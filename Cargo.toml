@@ -1,0 +1,28 @@
+[package]
+name = "a2amx"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Terminal multiplexer and message exchange for agent harness sessions"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[dependencies]
+alacritty_terminal = "=0.26.0"
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+libc = "0.2.189"
+rustix = { version = "1.1.5", features = ["termios", "process", "fs"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "allow" # shortcut: scaffold bodies are todo!(); flip to deny once spec 1 lands
