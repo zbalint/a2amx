@@ -133,6 +133,17 @@ generation without tools may produce no boundary. Whether a subagent's boundarie
 reach the parent's hooks is open. The adapter declares which channels it supports,
 and the broker shows the wait reason for a pending message.
 
+Proposal for the MVP: implement only the PTY channel, since it is the one path that
+works for any harness, including one running in a container (delivery needs only the
+PTY; a container needs a route to the host supervisor only for sending and for
+receipts). Keep the delivery channel an adapter concept so native channels can be
+added later without a redesign. Submission receipts are optional per harness
+profile: with a hook or extension the message reaches "submission observed", and
+without one it stays "write complete, outcome unknown". Native channels, such as an
+extension pushing messages into a live OMP session (its extension API appears to
+allow this; source read, not run), are post-MVP optimizations that remove PTY risk
+for that harness.
+
 Evidence differs by channel. A native-channel handoff shows the harness asked for and
 received the text, not that it was submitted through the composer or processed.
 Name each receipt for what it proves.

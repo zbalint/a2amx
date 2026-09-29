@@ -212,6 +212,7 @@ See [delivery recovery](delivery.md#recovery-and-retry) for side-effect ambiguit
 | One central server, multiple enrolled Linux hosts | High availability and federation | Native Windows support |
 | Three tested harness profiles (Claude Code, Codex, OMP) with submission observation | More harnesses and wrapper certifications | Universal safe injection into arbitrary TUIs |
 | One human controller per session | Multiple viewers and richer layouts | LLM planning and orchestration |
+| PTY delivery channel only; submission receipts optional per harness profile | Native in-harness delivery channels, added as adapters | |
 | Durable messages, receipts, and visible uncertainty | Offline outgoing queues | Exactly-once model processing |
 | Remote launch, attach, switch, detach, resize | Session survival through supervisor crash | Container management and model inference |
 

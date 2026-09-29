@@ -36,7 +36,7 @@ separately before combining them. Prototype interfaces are not production contra
 | Idle prompt | Exact message submitted once; receipt matches the attempt |
 | Active turn | Determine whether input steers, queues, interrupts, or is ignored; receipt timing is recorded |
 | Long single tool call, subagent wait, generation without tools | Record when a message sent during each reaches the recipient, per channel |
-| Native-channel boundary probe | Per harness, determine whether a hook or extension can return pending text as context at a tool boundary, and which activities produce one |
+| Native-channel boundary probe (informs post-MVP adapters) | Per harness, determine whether a hook or extension can return pending text as context at a tool boundary, and which activities produce one |
 | Human partial draft | Incoming message stays pending; draft remains byte/content equivalent in the editor |
 | Multiline, history recall, pasted draft | Ownership cannot be released by a simplistic Enter/idle heuristic |
 | Approval/authentication/menu/editor screen | No automated confirmation or destructive input; unknown state holds delivery |
