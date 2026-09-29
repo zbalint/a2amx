@@ -82,6 +82,17 @@ to the central daemon. Per-agent MCP servers use local IPC to their supervisor;
 hooks report receipts through local IPC as well. This concentrates network
 reconnection and host credentials in the supervisor.
 
+Proposal: local IPC is TCP, not a Unix socket, so that a containerized harness can
+reach it without a mounted socket. The host daemon listens on loopback by default;
+the listen setting accepts a list of addresses, for example loopback plus a
+Tailscale address, which lets containers on the host connect without host
+networking. Every connection presents a per-session token that is generated at launch and
+passed in the environment. The token identifies the session, which is how the sender
+is derived. A2AMX binds wherever the operator configures and does not warn about or
+refuse the choice: what the network exposes and who may use it is the operator's
+responsibility. The protocol is
+length-prefixed JSON for messages, with terminal streams on separate connections.
+
 Human clients connect to the central daemon for management and remote attachment.
 Initially relay remote terminal traffic through the daemon, with independently
 bounded scheduling for terminal streams, messages, and control traffic. A noisy
