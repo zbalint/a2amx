@@ -41,7 +41,14 @@ A2AMX is intended to provide:
 - Serialized input with explicit protection for human composition.
 - A small per-agent MCP interface, initially `list_agents` and `send_message`.
 - Hosting of arbitrary interactive commands, with tested delivery profiles for
-  supported harnesses.
+  supported harnesses. The target harnesses are Claude Code, Codex, and OMP,
+  including harnesses running inside containers.
+- Remote launch: a central daemon can direct the daemon on any connected host to
+  start a session there.
+- Mid-turn delivery: an agent in the middle of a long turn can receive a message
+  without waiting for the turn to end.
+- A human experience in an attached session equivalent to starting the harness
+  directly, without loss of function.
 
 It is not an agent planner, an LLM orchestration framework, a memory system, or a
 container management platform. It has no planned LLM of its own. Arbitrary command
@@ -55,8 +62,8 @@ hosting does not imply safe automatic message delivery into every terminal progr
 | [Delivery](docs/delivery.md) | Input arbitration, message evidence, hooks, retry, ordering, or failure recovery |
 | [Validation plan](docs/validation-plan.md) | Feasibility experiments, compatibility evidence, or implementation go/no-go decisions |
 
-The next milestone is a feasibility prototype exercising two harnesses across two
-Linux hosts. Its acceptance criteria are in the validation plan. The prototype
+The next milestone is a feasibility prototype exercising the target harnesses
+(Claude Code, Codex, OMP) across two Linux hosts, including mid-turn delivery. Its acceptance criteria are in the validation plan. The prototype
 must resolve delivery risks before the design is treated as an implementation contract.
 
 ## Contributing during the design stage

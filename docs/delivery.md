@@ -111,6 +111,32 @@ Terminal replies must remain serviceable without corrupting paste framing or
 deadlocking a harness waiting for a reply. The exact scheduling policy is part of
 the feasibility tests; a FIFO of arbitrary byte chunks is insufficient.
 
+## Mid-turn delivery
+
+Requirement: a message accepted for a busy recipient must be able to reach it during
+its active turn. A planner may need to correct an implementer that is inside one
+long turn.
+
+Proposal: a harness adapter may offer more than one delivery channel:
+
+- **PTY composer input.** Works with any harness. The risks in
+  [input arbitration](#input-arbitration) apply, and what the harness does with
+  input during a turn (steer, queue, interrupt, ignore) is adapter-specific.
+- **Native in-harness channel.** A hook or extension asks the local supervisor for
+  pending messages at a boundary the harness exposes, such as after a tool call, and
+  returns them as context. It writes nothing to the terminal, so it cannot corrupt a
+  draft or answer a dialog. Availability and semantics per harness are unverified.
+
+A native channel is bounded by the next boundary. File writes are tool calls in the
+target harnesses, but a long single tool call, a wait on a subagent, or a stretch of
+generation without tools may produce no boundary. Whether a subagent's boundaries
+reach the parent's hooks is open. The adapter declares which channels it supports,
+and the broker shows the wait reason for a pending message.
+
+Evidence differs by channel. A native-channel handoff shows the harness asked for and
+received the text, not that it was submitted through the composer or processed.
+Name each receipt for what it proves.
+
 ## Ordering and backpressure
 
 Proposal: one in-flight attempt per recipient, with pending messages ordered by

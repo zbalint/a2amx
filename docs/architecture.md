@@ -15,11 +15,19 @@ receipt semantics; [validation](validation-plan.md) defines how to test them.
 ## Requirements
 
 - Target Linux and implement in Rust.
-- Support multiple hosts through one central daemon/server.
-- Give each agent session an MCP server and a prompt-submission hook.
+- Support multiple hosts through one central daemon/server and a daemon on each
+  host. The central daemon can direct any connected host daemon to launch a session.
+- Give each agent session an MCP server and a prompt-submission hook (or the
+  harness's native equivalent, such as an extension).
 - Provide a client/launcher on each host and human management across hosts.
 - Launch interactive commands under PTYs; support attachment, switching,
   detachment, and continued execution of inactive sessions.
+- Target Claude Code, Codex, and OMP as hosted harnesses, including harnesses
+  running inside containers.
+- Deliver messages to a recipient during its active turn. Long turns are expected,
+  so waiting for the turn to end is not an acceptable default.
+- Give an attached human the experience of starting the harness directly, without
+  loss of function.
 - Persist messages and delivery evidence in SQLite.
 - Derive sender identity from the authenticated session, not a `from` tool argument.
 - Preserve ordinary terminal input except a small configurable mux prefix.
@@ -59,7 +67,9 @@ logical role, not a requirement for a dedicated physical host.
 | Prompt-submit hook | Observing and reporting matching submissions | Deciding that the model processed a message |
 | Human CLI/TUI | Session selection, attachment, management requests, pending-message display | Persistent ownership of a running PTY |
 
-A host supervisor must remain alive after its launching CLI exits. Hosting PTYs
+The host supervisor is the per-host daemon. It accepts launch and management
+requests from the central daemon as well as from local clients. A host supervisor
+must remain alive after its launching CLI exits. Hosting PTYs
 centrally over remote shell connections is not the proposed ownership model.
 
 Proposal: use one executable with role-specific modes and internal Rust modules.
@@ -162,9 +172,13 @@ inside a container needs a deliberate route to its session bridge and credential
 Nested PTYs add mode, resize, escape, and lifetime behavior to validate. A lost
 wrapper process does not prove that a remote process exited.
 
+Requirement: harnesses running inside containers must be supported. The route
+from a container to its session bridge and credentials is therefore a design item
+for the first prototype, not a later certification.
+
 Proposal: run a supervisor where the harness executes when possible. Certify
-specific wrapper arrangements later; arbitrary command launch is not a blanket
-integration guarantee.
+specific wrapper arrangements individually; arbitrary command launch is not a
+blanket integration guarantee.
 
 ## Persistence and lifecycle
 
@@ -196,7 +210,7 @@ See [delivery recovery](delivery.md#recovery-and-retry) for side-effect ambiguit
 | MVP proposal | Later | Out of scope |
 | --- | --- | --- |
 | One central server, multiple enrolled Linux hosts | High availability and federation | Native Windows support |
-| Two tested harness profiles with hooks | More harnesses and wrapper certifications | Universal safe injection into arbitrary TUIs |
+| Three tested harness profiles (Claude Code, Codex, OMP) with submission observation | More harnesses and wrapper certifications | Universal safe injection into arbitrary TUIs |
 | One human controller per session | Multiple viewers and richer layouts | LLM planning and orchestration |
 | Durable messages, receipts, and visible uncertainty | Offline outgoing queues | Exactly-once model processing |
 | Remote launch, attach, switch, detach, resize | Session survival through supervisor crash | Container management and model inference |
@@ -210,7 +224,8 @@ emulator. Isolate blocking PTY/database work from asynchronous network handling.
 
 1. What observable state permits safe automatic submission for each harness?
 2. What explicit action relinquishes human composition ownership?
-3. Which two harness versions and terminal capabilities define initial support?
+3. Which harness versions (Claude Code, Codex, OMP) and terminal capabilities
+   define initial support?
 4. How are hosts enrolled, revoked, and assigned messaging/management scopes?
 5. Which transport handles streams, reconnects, fencing, and flow control?
 6. How are stale recipients, message expiry, and deliberate retries presented?

@@ -9,8 +9,8 @@ message exchange alone is insufficient.
 ## Test environment and evidence
 
 Use disposable Linux environments, fictional identities, synthetic prompts, and
-explicitly enrolled test hosts. Use two distinct harnesses; the initial choices
-and versions remain open. Avoid production systems and real credentials in
+explicitly enrolled test hosts. Use the three target harnesses (Claude Code,
+Codex, OMP); their versions remain open. Avoid production systems and real credentials in
 fixtures. Keep raw transcripts and runtime databases outside the repository.
 
 For each experiment record:
@@ -35,6 +35,8 @@ separately before combining them. Prototype interfaces are not production contra
 | --- | --- |
 | Idle prompt | Exact message submitted once; receipt matches the attempt |
 | Active turn | Determine whether input steers, queues, interrupts, or is ignored; receipt timing is recorded |
+| Long single tool call, subagent wait, generation without tools | Record when a message sent during each reaches the recipient, per channel |
+| Native-channel boundary probe | Per harness, determine whether a hook or extension can return pending text as context at a tool boundary, and which activities produce one |
 | Human partial draft | Incoming message stays pending; draft remains byte/content equivalent in the editor |
 | Multiline, history recall, pasted draft | Ownership cannot be released by a simplistic Enter/idle heuristic |
 | Approval/authentication/menu/editor screen | No automated confirmation or destructive input; unknown state holds delivery |
@@ -46,7 +48,7 @@ separately before combining them. Prototype interfaces are not production contra
 | Human input/interrupt during injection | Defined arbitration, no silent keystroke loss, partial outcomes preserved |
 | Harness exit during write | Partial progress is visible; no automatic trailing-byte replay |
 
-Completion: both profiles have documented submission semantics and a demonstrated
+Completion: each target profile has documented submission semantics and a demonstrated
 ownership policy. Any unpreventable approval or draft-corruption race blocks a
 claim of safe automatic delivery in that state. Narrow support or revise the
 mechanism before moving to a production implementation.
@@ -90,6 +92,8 @@ bidirectional messaging and remote human attachment, then inject failures.
 | Terminal flood during messaging | Control and receipts make progress under defined bounds |
 | Disk full, queue full, SQLite busy | Explicit failure; no false durable acceptance or unbounded buffering |
 | Forged sender/receipt/control request | Unauthorized identities and operations are rejected |
+| Remote launch | A central request starts a session on a chosen host; failures surface with a reason |
+| Containerized harness | Its MCP bridge and hook reach the host supervisor from inside the container; credentials stay out of arguments and logs |
 | Nested PTY wrapper | Record resize, signal, disconnect, and local MCP/hook connectivity behavior |
 
 Completion: an accepted message remains discoverable with an honest outcome across
