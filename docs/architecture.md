@@ -139,6 +139,14 @@ its local sessions; a compromised central daemon can affect routing and relayed
 terminal traffic. Restrict local sockets, credentials, and database permissions.
 Keep credentials out of arguments, logs, message envelopes, and terminal output.
 
+Security posture: A2AMX ships secure and safe defaults and leaves the rest to the
+operator. The defaults are a loopback bind, owner-only permissions on the database,
+configuration, and credential files, random per-session tokens, a sender always
+derived from the token, escaped agent payloads, and no destructive input without a
+human. A2AMX does not solve transport encryption, what a configured bind address
+exposes, a hostile process running as the same OS user, or multi-tenant isolation.
+The documentation names these limits so that operators can decide.
+
 Open: exact exchange/workspace visibility rules and management permissions.
 Agents should only discover and message recipients authorized for their scope.
 
