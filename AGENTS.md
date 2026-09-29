@@ -24,7 +24,9 @@ cargo fmt --check
 - `unsafe` only with a `// SAFETY:` comment stating the invariant. Prefer `rustix`
   over raw `libc`.
 - Launch commands as argument vectors, never shell-interpolated strings.
-- Do not name an `alacritty_terminal` type outside `src/emulator.rs`.
+- Terminal-emulation types (`alacritty_terminal::term`, `vte`, `grid`, `event`) are
+  named only in `src/emulator.rs`; its `tty` module (PTY spawning) only in
+  `src/session.rs`.
 - When cutting a corner on purpose, leave a `// shortcut:` comment naming the
   ceiling and the upgrade trigger.
 - Comments explain why, not what. Match the density of the surrounding code.
