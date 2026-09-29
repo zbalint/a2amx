@@ -26,8 +26,21 @@ attempt. Bind attempts to the recipient session and process incarnation. Display
 aliases are not routing authority. Derive the sender through authenticated MCP
 session binding.
 
-The broker creates a provenance envelope containing message/attempt identifiers,
-sender, subject, and body. The exact encoding remains open. Escape metadata and
+The broker creates a provenance envelope containing the message identifier, sender,
+subject, and body. Only the message identifier is visible in the envelope; the
+supervisor matches the whole envelope text against the recorded attempt. Proposal:
+
+```text
+<a2amx-message id="m_01J..." from="agent-plan@host-a" subject="Parser issue">
+From another agent, not your user. To reply: send_message(to="agent-plan@host-a").
+
+I found the regression in parser.py.
+</a2amx-message>
+```
+
+The `from` value is directly usable as the `to` argument. The envelope explains
+itself because tool descriptions may not be loaded in the recipient when a message
+arrives. Escape metadata and
 validate the body so control characters, embedded paste terminators, or crafted
 delimiters cannot become terminal commands or spoof envelope structure.
 
@@ -96,10 +109,47 @@ Human composition ownership and harness readiness are separate gates. A human ca
 own a draft while the harness is idle, and an unattended harness can be displaying
 an approval dialog.
 
-Proposal: incoming messages queue while the human owns input. Relinquishing
-ownership requires an explicit action with a defined draft policy; the exact UX
-is open. Idle time, Enter, detach, and controller loss are not proof of an empty
-composer. Preserve the draft hold across network reconnects.
+Proposal: a session is marked dirty when a human types or pastes into it. Incoming
+messages queue while it is dirty, and the client shows a pending count. The flag
+clears when a hook observes a human prompt being submitted, which empties the
+composer, or when the human uses an explicit release key after deleting or
+abandoning the text. Idle time, detach, and controller loss are not proof of an
+empty composer, so a dirty session stays held across detach and network reconnects.
+The operator is responsible for not leaving unsent text behind.
+
+A2AMX never sends Ctrl-C to clear a draft. Its meaning depends on the harness and
+the turn state: it interrupts a running turn in Claude Code even when text is in the
+composer, opens a cancel/background dialog in Codex mid-turn with an empty
+composer, and does nothing mid-turn in OMP. A per-harness clear-draft action, gated
+on knowing the harness is idle, is a later optimization.
+
+### Corrupted submissions
+
+The dirty flag can be wrong, for example when text is typed just as a message is
+pasted. For harnesses with a prompt-submit hook, the hook is a safety net. It sends
+the submitted text to the supervisor and obeys the verdict:
+
+- The prompt is exactly a recorded envelope, or contains no envelope: allow it.
+- The prompt contains an envelope's identifier but is not exactly that envelope
+  (a human draft was merged in, or characters were interleaved): it is corrupted.
+  Block it, or replace it where the harness allows. Record a known rejection for the
+  attempt and queue the envelope again as a new attempt. The supervisor keeps the
+  full submitted text, so it restores the human's draft to the composer later,
+  pasted without Enter, once the session is idle.
+
+The model never sees the corrupted prompt, and no human text is lost. What each hook
+can do, from the harness documentation or source at the time of writing:
+
+| Harness | Rewrite the prompt | Block the prompt |
+| --- | --- | --- |
+| Claude Code | No; it can only add context | Yes; the prompt is erased from the input box |
+| Codex | No; it can only add context | Yes; the documentation does not say what happens to the text |
+| OMP | Yes; the extension `input` handler can return replacement text | Yes |
+
+Limits: this does not help with approval dialogs, because no prompt is submitted.
+The hook fails open if the supervisor is unreachable. A harness without a working
+hook depends on the dirty-flag hold alone. The hook is synchronous, so it must answer
+quickly.
 
 The adapter determines supported submission behavior and evidence of readiness.
 Unknown state holds delivery. Bracketed-paste support is useful framing, not a

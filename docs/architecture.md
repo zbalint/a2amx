@@ -64,7 +64,7 @@ logical role, not a requirement for a dedicated physical host.
 | Host supervisor | Local processes, session runtimes, reconnect reconciliation, local delivery journal | Global acceptance while disconnected from the central daemon |
 | Session runtime | PTY lifecycle, screen model, input arbiter, writer, resize, delivery execution | MCP tool parsing or global routing |
 | Per-agent MCP server | Small tool interface and authenticated session binding | Direct PTY access or human management authority |
-| Prompt-submit hook | Observing and reporting matching submissions | Deciding that the model processed a message |
+| Prompt-submit hook | Reporting submitted prompts and applying the supervisor's allow or block verdict | Deciding that the model processed a message |
 | Human CLI/TUI | Session selection, attachment, management requests, pending-message display | Persistent ownership of a running PTY |
 
 The host supervisor is the per-host daemon. It accepts launch and management
@@ -88,8 +88,15 @@ bounded scheduling for terminal streams, messages, and control traffic. A noisy
 terminal must not starve receipt processing or another session's input.
 
 The network transport, framing, protocol version negotiation, credential format,
-enrollment, and revocation mechanisms are open decisions. Authenticated encryption
-and explicit host authorization are requirements for cross-host connections.
+and revocation mechanism are open decisions. Every host must be authenticated and
+explicitly authorized. Confidentiality is the operator's responsibility: A2AMX does
+not encrypt traffic in the MVP, and the documentation tells operators to run it over
+a trusted network such as a Tailscale overlay. Authentication uses challenge-response,
+so a credential is never sent over the wire.
+
+Proposal: enroll a host by pairing. The host daemon prints a one-time code carrying
+its public key, and the operator enters the code at the central daemon to authorize
+that host. The central daemon then issues a long-lived credential.
 
 Proposed agent-facing tools:
 
@@ -144,7 +151,8 @@ terminal graphics are outside the proposed MVP.
 
 Preserve input bytes where possible. Prefix recognition must tolerate split
 sequences and avoid consuming prefix bytes inside paste or protocol frames.
-Provide a literal-prefix escape. Extended keyboard protocols and nested muxes are
+Provide a literal-prefix escape. The default prefix is Ctrl-Space, chosen because
+it exists on every keyboard layout, and it is configurable. Extended keyboard protocols and nested muxes are
 compatibility cases, not automatically supported features.
 
 Proposal: one controlling human attachment per session. The controller determines
@@ -227,7 +235,7 @@ emulator. Isolate blocking PTY/database work from asynchronous network handling.
 2. What explicit action relinquishes human composition ownership?
 3. Which harness versions (Claude Code, Codex, OMP) and terminal capabilities
    define initial support?
-4. How are hosts enrolled, revoked, and assigned messaging/management scopes?
+4. How are hosts revoked and assigned messaging/management scopes?
 5. Which transport handles streams, reconnects, fencing, and flow control?
 6. How are stale recipients, message expiry, and deliberate retries presented?
 7. What retention, payload, queue, and receipt-journal limits are appropriate?
