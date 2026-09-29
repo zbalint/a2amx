@@ -251,10 +251,19 @@ See [delivery recovery](delivery.md#recovery-and-retry) for side-effect ambiguit
 | Durable messages, receipts, and visible uncertainty | Offline outgoing queues | Exactly-once model processing |
 | Remote launch, attach, switch, detach, resize | Session survival through supervisor crash | Container management and model inference |
 
-Candidates, not pinned dependencies: Tokio, portable-pty, vt100 (or wezterm-term
-if required), rusqlite, rmcp, serde/serde_json, clap, tracing, crossterm, and ratatui.
-Validate emulator coverage before selection. A UI framework is not a terminal
-emulator. Isolate blocking PTY/database work from asynchronous network handling.
+Candidates, not pinned dependencies: Tokio, portable-pty, rusqlite, rmcp,
+serde/serde_json, clap, tracing, crossterm, and ratatui. A UI framework is not a
+terminal emulator.
+
+Decision: the terminal emulator is `alacritty_terminal`, kept behind a small
+interface of A2AMX's own so it can be replaced. It is maintained, tracks the modes
+the harnesses use (bracketed paste, focus, alternate screen, mouse, and the kitty
+keyboard flags), and emits the replies to terminal queries that must be answered
+while no client is attached. It has no reattach snapshot, so A2AMX writes its own
+serializer from the screen state to escape sequences. Alternatives considered:
+`vt100` (ready-made snapshots, but not updated since 2025-07 and it leaves query
+replies to the host), `libghostty-vt` (API not yet stable), and `wezterm-term` (not
+published on crates.io). Isolate blocking PTY/database work from asynchronous network handling.
 
 ## Open decisions
 

@@ -51,8 +51,10 @@ delivery in that state. Narrow support for that harness or change the mechanism.
 | Slow viewer and output flood | PTY draining continues; memory is bounded; the viewer can resynchronize |
 | Client exit or error | The client terminal is restored where recoverable; the hosted process keeps running |
 
-Select the terminal emulator from this evidence. Do not substitute screenshots alone
-for input and protocol checks.
+These checks confirm the chosen emulator (`alacritty_terminal`). Replay captured
+output from each target harness through it and compare the resulting screens with a
+reference such as tmux's pane capture. Do not substitute screenshots alone for input
+and protocol checks.
 
 ## Cross-host routing and recovery
 

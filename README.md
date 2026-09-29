@@ -28,6 +28,10 @@ For example, a planning agent on `host-a` could message a reviewing agent on
 `host-b`. The recipient's host would queue the message until delivery is permitted,
 inject a clearly attributed message, and report a matching submission-hook receipt.
 
+Claude Code and Codex can already message parallel sessions of their own kind, but
+not sessions of a different harness. A2AMX targets that gap, and also sessions on
+other hosts and in containers.
+
 Writing bytes to a PTY does not prove that the harness submitted a prompt. A hook
 receipt does not prove that a model processed it. Those distinctions, and protecting
 unfinished human input, are central design constraints.
