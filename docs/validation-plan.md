@@ -29,6 +29,8 @@ synthetic data.
 | Harness exit during write | Partial progress is visible; trailing bytes are not replayed |
 | Envelope matching | Each envelope is matched, including several joined into one prompt and large pastes shown as placeholders; ID substrings in mixed prompts do not match |
 | Corrupted submission | A prompt combining an envelope with a human draft is blocked (or replaced on OMP) before the model sees it; the envelope is queued again and the draft is restored to the composer; block behavior is verified per harness, including what Codex does with the blocked text |
+| Large paste placeholder | A long envelope or draft shown as a placeholder still reaches the hook as full text on every harness; the size at which each harness collapses a paste is recorded in its adapter profile |
+| Clear-draft candidate (later) | Many Delete keys then many Backspace keys empty the composer from any cursor position, including a multi-line draft and a collapsed paste, between turns and mid-turn, and do nothing on an empty composer; the key count comes from the characters A2AMX saw typed, counting each large paste once, and a draft above a cap is held instead of cleared |
 | Control characters and forged framing | Supported text round-trips; forbidden controls, paste terminators, and forged envelopes are rejected |
 | Duplicate, late, missing, or reordered receipts | Receipts merge idempotently; a missing receipt stays uncertain |
 | Mid-turn delivery | A message sent during a long tool call, a subagent wait, and generation without tools is delivered and reported with its actual delay |
