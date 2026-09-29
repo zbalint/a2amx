@@ -93,6 +93,14 @@ refuse the choice: what the network exposes and who may use it is the operator's
 responsibility. The protocol is
 length-prefixed JSON for messages, with terminal streams on separate connections.
 
+Proposal: the per-agent MCP server is a stdio subcommand of the same executable. The
+harness starts it, it reads the session token from its environment, and it forwards
+calls to the daemon over TCP. It runs wherever the harness runs, so a containerized
+harness has its MCP server and hook inside the container, needing only a TCP route
+to the daemon and the executable, either installed in the image or mounted. The
+daemon stays outside the container. An MCP endpoint served by the daemon over HTTP
+is a later option for harnesses where providing the executable is awkward.
+
 Human clients connect to the central daemon for management and remote attachment.
 Initially relay remote terminal traffic through the daemon, with independently
 bounded scheduling for terminal streams, messages, and control traffic. A noisy
