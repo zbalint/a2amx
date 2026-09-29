@@ -232,5 +232,6 @@ emulator. Isolate blocking PTY/database work from asynchronous network handling.
 6. How are stale recipients, message expiry, and deliberate retries presented?
 7. What retention, payload, queue, and receipt-journal limits are appropriate?
 
-Resolve these through the [validation plan](validation-plan.md) and design review.
+Resolve these through design review and the first implementation slices, checked
+against the [validation plan](validation-plan.md).
 Detailed schemas, wire formats, and command syntax follow those decisions.

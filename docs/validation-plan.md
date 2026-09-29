@@ -1,120 +1,77 @@
-# Feasibility and validation plan
+# Validation plan
 
-Status: planned experiments. **No experiment below has been run for A2AMX.**
+Status: checks to run while building the first slices. No implementation exists yet.
 
-The first milestone is evidence that terminal delivery can meet the intended
-safety contract across two harnesses and two Linux hosts. A successful happy-path
-message exchange alone is insufficient.
+PTY hosting, typing into a harness, and prompt-submit hooks are established practice
+and are not re-proven here. The checks below cover what is specific to A2AMX: safe
+injection, faithful attach and detach, and honest outcomes across hosts and failures.
+Run them against the three target harnesses (Claude Code, Codex, OMP) as each slice
+lands, and record the result in the design documents.
 
-## Test environment and evidence
+## Test hygiene
 
 Use disposable Linux environments, fictional identities, synthetic prompts, and
-explicitly enrolled test hosts. Use the three target harnesses (Claude Code,
-Codex, OMP); their versions remain open. Avoid production systems and real credentials in
-fixtures. Keep raw transcripts and runtime databases outside the repository.
+explicitly enrolled test hosts. Avoid production systems and real credentials in
+fixtures. Keep raw transcripts and runtime databases outside the repository. Record
+the harness version, terminal, and wrapper with each result. Use event ordering and
+explicit synchronization for race tests, not sleeps. Published artifacts contain only
+synthetic data.
 
-For each experiment record:
+## Delivery safety
 
-- Exact harness version/configuration, Linux environment, outer terminal, and wrapper.
-- Setup, injected event sequence, expected behavior, and observed behavior.
-- Message, attempt, and incarnation correlations using synthetic identifiers.
-- Whether evidence proves transport progress, submission observation, or more.
-- A reproducible sanitized artifact and a pass/fail/unsupported conclusion.
-
-Use event ordering and explicit synchronization for race tests; sleeps alone are
-not evidence of correct ordering. Published artifacts must contain only synthetic
-data and be reviewed for secrets and identifying details.
-
-## Stage 1: local delivery and arbitration
-
-Build only enough disposable instrumentation to own a PTY, send a synthetic
-message, observe input/output, and receive a hook callback. Validate each harness
-separately before combining them. Prototype interfaces are not production contracts.
-
-| Case | Required observation |
+| Check | Required observation |
 | --- | --- |
-| Idle prompt | Exact message submitted once; receipt matches the attempt |
-| Active turn | Determine whether input steers, queues, interrupts, or is ignored; receipt timing is recorded |
-| Long single tool call, subagent wait, generation without tools | Record when a message sent during each reaches the recipient, per channel |
-| Native-channel boundary probe (informs post-MVP adapters) | Per harness, determine whether a hook or extension can return pending text as context at a tool boundary, and which activities produce one |
-| Human partial draft | Incoming message stays pending; draft remains byte/content equivalent in the editor |
-| Multiline, history recall, pasted draft | Ownership cannot be released by a simplistic Enter/idle heuristic |
-| Approval/authentication/menu/editor screen | No automated confirmation or destructive input; unknown state holds delivery |
-| Ready-to-dialog race | Force a transition between readiness check and submission; prove prevention or mark automatic delivery unsupported |
-| Paste and submit timing | Split writes and fast bursts do not produce accidental submissions or dropped text |
-| Unicode and control-bearing payload | Supported text round-trips; forbidden controls and forged framing are rejected |
-| Duplicate, late, missing, reordered hooks | Receipts merge idempotently; missing receipt remains uncertain |
-| Other hook blocks processing | Submission observation is not reported as model processing |
-| Human input/interrupt during injection | Defined arbitration, no silent keystroke loss, partial outcomes preserved |
-| Harness exit during write | Partial progress is visible; no automatic trailing-byte replay |
+| Human partial draft | Incoming message stays pending; the draft is unchanged in the editor |
+| Multiline, history recall, pasted draft | Ownership is not released by an Enter or idle heuristic |
+| Approval, authentication, menu, or editor screen | No automated confirmation; unknown state holds delivery |
+| Ready-to-dialog race | A forced transition between the readiness check and submission is prevented, or automatic delivery is marked unsupported in that state |
+| Human input or interrupt during injection | Defined arbitration; no silent keystroke loss; partial outcomes preserved |
+| Harness exit during write | Partial progress is visible; trailing bytes are not replayed |
+| Envelope matching | Each envelope is matched, including several joined into one prompt and large pastes shown as placeholders; ID substrings in mixed prompts do not match |
+| Control characters and forged framing | Supported text round-trips; forbidden controls, paste terminators, and forged envelopes are rejected |
+| Duplicate, late, missing, or reordered receipts | Receipts merge idempotently; a missing receipt stays uncertain |
+| Mid-turn delivery | A message sent during a long tool call, a subagent wait, and generation without tools is delivered and reported with its actual delay |
 
-Completion: each target profile has documented submission semantics and a demonstrated
-ownership policy. Any unpreventable approval or draft-corruption race blocks a
-claim of safe automatic delivery in that state. Narrow support or revise the
-mechanism before moving to a production implementation.
+Any unpreventable approval or draft-corruption race blocks a claim of safe automatic
+delivery in that state. Narrow support for that harness or change the mechanism.
 
-## Stage 2: terminal compatibility
+## Terminal fidelity
 
-Exercise attachment and detachment independently of messaging.
-
-| Case | Required observation |
+| Check | Required observation |
 | --- | --- |
-| Alternate screen and redraw | Reattachment reconstructs the correct screen without replaying historical effects |
-| Output during snapshot | Snapshot plus updates has no missing or duplicated state transitions |
-| Resize while active/detached | Defined dimensions, correct redraw, and no stale coordinate assumptions |
-| Detached terminal queries | Harness receives one correct reply without an attached outer terminal |
-| Keyboard modes and prefixes | Ctrl/Alt, Shift+Tab, arrows, function keys, UTF-8 and supported extended modes behave as advertised |
-| Fragmented escape/paste sequences | Prefix recognition preserves payload and protocol framing |
+| Alternate screen and reattach | Reattachment restores the screen without replaying historical effects |
+| Output during snapshot | Snapshot plus updates has no missing or duplicated transitions |
+| Resize while active or detached | Defined dimensions and a correct redraw |
+| Detached terminal queries | The harness gets exactly one correct reply with no client attached |
+| Keyboard modes and prefix | Ctrl/Alt, Shift+Tab, arrows, function keys, UTF-8, and supported extended modes pass through; fragmented escape and paste sequences are preserved |
 | Session switching | Cursor, paste, mouse, focus, and keyboard modes do not leak between sessions |
-| Slow/disconnected viewer and output flood | PTY draining continues; bounded memory; viewer can resynchronize |
-| Client exit/error | Client terminal is restored where recoverable; hosted process remains running |
+| Slow viewer and output flood | PTY draining continues; memory is bounded; the viewer can resynchronize |
+| Client exit or error | The client terminal is restored where recoverable; the hosted process keeps running |
 
-Completion: publish a bounded terminal capability profile and identify unsupported
-features. Select the emulator from this evidence. Do not substitute screenshots
-alone for input and protocol correctness checks.
+Select the terminal emulator from this evidence. Do not substitute screenshots alone
+for input and protocol checks.
 
-## Stage 3: cross-host routing and recovery
+## Cross-host routing and recovery
 
-Use one central daemon and two supervisors, with one harness on each host. Prove
-bidirectional messaging and remote human attachment, then inject failures.
-
-| Case | Required observation |
+| Check | Required observation |
 | --- | --- |
-| Bidirectional active-turn messages | Correct sender/recipient, ordered acceptance, matching receipts |
-| Sender loses commit response | Ambiguous acceptance or idempotent reconciliation; no blind duplicate send |
-| Target disconnects before delivery | Central message remains pending and visible |
+| Remote launch | A central request starts a session on a chosen host; failures surface with a reason |
+| Bidirectional messages | Correct sender and recipient, ordered acceptance, matching receipts |
+| Sender loses commit response | Acceptance is reported as ambiguous or reconciled idempotently; no blind duplicate |
+| Target disconnected before delivery | The message stays pending and visible |
 | Partition after submission, before central receipt | Local evidence reconciles without a fresh injection |
 | Central restart | Local PTYs continue; directory and message evidence reconcile |
 | Supervisor crash at each attempt boundary | Recovery distinguishes known evidence from unknown side effects |
-| Harness restart / alias reuse | Old messages cannot silently target a new incarnation |
-| Old connection survives reconnect | Fencing rejects stale control and delivery authority |
-| Two competing human controllers | Exactly one has input authority; a disconnected draft stays protected |
-| Terminal flood during messaging | Control and receipts make progress under defined bounds |
+| Harness restart or alias reuse | Old messages cannot silently target a new incarnation |
+| Stale connection or two human controllers | Fencing rejects stale authority; exactly one controller has input; a disconnected draft stays protected |
+| Terminal flood during messaging | Control traffic and receipts keep making progress |
 | Disk full, queue full, SQLite busy | Explicit failure; no false durable acceptance or unbounded buffering |
-| Forged sender/receipt/control request | Unauthorized identities and operations are rejected |
-| Remote launch | A central request starts a session on a chosen host; failures surface with a reason |
-| Containerized harness | Its MCP bridge and hook reach the host supervisor from inside the container; credentials stay out of arguments and logs |
-| Nested PTY wrapper | Record resize, signal, disconnect, and local MCP/hook connectivity behavior |
+| Forged sender, receipt, or control request | Rejected |
+| Containerized harness and nested PTY wrapper | The MCP bridge and hook reach the host supervisor from inside the container; credentials stay out of arguments and logs; resize, signal, and disconnect behavior is recorded |
 
-Completion: an accepted message remains discoverable with an honest outcome across
-every tested failure window. Recovery never treats missing evidence as proof that
-the message was not submitted. No exactly-once processing claim is inferred.
-
-## Design decisions after the experiments
-
-Review findings against [architecture](architecture.md) and [delivery](delivery.md).
-Resolve the following before implementing the production protocol:
-
-1. Supported harness profiles and permitted automatic-delivery states.
-2. Human ownership transfer and pending/unknown message UX.
-3. Hook validation, timeout, and receipt persistence behavior.
-4. Enrollment, authorization, transport, reconnect fencing, and flow control.
-5. Retry/idempotency rules and session-incarnation lifecycle.
-6. Terminal capability contract and crate selection.
-
-Record accepted choices and their evidence in the design documents. Leave failed
-or unsupported cases visible rather than removing them from the matrix. Introduce
-separate decision records only when alternatives and rationale warrant them.
+An accepted message stays discoverable with an honest outcome in every tested failure
+window. Missing evidence is never treated as proof that a message was not submitted.
+No exactly-once processing claim is made.
 
 ## Repository checks at the documentation stage
 
@@ -124,7 +81,7 @@ There is no application build or test suite yet. Documentation changes should:
 - Have resolvable relative links and consistent requirement/proposal labels.
 - Contain no personal paths, real infrastructure details, credentials, private
   transcripts, or memory exports.
-- Avoid presenting planned commands, experiments, or compatibility as implemented.
+- Avoid presenting planned commands or compatibility as implemented.
 
 Once implementation starts, add the actual build and test commands to the project
-documentation and replace this limited check list with the appropriate checks.
+documentation and replace this list with the appropriate checks.

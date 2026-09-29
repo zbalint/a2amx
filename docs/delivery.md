@@ -1,7 +1,7 @@
 # Message delivery
 
-Status: proposed semantics for feasibility testing. This document defines the
-delivery contract to evaluate, not implemented behavior.
+Status: proposed semantics. This document defines the delivery contract to build
+and check, not implemented behavior.
 
 ## Guarantees and limits
 
@@ -65,6 +65,12 @@ These are semantic observations, not a final database schema or one linear enum.
 | Known rejection | A specific failure is established; retain its reason and any partial progress |
 | Unknown outcome | Available evidence cannot establish what reached the harness |
 
+Observed in a separate project: a prompt-submit hook or extension sees prompts typed
+mid-turn on all three target harnesses. Claude Code and Codex report the active
+turn's existing identifier rather than a new one; OMP has no message identifier and
+may join queued messages into one prompt. Adapters must therefore match on A2AMX
+identifiers, and paste wrapping and joined messages are handled per adapter.
+
 Write progress and hook receipts arrive independently. A receipt may precede the
 writer's completion event. Merge evidence without downgrading a confirmed receipt
 when a late write event arrives. A timeout alone is not a known rejection.
@@ -78,7 +84,7 @@ harness turn ID.
 Hooks should be bounded and idempotent, preserve the host harness's required exit
 and output contract, and avoid printing receipt data into the conversation. Hook
 failure must be visible without hanging normal interaction. Exact failure policy
-and timing are adapter-specific decisions to validate.
+and timing are adapter-specific decisions.
 
 ## Input arbitration
 
@@ -109,7 +115,7 @@ Do not resume an abandoned transaction's remaining bytes automatically.
 
 Terminal replies must remain serviceable without corrupting paste framing or
 deadlocking a harness waiting for a reply. The exact scheduling policy is part of
-the feasibility tests; a FIFO of arbitrary byte chunks is insufficient.
+the implementation; a FIFO of arbitrary byte chunks is insufficient.
 
 ## Mid-turn delivery
 
@@ -198,4 +204,4 @@ lookup, report ambiguous acceptance instead of encouraging blind resend.
 
 Support is a tested combination of harness version, configuration, terminal
 capabilities, and wrapper arrangement. A hook installed successfully is not proof
-that active-turn delivery is safe. See the [validation matrix](validation-plan.md).
+that active-turn delivery is safe. See the [validation plan](validation-plan.md).

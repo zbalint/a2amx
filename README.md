@@ -8,7 +8,7 @@ A terminal multiplexer and message exchange for communication between AI agent s
 
 A2AMX is in the design stage. This repository contains design documents, not a
 working application. Commands, interfaces, and dependencies described here are
-proposals unless identified as requirements. No harness compatibility is certified.
+proposals unless identified as requirements.
 
 The implementation direction is **Rust on Linux**, with communication and session
 management across multiple hosts from the outset.
@@ -60,11 +60,12 @@ hosting does not imply safe automatic message delivery into every terminal progr
 | --- | --- |
 | [Architecture](docs/architecture.md) | Scope, topology, ownership, trust, terminal behavior, or unresolved architectural choices |
 | [Delivery](docs/delivery.md) | Input arbitration, message evidence, hooks, retry, ordering, or failure recovery |
-| [Validation plan](docs/validation-plan.md) | Feasibility experiments, compatibility evidence, or implementation go/no-go decisions |
+| [Validation plan](docs/validation-plan.md) | The checks each implementation slice must pass |
 
-The next milestone is a feasibility prototype exercising the target harnesses
-(Claude Code, Codex, OMP) across two Linux hosts, including mid-turn delivery. Its acceptance criteria are in the validation plan. The prototype
-must resolve delivery risks before the design is treated as an implementation contract.
+The next milestone is a first implementation slice: one host, PTY hosting with
+attach and detach, and message delivery through the PTY to the target harnesses
+(Claude Code, Codex, OMP), including mid-turn. Cross-host support follows. The
+checks each slice must pass are in the validation plan.
 
 ## Contributing during the design stage
 
