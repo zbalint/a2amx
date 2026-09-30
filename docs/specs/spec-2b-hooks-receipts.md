@@ -608,3 +608,16 @@ git status --porcelain                       # only files named in §0 Scope
 and every behavior listed in §3–§12 has at least one test in §13, except the ones §13
 names as deliberately untested. Leave the diff **uncommitted** and **unmerged** in the
 worktree.
+
+## Amendment 1 (adjudicating OMP question: future-schema test vs schema v2)
+
+§5 makes `user_version` 2 the current schema, so the existing test
+`daemon_refuses_a_future_database_schema` in `tests/broker.rs`, which used version 2 as its
+"future" fixture, would now start successfully. §13's list of permitted edits to existing
+tests gains one entry: in that test, `pragma_update(None, "user_version", 2)` becomes
+`pragma_update(None, "user_version", 3)` and the expected error string becomes
+`"unsupported messages.db schema version 3"`. Nothing else in the test changes; it still
+asserts that startup fails and leaves no `admin.token`. The fix is in the fixture value, not
+in §5: version 3 is the smallest version this spec does not define. A tree-wide search for
+`user_version` and `schema version` in `src/` and `tests/` found no other fixture that
+depends on version 2 being unsupported. Scope and acceptance are unchanged.
