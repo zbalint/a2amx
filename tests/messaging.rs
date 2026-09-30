@@ -181,6 +181,22 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
     );
     assert_eq!(argv[7], "--append-system-prompt");
     assert_eq!(argv[8], harness::PEER_AUTHORIZATION_PROMPT);
+    assert_eq!(argv[9], "--settings");
+    let settings: serde_json::Value = serde_json::from_str(&argv[10]).expect("settings JSON");
+    assert_eq!(
+        settings,
+        serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "'/tmp/a2amx binary' hook",
+                        "timeout": 5
+                    }]
+                }]
+            }
+        })
+    );
 
     let before_separator = harness::wire_claude_argv(
         vec!["claude".into(), "--".into(), "positional".into()],
@@ -190,11 +206,32 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
     assert_eq!(before_separator[0], "claude");
     assert_eq!(before_separator[1], "--mcp-config");
     assert_eq!(before_separator[3], "--allowedTools");
-    assert_eq!(before_separator[5], "--");
+    assert_eq!(before_separator[5], "--settings");
+    let settings: serde_json::Value =
+        serde_json::from_str(&before_separator[6]).expect("settings JSON");
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        "'/tmp/a2amx binary' hook"
+    );
+    assert_eq!(before_separator[7], "--");
     assert!(
         !before_separator
             .iter()
             .any(|arg| arg == "--append-system-prompt")
+    );
+}
+
+#[test]
+fn claude_argv_shell_quotes_apostrophe_paths_exactly() {
+    let argv =
+        harness::wire_claude_argv(vec!["claude".into()], Path::new("/tmp/it's/a2amx"), false);
+    assert_eq!(argv[1], "--mcp-config");
+    assert_eq!(argv[3], "--allowedTools");
+    assert_eq!(argv[5], "--settings");
+    let settings: serde_json::Value = serde_json::from_str(&argv[6]).expect("settings JSON");
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        "'/tmp/it'\\''s/a2amx' hook"
     );
 }
 
@@ -290,4 +327,73 @@ fn generic_readiness_only_uses_bracketed_paste_and_scroll_state() {
         false
     ));
     assert!(!harness::ready(Harness::Generic, &screen_from(&f1), true));
+}
+
+#[test]
+fn paste_wrappers_are_unwrapped_without_changing_malformed_text() {
+    use a2amx::messaging::unwrap_pastes;
+    let cases = [
+        (
+            "\n\n<pasted_content id=\"458d\">\nalpha\nbeta\n</pasted_content id=\"458d\">\n",
+            "alpha\nbeta",
+        ),
+        (
+            "hello \n\n<pasted_content id=\"458d\">\nalpha\n</pasted_content id=\"458d\">\n",
+            "hello alpha",
+        ),
+        (
+            "a\n\n<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">\nb\n\n<pasted_content id=\"2\">\nY\n</pasted_content id=\"2\">\n",
+            "aXbY",
+        ),
+        (
+            "\n\n<pasted_content id=\"458d\">\nalpha\n",
+            "\n\n<pasted_content id=\"458d\">\nalpha\n",
+        ),
+        (
+            "\n\n<pasted_content id=\"458d\">\nalpha\n</pasted_content id=\"zzzz\">\n",
+            "\n\n<pasted_content id=\"458d\">\nalpha\n</pasted_content id=\"zzzz\">\n",
+        ),
+        ("plain text", "plain text"),
+        (
+            "é\n\n<pasted_content id=\"\">\nx\n</pasted_content id=\"\">\n",
+            "é\n\n<pasted_content id=\"\">\nx\n</pasted_content id=\"\">\n",
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(unwrap_pastes(input), expected);
+    }
+}
+
+#[test]
+fn envelope_ids_require_tags_positive_bounded_digits_and_preserve_order() {
+    use a2amx::messaging::envelope_ids;
+    assert_eq!(
+        envelope_ids("<a2amx-message id=\"m_12\" from=\"x\">"),
+        vec![12]
+    );
+    assert_eq!(
+        envelope_ids(
+            "<a2amx-message id=\"m_3\"><a2amx-message id=\"m_3\"><a2amx-message id=\"m_7\">"
+        ),
+        vec![3, 7]
+    );
+    assert_eq!(
+        envelope_ids(
+            "<a2amx-message id=\"m_\"><a2amx-message id=\"m_x1\"><a2amx-message id=\"m_0\"> m_12"
+        ),
+        Vec::<i64>::new()
+    );
+    assert_eq!(
+        envelope_ids(
+            "<a2amx-message id=\"m_999999999999999999\"><a2amx-message id=\"m_1000000000000000000\">"
+        ),
+        vec![999_999_999_999_999_999]
+    );
+}
+
+#[test]
+fn restored_drafts_drop_controls_but_keep_newlines_tabs_and_unicode() {
+    use a2amx::messaging::sanitize_draft;
+    assert_eq!(sanitize_draft("a\u{1b}b\rc\0d\u{7f}e\u{85}f"), "abcdef");
+    assert_eq!(sanitize_draft("x\ny\tz é"), "x\ny\tz é");
 }

@@ -23,6 +23,7 @@ pub(crate) async fn run(session: Arc<Session>, store: Store, boot: String) {
                     .await?;
                 return Ok(false);
             }
+            session.restore_draft().await;
             if session.deliver() == Deliver::Hold {
                 return Ok(true);
             }

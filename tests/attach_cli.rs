@@ -425,9 +425,9 @@ async fn claude_new_wires_mcp_and_optional_peer_authorization() -> anyhow::Resul
         &[("OUT", &first_path)],
     )?;
     assert_eq!(first_output.status.code(), Some(0));
-    let first_args = wait_for_file(first.path(), 6).await;
+    let first_args = wait_for_file(first.path(), 8).await;
     let first_args: Vec<&str> = first_args.lines().collect();
-    assert_eq!(first_args.len(), 6);
+    assert_eq!(first_args.len(), 8);
     assert_eq!(first_args[0], "--mcp-config");
     let config: serde_json::Value = serde_json::from_str(first_args[1])?;
     let expected_exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_a2amx"))?
@@ -435,7 +435,7 @@ async fn claude_new_wires_mcp_and_optional_peer_authorization() -> anyhow::Resul
         .into_owned();
     assert_eq!(
         config["mcpServers"]["a2amx"]["command"],
-        serde_json::Value::String(expected_exe)
+        serde_json::Value::String(expected_exe.clone())
     );
     assert_eq!(
         config["mcpServers"]["a2amx"]["args"],
@@ -448,6 +448,12 @@ async fn claude_new_wires_mcp_and_optional_peer_authorization() -> anyhow::Resul
     );
     assert_eq!(first_args[4], "--append-system-prompt");
     assert_eq!(first_args[5], a2amx::harness::PEER_AUTHORIZATION_PROMPT);
+    assert_eq!(first_args[6], "--settings");
+    let settings: serde_json::Value = serde_json::from_str(first_args[7])?;
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        format!("'{expected_exe}' hook")
+    );
 
     let second = tempfile::NamedTempFile::new_in(dir.path())?;
     let second_path = second.path().to_string_lossy().into_owned();
@@ -468,8 +474,9 @@ async fn claude_new_wires_mcp_and_optional_peer_authorization() -> anyhow::Resul
         &[("OUT", &second_path)],
     )?;
     assert_eq!(second_output.status.code(), Some(0));
-    let second_args = wait_for_file(second.path(), 4).await;
+    let second_args = wait_for_file(second.path(), 6).await;
     let second_args: Vec<&str> = second_args.lines().collect();
+    assert_eq!(second_args.len(), 6);
     assert_eq!(
         second_args,
         vec![
@@ -477,6 +484,8 @@ async fn claude_new_wires_mcp_and_optional_peer_authorization() -> anyhow::Resul
             first_args[1],
             "--allowedTools",
             "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status",
+            "--settings",
+            first_args[7],
         ]
     );
     Ok(())

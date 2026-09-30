@@ -46,7 +46,7 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-fn configuration() -> Result<(SocketAddr, String)> {
+pub(crate) fn configuration() -> Result<(SocketAddr, String)> {
     let address = std::env::var("A2AMX_ADDR")
         .ok()
         .and_then(|value| value.parse::<SocketAddr>().ok());
@@ -201,6 +201,7 @@ impl McpServer {
                         "state": message.state,
                         "detail": message.detail,
                         "hold_reason": message.hold_reason,
+                        "evidence": message.evidence,
                     })),
                     response => response_payload(response),
                 }

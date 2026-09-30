@@ -11,6 +11,9 @@ pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 // shortcut: delivery uses one fixed 400 ms paste gap; the threshold was not bisected below 300 ms.
 pub const PASTE_GAP: Duration = Duration::from_millis(400);
 pub const COOLDOWN: Duration = Duration::from_secs(1);
+pub const MAX_CORRUPTED_SUBMISSIONS: u32 = 3;
+pub const MAX_RESTORE_BYTES: usize = 64 * 1024;
+pub const CORRUPTED_SUBMISSION_REASON: &str = "A2AMX blocked this prompt because it mixed your text with a peer message. The message will be delivered again.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -256,6 +259,64 @@ pub fn paste_bytes(envelope: &str) -> Vec<u8> {
     bytes.extend_from_slice(envelope.as_bytes());
     bytes.extend_from_slice(suffix);
     bytes
+}
+
+/// Replace every complete paste wrapper with its inner text.
+pub fn unwrap_pastes(prompt: &str) -> String {
+    // shortcut: wrapper shape was observed on Claude Code 2.1.285/2.1.286;
+    // update this matcher if a supported harness version changes its paste format.
+    const OPEN: &str = "\n\n<pasted_content id=\"";
+    let mut output = String::with_capacity(prompt.len());
+    let mut cursor = 0;
+    while let Some(offset) = prompt[cursor..].find(OPEN) {
+        let start = cursor + offset;
+        let id_start = start + OPEN.len();
+        let id_len = prompt.as_bytes()[id_start..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_alphanumeric())
+            .count();
+        let id_end = id_start + id_len;
+        if id_len > 0 && prompt[id_end..].starts_with("\">\n") {
+            let inner_start = id_end + 3;
+            let closing = format!("\n</pasted_content id=\"{}\">\n", &prompt[id_start..id_end]);
+            if let Some(end) = prompt[inner_start..].find(&closing) {
+                let inner_end = inner_start + end;
+                output.push_str(&prompt[cursor..start]);
+                output.push_str(&prompt[inner_start..inner_end]);
+                cursor = inner_end + closing.len();
+                continue;
+            }
+        }
+        output.push_str(&prompt[cursor..start + 1]);
+        cursor = start + 1;
+    }
+    output.push_str(&prompt[cursor..]);
+    output
+}
+
+/// Message sequence numbers of envelope tags, in first-appearance order.
+pub fn envelope_ids(text: &str) -> Vec<i64> {
+    const PREFIX: &str = "<a2amx-message id=\"m_";
+    let mut ids = Vec::new();
+    for (start, _) in text.match_indices(PREFIX) {
+        let digits = &text[start + PREFIX.len()..];
+        let count = digits.bytes().take_while(u8::is_ascii_digit).count();
+        if (1..=18).contains(&count) && digits.as_bytes().get(count) == Some(&b'"') {
+            if let Ok(seq) = digits[..count].parse::<i64>() {
+                if seq > 0 && !ids.contains(&seq) {
+                    ids.push(seq);
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Drop control characters other than newlines and tabs, without truncating.
+pub fn sanitize_draft(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+        .collect()
 }
 
 fn sgr_mouse_report_len(bytes: &[u8], start: usize) -> Option<usize> {

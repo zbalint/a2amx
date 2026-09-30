@@ -1047,11 +1047,81 @@ async fn storage_failure_returns_internal_without_acceptance_or_content_leak() {
 }
 
 #[tokio::test]
+async fn migrates_v1_database_and_preserves_submitted_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let database = rusqlite::Connection::open(dir.path().join("messages.db")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE messages (
+               seq INTEGER PRIMARY KEY AUTOINCREMENT,
+               boot TEXT NOT NULL,
+               sender_session TEXT NOT NULL,
+               sender_address TEXT NOT NULL,
+               recipient_session TEXT NOT NULL,
+               recipient_address TEXT NOT NULL,
+               subject TEXT NOT NULL,
+               body TEXT NOT NULL,
+               state TEXT NOT NULL,
+               detail TEXT,
+               accepted_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+             );
+             CREATE INDEX messages_recipient
+               ON messages (boot, recipient_session, state, seq);
+             CREATE TABLE attempts (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               message_seq INTEGER NOT NULL REFERENCES messages(seq),
+               started_at INTEGER NOT NULL,
+               outcome TEXT NOT NULL,
+               detail TEXT,
+               finished_at INTEGER
+             );
+             PRAGMA user_version = 1;
+             INSERT INTO messages
+               (seq, boot, sender_session, sender_address, recipient_session,
+                recipient_address, subject, body, state, detail, accepted_at, updated_at)
+             VALUES
+               (1, 'boot-v1', 's1', 'sender@host-a', 's2', 'recipient@host-a',
+                'subject', 'body', 'submitted', NULL, 2000000000, 2000000000);
+             INSERT INTO attempts
+               (message_seq, started_at, outcome, detail, finished_at)
+             VALUES (1, 2000000000, 'submitted', NULL, 2000000000);",
+        )
+        .unwrap();
+    drop(database);
+
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let messages = match admin
+        .request(Request::ListMessages {
+            session: None,
+            state: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Messages { messages } => messages,
+        response => panic!("unexpected response: {response:?}"),
+    };
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, "m_1");
+    assert_eq!(messages[0].state, "submitted");
+    assert_eq!(messages[0].evidence.as_deref(), Some("write_complete"));
+
+    daemon.shutdown().await.unwrap();
+    let database = rusqlite::Connection::open(dir.path().join("messages.db")).unwrap();
+    let version: i64 = database
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+}
+
+#[tokio::test]
 async fn daemon_refuses_a_future_database_schema() {
     let dir = tempfile::tempdir().unwrap();
     // The database is a startup input fixture, not an assertion side channel.
     let database = rusqlite::Connection::open(dir.path().join("messages.db")).unwrap();
-    database.pragma_update(None, "user_version", 2).unwrap();
+    database.pragma_update(None, "user_version", 3).unwrap();
     drop(database);
     let error = a2amx::daemon::Daemon::start(a2amx::daemon::DaemonConfig {
         state_dir: dir.path().to_owned(),
@@ -1064,7 +1134,7 @@ async fn daemon_refuses_a_future_database_schema() {
     .expect("future schema must fail startup");
     assert_eq!(
         error.to_string(),
-        "unsupported messages.db schema version 2"
+        "unsupported messages.db schema version 3"
     );
     assert!(
         !dir.path().join("admin.token").exists(),

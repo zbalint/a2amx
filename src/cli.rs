@@ -85,4 +85,6 @@ pub enum Command {
     Cancel { message: String },
     /// Run the stdio MCP server.
     Mcp,
+    /// Run the prompt-submit hook adapter (reads the harness payload on stdin).
+    Hook,
 }

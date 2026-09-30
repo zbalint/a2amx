@@ -262,6 +262,70 @@ impl Runtime {
         }
     }
 
+    async fn report_prompt(&self, session_id: &str, prompt: String) -> anyhow::Result<Response> {
+        let (_, session) =
+            lookup(self, session_id).ok_or_else(|| anyhow::anyhow!("session is unavailable"))?;
+        let text = messaging::unwrap_pastes(&prompt);
+        let mut known = Vec::new();
+        // shortcut: a session-token holder can forge prompts for that session;
+        // stronger attestation requires a different same-user trust contract.
+        for seq in messaging::envelope_ids(&text) {
+            if let Some(message) = self.store.get(seq).await? {
+                if message.boot == self.boot
+                    && message.recipient_session == session_id
+                    && matches!(
+                        message.state,
+                        MessageState::Delivering
+                            | MessageState::Submitted
+                            | MessageState::Unsubmitted
+                    )
+                    && !message.observed
+                {
+                    let envelope = messaging::render_envelope(
+                        &format!("m_{seq}"),
+                        &message.sender_address,
+                        &message.subject,
+                        &message.body,
+                    );
+                    known.push((seq, envelope));
+                }
+            }
+        }
+        if known.is_empty() {
+            session.note_submit(false);
+        } else if known.len() == 1 && text == known[0].1 {
+            self.store.record_receipt(known[0].0).await?;
+            session.note_submit(true);
+        } else {
+            let mut remainder = text;
+            let mut complete = true;
+            for (_, envelope) in &known {
+                if let Some(start) = remainder.find(envelope) {
+                    remainder.replace_range(start..start + envelope.len(), "");
+                } else {
+                    complete = false;
+                    break;
+                }
+            }
+            // shortcut: interleaved envelopes cannot be separated safely; their
+            // human text stays in the transcript until a harness can rewrite it.
+            let draft = complete.then(|| messaging::sanitize_draft(remainder.trim()));
+            session.note_corrupted(draft);
+            for (seq, _) in known {
+                self.store.reject_attempt(seq).await?;
+            }
+            session.message_notify().notify_one();
+            return Ok(Response::PromptVerdict {
+                verdict: "block".into(),
+                reason: Some(messaging::CORRUPTED_SUBMISSION_REASON.into()),
+            });
+        }
+        Ok(Response::PromptVerdict {
+            verdict: "allow".into(),
+            reason: None,
+        })
+    }
+
     async fn message_status(&self, role: &Role, id: &str) -> anyhow::Result<Response> {
         let Some(seq) = parse_message_id(id) else {
             return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
@@ -297,6 +361,8 @@ impl Runtime {
                 Some("deliver_hold")
             } else if state.hold == Some(Hold::UnsubmittedEnvelope) {
                 Some("unsubmitted_envelope")
+            } else if state.hold == Some(Hold::CorruptedSubmissions) {
+                Some("corrupted_submissions")
             } else if state.hold == Some(Hold::HumanDraft) {
                 Some("human_draft")
             } else if queued {
@@ -326,6 +392,18 @@ impl Runtime {
             state: message.state.as_str().into(),
             detail: message.detail,
             hold_reason: hold_reason.map(str::to_owned),
+            evidence: if message.state == MessageState::Submitted {
+                Some(
+                    if message.observed {
+                        "submission_observed"
+                    } else {
+                        "write_complete"
+                    }
+                    .into(),
+                )
+            } else {
+                None
+            },
         })
     }
 }
@@ -698,7 +776,10 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
         if matches!(&role, Role::Session(_))
             && !matches!(
                 &request,
-                Request::SendMessage { .. } | Request::ListAgents | Request::MessageStatus { .. },
+                Request::SendMessage { .. }
+                    | Request::ListAgents
+                    | Request::MessageStatus { .. }
+                    | Request::ReportPrompt { .. },
             )
         {
             response(
@@ -815,6 +896,12 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     message: "send_message needs a session token".into(),
                 },
                 Role::Session(id) => runtime.send_message(id, to, subject, message).await,
+            },
+            Request::ReportPrompt { prompt } => match &role {
+                Role::Admin => Response::Error {
+                    message: "report_prompt needs a session token".into(),
+                },
+                Role::Session(id) => runtime.report_prompt(id, prompt).await?,
             },
             Request::MessageStatus { id } => runtime.message_status(&role, &id).await?,
             Request::ListMessages { session, state } => {

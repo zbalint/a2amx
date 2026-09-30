@@ -9,6 +9,7 @@ pub mod daemon;
 mod delivery;
 pub mod emulator;
 pub mod harness;
+pub mod hook;
 pub mod mcp;
 pub mod messaging;
 pub mod prefix;

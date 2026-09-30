@@ -14,6 +14,7 @@ use a2amx::client::{Attachment, Client};
 use a2amx::daemon::{Daemon, DaemonConfig};
 use a2amx::emulator::Scroll;
 use a2amx::harness::Harness;
+use a2amx::hook;
 use a2amx::mcp;
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::wire::{ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary};
@@ -45,8 +46,10 @@ async fn main() -> std::process::ExitCode {
 async fn dispatch(cli: Cli) -> anyhow::Result<()> {
     let prefix = cli.prefix;
     let home_arg = cli.home;
-    if matches!(&cli.command, Command::Mcp) {
-        return mcp::run().await;
+    match &cli.command {
+        Command::Mcp => return mcp::run().await,
+        Command::Hook => return hook::run().await,
+        _ => {}
     }
     let home = resolve_home(home_arg)?;
     match cli.command {
@@ -57,7 +60,9 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             run_attach_command(home, prefix, session, force).await
         }
         Command::Kill { session } => run_kill(home, session).await,
-        Command::Mcp => unreachable!("MCP dispatch returned before resolving home"),
+        Command::Mcp | Command::Hook => {
+            unreachable!("early dispatch returned before resolving home")
+        }
         Command::Messages { session, state } => run_messages(home, session, state).await,
         Command::Cancel { message } => run_cancel(home, message).await,
     }
@@ -719,6 +724,10 @@ fn message_value_rows(messages: &[MessageInfo]) -> Vec<[String; 6]> {
                     .detail
                     .clone()
                     .or_else(|| message.hold_reason.clone())
+                    .or_else(|| {
+                        (message.evidence.as_deref() == Some("submission_observed"))
+                            .then(|| "submission_observed".to_owned())
+                    })
                     .unwrap_or_else(|| "-".to_owned()),
                 message.subject.clone(),
             ]

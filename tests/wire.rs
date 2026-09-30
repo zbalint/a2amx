@@ -296,6 +296,7 @@ fn messaging_control_variants_round_trip() {
         state: "pending".into(),
         detail: None,
         hold_reason: Some("human_draft".into()),
+        evidence: None,
     };
     let responses = [
         Response::Accepted { id: "m_1".into() },
@@ -332,4 +333,47 @@ fn messaging_control_variants_round_trip() {
             response
         );
     }
+}
+
+#[test]
+fn prompt_reports_verdicts_and_optional_evidence_have_exact_json() {
+    use a2amx::wire::MessageInfo;
+    let request = Request::ReportPrompt { prompt: "x".into() };
+    let encoded = serde_json::to_string(&request).unwrap();
+    assert_eq!(encoded, r#"{"type":"report_prompt","prompt":"x"}"#);
+    assert_eq!(serde_json::from_str::<Request>(&encoded).unwrap(), request);
+    for (response, expected) in [
+        (
+            Response::PromptVerdict {
+                verdict: "allow".into(),
+                reason: None,
+            },
+            r#"{"type":"prompt_verdict","verdict":"allow"}"#,
+        ),
+        (
+            Response::PromptVerdict {
+                verdict: "block".into(),
+                reason: Some("r".into()),
+            },
+            r#"{"type":"prompt_verdict","verdict":"block","reason":"r"}"#,
+        ),
+    ] {
+        let encoded = serde_json::to_string(&response).unwrap();
+        assert_eq!(encoded, expected);
+        assert_eq!(
+            serde_json::from_str::<Response>(&encoded).unwrap(),
+            response
+        );
+    }
+    let old = r#"{"id":"m_1","from":"agent-plan@host-a","to":"agent-review@host-a","subject":"Parser issue","state":"submitted","detail":null,"hold_reason":null}"#;
+    let mut message: MessageInfo = serde_json::from_str(old).unwrap();
+    assert_eq!(message.evidence, None);
+    assert_eq!(serde_json::to_string(&message).unwrap(), old);
+    message.evidence = Some("submission_observed".into());
+    let observed = r#"{"id":"m_1","from":"agent-plan@host-a","to":"agent-review@host-a","subject":"Parser issue","state":"submitted","detail":null,"hold_reason":null,"evidence":"submission_observed"}"#;
+    assert_eq!(serde_json::to_string(&message).unwrap(), observed);
+    assert_eq!(
+        serde_json::from_str::<MessageInfo>(observed).unwrap(),
+        message
+    );
 }

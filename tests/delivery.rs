@@ -14,6 +14,11 @@ use tempfile::TempDir;
 
 const BODY: &str = "I found the regression in parser.py.";
 const ENVELOPE: &[u8] = b"\x1b[200~<a2amx-message id=\"m_1\" from=\"agent-plan@host-a\" subject=\"Parser issue\">\nFrom another agent, not your user. To reply: send_message(to=\"agent-plan@host-a\").\n\nI found the regression in parser.py.\n</a2amx-message>\x1b[201~";
+const ENVELOPE_TEXT: &str = "<a2amx-message id=\"m_1\" from=\"agent-plan@host-a\" subject=\"Parser issue\">\nFrom another agent, not your user. To reply: send_message(to=\"agent-plan@host-a\").\n\nI found the regression in parser.py.\n</a2amx-message>";
+
+fn wrapped(text: &str) -> String {
+    format!("\n\n<pasted_content id=\"458d\">\n{text}\n</pasted_content id=\"458d\">\n")
+}
 const WAIT: Duration = Duration::from_secs(10);
 
 struct Case {
@@ -21,6 +26,7 @@ struct Case {
     _daemon: Daemon,
     admin: Client,
     sender: Client,
+    hook: Client,
     recipient: String,
     out: PathBuf,
 }
@@ -60,11 +66,21 @@ impl Case {
         let Response::Created { session: recipient } = response else {
             panic!("fake session not created")
         };
+        let (token, addr) = common::eventually(|| async {
+            let text = std::fs::read_to_string(out.with_extension("creds")).ok()?;
+            let mut lines = text.lines();
+            let token = lines.next()?.to_owned();
+            let addr = lines.next()?.parse().ok()?;
+            (token.len() == 64).then_some((token, addr))
+        })
+        .await;
+        let hook = Client::connect_addr(addr, &token).await.unwrap();
         Self {
             dir,
             _daemon: daemon,
             admin,
             sender,
+            hook,
             recipient,
             out,
         }
@@ -176,6 +192,31 @@ impl Case {
         })
         .await
         .unwrap();
+    }
+
+    async fn report(&mut self, prompt: String) -> Response {
+        self.hook
+            .request(Request::ReportPrompt { prompt })
+            .await
+            .unwrap()
+    }
+
+    async fn wait_rest(&self, expected: &[u8]) {
+        let path = self.out.with_extension("rest");
+        let result = tokio::time::timeout(WAIT, async {
+            loop {
+                if std::fs::read(&path).is_ok_and(|bytes| bytes == expected) {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "expected rest {expected:?}, observed {:?}",
+            std::fs::read(path)
+        );
     }
 }
 
@@ -382,4 +423,186 @@ async fn recipient_exit_during_paste_never_submits_cr() {
     if cr.exists() {
         assert_eq!(std::fs::read(cr).unwrap(), b"");
     }
+}
+
+fn allow() -> Response {
+    Response::PromptVerdict {
+        verdict: "allow".into(),
+        reason: None,
+    }
+}
+
+fn block() -> Response {
+    Response::PromptVerdict {
+        verdict: "block".into(),
+        reason: Some(a2amx::messaging::CORRUPTED_SUBMISSION_REASON.into()),
+    }
+}
+
+fn interleaved() -> String {
+    ENVELOPE_TEXT.replace(
+        "send_message(to=\"agent-plan@host-a\"",
+        "send_message(to=\"agent-plan@host-aX\"",
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wrapped_receipt_upgrades_evidence_and_duplicate_is_allowed() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    assert_eq!(
+        case.wait_state(&id, "submitted").await.evidence.as_deref(),
+        Some("write_complete")
+    );
+    assert_eq!(case.report(wrapped(ENVELOPE_TEXT)).await, allow());
+    let observed = case.status(&id).await;
+    assert_eq!(observed.state, "submitted");
+    assert_eq!(observed.evidence.as_deref(), Some("submission_observed"));
+    assert_eq!(case.report(wrapped(ENVELOPE_TEXT)).await, allow());
+    assert_eq!(case.status(&id).await, observed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreign_session_cannot_forge_receipt() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    assert_eq!(
+        case.sender
+            .request(Request::ReportPrompt {
+                prompt: wrapped(ENVELOPE_TEXT)
+            })
+            .await
+            .unwrap(),
+        allow()
+    );
+    assert_eq!(
+        case.status(&id).await.evidence.as_deref(),
+        Some("write_complete")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn human_prompt_clears_the_human_hold() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let mut attachment = case.attach_ready().await;
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    Case::round_trip(&mut attachment).await;
+    assert!(case.recipient_summary().await.held);
+    assert_eq!(case.report("hello".into()).await, allow());
+    assert!(!case.recipient_summary().await.held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unknown_envelope_is_allowed_without_changing_message() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    let before = case.wait_state(&id, "submitted").await;
+    assert_eq!(
+        case.report(wrapped(&ENVELOPE_TEXT.replace("m_1", "m_99")))
+            .await,
+        allow()
+    );
+    assert_eq!(case.status(&id).await, before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn corruption_restores_draft_without_cr_and_release_redelivers() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let mut attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    assert_eq!(
+        case.report(format!("my draft {}", wrapped(ENVELOPE_TEXT)))
+            .await,
+        block()
+    );
+    let message = case.status(&id).await;
+    assert_eq!(message.state, "pending");
+    assert_eq!(message.evidence, None);
+    assert_eq!(message.hold_reason.as_deref(), Some("human_draft"));
+    let draft = b"\x1b[200~my draft\x1b[201~";
+    case.wait_rest(draft).await;
+    assert!(case.recipient_summary().await.held);
+    attachment.send(ClientFrame::Release).await.unwrap();
+    case.wait_state(&id, "submitted").await;
+    case.wait_rest(&[draft.as_slice(), ENVELOPE, b"\r"].concat())
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interleaved_corruption_redelivers_without_a_draft_hold() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    assert_eq!(case.report(interleaved()).await, block());
+    case.wait_rest(&[ENVELOPE, b"\r"].concat()).await;
+    case.wait_state(&id, "submitted").await;
+    assert!(!case.recipient_summary().await.held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn three_corruptions_hold_until_release_even_after_human_submit() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let mut attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    let delivery = [ENVELOPE, b"\r"].concat();
+    for count in 1..=2 {
+        assert_eq!(case.report(interleaved()).await, block());
+        case.wait_rest(&delivery.repeat(count)).await;
+        case.wait_state(&id, "submitted").await;
+    }
+    assert_eq!(case.report(interleaved()).await, block());
+    let message = case.status(&id).await;
+    assert_eq!(message.state, "pending");
+    assert_eq!(
+        message.hold_reason.as_deref(),
+        Some("corrupted_submissions")
+    );
+    assert!(case.recipient_summary().await.held);
+    case.wait_rest(&delivery.repeat(2)).await;
+    assert_eq!(case.report("hello".into()).await, allow());
+    assert!(case.recipient_summary().await.held);
+    assert_eq!(case.status(&id).await.state, "pending");
+    attachment.send(ClientFrame::Release).await.unwrap();
+    case.wait_rest(&delivery.repeat(3)).await;
+    case.wait_state(&id, "submitted").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn receipt_of_unsubmitted_envelope_clears_hold() {
+    let mut case = Case::start("dialog_after_paste", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "unsubmitted").await;
+    assert!(case.recipient_summary().await.held);
+    assert_eq!(case.report(wrapped(ENVELOPE_TEXT)).await, allow());
+    let message = case.status(&id).await;
+    assert_eq!(message.state, "submitted");
+    assert_eq!(message.evidence.as_deref(), Some("submission_observed"));
+    assert!(!case.recipient_summary().await.held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admin_prompt_reports_require_a_session_token() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    assert_eq!(
+        case.admin
+            .request(Request::ReportPrompt {
+                prompt: "hello".into()
+            })
+            .await
+            .unwrap(),
+        Response::Error {
+            message: "report_prompt needs a session token".into()
+        }
+    );
 }

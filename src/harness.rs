@@ -133,6 +133,20 @@ pub fn ready(harness: Harness, screen: &Screen, scrolled: bool) -> bool {
     }
 }
 
+fn shell_quote(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for character in value.chars() {
+        if character == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(character);
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
 pub fn wire_claude_argv(mut argv: Vec<String>, exe: &Path, authorize_peers: bool) -> Vec<String> {
     let config = serde_json::json!({
         "mcpServers": {
@@ -142,7 +156,18 @@ pub fn wire_claude_argv(mut argv: Vec<String>, exe: &Path, authorize_peers: bool
             }
         }
     });
-    let mut extras = Vec::with_capacity(if authorize_peers { 8 } else { 6 });
+    let settings = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("{} hook", shell_quote(exe.to_string_lossy().as_ref())),
+                    "timeout": 5,
+                }]
+            }]
+        }
+    });
+    let mut extras = Vec::with_capacity(if authorize_peers { 10 } else { 8 });
     extras.push("--mcp-config".to_owned());
     extras.push(config.to_string());
     extras.push("--allowedTools".to_owned());
@@ -151,6 +176,8 @@ pub fn wire_claude_argv(mut argv: Vec<String>, exe: &Path, authorize_peers: bool
         extras.push("--append-system-prompt".to_owned());
         extras.push(PEER_AUTHORIZATION_PROMPT.to_owned());
     }
+    extras.push("--settings".to_owned());
+    extras.push(settings.to_string());
 
     let insertion = argv
         .iter()

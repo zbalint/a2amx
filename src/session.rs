@@ -67,12 +67,15 @@ pub(crate) struct State {
     pub dirty: bool,
     pub hold: Option<Hold>,
     pub last_submit: Option<Instant>,
+    pub restore: Option<String>,
+    pub corrupted: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Hold {
     HumanDraft,
     UnsubmittedEnvelope,
+    CorruptedSubmissions,
 }
 
 pub(crate) struct Delivery<'a> {
@@ -132,6 +135,8 @@ impl Session {
                 dirty: true,
                 hold: None,
                 last_submit: None,
+                restore: None,
+                corrupted: 0,
             }),
             notify: Notify::new(),
         });
@@ -264,13 +269,97 @@ impl Session {
 
     pub(crate) fn note_human_input(&self, bytes: &[u8]) {
         if messaging::input_is_typing(bytes) {
-            self.lock().hold.get_or_insert(Hold::HumanDraft);
+            let mut state = self.lock();
+            state.restore = None;
+            state.hold.get_or_insert(Hold::HumanDraft);
         }
     }
 
     pub(crate) fn release(&self) {
-        self.lock().hold = None;
+        let mut state = self.lock();
+        state.hold = None;
+        state.restore = None;
+        state.corrupted = 0;
+        drop(state);
         self.message_notify.notify_one();
+    }
+
+    pub(crate) fn note_submit(&self, clean_envelope: bool) {
+        let mut state = self.lock();
+        // shortcut: typing between submit and report can have its hold cleared;
+        // use harness-side composition epochs if this observed race becomes noisy.
+        if matches!(
+            state.hold,
+            Some(Hold::HumanDraft | Hold::UnsubmittedEnvelope)
+        ) {
+            state.hold = None;
+            state.restore = None;
+        }
+        if clean_envelope {
+            state.corrupted = 0;
+        }
+        drop(state);
+        self.message_notify.notify_one();
+    }
+
+    pub(crate) fn note_corrupted(&self, draft: Option<String>) -> bool {
+        let mut state = self.lock();
+        state.corrupted += 1;
+        let capped = state.corrupted >= messaging::MAX_CORRUPTED_SUBMISSIONS;
+        state.restore =
+            draft.filter(|text| !text.is_empty() && text.len() <= messaging::MAX_RESTORE_BYTES);
+        if capped {
+            state.hold = Some(Hold::CorruptedSubmissions);
+        } else if state.restore.is_some() {
+            state.hold = Some(Hold::HumanDraft);
+        }
+        capped
+    }
+
+    pub(crate) async fn restore_draft(&self) {
+        if self.lock().restore.is_none() {
+            return;
+        }
+        let _gate = self.input_gate.lock().await;
+        {
+            let mut state = self.lock();
+            if state.exit_code.is_some() {
+                state.restore = None;
+                return;
+            }
+            if state.restore.is_none()
+                || !harness::ready(
+                    self.harness,
+                    &state.emulator.screen(),
+                    state.emulator.is_scrolled(),
+                )
+            {
+                return;
+            }
+        }
+        // shortcut: a queue that never drains can hold this gate indefinitely;
+        // add a timeout if an unattended session stalls on input backpressure.
+        let Ok(permit) = self.input.reserve().await else {
+            self.lock().restore = None;
+            return;
+        };
+        let mut state = self.lock();
+        if state.exit_code.is_some() {
+            state.restore = None;
+            return;
+        }
+        // Human input can cancel restoration while reserving waits; never paste
+        // an old draft over that input, or into a newly displayed dialog.
+        if !harness::ready(
+            self.harness,
+            &state.emulator.screen(),
+            state.emulator.is_scrolled(),
+        ) {
+            return;
+        }
+        if let Some(text) = state.restore.take() {
+            permit.send(Some(messaging::paste_bytes(&text)));
+        }
     }
 
     pub(crate) fn message_notify(&self) -> &Notify {

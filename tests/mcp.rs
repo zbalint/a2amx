@@ -304,7 +304,8 @@ async fn mcp_initialize_tools_and_message_calls() {
             "to": "agent-review@host-a",
             "state": "pending",
             "detail": null,
-            "hold_reason": "deliver_hold"
+            "hold_reason": "deliver_hold",
+            "evidence": null
         })
     );
 

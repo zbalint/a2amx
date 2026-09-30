@@ -143,6 +143,9 @@ pub enum Request {
     MessageStatus {
         id: String,
     },
+    ReportPrompt {
+        prompt: String,
+    },
     ListMessages {
         session: Option<String>,
         state: Option<String>,
@@ -155,16 +158,38 @@ pub enum Request {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
-    Created { session: String },
-    Sessions { sessions: Vec<SessionSummary> },
+    Created {
+        session: String,
+    },
+    Sessions {
+        sessions: Vec<SessionSummary>,
+    },
     Attached,
     Ok,
-    Error { message: String },
-    Accepted { id: String },
-    Failed { code: String, message: String },
-    Agents { agents: Vec<AgentSummary> },
-    Status { message: MessageInfo },
-    Messages { messages: Vec<MessageInfo> },
+    Error {
+        message: String,
+    },
+    Accepted {
+        id: String,
+    },
+    Failed {
+        code: String,
+        message: String,
+    },
+    Agents {
+        agents: Vec<AgentSummary>,
+    },
+    Status {
+        message: MessageInfo,
+    },
+    Messages {
+        messages: Vec<MessageInfo>,
+    },
+    PromptVerdict {
+        verdict: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +232,8 @@ pub struct MessageInfo {
     pub state: String,
     pub detail: Option<String>,
     pub hold_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
 }
 
 /// Server-to-client stream frame.
