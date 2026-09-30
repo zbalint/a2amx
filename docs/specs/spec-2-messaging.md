@@ -774,7 +774,8 @@ Files to add:
   `render_envelope` matches both worked examples exactly; `paste_bytes` length is
   222 for the first. `input_is_typing` matches the table in §3. `validate_name` /
   `validate_host` accept `agent-plan`, `a`, a 63-character name; reject `Agent`,
-  `-a`, a 64-character name, `s12`, and (for `validate_name` only) accept `s12x`.
+  `-a`, a 64-character name; `validate_name` alone also rejects `s12` (and accepts
+  `s12x`), while `validate_host("s12")` succeeds (see Amendment 1).
   `local_part` for the four cases (`agent-plan` → itself, `agent-plan@host-a` with
   host `host-a` → `agent-plan`, `agent-plan@host-b` → `None`, `a@b@host-a` → `a@b`).
   `wire_claude_argv`: appends at the end; inserts before a literal `--`; omits the
@@ -959,3 +960,13 @@ git diff --check                             # no output
 and every behavior listed in §3–§12 has at least one test in §14 (the transient
 `cooldown` hold reason is the one exception). Leave the diff
 **uncommitted** and **unmerged** in the worktree.
+
+## Amendment 1 (adjudicating OMP BLOCKED: `s12` vs `validate_host`)
+
+§3.1 is authoritative: the `s[0-9]+` reservation exists only because session ids share
+the address namespace with agent names, so it applies to `validate_name` alone; a host
+name `s12` is a valid host and `validate_host("s12")` must succeed. The §14 `S6` bullet
+for `validate_name` / `validate_host` is corrected accordingly: both reject `Agent`,
+`-a`, and a 64-character name; only `validate_name` rejects `s12`. No other section
+changes; the §14 naming bullet that lists `s12` concerns session names
+(`validate_name`) and stays as written. Scope and acceptance are unchanged.
