@@ -309,7 +309,12 @@ impl Runtime {
             }
             // shortcut: interleaved envelopes cannot be separated safely; their
             // human text stays in the transcript until a harness can rewrite it.
-            let draft = complete.then(|| messaging::sanitize_draft(remainder.trim()));
+            // A leftover wrapper tag means unwrapping failed; pasting it back would put
+            // harness markup in the human's composer.
+            let draft = (complete
+                && !remainder.contains("<pasted_content")
+                && !remainder.contains("</pasted_content"))
+            .then(|| messaging::sanitize_draft(remainder.trim()));
             session.note_corrupted(draft);
             for (seq, _) in known {
                 self.store.reject_attempt(seq).await?;

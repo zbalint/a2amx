@@ -464,6 +464,35 @@ async fn wrapped_receipt_upgrades_evidence_and_duplicate_is_allowed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trimmed_wrapper_from_a_mid_turn_submit_is_a_receipt() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    let trimmed =
+        format!("<pasted_content id=\"7c5f\">\n{ENVELOPE_TEXT}\n</pasted_content id=\"7c5f\">");
+    assert_eq!(case.report(trimmed).await, allow());
+    assert_eq!(
+        case.status(&id).await.evidence.as_deref(),
+        Some("submission_observed")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leftover_wrapper_tags_are_never_restored_as_a_draft() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    // Text glued after the closing tag defeats unwrapping; the tags must not come back.
+    let odd = format!("<pasted_content id=\"zz\">\n{ENVELOPE_TEXT}\n</pasted_content id=\"zz\">X");
+    assert_eq!(case.report(odd).await, block());
+    case.wait_rest(&[ENVELOPE, b"\r"].concat()).await;
+    case.wait_state(&id, "submitted").await;
+    assert!(!case.recipient_summary().await.held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn foreign_session_cannot_forge_receipt() {
     let mut case = Case::start("ready", Deliver::Auto).await;
     let _attachment = case.attach_ready().await;

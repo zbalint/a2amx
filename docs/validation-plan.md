@@ -90,6 +90,9 @@ been run against a live pair of agents yet.
 | Corrupted submission: block behavior | Claude Code 2.1.285, 2.1.286 | A hook block stops the prompt, empties the composer, and shows the original prompt in the transcript |
 | Large paste placeholder | Claude Code 2.1.285, 2.1.286 | The hook receives the full text wrapped in `<pasted_content id="...">` tags with a random id. Every multi-line paste and every single line from about 1000 characters is wrapped; single lines up to 686 characters are not. The exact single-line threshold is not pinned |
 | Mid-turn delivery and receipts | Claude Code 2.1.285 | A message submitted during a turn is queued and the hook fires at submit time with the active turn's `prompt_id`, so matching uses the A2AMX id |
+| Mid-turn wrapper shape | Claude Code 2.1.286 | A paste queued mid-turn reaches the hook with the prompt's ends trimmed: no blank line before the opening tag and no newline after the closing tag. An idle submit keeps both |
+| Composer glyph | Claude Code 2.1.286 | The composer is drawn as `❯` followed by U+00A0, not a plain space; a readiness check that requires a plain space never sees a ready composer |
+| Two live agents, stress run | Claude Code 2.1.286 | 30 delivery attempts: 21 submitted, all with a hook receipt; the 9 rejections belong to three messages that contain a tab. Bursts, detach and attach while messaging, and awkward payloads (Unicode, shell-looking text, blank lines, indentation) delivered intact |
 | Hook timeout | Claude Code 2.1.285 | A hook that exceeds its timeout is cut off, the prompt proceeds, and a notice is shown |
 | Raw-typed envelope | Claude Code 2.1.286 | Small paced chunks arrive unwrapped; one fast raw write is collapsed like a paste |
 | Duplicate and foreign receipts | automated tests | A repeated receipt is idempotent; a receipt from another session is ignored |

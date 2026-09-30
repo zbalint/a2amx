@@ -277,8 +277,9 @@ cooldown follows each submission. An earlier unresolved message blocks later one
 order is acceptance order.
 
 **Readiness.** `--harness claude` inspects the screen: bracketed paste on, not
-scrolled back, cursor visible, `❯ ` at the cursor row's start between two full-width
-rules above and below, and no row containing `Enter to confirm` or `Esc to cancel`.
+scrolled back, cursor visible, `❯` followed by a space or a non-breaking space (Claude
+Code 2.1.286 draws U+00A0) at the cursor row's start between two full-width rules above
+and below, and no row containing `Enter to confirm` or `Esc to cancel`.
 Bracketed paste alone is not enough because Claude Code keeps it enabled while a
 dialog is open. `--harness generic` is ready when bracketed paste is on and the
 session is not scrolled back. The default for `claude` is `--deliver auto` and for
@@ -350,7 +351,10 @@ hook):
 - A paste with a newline, or a single line of roughly 1000 characters or more, shows in
   the composer as `[Pasted text #N]` and reaches the hook as a blank line, an opening
   `<pasted_content id="ID">` line, the text, and a closing `</pasted_content id="ID">`
-  line. The id is random. Single lines up to 686 characters arrive unwrapped; the exact collapse
+  line. The id is random. When the paste is the whole prompt and Claude Code queues it
+  mid-turn, the prompt's ends are trimmed: the blank line before the opening tag and the
+  newline after the closing tag are missing, so the matcher accepts a wrapper at the
+  start or end of the prompt without them. Single lines up to 686 characters arrive unwrapped; the exact collapse
   threshold is not pinned. Every delivered envelope has newlines, so the matcher
   unwraps first.
 - Input sent as raw keystrokes in small paced chunks arrives unwrapped, but one fast raw

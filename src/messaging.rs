@@ -263,32 +263,51 @@ pub fn paste_bytes(envelope: &str) -> Vec<u8> {
 
 /// Replace every complete paste wrapper with its inner text.
 pub fn unwrap_pastes(prompt: &str) -> String {
-    // shortcut: wrapper shape was observed on Claude Code 2.1.285/2.1.286;
-    // update this matcher if a supported harness version changes its paste format.
-    const OPEN: &str = "\n\n<pasted_content id=\"";
+    // shortcut: wrapper shapes were observed on Claude Code 2.1.285/2.1.286 (idle submits keep
+    // the surrounding blank line and newline; queued mid-turn submits have the prompt's ends
+    // trimmed); update this matcher if a supported harness version changes its paste format.
+    const OPEN: &str = "<pasted_content id=\"";
     let mut output = String::with_capacity(prompt.len());
     let mut cursor = 0;
-    while let Some(offset) = prompt[cursor..].find(OPEN) {
-        let start = cursor + offset;
-        let id_start = start + OPEN.len();
+    let mut search = 0;
+    while let Some(offset) = prompt[search..].find(OPEN) {
+        let tag = search + offset;
+        search = tag + 1;
+        let start = if tag == 0 {
+            0
+        } else if prompt[..tag].ends_with("\n\n") {
+            tag - 2
+        } else {
+            continue;
+        };
+        if start < cursor {
+            continue;
+        }
+        let id_start = tag + OPEN.len();
         let id_len = prompt.as_bytes()[id_start..]
             .iter()
             .take_while(|byte| byte.is_ascii_alphanumeric())
             .count();
         let id_end = id_start + id_len;
-        if id_len > 0 && prompt[id_end..].starts_with("\">\n") {
-            let inner_start = id_end + 3;
-            let closing = format!("\n</pasted_content id=\"{}\">\n", &prompt[id_start..id_end]);
-            if let Some(end) = prompt[inner_start..].find(&closing) {
-                let inner_end = inner_start + end;
-                output.push_str(&prompt[cursor..start]);
-                output.push_str(&prompt[inner_start..inner_end]);
-                cursor = inner_end + closing.len();
-                continue;
-            }
+        if id_len == 0 || !prompt[id_end..].starts_with("\">\n") {
+            continue;
         }
-        output.push_str(&prompt[cursor..start + 1]);
-        cursor = start + 1;
+        let inner_start = id_end + 3;
+        let closing = format!("\n</pasted_content id=\"{}\">", &prompt[id_start..id_end]);
+        let Some(end) = prompt[inner_start..].find(&closing) else {
+            continue;
+        };
+        let inner_end = inner_start + end;
+        let mut after = inner_end + closing.len();
+        if prompt[after..].starts_with('\n') {
+            after += 1;
+        } else if after != prompt.len() {
+            continue;
+        }
+        output.push_str(&prompt[cursor..start]);
+        output.push_str(&prompt[inner_start..inner_end]);
+        cursor = after;
+        search = after;
     }
     output.push_str(&prompt[cursor..]);
     output

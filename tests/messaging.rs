@@ -265,6 +265,17 @@ fn claude_readiness_accepts_idle_and_mid_turn_composers() {
 }
 
 #[test]
+fn claude_readiness_accepts_the_non_breaking_space_after_the_glyph() {
+    // Claude Code 2.1.286 draws its composer as the glyph plus U+00A0, not a plain space.
+    let rules = "─".repeat(40);
+    let bytes = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯\u{a0}\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    )
+    .into_bytes();
+    assert!(harness::ready(Harness::Claude, &screen_from(&bytes), false));
+}
+
+#[test]
 fn claude_readiness_rejects_each_non_ready_fixture() {
     let f1 = f1_bytes();
 
@@ -357,6 +368,38 @@ fn paste_wrappers_are_unwrapped_without_changing_malformed_text() {
         (
             "é\n\n<pasted_content id=\"\">\nx\n</pasted_content id=\"\">\n",
             "é\n\n<pasted_content id=\"\">\nx\n</pasted_content id=\"\">\n",
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(unwrap_pastes(input), expected);
+    }
+}
+
+#[test]
+fn paste_wrappers_trimmed_at_the_prompt_ends_are_still_unwrapped() {
+    use a2amx::messaging::unwrap_pastes;
+    // A message queued mid-turn reaches the hook with the prompt's ends trimmed.
+    let cases = [
+        (
+            "<pasted_content id=\"7c5f\">\nalpha\n</pasted_content id=\"7c5f\">",
+            "alpha",
+        ),
+        (
+            "<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">\n",
+            "X",
+        ),
+        (
+            "\n\n<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">",
+            "X",
+        ),
+        // Text glued to the tags is not a wrapper.
+        (
+            "hello <pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">",
+            "hello <pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">",
+        ),
+        (
+            "<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">tail",
+            "<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">tail",
         ),
     ];
     for (input, expected) in cases {

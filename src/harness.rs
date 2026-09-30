@@ -114,7 +114,10 @@ fn claude_ready(screen: &Screen, scrolled: bool) -> bool {
     }
 
     let row = screen.cursor.row;
-    if cell_char(screen, row, 0) != Some('❯') || cell_char(screen, row, 1) != Some(' ') {
+    // Claude Code 2.1.286 draws the glyph followed by U+00A0; older builds used a plain space.
+    if cell_char(screen, row, 0) != Some('❯')
+        || !matches!(cell_char(screen, row, 1), Some(' ' | '\u{a0}'))
+    {
         return false;
     }
     if row == 0 || row.saturating_add(1) >= screen.size.rows {
