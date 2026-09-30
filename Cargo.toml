@@ -25,4 +25,5 @@ tempfile = "3.27.0"
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
-todo = "allow" # shortcut: scaffold bodies are todo!(); flip to deny once spec 1 lands
+todo = "deny"
+unimplemented = "deny"

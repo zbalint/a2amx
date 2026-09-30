@@ -4,12 +4,24 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+use crate::prefix::parse_prefix;
+
 #[derive(Debug, Parser)]
 #[command(name = "a2amx", version)]
 pub struct Cli {
-    /// State directory. Defaults to `A2AMX_HOME`.
+    /// State directory. Defaults to A2AMX_HOME, XDG_STATE_HOME, or $HOME.
     #[arg(long, global = true, env = "A2AMX_HOME")]
     pub home: Option<PathBuf>,
+
+    /// Prefix key used by an attached client.
+    #[arg(
+        long,
+        global = true,
+        env = "A2AMX_PREFIX",
+        default_value = "C-space",
+        value_parser = parse_prefix
+    )]
+    pub prefix: u8,
 
     #[command(subcommand)]
     pub command: Command,

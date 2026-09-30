@@ -73,7 +73,7 @@ fn snapshot_roundtrips_wide_characters_and_cursor_position() {
 
 #[test]
 fn snapshot_roundtrips_alt_screen_and_input_modes() {
-    let (original, restored) = roundtrip(b"main\x1b[?1049h\x1b[?2004h\x1b[?1h\x1b[?1004halt");
+    let (original, restored) = roundtrip(b"main\x1b[?1049h\x1b[H\x1b[?2004h\x1b[?1h\x1b[?1004halt");
     let screen = restored.screen();
     assert!(screen.modes.alt_screen);
     assert!(screen.modes.bracketed_paste);
