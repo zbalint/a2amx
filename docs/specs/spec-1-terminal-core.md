@@ -499,3 +499,22 @@ diff <(git show HEAD:Cargo.toml | deps) <(deps < Cargo.toml)   # no output (no n
 
 and every behavior listed in §3–§9 has at least one test in §10. Leave the diff
 **uncommitted** and **unmerged** in the worktree.
+
+## Amendment 1: `src/lib.rs` scope
+
+OMP reported (correctly) that §0 limits `src/lib.rs` to dropping the
+`#![allow(unused_variables, dead_code)]` attribute, while §11 also requires
+rewording the module documentation and §13's `todo!` scan matches it
+(`src/lib.rs:3`, the text "Bodies marked `todo!()`").
+
+Resolution: §0's `src/lib.rs` scope is widened, and only that, to: drop the
+`#![allow(unused_variables, dead_code)]` attribute **and** its two-line `//
+shortcut:` comment, and reword the `//!` module documentation so it no longer
+contains the text `todo!()` or `unimplemented!()`. Nothing else in `src/lib.rs`
+changes (the `pub mod` list stays). §11 and §13 are unchanged.
+
+Checked against the full `rg -n 'todo!\(|unimplemented!\(' src tests` output on the
+current tree: the only matches outside `todo!()` bodies that §3–§9 replace are
+`src/lib.rs:3` (this amendment), `src/lib.rs:6` (the `shortcut:` comment removed
+above), and `src/main.rs:11` (a body in §9's scope). No other file needs a scope
+change.
