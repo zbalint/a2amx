@@ -11,10 +11,11 @@ their screen state while detached, and lets one human attach, detach, switch, an
 scroll from a client that redraws from the terminal model. The single-machine
 messaging core is implemented too: durable SQLite messages, per-session tokens, a
 stdio MCP server, and delivery into a session's composer that protects an unfinished
-human draft. Hooks and submission receipts, agent-initiated launch, Codex and OMP
-profiles, and cross-host support are not built yet. Everything in the design
-documents beyond these two slices is still a proposal unless identified as a
-requirement.
+human draft. For Claude Code, a prompt-submit hook adds submission receipts and a
+safety net that blocks a prompt mixing a peer message with a human draft.
+Agent-initiated launch, hooks for Codex and OMP, their delivery profiles, and
+cross-host support are not built yet. Everything in the design documents beyond
+these slices is still a proposal unless identified as a requirement.
 
 The implementation direction is **Rust on Linux**, with communication and session
 management across multiple hosts from the outset.
@@ -73,12 +74,12 @@ hosting does not imply safe automatic message delivery into every terminal progr
 | [Delivery](docs/delivery.md) | Input arbitration, message evidence, hooks, retry, ordering, or failure recovery |
 | [Validation plan](docs/validation-plan.md) | The checks each implementation slice must pass |
 
-The terminal-core and messaging-core slices are done; their locked specs are
-[spec 1](docs/specs/spec-1-terminal-core.md) and
-[spec 2](docs/specs/spec-2-messaging.md). The next milestone is hooks and submission
-receipts, one harness at a time starting with Claude Code, then the Codex and OMP
-profiles. Cross-host support follows. The checks each slice must pass are in the
-validation plan.
+The terminal-core, messaging-core, and Claude Code hook slices are done; their locked
+specs are [spec 1](docs/specs/spec-1-terminal-core.md),
+[spec 2](docs/specs/spec-2-messaging.md), and
+[spec 2b](docs/specs/spec-2b-hooks-receipts.md). The next milestones are the Codex and
+OMP profiles, each with its own hook, then cross-host support. The checks each slice
+must pass, and the results recorded so far, are in the validation plan.
 
 ## Building and trying it
 
@@ -96,10 +97,13 @@ a2amx messages [--session <id>] [--state pending]
 a2amx cancel <message-id>
 ```
 
-`--harness claude` wires the MCP server into Claude Code and delivers messages
-automatically; `--harness generic` (the default) holds them, and `--deliver auto`
-opts a generic session in to blind delivery. `a2amx mcp` is the stdio MCP server that
-harnesses start; it reads `A2AMX_ADDR` and `A2AMX_TOKEN` from its environment.
+`--harness claude` wires the MCP server and the prompt-submit hook into Claude Code
+and delivers messages automatically; `--harness generic` (the default) holds them, and
+`--deliver auto` opts a generic session in to blind delivery. `a2amx mcp` is the stdio
+MCP server that harnesses start; it reads `A2AMX_ADDR` and `A2AMX_TOKEN` from its
+environment. `a2amx hook` is the Claude Code `UserPromptSubmit` hook, installed through
+an inline `--settings` argument; it reads the harness payload on stdin, always exits 0,
+and prints output only when it blocks a prompt.
 
 The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,
 then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-Space (`--prefix` or

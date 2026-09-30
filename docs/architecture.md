@@ -2,7 +2,8 @@
 
 Status: design draft, with two implemented slices: the terminal core (see
 [Implemented: terminal core](#implemented-terminal-core)) and the single-machine
-messaging core (see [Implemented: messaging core](#implemented-messaging-core)).
+messaging core, including the Claude Code hook (see
+[Implemented: messaging core](#implemented-messaging-core)).
 Everything else here is a proposal, and no compatibility results are implied.
 
 This document owns topology and scope. [Delivery](delivery.md) owns input and
@@ -242,8 +243,8 @@ machine; there is no central-versus-host split yet.
   to SQLite (`messages.db` in the state dir: WAL, `synchronous=FULL`, 0600 with its
   `-wal` and `-shm` files). All SQLite work runs on one dedicated thread that owns the
   connection. Tables `messages` and `attempts` carry a `PRAGMA user_version`
-  migration; `attempts` exists so a later receipt can attach without a schema
-  change. Message ids are `m_<seq>`.
+  migration (current version 2; version 2 added `attempts.receipt_at`, and a version 1
+  database is migrated in place). Message ids are `m_<seq>`.
 - **Restart behavior.** Sessions do not survive a daemon restart, so messages still
   open at startup become `undeliverable` with detail `daemon_restarted`, and a
   graceful shutdown marks the remaining open ones `daemon_stopped`. Session ids
@@ -253,8 +254,8 @@ machine; there is no central-versus-host split yet.
 - **Identity from the token.** Each session gets a random 64-hex token at spawn, passed
   as `A2AMX_TOKEN` with `A2AMX_ADDR` in the child's environment (never argv). A
   connection that presents a session token has only session powers (`list_agents`,
-  `send_message`, and `message_status` for its own messages); the sender is always
-  that session. The admin token keeps the human's powers and cannot send.
+  `send_message`, `message_status` for its own messages, and `report_prompt` for the
+  hook); the sender is always that session. The admin token keeps the human's powers and cannot send.
 - **Addresses.** A session is `<name>@<host>` (`a2amx new --name`, daemon
   `--host-name`) or `<id>@<host>` when unnamed. Names match `[a-z0-9][a-z0-9-]{0,62}`,
   may not look like a session id (`s12`), and are unique among all sessions still in
@@ -266,7 +267,9 @@ machine; there is no central-versus-host split yet.
   `queue_full`, `rate_limited`, `invalid_content`, `unknown_message`, `internal`.
 - **Delivery.** One task per session delivers its pending messages in acceptance
   order. See [delivery](delivery.md#implemented-pty-delivery) for the transaction and
-  the hold reasons. Delivery ends at "submitted, outcome unknown".
+  the hold reasons. Without a hook delivery ends at "submitted, outcome unknown"
+  (reported as `evidence: write_complete`); with the Claude Code hook a matching
+  prompt reaches `submission_observed`.
 - **MCP server.** `a2amx mcp` is a hand-written stdio JSON-RPC server with three
   tools: `list_agents`, `send_message`, `message_status`. It runs wherever the
   harness runs and connects to the daemon over TCP. A `send_message` whose connection
@@ -275,6 +278,16 @@ machine; there is no central-versus-host split yet.
   `--allowedTools`, and (unless `--no-authorize-peers`) an `--append-system-prompt`
   that authorizes peer messages, because Claude Code otherwise declines to act on a
   pasted envelope. The wording is provisional.
+- **Claude Code hook.** The same launch also appends an inline `--settings` argument
+  holding one `UserPromptSubmit` command hook that runs `a2amx hook`. The hook reads
+  the harness payload on stdin, sends the prompt to the daemon with the session token
+  (`ReportPrompt`), and prints a block decision or nothing; it fails open on every
+  error and always exits 0. The daemon unwraps the harness's paste wrappers, matches
+  the whole text against the envelope it delivered, and answers allow or block: an
+  exact envelope records a receipt, a human prompt clears the human hold, and an
+  envelope mixed with other text is blocked, re-queued as a new attempt, and the
+  human's text is restored as a paste without Enter (three strikes per session, then
+  the `corrupted_submissions` hold). See [delivery](delivery.md#implemented-claude-code-hook).
 - **Human controls.** `a2amx list` gains NAME, PENDING, and HELD columns; `a2amx
   messages [--session S] [--state ...]` lists messages; `a2amx cancel <id>` cancels a
   pending one; the prefix then `r` releases a session's hold. Nothing expires or
@@ -284,9 +297,8 @@ Known gaps kept as `// shortcut:` comments where the code lives: a split escape
 sequence can hold a session, the paste-then-`CR` gap is one fixed constant, an
 unreadable PTY can hold the writer gate, and message bodies are stored as plaintext.
 
-Not yet built: hooks and submission receipts (spec 2b, one harness at a time,
-starting with Claude Code), agent-initiated launch, Codex and OMP profiles, and
-everything cross-host.
+Not yet built: hooks and receipts for Codex and OMP, agent-initiated launch, Codex and
+OMP delivery profiles, and everything cross-host.
 
 ## Wrappers and containers
 

@@ -1,6 +1,6 @@
 # Validation plan
 
-Status: checks to run while building the first slices. Only the terminal core is implemented (see architecture).
+Status: checks to run while building the first slices. The terminal core, the single-machine messaging core, and the Claude Code hook are implemented (see architecture); [recorded results](#recorded-results) lists what has been observed so far.
 
 PTY hosting, typing into a harness, and prompt-submit hooks are established practice
 and are not re-proven here. The checks below cover what is specific to A2AMX: safe
@@ -78,15 +78,34 @@ An accepted message stays discoverable with an honest outcome in every tested fa
 window. Missing evidence is never treated as proof that a message was not submitted.
 No exactly-once processing claim is made.
 
-## Repository checks at the documentation stage
+## Recorded results
 
-There is no application build or test suite yet. Documentation changes should:
+Observations so far. Each names the harness version and how it was observed; none has
+been run against a live pair of agents yet.
+
+| Check | Harness | Result |
+| --- | --- | --- |
+| Paste and submit timing | Claude Code 2.1.285 | A `CR` in the same write as a bracketed paste does not submit; a `CR` written separately 300 ms or more later does, including mid-turn, where the message is queued |
+| Readiness screens | Claude Code 2.1.285 | The trust dialog enables bracketed paste, so the screen check (composer rules, no dialog footer) is required; the composer stays visible while a turn runs |
+| Corrupted submission: block behavior | Claude Code 2.1.285, 2.1.286 | A hook block stops the prompt, empties the composer, and shows the original prompt in the transcript |
+| Large paste placeholder | Claude Code 2.1.285, 2.1.286 | The hook receives the full text wrapped in `<pasted_content id="...">` tags with a random id. Every multi-line paste and every single line from about 1000 characters is wrapped; single lines up to 686 characters are not. The exact single-line threshold is not pinned |
+| Mid-turn delivery and receipts | Claude Code 2.1.285 | A message submitted during a turn is queued and the hook fires at submit time with the active turn's `prompt_id`, so matching uses the A2AMX id |
+| Hook timeout | Claude Code 2.1.285 | A hook that exceeds its timeout is cut off, the prompt proceeds, and a notice is shown |
+| Raw-typed envelope | Claude Code 2.1.286 | Small paced chunks arrive unwrapped; one fast raw write is collapsed like a paste |
+| Duplicate and foreign receipts | automated tests | A repeated receipt is idempotent; a receipt from another session is ignored |
+
+Not yet checked: any of the above on Codex or OMP (block behavior on Codex in
+particular), a real run with two live agents messaging each other, and the cross-host
+sections of this plan.
+
+## Repository checks
+
+The repository has a build and test suite. Before a change is done, `cargo test`,
+`cargo clippy --all-targets -- -D warnings`, and `cargo fmt --check` must pass (see
+[AGENTS.md](../AGENTS.md)). Documentation changes should also:
 
 - Pass `git diff --check` and review of new files as well as tracked diffs.
 - Have resolvable relative links and consistent requirement/proposal labels.
 - Contain no personal paths, real infrastructure details, credentials, private
   transcripts, or memory exports.
 - Avoid presenting planned commands or compatibility as implemented.
-
-Once implementation starts, add the actual build and test commands to the project
-documentation and replace this list with the appropriate checks.

@@ -1,10 +1,11 @@
 # Message delivery
 
-Status: proposed semantics, with one implemented slice: single-machine PTY delivery
-ending at "submitted, outcome unknown" (see
-[Implemented: PTY delivery](#implemented-pty-delivery)). Everything else in this
-document, including hooks and receipts, defines the contract to build and check, not
-implemented behavior.
+Status: proposed semantics, with two implemented slices: single-machine PTY delivery
+(see [Implemented: PTY delivery](#implemented-pty-delivery)) and, for Claude Code only,
+the prompt-submit hook with submission receipts and the corrupted-submission verdict
+(see [Implemented: Claude Code hook](#implemented-claude-code-hook)). Everything else
+in this document, including hooks for other harnesses, defines the contract to build
+and check, not implemented behavior.
 
 ## Guarantees and limits
 
@@ -145,7 +146,7 @@ can do, from the harness documentation or source at the time of writing:
 
 | Harness | Rewrite the prompt | Block the prompt |
 | --- | --- | --- |
-| Claude Code | No; it can only add context | Yes; the prompt is erased from the input box |
+| Claude Code | No; it can only add context | Yes; the prompt is erased from the input box (verified on 2.1.285 and 2.1.286) |
 | Codex | No; it can only add context | Yes; the documentation does not say what happens to the text |
 | OMP | Yes; the extension `input` handler can return replacement text | Yes |
 
@@ -248,8 +249,8 @@ lookup, report ambiguous acceptance instead of encouraging blind resend.
 ## Implemented: PTY delivery
 
 Built from [spec 2](specs/spec-2-messaging.md); the spec is the contract, this
-section is the summary. There are no hooks or receipts yet (spec 2b), so a message
-never goes beyond "submitted, outcome unknown".
+section is the summary. Without a hook a message never goes beyond "submitted, outcome
+unknown"; the [Claude Code hook](#implemented-claude-code-hook) adds the receipt.
 
 **Message states.** `pending`, `delivering`, `submitted`, `unsubmitted`, `cancelled`,
 `undeliverable`. `pending` and `delivering` are open. Nothing expires automatically;
@@ -289,18 +290,79 @@ session is not scrolled back. The default for `claude` is `--deliver auto` and f
 | --- | --- |
 | `deliver_hold` | the session was started with `--deliver hold` |
 | `unsubmitted_envelope` | an envelope was pasted but not submitted; it may still be in the composer |
-| `human_draft` | a human typed or pasted since the last release |
+| `corrupted_submissions` | three corrupted submissions in a row; only an explicit release clears it |
+| `human_draft` | a human typed or pasted since the last release, or a blocked draft was restored |
 | `queued` | an earlier message for this recipient is still open |
 | `not_ready` | the harness profile says the composer is not ready |
 | `cooldown` | a message was submitted less than a second ago |
 
 The dirty flag is set by human typing or pasting; focus reports and mouse reports do
-not count. With no hook yet, only an explicit release clears it: the prefix then `r`
-while attached. Detach does not clear it.
+not count. An explicit release clears it: the prefix then `r` while attached. Where a
+hook exists (Claude Code), a hook-observed human submit clears it too. Detach does not
+clear it.
 
-**Not implemented.** Corrupted-submission verdicts, draft restoration, submission
-observation, native in-harness channels, cross-host routing, and Codex and OMP
-profiles.
+**Not implemented.** Hooks for harnesses other than Claude Code, native in-harness
+channels, cross-host routing, and Codex and OMP profiles.
+
+## Implemented: Claude Code hook
+
+Built from [spec 2b](specs/spec-2b-hooks-receipts.md); the spec is the contract, this
+section is the summary.
+
+**Install and failure.** `a2amx new --harness claude` appends `--settings <json>`
+holding one `UserPromptSubmit` command hook that runs `a2amx hook`. Nothing is written
+to disk, and the hook reaches the daemon with the session's `A2AMX_ADDR` and
+`A2AMX_TOKEN`, which the harness passes to it. The hook fails open: an unreachable
+daemon, a bad payload, a prompt above 512 KiB, or a 4 second timeout all allow the
+prompt, exit 0, and write one line to stderr. Its stdout is empty unless it blocks,
+because hook stdout becomes conversation context on this event.
+
+**Matching.** The daemon removes paste wrappers from the submitted text, finds
+`<a2amx-message id="m_N">` tags, and compares the whole text with the envelope it would
+render for that message. A message id counts only when the message is addressed to the
+calling session, belongs to the current daemon run, is `delivering`, `submitted`, or
+`unsubmitted`, and has no receipt yet; anything else is treated as a human prompt, so a
+stale or foreign id never blocks typing.
+
+| Submitted text | Verdict | Effect |
+| --- | --- | --- |
+| Exactly one known envelope | allow | Receipt recorded; the `human_draft` and `unsubmitted_envelope` holds clear; the corrupted-submission count resets |
+| No known envelope | allow | The composer was emptied by a human submit: the `human_draft` and `unsubmitted_envelope` holds clear |
+| A known envelope plus other text, or characters interleaved into it | block | Attempt recorded as `rejected`; the message goes back to `pending` for a new attempt; the human's own text is restored as a paste without Enter once the session is idle, under a `human_draft` hold; interleaved text is not restored and stays in the transcript |
+
+Three corrupted submissions in a row on one session stop the cycle with the
+`corrupted_submissions` hold, cleared only by an explicit release. A block shows
+`UserPromptSubmit operation blocked by hook` and the original prompt in the harness
+transcript, and the model never sees the prompt.
+
+**Evidence.** A receipt is stored on the attempt (`attempts.receipt_at`; schema version
+2). `message_status`, `a2amx messages`, and the wire `MessageInfo` report `evidence`:
+`write_complete` for a `submitted` message without a receipt and `submission_observed`
+for one with a receipt. A missing receipt is never a failure. A receipt can arrive
+before the writer records its own outcome; whichever lands first wins, and a late write
+outcome never downgrades a receipt or overwrites a rejection.
+
+**Observed Claude Code behavior** (2.1.285 and 2.1.286, through a PTY with a logging
+hook):
+
+- The hook payload is a JSON object with `session_id`, `transcript_path`, `cwd`,
+  `prompt_id`, `permission_mode`, `hook_event_name`, and `prompt`.
+- A paste with a newline, or a single line of roughly 1000 characters or more, shows in
+  the composer as `[Pasted text #N]` and reaches the hook as a blank line, an opening
+  `<pasted_content id="ID">` line, the text, and a closing `</pasted_content id="ID">`
+  line. The id is random. Single lines up to 686 characters arrive unwrapped; the exact collapse
+  threshold is not pinned. Every delivered envelope has newlines, so the matcher
+  unwraps first.
+- Input sent as raw keystrokes in small paced chunks arrives unwrapped, but one fast raw
+  write is collapsed too, so typing an envelope is not a reliable way around the
+  wrapper.
+- A message submitted mid-turn is queued by Claude Code and the hook fires at submit
+  time with the active turn's `prompt_id`, which is why matching uses the A2AMX id.
+- A hook that exceeds its timeout is cut off, the prompt proceeds, and a notice is shown.
+
+**Not implemented.** Hooks for Codex and OMP, cross-host receipts and replay, a
+timeout or expiry for messages with no receipt, and restoring a pending draft across a
+daemon restart.
 
 ## Harness adapter responsibilities
 
