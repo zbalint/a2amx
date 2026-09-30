@@ -1,7 +1,7 @@
 //! Prefix-key state machine for the attach client.
 //!
 //! Human input passes through untouched except for the configurable prefix
-//! (default Ctrl-Space, byte 0x00). Prefix twice sends a literal prefix. The
+//! (default Ctrl-B, byte 0x02). Prefix twice sends a literal prefix. The
 //! machine tolerates reads split at any byte and never interprets bytes inside
 //! a bracketed paste (`ESC[200~` ... `ESC[201~`).
 

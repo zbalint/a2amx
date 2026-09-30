@@ -87,7 +87,7 @@ must pass, and the results recorded so far, are in the validation plan.
 cargo build
 cargo test
 a2amx daemon                        # prints "listening on <addr>"
-a2amx new -- sh                     # start and attach; Ctrl-Space d detaches
+a2amx new -- sh                     # start and attach; Ctrl-B d detaches
 a2amx list
 a2amx attach <id> [--force]
 a2amx kill <id>
@@ -106,7 +106,7 @@ an inline `--settings` argument; it reads the harness payload on stdin, always e
 and prints output only when it blocks a prompt.
 
 The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,
-then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-Space (`--prefix` or
+then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
 `A2AMX_PREFIX` to change it). After the prefix: `d` detach, `w` session picker, `[`
 scroll mode, `r` releases the session's message hold, and the prefix twice sends a
 literal prefix.

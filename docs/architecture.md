@@ -183,8 +183,10 @@ terminal graphics are outside the proposed MVP.
 
 Preserve input bytes where possible. Prefix recognition must tolerate split
 sequences and avoid consuming prefix bytes inside paste or protocol frames.
-Provide a literal-prefix escape. The default prefix is Ctrl-Space, chosen because
-it exists on every keyboard layout, and it is configurable. Extended keyboard protocols and nested muxes are
+Provide a literal-prefix escape. The default prefix is Ctrl-B (byte 0x02), a plain letter chord that works on every
+keyboard layout and through remote-desktop clients that capture Ctrl-Space for input-method
+switching; it is configurable. It shadows the harness's own Ctrl-B (Claude Code uses it to
+background a running command), so press the prefix twice to send it. Extended keyboard protocols and nested muxes are
 compatibility cases, not automatically supported features.
 
 Proposal: one controlling human attachment per session. The controller determines

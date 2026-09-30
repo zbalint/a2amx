@@ -19,7 +19,7 @@ pub struct Cli {
         long,
         global = true,
         env = "A2AMX_PREFIX",
-        default_value = "C-space",
+        default_value = "C-b",
         value_parser = parse_prefix
     )]
     pub prefix: u8,

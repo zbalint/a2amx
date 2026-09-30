@@ -63,7 +63,7 @@ async fn new_list_attach_detach_and_literal_prefix_use_real_terminal() -> anyhow
     attached.wait_for_text("ready", WAIT)?;
     attached.send(b"typed\n")?;
     attached.wait_for_text("typed", WAIT)?;
-    attached.send(&[0, b'd'])?;
+    attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
     assert!(
@@ -77,7 +77,7 @@ async fn new_list_attach_detach_and_literal_prefix_use_real_terminal() -> anyhow
     assert_eq!(code, 0);
     assert!(after_detach.contains("s1") && after_detach.contains("running"));
 
-    // Ctrl-Space twice is a literal NUL, not a prefix command. The child
+    // Ctrl-B twice is a literal 0x02, not a prefix command. The child
     // prints the received byte in hex and stays alive so the screen is observable.
     let (created, code) = run_cli(
         dir.path(),
@@ -93,9 +93,9 @@ async fn new_list_attach_detach_and_literal_prefix_use_real_terminal() -> anyhow
     assert_eq!(code, 0);
     assert!(created.contains("s2"), "new output: {created:?}");
     let mut literal = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s2"]), dir.path())?;
-    literal.send(&[0, 0])?;
-    literal.wait_for_text("00", WAIT)?;
-    literal.send(&[0, b'd'])?;
+    literal.send(&[2, 2])?;
+    literal.wait_for_text("02", WAIT)?;
+    literal.send(&[2, b'd'])?;
     literal.wait_for_text("[detached from s2]", WAIT)?;
     assert_eq!(literal.wait_exit(WAIT)?, 0);
     Ok(())
@@ -111,7 +111,7 @@ async fn scroll_mode_parses_split_sequences_and_returns_to_live_bottom() -> anyh
 
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
     attached.wait_for_text("line30", WAIT)?;
-    attached.send(&[0, b'['])?;
+    attached.send(&[2, b'['])?;
     attached.wait_for_text("[scroll: q to exit]", WAIT)?;
 
     // Send PageUp one byte at a time; the parser must retain the split CSI.
@@ -121,7 +121,7 @@ async fn scroll_mode_parses_split_sequences_and_returns_to_live_bottom() -> anyh
     attached.wait_for_text("line01", WAIT)?;
     attached.send(b"qafter-scroll-input\n")?;
     attached.wait_for_text("after-scroll-input", WAIT)?;
-    attached.send(&[0, b'd'])?;
+    attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
     Ok(())
@@ -161,22 +161,22 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
     attached.wait_for_text("one", WAIT)?;
 
     // Entering and selecting the current row cancels and redraws the live session.
-    attached.send(&[0, b'w'])?;
+    attached.send(&[2, b'w'])?;
     attached.wait_for_text("a2amx sessions:", WAIT)?;
     attached.send(b"\r")?;
     attached.wait_for_text("one", WAIT)?;
 
     // A held controller makes the first switch fail; the picker remains open.
-    attached.send(&[0, b'w'])?;
+    attached.send(&[2, b'w'])?;
     attached.wait_for_text("a2amx sessions:", WAIT)?;
     attached.send(b"\x1b[B\r")?;
     attached.wait_for_text("attached elsewhere", WAIT)?;
-    blocker.send(&[0, b'd'])?;
+    blocker.send(&[2, b'd'])?;
     blocker.wait_for_text("[detached from s2]", WAIT)?;
     blocker.wait_exit(WAIT)?;
     attached.send(b"\r")?;
     attached.wait_for_text("two", WAIT)?;
-    attached.send(&[0, b'd'])?;
+    attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s2]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
 
@@ -520,13 +520,13 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     assert_eq!(code, 0);
     assert!(listing.contains("s1  -     running  yes       0        yes"));
 
-    attached.send(&[0, b'r'])?;
+    attached.send(&[2, b'r'])?;
     wait_for_held(dir.path(), "s1", false).await;
     let (listing, code) = run_cli(dir.path(), &["list"])?;
     assert_eq!(code, 0);
     assert!(listing.contains("s1  -     running  yes       0        no"));
 
-    attached.send(&[0, b'd'])?;
+    attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
     Ok(())
