@@ -76,6 +76,9 @@ fn request_json_uses_exact_tagged_shapes() {
         rows: 24,
         cwd: Some("/tmp/work".to_owned()),
         env: vec![("TERM".to_owned(), "xterm-256color".to_owned())],
+        name: None,
+        harness: a2amx::harness::Harness::Generic,
+        deliver: None,
     };
     let json = serde_json::to_string(&request).unwrap_or_default();
     assert_eq!(
@@ -111,6 +114,10 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             rows: 24,
             exit_code: None,
             attached: false,
+            name: None,
+            address: String::new(),
+            pending: 0,
+            held: false,
         }],
     };
     let json = serde_json::to_string(&response).unwrap_or_default();
@@ -229,4 +236,100 @@ fn stream_decoders_enforce_input_and_data_limits() {
 #[test]
 fn detached_reason_must_be_utf8() {
     assert!(ServerFrame::decode(&[0x03, 0xff]).is_err());
+}
+
+#[test]
+fn release_has_an_empty_body_and_rejects_extra_bytes() {
+    assert_eq!(ClientFrame::Release.encode(), vec![0x06]);
+    assert_eq!(
+        ClientFrame::decode(&[0x06]).ok(),
+        Some(ClientFrame::Release)
+    );
+    assert!(ClientFrame::decode(&[0x06, 0]).is_err());
+}
+
+#[test]
+fn messaging_control_variants_round_trip() {
+    use a2amx::wire::{AgentSummary, MessageInfo};
+    let requests = [
+        Request::SendMessage {
+            to: "agent-review@host-a".into(),
+            subject: "Parser issue".into(),
+            message: "I found the regression in parser.py.".into(),
+        },
+        Request::ListAgents,
+        Request::MessageStatus { id: "m_1".into() },
+        Request::ListMessages {
+            session: Some("s2".into()),
+            state: Some("pending".into()),
+        },
+        Request::CancelMessage { id: "m_1".into() },
+        Request::NewSession {
+            argv: vec!["sh".into()],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![],
+            name: Some("agent-review".into()),
+            harness: a2amx::harness::Harness::Claude,
+            deliver: Some(a2amx::harness::Deliver::Auto),
+        },
+    ];
+    let request_json = [
+        serde_json::json!({"type":"send_message","to":"agent-review@host-a","subject":"Parser issue","message":"I found the regression in parser.py."}),
+        serde_json::json!({"type":"list_agents"}),
+        serde_json::json!({"type":"message_status","id":"m_1"}),
+        serde_json::json!({"type":"list_messages","session":"s2","state":"pending"}),
+        serde_json::json!({"type":"cancel_message","id":"m_1"}),
+        serde_json::json!({"type":"new_session","argv":["sh"],"cols":40,"rows":10,"cwd":null,"env":[],"name":"agent-review","harness":"claude","deliver":"auto"}),
+    ];
+    for (request, expected) in requests.into_iter().zip(request_json) {
+        assert_eq!(serde_json::to_value(&request).unwrap(), expected);
+        let bytes = serde_json::to_vec(&request).unwrap();
+        assert_eq!(serde_json::from_slice::<Request>(&bytes).unwrap(), request);
+    }
+    let message = MessageInfo {
+        id: "m_1".into(),
+        from: "agent-plan@host-a".into(),
+        to: "agent-review@host-a".into(),
+        subject: "Parser issue".into(),
+        state: "pending".into(),
+        detail: None,
+        hold_reason: Some("human_draft".into()),
+    };
+    let responses = [
+        Response::Accepted { id: "m_1".into() },
+        Response::Failed {
+            code: "queue_full".into(),
+            message: "recipient queue is full".into(),
+        },
+        Response::Agents {
+            agents: vec![AgentSummary {
+                address: "agent-plan@host-a".into(),
+                state: "running".into(),
+                attached: false,
+            }],
+        },
+        Response::Status {
+            message: message.clone(),
+        },
+        Response::Messages {
+            messages: vec![message],
+        },
+    ];
+    let response_json = [
+        serde_json::json!({"type":"accepted","id":"m_1"}),
+        serde_json::json!({"type":"failed","code":"queue_full","message":"recipient queue is full"}),
+        serde_json::json!({"type":"agents","agents":[{"address":"agent-plan@host-a","state":"running","attached":false}]}),
+        serde_json::json!({"type":"status","message":{"id":"m_1","from":"agent-plan@host-a","to":"agent-review@host-a","subject":"Parser issue","state":"pending","detail":null,"hold_reason":"human_draft"}}),
+        serde_json::json!({"type":"messages","messages":[{"id":"m_1","from":"agent-plan@host-a","to":"agent-review@host-a","subject":"Parser issue","state":"pending","detail":null,"hold_reason":"human_draft"}]}),
+    ];
+    for (response, expected) in responses.into_iter().zip(response_json) {
+        assert_eq!(serde_json::to_value(&response).unwrap(), expected);
+        let bytes = serde_json::to_vec(&response).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Response>(&bytes).unwrap(),
+            response
+        );
+    }
 }

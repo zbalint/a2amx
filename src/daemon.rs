@@ -1,6 +1,6 @@
 //! The host daemon: owns session runtimes and serves the local TCP protocol.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
@@ -8,7 +8,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use tokio::io::AsyncWriteExt;
@@ -18,14 +18,21 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use crate::client::Framed;
 use crate::emulator::Size;
-use crate::session::{AttachmentSlot, Session, SessionId, SessionSpec};
-use crate::wire::{ClientFrame, Request, Response, ServerFrame, SessionSummary};
+use crate::harness::{self, Deliver};
+use crate::messaging::{self, COOLDOWN, Limits, MessageState, code};
+use crate::session::{AttachmentSlot, Hold, Session, SessionId, SessionSpec};
+use crate::store::{self, CancelResult, InsertError, Message, NewMessage, Store};
+use crate::wire::{
+    AgentSummary, ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary,
+};
 
 pub struct DaemonConfig {
     /// State directory (`A2AMX_HOME` or `--home`).
     pub state_dir: PathBuf,
     /// Listen addresses; loopback by default. Port 0 lets the OS choose.
     pub listen: Vec<SocketAddr>,
+    pub host_name: Option<String>,
+    pub limits: Limits,
 }
 
 pub struct Daemon {
@@ -33,6 +40,7 @@ pub struct Daemon {
     runtime: Arc<Runtime>,
     shutdown: watch::Sender<bool>,
     listeners: Vec<JoinHandle<()>>,
+    purge: Option<JoinHandle<()>>,
     state_dir: PathBuf,
     lock: Option<File>,
 }
@@ -41,6 +49,285 @@ struct Runtime {
     sessions: Mutex<BTreeMap<u64, Arc<Session>>>,
     next_id: AtomicU64,
     token: String,
+    store: Store,
+    host_name: String,
+    boot: String,
+    limits: Limits,
+    address: String,
+    rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
+    new_session_gate: tokio::sync::Mutex<()>,
+    deliveries: Mutex<Vec<JoinHandle<()>>>,
+}
+
+enum Role {
+    Admin,
+    Session(String),
+}
+
+fn constant_time_eq(actual: &str, expected: &str) -> bool {
+    let mut difference = actual.len() ^ expected.len();
+    for (index, byte) in expected.bytes().enumerate() {
+        difference |= usize::from(byte ^ actual.as_bytes().get(index).copied().unwrap_or(0));
+    }
+    difference == 0
+}
+
+fn parse_message_id(id: &str) -> Option<i64> {
+    let digits = id.strip_prefix("m_")?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|seq| *seq > 0)
+}
+
+fn failed(code: &str, message: &str) -> Response {
+    Response::Failed {
+        code: code.into(),
+        message: message.into(),
+    }
+}
+
+impl Runtime {
+    fn authenticate(&self, token: &str) -> Option<Role> {
+        let mut role = constant_time_eq(token, &self.token).then_some(Role::Admin);
+        for session in self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+        {
+            if session.exit_code().is_none() {
+                let matches = constant_time_eq(token, session.token());
+                if matches && role.is_none() {
+                    role = Some(Role::Session(session.id().0.clone()));
+                }
+            }
+        }
+        role
+    }
+
+    async fn create_session(&self, request: Request) -> anyhow::Result<Response> {
+        let Request::NewSession {
+            argv,
+            cols,
+            rows,
+            cwd,
+            mut env,
+            name,
+            harness,
+            deliver,
+        } = request
+        else {
+            anyhow::bail!("expected new_session");
+        };
+        if argv.is_empty() || cols == 0 || rows == 0 {
+            return Ok(Response::Error {
+                message: "command and nonzero dimensions are required".into(),
+            });
+        }
+        let _gate = self.new_session_gate.lock().await;
+        if let Some(name) = &name {
+            if let Err(error) = messaging::validate_name(name) {
+                return Ok(Response::Error {
+                    message: error.to_string(),
+                });
+            }
+            if self
+                .sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .any(|session| session.name() == Some(name.as_str()))
+            {
+                return Ok(Response::Error {
+                    message: format!("session name {name} is already in use"),
+                });
+            }
+        }
+        let number = self
+            .next_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| anyhow::anyhow!("session id space exhausted"))?;
+        let id = SessionId(format!("s{number}"));
+        let address = self.address.clone();
+        let session = tokio::task::spawn_blocking(move || {
+            let token = random_hex::<32>()?;
+            env.push(("A2AMX_TOKEN".into(), token.clone()));
+            env.push(("A2AMX_ADDR".into(), address));
+            Session::spawn(
+                id,
+                SessionSpec {
+                    argv,
+                    cwd: cwd.map(PathBuf::from),
+                    size: Size { cols, rows },
+                    env,
+                    name,
+                    harness,
+                    deliver: deliver.unwrap_or_else(|| harness.default_deliver()),
+                    token,
+                },
+            )
+        })
+        .await?;
+        match session {
+            Ok(session) => {
+                let session = Arc::new(session);
+                let id = session.id().0.clone();
+                self.sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(number, session.clone());
+                let store = self.store.clone();
+                let boot = self.boot.clone();
+                let task = tokio::spawn(crate::delivery::run(session, store, boot));
+                self.deliveries
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(task);
+                Ok(Response::Created { session: id })
+            }
+            Err(error) => Ok(Response::Error {
+                message: error.to_string(),
+            }),
+        }
+    }
+
+    async fn send_message(
+        &self,
+        sender_id: &str,
+        to: String,
+        subject: String,
+        body: String,
+    ) -> Response {
+        if let Err(error) = messaging::validate_message(&subject, &body) {
+            return failed(error.code, &error.message);
+        }
+        let recipient = messaging::local_part(&to, &self.host_name).and_then(|local| {
+            self.sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .find(|session| session.name().unwrap_or(&session.id().0) == local)
+                .cloned()
+        });
+        let Some(recipient) = recipient else {
+            return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
+        };
+        if recipient.id().0 == sender_id {
+            return failed(code::UNKNOWN_RECIPIENT, "a session cannot message itself");
+        }
+        if recipient.exit_code().is_some() {
+            return failed(code::RECIPIENT_EXITED, "recipient has exited");
+        }
+        let Some((_, sender)) = lookup(self, sender_id) else {
+            return failed(code::INTERNAL, "sender session is unavailable");
+        };
+        let mut rate = self.rate.lock().await;
+        let timestamps = rate.entry(sender_id.into()).or_default();
+        while timestamps
+            .front()
+            .is_some_and(|time| time.elapsed() > Duration::from_secs(60))
+        {
+            timestamps.pop_front();
+        }
+        if timestamps.len() >= self.limits.rate_per_minute as usize {
+            return failed(code::RATE_LIMITED, "sender rate limit reached");
+        }
+        let new = NewMessage {
+            boot: self.boot.clone(),
+            sender_session: sender_id.into(),
+            sender_address: messaging::address(sender.name(), sender_id, &self.host_name),
+            recipient_session: recipient.id().0.clone(),
+            recipient_address: messaging::address(
+                recipient.name(),
+                &recipient.id().0,
+                &self.host_name,
+            ),
+            subject,
+            body,
+        };
+        match self.store.insert_message(new).await {
+            Ok(seq) => {
+                timestamps.push_back(Instant::now());
+                recipient.message_notify().notify_one();
+                Response::Accepted {
+                    id: format!("m_{seq}"),
+                }
+            }
+            Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
+            Err(InsertError::Internal(error)) => {
+                tracing::error!(%error, "message acceptance failed");
+                failed(code::INTERNAL, "message storage failed")
+            }
+        }
+    }
+
+    async fn message_status(&self, role: &Role, id: &str) -> anyhow::Result<Response> {
+        let Some(seq) = parse_message_id(id) else {
+            return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
+        };
+        let Some(message) = self.store.get(seq).await? else {
+            return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
+        };
+        if let Role::Session(sender) = role {
+            if message.boot != self.boot || message.sender_session != *sender {
+                return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
+            }
+        }
+        Ok(Response::Status {
+            message: self.message_info(message).await?,
+        })
+    }
+
+    async fn message_info(&self, message: Message) -> anyhow::Result<MessageInfo> {
+        let recipient = if message.boot == self.boot && message.state == MessageState::Pending {
+            lookup(self, &message.recipient_session).map(|(_, session)| session)
+        } else {
+            None
+        };
+        let hold_reason = if let Some(session) = recipient {
+            let queued = self
+                .store
+                .has_earlier_open(&self.boot, &message.recipient_session, message.seq)
+                .await?;
+            let state = session.lock();
+            if state.exit_code.is_some() {
+                None
+            } else if session.deliver() == Deliver::Hold {
+                Some("deliver_hold")
+            } else if state.hold == Some(Hold::UnsubmittedEnvelope) {
+                Some("unsubmitted_envelope")
+            } else if state.hold == Some(Hold::HumanDraft) {
+                Some("human_draft")
+            } else if queued {
+                Some("queued")
+            } else if !harness::ready(
+                session.harness(),
+                &state.emulator.screen(),
+                state.emulator.is_scrolled(),
+            ) {
+                Some("not_ready")
+            } else if state
+                .last_submit
+                .is_some_and(|time| time.elapsed() < COOLDOWN)
+            {
+                Some("cooldown")
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(MessageInfo {
+            id: format!("m_{}", message.seq),
+            from: message.sender_address,
+            to: message.recipient_address,
+            subject: message.subject,
+            state: message.state.as_str().into(),
+            detail: message.detail,
+            hold_reason: hold_reason.map(str::to_owned),
+        })
+    }
 }
 
 impl Daemon {
@@ -92,6 +379,26 @@ impl Daemon {
             Ok(lock)
         })
         .await??;
+        let host_name = config.host_name;
+        let (token, host_name, boot) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let token = random_hex::<32>()?;
+            let host = match host_name {
+                Some(host) => {
+                    messaging::validate_host(&host).context("invalid host name")?;
+                    host
+                }
+                None => messaging::default_host_name(),
+            };
+            Ok((token, host, random_hex::<8>()?))
+        })
+        .await??;
+        let store = Store::open(config.state_dir.clone(), config.limits).await?;
+        // Written only after the steps that can fail without binding, so an early
+        // startup error never leaves a token for a daemon that is not running.
+        let token_path = config.state_dir.join("admin.token");
+        let token_text = token.clone();
+        tokio::task::spawn_blocking(move || write_state_file(&token_path, token_text.as_bytes()))
+            .await??;
         let mut bound = Vec::new();
         let mut addrs = Vec::new();
         let listen = if config.listen.is_empty() {
@@ -100,7 +407,14 @@ impl Daemon {
             config.listen
         };
         for address in listen {
-            let listener = TcpListener::bind(address).await?;
+            let listener = match TcpListener::bind(address).await {
+                Ok(listener) => listener,
+                Err(error) => {
+                    let path = config.state_dir.join("admin.token");
+                    tokio::task::spawn_blocking(move || std::fs::remove_file(path)).await??;
+                    return Err(error.into());
+                }
+            };
             addrs.push(listener.local_addr()?);
             bound.push(listener);
         }
@@ -109,27 +423,46 @@ impl Daemon {
             .iter()
             .map(|addr| format!("{addr}\n"))
             .collect::<String>();
-        let token = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-            let mut random = [0; 32];
-            File::open("/dev/urandom")?.read_exact(&mut random)?;
-            let mut token = String::with_capacity(64);
-            use std::fmt::Write as _;
-            for byte in random {
-                write!(&mut token, "{byte:02x}")?;
-            }
-            write_state_file(&path.join("admin.token"), token.as_bytes())?;
-            write_state_file(&path.join("addr"), addresses.as_bytes())?;
-            Ok(token)
+        tokio::task::spawn_blocking(move || {
+            write_state_file(&path.join("addr"), addresses.as_bytes())
         })
         .await??;
         // shortcut: sessions live only in this daemon; add persistence only with
         // a later lifecycle specification.
+        let (shutdown, _) = watch::channel(false);
         let runtime = Arc::new(Runtime {
             sessions: Mutex::new(BTreeMap::new()),
             next_id: AtomicU64::new(1),
             token,
+            store,
+            host_name,
+            boot,
+            limits: config.limits,
+            address: addrs[0].to_string(),
+            // shortcut: accepted-send timestamps are memory-only; persist them if
+            // rate limits must survive daemon restarts.
+            rate: tokio::sync::Mutex::new(HashMap::new()),
+            new_session_gate: tokio::sync::Mutex::new(()),
+            deliveries: Mutex::new(Vec::new()),
         });
-        let (shutdown, _) = watch::channel(false);
+        let purge = {
+            let store = runtime.store.clone();
+            let mut stopping = shutdown.subscribe();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(3600));
+                interval.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = stopping.changed() => break,
+                        _ = interval.tick() => {
+                            if let Err(error) = store.purge(store::now()).await {
+                                tracing::error!(%error, "message purge failed");
+                            }
+                        }
+                    }
+                }
+            })
+        };
         let listeners = bound.into_iter().map(|listener| {
             let runtime = runtime.clone();
             let mut stopping = shutdown.subscribe();
@@ -173,6 +506,7 @@ impl Daemon {
             runtime,
             shutdown,
             listeners,
+            purge: Some(purge),
             state_dir: config.state_dir,
             lock: Some(lock),
         })
@@ -183,10 +517,37 @@ impl Daemon {
         &self.addrs
     }
 
+    pub fn host_name(&self) -> &str {
+        &self.runtime.host_name
+    }
+
     pub async fn shutdown(mut self) -> anyhow::Result<()> {
         let _ = self.shutdown.send(true);
         for listener in self.listeners.drain(..) {
             listener.await?;
+        }
+        if let Some(purge) = self.purge.take() {
+            purge.await?;
+        }
+        let mut failure = None;
+        let deliveries = std::mem::take(
+            &mut *self
+                .runtime
+                .deliveries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        // Stop injection before killing children so graceful shutdown, rather
+        // than a racing recipient-exit observer, owns the remaining open rows.
+        for delivery in &deliveries {
+            delivery.abort();
+        }
+        for delivery in deliveries {
+            if let Err(error) = delivery.await
+                && !error.is_cancelled()
+            {
+                failure.get_or_insert(anyhow::Error::new(error).context("message delivery task"));
+            }
         }
         let sessions = self
             .runtime
@@ -200,7 +561,6 @@ impl Daemon {
         for session in sessions {
             kills.spawn(async move { session.kill().await });
         }
-        let mut failure = None;
         while let Some(result) = kills.join_next().await {
             if let Err(error) = result
                 .context("session shutdown task")
@@ -214,6 +574,17 @@ impl Daemon {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+        if let Err(error) = self
+            .runtime
+            .store
+            .fail_open(&self.runtime.boot, None, "daemon_stopped")
+            .await
+        {
+            failure.get_or_insert(error);
+        }
+        if let Err(error) = self.runtime.store.close().await {
+            failure.get_or_insert(error);
+        }
         let addr = self.state_dir.join("addr");
         let lock = self.lock.take();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -236,7 +607,27 @@ impl Daemon {
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.shutdown.send(true);
+        for delivery in self
+            .runtime
+            .deliveries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+        {
+            delivery.abort();
+        }
     }
+}
+
+fn random_hex<const N: usize>() -> anyhow::Result<String> {
+    let mut random = [0; N];
+    File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let mut text = String::with_capacity(N * 2);
+    use std::fmt::Write as _;
+    for byte in random {
+        write!(&mut text, "{byte:02x}")?;
+    }
+    Ok(text)
 }
 
 fn write_state_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
@@ -258,21 +649,14 @@ async fn response(connection: &mut Framed, response: Response) -> anyhow::Result
 async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
     let mut connection = Framed::new(socket);
     let hello = tokio::time::timeout(Duration::from_secs(5), connection.recv()).await;
-    let authenticated = match hello {
+    let role = match hello {
         Ok(Ok(Some(bytes))) => match serde_json::from_slice::<Request>(&bytes) {
-            Ok(Request::Hello { token }) => {
-                let mut difference = token.len() ^ runtime.token.len();
-                for (index, expected) in runtime.token.bytes().enumerate() {
-                    difference |=
-                        usize::from(expected ^ token.as_bytes().get(index).copied().unwrap_or(0));
-                }
-                difference == 0
-            }
-            _ => false,
+            Ok(Request::Hello { token }) => runtime.authenticate(&token),
+            _ => None,
         },
-        _ => false,
+        _ => None,
     };
-    if !authenticated {
+    let Some(role) = role else {
         response(
             &mut connection,
             Response::Error {
@@ -282,9 +666,22 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
         .await?;
         connection.stream.shutdown().await?;
         return Ok(());
-    }
+    };
     response(&mut connection, Response::Ok).await?;
     while let Some(bytes) = connection.recv().await? {
+        if let Role::Session(id) = &role {
+            if !lookup(&runtime, id).is_some_and(|(_, session)| session.exit_code().is_none()) {
+                response(
+                    &mut connection,
+                    Response::Error {
+                        message: "session has exited".into(),
+                    },
+                )
+                .await?;
+                connection.stream.shutdown().await?;
+                return Ok(());
+            }
+        }
         let request = match serde_json::from_slice::<Request>(&bytes) {
             Ok(request) => request,
             Err(_) => {
@@ -298,11 +695,27 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 continue;
             }
         };
+        if matches!(&role, Role::Session(_))
+            && !matches!(
+                &request,
+                Request::SendMessage { .. } | Request::ListAgents | Request::MessageStatus { .. },
+            )
+        {
+            response(
+                &mut connection,
+                Response::Error {
+                    message: "not permitted for a session token".into(),
+                },
+            )
+            .await?;
+            continue;
+        }
         let result = match request {
             Request::Hello { .. } => Response::Error {
                 message: "already authenticated".into(),
             },
             Request::List => {
+                let counts = runtime.store.open_counts(&runtime.boot).await?;
                 let sessions = runtime
                     .sessions
                     .lock()
@@ -317,56 +730,20 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                             rows: state.size.rows,
                             attached: state.attachment.is_some(),
                             exit_code: state.exit_code,
+                            name: session.name().map(str::to_owned),
+                            address: messaging::address(
+                                session.name(),
+                                &session.id().0,
+                                &runtime.host_name,
+                            ),
+                            pending: counts.get(&session.id().0).copied().unwrap_or(0),
+                            held: state.hold.is_some(),
                         }
                     })
                     .collect();
                 Response::Sessions { sessions }
             }
-            Request::NewSession {
-                argv,
-                cols,
-                rows,
-                cwd,
-                env,
-            } => {
-                if argv.is_empty() || cols == 0 || rows == 0 {
-                    Response::Error {
-                        message: "command and nonzero dimensions are required".into(),
-                    }
-                } else {
-                    let number = runtime
-                        .next_id
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-                        .map_err(|_| anyhow::anyhow!("session id space exhausted"))?;
-                    let id = SessionId(format!("s{number}"));
-                    match tokio::task::spawn_blocking(move || {
-                        Session::spawn(
-                            id,
-                            SessionSpec {
-                                argv,
-                                cwd: cwd.map(PathBuf::from),
-                                size: Size { cols, rows },
-                                env,
-                            },
-                        )
-                    })
-                    .await?
-                    {
-                        Ok(session) => {
-                            let id = session.id().0.clone();
-                            runtime
-                                .sessions
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .insert(number, Arc::new(session));
-                            Response::Created { session: id }
-                        }
-                        Err(error) => Response::Error {
-                            message: error.to_string(),
-                        },
-                    }
-                }
-            }
+            request @ Request::NewSession { .. } => runtime.create_session(request).await?,
             Request::Kill { session: id } => match lookup(&runtime, &id) {
                 Some((number, session)) => match session.kill().await {
                     Ok(()) => {
@@ -406,6 +783,75 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     }
                 }
             }
+            Request::ListAgents => {
+                let agents = runtime
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .values()
+                    .map(|session| AgentSummary {
+                        address: messaging::address(
+                            session.name(),
+                            &session.id().0,
+                            &runtime.host_name,
+                        ),
+                        state: if session.exit_code().is_some() {
+                            "exited"
+                        } else {
+                            "running"
+                        }
+                        .into(),
+                        attached: session.attached(),
+                    })
+                    .collect();
+                Response::Agents { agents }
+            }
+            Request::SendMessage {
+                to,
+                subject,
+                message,
+            } => match &role {
+                Role::Admin => Response::Error {
+                    message: "send_message needs a session token".into(),
+                },
+                Role::Session(id) => runtime.send_message(id, to, subject, message).await,
+            },
+            Request::MessageStatus { id } => runtime.message_status(&role, &id).await?,
+            Request::ListMessages { session, state } => {
+                let filter = state.as_deref().map(MessageState::parse);
+                if matches!(filter, Some(None)) {
+                    Response::Error {
+                        message: "unknown message state".into(),
+                    }
+                } else {
+                    let rows = runtime
+                        .store
+                        .list(&runtime.boot, session.as_deref(), filter.flatten())
+                        .await?;
+                    let mut messages = Vec::with_capacity(rows.len());
+                    for row in rows {
+                        messages.push(runtime.message_info(row).await?);
+                    }
+                    Response::Messages { messages }
+                }
+            }
+            Request::CancelMessage { id } => match parse_message_id(&id) {
+                Some(seq) => match runtime.store.cancel(seq).await? {
+                    CancelResult::Cancelled => Response::Ok,
+                    CancelResult::NotCancellable(state) => Response::Error {
+                        message: format!(
+                            "message {id} is {} and cannot be cancelled",
+                            state.as_str()
+                        ),
+                    },
+                    CancelResult::Unknown => Response::Error {
+                        message: format!("unknown message {id}"),
+                    },
+                },
+                None => Response::Error {
+                    message: format!("unknown message {id}"),
+                },
+            },
         };
         response(&mut connection, result).await?;
     }
@@ -563,10 +1009,12 @@ async fn attach(
                 match ClientFrame::decode(&payload)? {
                     ClientFrame::Detach => return Ok(true),
                     ClientFrame::Input(bytes) => {
+                        session.note_human_input(&bytes);
                         if !session.enqueue(bytes).await? {
                             session.notify().notify_one();
                         }
                     },
+                    ClientFrame::Release => session.release(),
                     frame => {
                         let (bytes, exited) = {
                             let mut state = session.lock();

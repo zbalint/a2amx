@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+use crate::harness::{Deliver, Harness};
 use crate::prefix::parse_prefix;
 
 #[derive(Debug, Parser)]
@@ -34,11 +35,21 @@ pub enum Command {
         /// Listen address; repeatable. Defaults to loopback with an OS-chosen port.
         #[arg(long)]
         listen: Vec<std::net::SocketAddr>,
+        #[arg(long)]
+        host_name: Option<String>,
     },
     /// Start a session running COMMAND and attach to it.
     New {
         #[arg(long)]
         detach: bool,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, value_enum, default_value_t = Harness::Generic)]
+        harness: Harness,
+        #[arg(long, value_enum)]
+        deliver: Option<Deliver>,
+        #[arg(long)]
+        no_authorize_peers: bool,
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },
@@ -53,4 +64,25 @@ pub enum Command {
     },
     /// Terminate a session.
     Kill { session: String },
+    /// List messages.
+    Messages {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(
+            long,
+            value_parser = [
+                "pending",
+                "delivering",
+                "submitted",
+                "unsubmitted",
+                "cancelled",
+                "undeliverable"
+            ]
+        )]
+        state: Option<String>,
+    },
+    /// Cancel a pending message.
+    Cancel { message: String },
+    /// Run the stdio MCP server.
+    Mcp,
 }

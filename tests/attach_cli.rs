@@ -6,7 +6,11 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
+use a2amx::client::Client;
+use a2amx::harness::{Deliver, Harness};
+use a2amx::wire::{Request, Response};
 use common::pty::PtyHarness;
+use common::{eventually, new_agent};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -49,7 +53,7 @@ async fn new_list_attach_detach_and_literal_prefix_use_real_terminal() -> anyhow
 
     let (listed, code) = run_cli(dir.path(), &["list"])?;
     assert_eq!(code, 0);
-    assert!(listed.contains("ID  STATE"), "list output: {listed:?}");
+    assert!(listed.contains("ID  NAME"), "list output: {listed:?}");
     assert!(
         listed.contains("s1") && listed.contains("running"),
         "list output: {listed:?}"
@@ -212,6 +216,8 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     let _second_daemon = a2amx::daemon::Daemon::start(a2amx::daemon::DaemonConfig {
         state_dir: second_dir.path().to_path_buf(),
         listen: vec!["127.0.0.1:0".parse()?],
+        host_name: None,
+        limits: a2amx::messaging::Limits::default(),
     })
     .await?;
     let first_home = first_dir.path().to_string_lossy().into_owned();
@@ -232,13 +238,17 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     let listed = run_binary(first_dir.path(), &["list"], &environment)?;
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
-    assert!(listing.starts_with("ID  STATE    ATTACHED  SIZE   COMMAND\n"));
-    assert!(listing.contains("s1  running  no        80x24  sh -c sleep 30\n"));
+    assert!(listing.starts_with("ID  NAME  STATE    ATTACHED  PENDING  HELD  SIZE   COMMAND\n"));
+    assert!(
+        listing.contains("s1  -     running  no        0        no    80x24  sh -c sleep 30\n")
+    );
 
     let explicit = run_binary(second_dir.path(), &["list"], &environment)?;
     assert_eq!(explicit.status.code(), Some(0));
     let explicit_listing = String::from_utf8(explicit.stdout)?;
-    assert!(explicit_listing.starts_with("ID  STATE  ATTACHED  SIZE  COMMAND\n"));
+    assert!(
+        explicit_listing.starts_with("ID  NAME  STATE  ATTACHED  PENDING  HELD  SIZE  COMMAND\n")
+    );
     assert!(!explicit_listing.contains("s1"));
     Ok(())
 }
@@ -305,5 +315,341 @@ fn invalid_prefix_reports_the_named_reason_as_an_a2amx_error() -> anyhow::Result
     let stderr = String::from_utf8(output.stderr)?;
     assert!(stderr.starts_with("a2amx:"));
     assert!(stderr.contains("CR"));
+    Ok(())
+}
+async fn wait_for_file(path: &Path, lines: usize) -> String {
+    let path = path.to_owned();
+    eventually(move || {
+        let path = path.clone();
+        async move {
+            let content = std::fs::read_to_string(path).ok()?;
+            (content.lines().count() == lines).then_some(content)
+        }
+    })
+    .await
+}
+
+async fn wait_for_message_state(home: &Path, id: &str, state: &str) {
+    let home = home.to_owned();
+    let id = id.to_owned();
+    let state = state.to_owned();
+    eventually(move || {
+        let home = home.clone();
+        let id = id.clone();
+        let state = state.clone();
+        async move {
+            let mut client = Client::connect(&home).await.ok()?;
+            let Response::Status { message } =
+                client.request(Request::MessageStatus { id }).await.ok()?
+            else {
+                return None;
+            };
+            (message.state == state).then_some(())
+        }
+    })
+    .await;
+}
+
+async fn wait_for_held(home: &Path, session: &str, held: bool) {
+    let home = home.to_owned();
+    let session = session.to_owned();
+    eventually(move || {
+        let home = home.clone();
+        let session = session.clone();
+        async move {
+            let mut client = Client::connect(&home).await.ok()?;
+            let Response::Sessions { sessions } = client.request(Request::List).await.ok()? else {
+                return None;
+            };
+            sessions
+                .into_iter()
+                .find(|summary| summary.id == session)
+                .filter(|summary| summary.held == held)
+                .map(|_| ())
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_session_appears_in_the_list_table() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let created = run_binary(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "agent-plan",
+            "--",
+            "sh",
+            "-c",
+            "sleep 30",
+        ],
+        &[],
+    )?;
+    assert!(created.status.success());
+    assert_eq!(created.stdout, b"s1\n");
+
+    let output = run_binary(dir.path(), &["list"], &[])?;
+    assert!(output.status.success());
+    let listing = String::from_utf8(output.stdout)?;
+    assert!(
+        listing.starts_with("ID  NAME        STATE    ATTACHED  PENDING  HELD  SIZE   COMMAND\n")
+    );
+    assert!(
+        listing
+            .contains("s1  agent-plan  running  no        0        no    80x24  sh -c sleep 30\n")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_new_wires_mcp_and_optional_peer_authorization() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let first = tempfile::NamedTempFile::new_in(dir.path())?;
+    let first_path = first.path().to_string_lossy().into_owned();
+    let first_output = run_binary(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--harness",
+            "claude",
+            "--",
+            "sh",
+            "-c",
+            "printf '%s\\n' \"$@\" >\"$OUT\"; sleep 30",
+            "sh",
+        ],
+        &[("OUT", &first_path)],
+    )?;
+    assert_eq!(first_output.status.code(), Some(0));
+    let first_args = wait_for_file(first.path(), 6).await;
+    let first_args: Vec<&str> = first_args.lines().collect();
+    assert_eq!(first_args.len(), 6);
+    assert_eq!(first_args[0], "--mcp-config");
+    let config: serde_json::Value = serde_json::from_str(first_args[1])?;
+    let expected_exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_a2amx"))?
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        config["mcpServers"]["a2amx"]["command"],
+        serde_json::Value::String(expected_exe)
+    );
+    assert_eq!(
+        config["mcpServers"]["a2amx"]["args"],
+        serde_json::json!(["mcp"])
+    );
+    assert_eq!(first_args[2], "--allowedTools");
+    assert_eq!(
+        first_args[3],
+        "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status"
+    );
+    assert_eq!(first_args[4], "--append-system-prompt");
+    assert_eq!(first_args[5], a2amx::harness::PEER_AUTHORIZATION_PROMPT);
+
+    let second = tempfile::NamedTempFile::new_in(dir.path())?;
+    let second_path = second.path().to_string_lossy().into_owned();
+    let second_output = run_binary(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--harness",
+            "claude",
+            "--no-authorize-peers",
+            "--",
+            "sh",
+            "-c",
+            "printf '%s\\n' \"$@\" >\"$OUT\"; sleep 30",
+            "sh",
+        ],
+        &[("OUT", &second_path)],
+    )?;
+    assert_eq!(second_output.status.code(), Some(0));
+    let second_args = wait_for_file(second.path(), 4).await;
+    let second_args: Vec<&str> = second_args.lines().collect();
+    assert_eq!(
+        second_args,
+        vec![
+            "--mcp-config",
+            first_args[1],
+            "--allowedTools",
+            "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status",
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let created = run_binary(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--harness",
+            "generic",
+            "--deliver",
+            "auto",
+            "--",
+            "sh",
+            "-c",
+            "stty raw -echo; cat",
+        ],
+        &[],
+    )?;
+    assert!(created.status.success());
+    assert_eq!(created.stdout, b"s1\n");
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.send(b"x")?;
+    wait_for_held(dir.path(), "s1", true).await;
+    let (listing, code) = run_cli(dir.path(), &["list"])?;
+    assert_eq!(code, 0);
+    assert!(listing.contains("s1  -     running  yes       0        yes"));
+
+    attached.send(&[0, b'r'])?;
+    wait_for_held(dir.path(), "s1", false).await;
+    let (listing, code) = run_cli(dir.path(), &["list"])?;
+    assert_eq!(code, 0);
+    assert!(listing.contains("s1  -     running  yes       0        no"));
+
+    attached.send(&[0, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await?;
+    let (_, sender_token, sender_addr) = new_agent(
+        &mut admin,
+        dir.path(),
+        Some("agent-plan"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let recipient_output = run_cli(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "agent-review",
+            "--harness",
+            "generic",
+            "--deliver",
+            "auto",
+            "--",
+            "sh",
+            "-c",
+            "printf '\\033[?2004h'; stty raw -echo; cat >/dev/null",
+        ],
+    )?;
+    assert_eq!(recipient_output.1, 0);
+    let mut sender = Client::connect_addr(sender_addr, &sender_token).await?;
+    let accepted = sender
+        .request(Request::SendMessage {
+            to: "agent-review@host-a".into(),
+            subject: "Parser issue".into(),
+            message: "I found the regression.".into(),
+        })
+        .await?;
+    assert_eq!(accepted, Response::Accepted { id: "m_1".into() });
+    wait_for_message_state(dir.path(), "m_1", "submitted").await;
+
+    let accepted = sender
+        .request(Request::SendMessage {
+            to: "agent-review@host-a".into(),
+            subject: "Second".into(),
+            message: "Another issue.".into(),
+        })
+        .await?;
+    assert_eq!(accepted, Response::Accepted { id: "m_2".into() });
+    let accepted = sender
+        .request(Request::SendMessage {
+            to: "agent-review@host-a".into(),
+            subject: "Trailing ".into(),
+            message: "Subjects print as stored.".into(),
+        })
+        .await?;
+    assert_eq!(accepted, Response::Accepted { id: "m_3".into() });
+    assert_eq!(
+        admin
+            .request(Request::Kill {
+                session: "s2".into()
+            })
+            .await?,
+        Response::Ok
+    );
+    wait_for_message_state(dir.path(), "m_2", "undeliverable").await;
+    wait_for_message_state(dir.path(), "m_3", "undeliverable").await;
+
+    let output = run_binary(dir.path(), &["messages"], &[])?;
+    assert!(output.status.success());
+    let listing = String::from_utf8(output.stdout)?;
+    assert!(listing.starts_with(
+        "ID   FROM               TO                   STATE          DETAIL            SUBJECT\n"
+    ));
+    assert!(listing.contains("m_1  agent-plan@host-a  agent-review@host-a  submitted      -                 Parser issue\n"));
+    assert!(listing.contains(
+        "m_2  agent-plan@host-a  agent-review@host-a  undeliverable  recipient_exited  Second\n"
+    ));
+    assert!(listing.contains(
+        "m_3  agent-plan@host-a  agent-review@host-a  undeliverable  recipient_exited  Trailing \n"
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancel_is_silent_on_success_and_reports_errors() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await?;
+    let (_, sender_token, sender_addr) = new_agent(
+        &mut admin,
+        dir.path(),
+        Some("agent-plan"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (_, _, _) = new_agent(
+        &mut admin,
+        dir.path(),
+        Some("agent-review"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let mut sender = Client::connect_addr(sender_addr, &sender_token).await?;
+    assert_eq!(
+        sender
+            .request(Request::SendMessage {
+                to: "agent-review@host-a".into(),
+                subject: "Pending".into(),
+                message: "Cancel me.".into(),
+            })
+            .await?,
+        Response::Accepted { id: "m_1".into() }
+    );
+
+    let cancelled = run_binary(dir.path(), &["cancel", "m_1"], &[])?;
+    assert_eq!(cancelled.status.code(), Some(0));
+    assert!(cancelled.stdout.is_empty());
+    assert!(cancelled.stderr.is_empty());
+
+    let missing = run_binary(dir.path(), &["cancel", "m_99"], &[])?;
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(missing.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(missing.stderr)?,
+        "a2amx: unknown message m_99\n"
+    );
     Ok(())
 }

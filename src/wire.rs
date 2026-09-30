@@ -8,6 +8,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::emulator::Scroll;
+use crate::harness::{Deliver, Harness};
 
 /// Largest accepted frame payload. Decoding rejects longer frames.
 pub const MAX_FRAME_LEN: usize = 1 << 20;
@@ -115,6 +116,12 @@ pub enum Request {
         rows: u16,
         cwd: Option<String>,
         env: Vec<(String, String)>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        harness: Harness,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deliver: Option<Deliver>,
     },
     List,
     /// Followed by a switch of this connection to stream frames.
@@ -127,6 +134,22 @@ pub enum Request {
     Kill {
         session: String,
     },
+    SendMessage {
+        to: String,
+        subject: String,
+        message: String,
+    },
+    ListAgents,
+    MessageStatus {
+        id: String,
+    },
+    ListMessages {
+        session: Option<String>,
+        state: Option<String>,
+    },
+    CancelMessage {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +160,11 @@ pub enum Response {
     Attached,
     Ok,
     Error { message: String },
+    Accepted { id: String },
+    Failed { code: String, message: String },
+    Agents { agents: Vec<AgentSummary> },
+    Status { message: MessageInfo },
+    Messages { messages: Vec<MessageInfo> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +176,37 @@ pub struct SessionSummary {
     /// `None` while running, the exit code once the child exited.
     pub exit_code: Option<i32>,
     pub attached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub address: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub pending: u32,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub held: bool,
+}
+
+// Preserve terminal-core JSON when the additive fields carry their defaults.
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSummary {
+    pub address: String,
+    pub state: String,
+    pub attached: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageInfo {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub subject: String,
+    pub state: String,
+    pub detail: Option<String>,
+    pub hold_reason: Option<String>,
 }
 
 /// Server-to-client stream frame.
@@ -166,6 +225,7 @@ pub enum ClientFrame {
     Detach,
     Redraw,
     Scroll(Scroll),
+    Release,
 }
 impl ServerFrame {
     pub fn encode(&self) -> Vec<u8> {
@@ -240,6 +300,7 @@ impl ClientFrame {
             Self::Detach => vec![0x03],
             Self::Redraw => vec![0x04],
             Self::Scroll(scroll) => vec![0x05, scroll_to_byte(*scroll)],
+            Self::Release => vec![0x06],
         }
     }
 
@@ -284,6 +345,12 @@ impl ClientFrame {
                     bail!("client scroll frame body must be one byte");
                 }
                 Ok(Self::Scroll(byte_to_scroll(body[0])?))
+            }
+            0x06 => {
+                if !body.is_empty() {
+                    bail!("client release frame body must be empty");
+                }
+                Ok(Self::Release)
             }
             _ => bail!("unknown client stream frame tag 0x{tag:02x}"),
         }

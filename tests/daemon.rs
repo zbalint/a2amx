@@ -22,6 +22,9 @@ async fn create(client: &mut Client, argv: &[&str], env: Vec<(String, String)>) 
             rows: 5,
             cwd: None,
             env,
+            name: None,
+            harness: a2amx::harness::Harness::Generic,
+            deliver: None,
         })
         .await
         .unwrap()
@@ -109,6 +112,8 @@ async fn state_is_owner_only_and_exclusively_locked() {
     let second = Daemon::start(DaemonConfig {
         state_dir: dir.path().to_owned(),
         listen: vec!["127.0.0.1:0".parse().unwrap()],
+        host_name: None,
+        limits: a2amx::messaging::Limits::default(),
     })
     .await;
     assert_eq!(
@@ -176,7 +181,10 @@ async fn failed_spawns_and_zero_sizes_leave_no_sessions() {
                     cols,
                     rows,
                     cwd: None,
-                    env: vec![]
+                    env: vec![],
+                    name: None,
+                    harness: a2amx::harness::Harness::Generic,
+                    deliver: None,
                 })
                 .await
                 .unwrap(),
@@ -532,6 +540,8 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
         Daemon::start(DaemonConfig {
             state_dir: home.clone(),
             listen: vec!["127.0.0.1:0".parse().unwrap(), address],
+            host_name: None,
+            limits: a2amx::messaging::Limits::default(),
         })
         .await
         .is_err()
@@ -547,6 +557,8 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
     let daemon = Daemon::start(DaemonConfig {
         state_dir: home,
         listen: vec!["127.0.0.1:0".parse().unwrap()],
+        host_name: None,
+        limits: a2amx::messaging::Limits::default(),
     })
     .await
     .unwrap();
@@ -643,6 +655,9 @@ async fn cwd_environment_and_argument_boundaries_reach_the_child() {
                 ("TERM".into(), "wrong".into()),
                 ("COLORTERM".into(), "wrong".into()),
             ],
+            name: None,
+            harness: a2amx::harness::Harness::Generic,
+            deliver: None,
         })
         .await
         .unwrap();
@@ -801,6 +816,8 @@ fn newly_created_parents_are_private_even_with_a_restrictive_umask() {
             .block_on(Daemon::start(DaemonConfig {
                 state_dir: path.clone(),
                 listen: vec!["127.0.0.1:0".parse().unwrap()],
+                host_name: None,
+                limits: a2amx::messaging::Limits::default(),
             }))
             .unwrap();
         for directory in [path.clone(), path.parent().unwrap().to_owned()] {
@@ -936,6 +953,9 @@ async fn large_final_snapshot_is_split_at_the_data_limit_and_precedes_exit() {
             rows: 256,
             cwd: None,
             env: vec![],
+            name: None,
+            harness: a2amx::harness::Harness::Generic,
+            deliver: None,
         })
         .await
         .unwrap()

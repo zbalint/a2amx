@@ -6,7 +6,12 @@
 pub mod cli;
 pub mod client;
 pub mod daemon;
+mod delivery;
 pub mod emulator;
+pub mod harness;
+pub mod mcp;
+pub mod messaging;
 pub mod prefix;
 pub mod session;
+mod store;
 pub mod wire;

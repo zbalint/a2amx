@@ -13,8 +13,10 @@ use a2amx::cli::{Cli, Command};
 use a2amx::client::{Attachment, Client};
 use a2amx::daemon::{Daemon, DaemonConfig};
 use a2amx::emulator::Scroll;
+use a2amx::harness::Harness;
+use a2amx::mcp;
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
-use a2amx::wire::{ClientFrame, Request, Response, ServerFrame, SessionSummary};
+use a2amx::wire::{ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary};
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -25,8 +27,8 @@ const RESTORE_TERMINAL: &[u8] = b"\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?1000l\x1b[?
 async fn main() -> std::process::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .init();
-
     let result = match Cli::try_parse() {
         Ok(cli) => dispatch(cli).await,
         Err(error) if !error.use_stderr() => write_stdout(error.to_string().into_bytes()).await,
@@ -41,15 +43,23 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn dispatch(cli: Cli) -> anyhow::Result<()> {
-    let home = resolve_home(cli.home)?;
+    let prefix = cli.prefix;
+    let home_arg = cli.home;
+    if matches!(&cli.command, Command::Mcp) {
+        return mcp::run().await;
+    }
+    let home = resolve_home(home_arg)?;
     match cli.command {
-        Command::Daemon { listen } => run_daemon(home, listen).await,
-        Command::New { detach, command } => run_new(home, cli.prefix, detach, command).await,
+        Command::Daemon { listen, host_name } => run_daemon(home, listen, host_name).await,
+        options @ Command::New { .. } => run_new(home, prefix, options).await,
         Command::List => run_list(home).await,
         Command::Attach { session, force } => {
-            run_attach_command(home, cli.prefix, session, force).await
+            run_attach_command(home, prefix, session, force).await
         }
         Command::Kill { session } => run_kill(home, session).await,
+        Command::Mcp => unreachable!("MCP dispatch returned before resolving home"),
+        Command::Messages { session, state } => run_messages(home, session, state).await,
+        Command::Cancel { message } => run_cancel(home, message).await,
     }
 }
 
@@ -69,7 +79,11 @@ fn resolve_home(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     Err(anyhow!("cannot determine the a2amx state directory"))
 }
 
-async fn run_daemon(home: PathBuf, listen: Vec<std::net::SocketAddr>) -> anyhow::Result<()> {
+async fn run_daemon(
+    home: PathBuf,
+    listen: Vec<std::net::SocketAddr>,
+    host_name: Option<String>,
+) -> anyhow::Result<()> {
     let listen = if listen.is_empty() {
         vec![
             "127.0.0.1:0"
@@ -82,6 +96,8 @@ async fn run_daemon(home: PathBuf, listen: Vec<std::net::SocketAddr>) -> anyhow:
     let daemon = Daemon::start(DaemonConfig {
         state_dir: home,
         listen,
+        host_name,
+        limits: a2amx::messaging::Limits::default(),
     })
     .await?;
     for addr in daemon.addrs() {
@@ -96,12 +112,23 @@ async fn run_daemon(home: PathBuf, listen: Vec<std::net::SocketAddr>) -> anyhow:
     daemon.shutdown().await
 }
 
-async fn run_new(
-    home: PathBuf,
-    prefix: u8,
-    detach: bool,
-    command: Vec<String>,
-) -> anyhow::Result<()> {
+async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<()> {
+    let Command::New {
+        detach,
+        name,
+        harness,
+        deliver,
+        no_authorize_peers,
+        command,
+    } = options
+    else {
+        return Err(anyhow!("expected new session options"));
+    };
+    let command = if harness == Harness::Claude {
+        a2amx::harness::wire_claude_argv(command, &std::env::current_exe()?, !no_authorize_peers)
+    } else {
+        command
+    };
     let mut client = Client::connect(&home).await?;
     let (cols, rows) = terminal_size_with_default()?;
     let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
@@ -113,6 +140,9 @@ async fn run_new(
             rows,
             cwd: Some(cwd),
             env,
+            name,
+            harness,
+            deliver,
         })
         .await?;
     let session = match response {
@@ -147,6 +177,36 @@ async fn run_kill(home: PathBuf, session: String) -> anyhow::Result<()> {
     match response {
         Response::Ok => Ok(()),
         Response::Error { message } => Err(anyhow!(message)),
+        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
+}
+async fn run_messages(
+    home: PathBuf,
+    session: Option<String>,
+    state: Option<String>,
+) -> anyhow::Result<()> {
+    let mut client = Client::connect(&home).await?;
+    let response = client
+        .request(Request::ListMessages { session, state })
+        .await?;
+    let messages = match response {
+        Response::Messages { messages } => messages,
+        Response::Error { message } | Response::Failed { message, .. } => {
+            return Err(anyhow!(message));
+        }
+        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+    };
+    write_stdout(format_messages_table(&messages).into_bytes()).await
+}
+
+async fn run_cancel(home: PathBuf, message: String) -> anyhow::Result<()> {
+    let mut client = Client::connect(&home).await?;
+    let response = client
+        .request(Request::CancelMessage { id: message })
+        .await?;
+    match response {
+        Response::Ok => Ok(()),
+        Response::Error { message } | Response::Failed { message, .. } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }
 }
@@ -334,6 +394,11 @@ impl AttachmentState {
                     )
                     .await?;
                     self.picker = Some(state);
+                }
+                Action::Command(PrefixCommand::Release) => {
+                    if let Some(attached) = self.attachment.as_mut() {
+                        attached.send(ClientFrame::Release).await?;
+                    }
                 }
             }
         }
@@ -584,9 +649,42 @@ fn terminal_size_with_default() -> anyhow::Result<(u16, u16)> {
     ))
 }
 
-const SESSION_HEADERS: [&str; 5] = ["ID", "STATE", "ATTACHED", "SIZE", "COMMAND"];
+const SESSION_HEADERS: [&str; 8] = [
+    "ID", "NAME", "STATE", "ATTACHED", "PENDING", "HELD", "SIZE", "COMMAND",
+];
+const PICKER_HEADERS: [&str; 5] = ["ID", "STATE", "ATTACHED", "SIZE", "COMMAND"];
+const MESSAGE_HEADERS: [&str; 6] = ["ID", "FROM", "TO", "STATE", "DETAIL", "SUBJECT"];
 
-fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 5]> {
+fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 8]> {
+    sessions
+        .iter()
+        .map(|session| {
+            [
+                session.id.clone(),
+                session.name.clone().unwrap_or_else(|| "-".to_owned()),
+                match session.exit_code {
+                    Some(code) => format!("exited({code})"),
+                    None => "running".to_owned(),
+                },
+                if session.attached {
+                    "yes".to_owned()
+                } else {
+                    "no".to_owned()
+                },
+                session.pending.to_string(),
+                if session.held {
+                    "yes".to_owned()
+                } else {
+                    "no".to_owned()
+                },
+                format!("{}x{}", session.cols, session.rows),
+                session.argv.join(" "),
+            ]
+        })
+        .collect()
+}
+
+fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 5]> {
     sessions
         .iter()
         .map(|session| {
@@ -608,8 +706,28 @@ fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 5]> {
         .collect()
 }
 
-fn session_widths(rows: &[[String; 5]]) -> [usize; 5] {
-    let mut widths = SESSION_HEADERS.map(str::len);
+fn message_value_rows(messages: &[MessageInfo]) -> Vec<[String; 6]> {
+    messages
+        .iter()
+        .map(|message| {
+            [
+                message.id.clone(),
+                message.from.clone(),
+                message.to.clone(),
+                message.state.clone(),
+                message
+                    .detail
+                    .clone()
+                    .or_else(|| message.hold_reason.clone())
+                    .unwrap_or_else(|| "-".to_owned()),
+                message.subject.clone(),
+            ]
+        })
+        .collect()
+}
+
+fn column_widths<const N: usize>(headers: &[&str; N], rows: &[[String; N]]) -> [usize; N] {
+    let mut widths = headers.map(str::len);
     for row in rows {
         for (index, value) in row.iter().enumerate() {
             widths[index] = widths[index].max(value.len());
@@ -618,28 +736,41 @@ fn session_widths(rows: &[[String; 5]]) -> [usize; 5] {
     widths
 }
 
-fn format_session_table(sessions: &[SessionSummary]) -> String {
-    let rows = session_value_rows(sessions);
-    let widths = session_widths(&rows);
+fn format_table<const N: usize>(headers: &[&str; N], rows: &[[String; N]]) -> String {
+    let widths = column_widths(headers, rows);
     let mut output = String::new();
-    output.push_str(&format_row(&SESSION_HEADERS.map(str::to_owned), &widths));
+    output.push_str(&format_row(headers, &widths));
     output.push('\n');
     for row in rows {
-        output.push_str(&format_row(&row, &widths));
+        output.push_str(&format_row(row, &widths));
         output.push('\n');
     }
     output
 }
 
-fn format_row(values: &[String; 5], widths: &[usize; 5]) -> String {
+fn format_session_table(sessions: &[SessionSummary]) -> String {
+    format_table(&SESSION_HEADERS, &session_value_rows(sessions))
+}
+
+fn format_messages_table(messages: &[MessageInfo]) -> String {
+    format_table(&MESSAGE_HEADERS, &message_value_rows(messages))
+}
+
+fn format_row<T: AsRef<str>>(values: &[T], widths: &[usize]) -> String {
     let mut output = String::new();
-    for index in 0..values.len() {
+    for (index, value) in values.iter().enumerate() {
         if index > 0 {
             output.push_str("  ");
         }
-        output.push_str(&format!("{:<width$}", values[index], width = widths[index]));
+        let value = value.as_ref();
+        output.push_str(value);
+        if index + 1 < values.len() {
+            for _ in value.len()..widths[index] {
+                output.push(' ');
+            }
+        }
     }
-    output.trim_end().to_owned()
+    output
 }
 
 async fn write_stdout(bytes: Vec<u8>) -> anyhow::Result<()> {
@@ -1082,7 +1213,7 @@ impl PickerParser {
 }
 
 fn session_rows(sessions: &[SessionSummary]) -> Vec<String> {
-    let rows = session_value_rows(sessions);
-    let widths = session_widths(&rows);
+    let rows = picker_value_rows(sessions);
+    let widths = column_widths(&PICKER_HEADERS, &rows);
     rows.iter().map(|row| format_row(row, &widths)).collect()
 }

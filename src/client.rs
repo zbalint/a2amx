@@ -13,9 +13,18 @@ use crate::wire::{ClientFrame, FrameDecoder, Request, Response, ServerFrame};
 
 const UNREACHABLE: &str = "cannot reach the a2amx daemon: start it with `a2amx daemon`";
 
+fn validate_payload(payload: &[u8]) -> anyhow::Result<()> {
+    if payload.len() > crate::wire::MAX_FRAME_LEN {
+        bail!("frame exceeds maximum length");
+    }
+    Ok(())
+}
+
 pub struct Client {
     connection: Framed,
 }
+
+pub(crate) struct PreparedRequest(Vec<u8>);
 
 impl Client {
     pub async fn connect(state_dir: &Path) -> anyhow::Result<Self> {
@@ -62,7 +71,23 @@ impl Client {
     }
 
     pub async fn request(&mut self, request: Request) -> anyhow::Result<Response> {
-        self.connection.send(&serde_json::to_vec(&request)?).await?;
+        self.request_prepared(Self::prepare_request(&request)?)
+            .await
+    }
+
+    /// Finish serialization and size validation before any request bytes can be
+    /// written, so MCP can distinguish a known pre-write failure from uncertainty.
+    pub(crate) fn prepare_request(request: &Request) -> anyhow::Result<PreparedRequest> {
+        let payload = serde_json::to_vec(request)?;
+        validate_payload(&payload)?;
+        Ok(PreparedRequest(payload))
+    }
+
+    pub(crate) async fn request_prepared(
+        &mut self,
+        request: PreparedRequest,
+    ) -> anyhow::Result<Response> {
+        self.connection.send_payload(&request.0).await?;
         let payload = self
             .connection
             .recv()
@@ -162,9 +187,11 @@ impl Framed {
     }
 
     pub async fn send(&mut self, payload: &[u8]) -> anyhow::Result<()> {
-        if payload.len() > crate::wire::MAX_FRAME_LEN {
-            bail!("frame exceeds maximum length");
-        }
+        validate_payload(payload)?;
+        self.send_payload(payload).await
+    }
+
+    async fn send_payload(&mut self, payload: &[u8]) -> anyhow::Result<()> {
         self.stream
             .write_all(&(payload.len() as u32).to_be_bytes())
             .await?;

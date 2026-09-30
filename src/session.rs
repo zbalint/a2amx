@@ -18,6 +18,8 @@ use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::sync::{Notify, mpsc, watch};
 
 use crate::emulator::{Emulator, Size, window_size};
+use crate::harness::{self, Deliver, Harness};
+use crate::messaging;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionId(pub String);
@@ -27,11 +29,21 @@ pub struct SessionSpec {
     pub cwd: Option<std::path::PathBuf>,
     pub size: Size,
     pub env: Vec<(String, String)>,
+    pub name: Option<String>,
+    pub harness: Harness,
+    pub deliver: Deliver,
+    pub token: String,
 }
 
 pub struct Session {
     id: SessionId,
     pub(crate) argv: Vec<String>,
+    name: Option<String>,
+    harness: Harness,
+    deliver: Deliver,
+    token: String,
+    input_gate: tokio::sync::Mutex<()>,
+    message_notify: Notify,
     shared: Arc<Shared>,
     input: mpsc::Sender<Option<Vec<u8>>>,
     master: File,
@@ -53,6 +65,25 @@ pub(crate) struct State {
     pub generation: u64,
     pub pending_attachment: Option<u64>,
     pub dirty: bool,
+    pub hold: Option<Hold>,
+    pub last_submit: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Hold {
+    HumanDraft,
+    UnsubmittedEnvelope,
+}
+
+pub(crate) struct Delivery<'a> {
+    session: &'a Session,
+    _gate: tokio::sync::MutexGuard<'a, ()>,
+}
+
+pub(crate) enum DeliveryOutcome {
+    Submitted,
+    Unsubmitted(String),
+    Failed(String),
 }
 
 pub(crate) struct AttachmentSlot {
@@ -99,6 +130,8 @@ impl Session {
                 generation: 0,
                 pending_attachment: None,
                 dirty: true,
+                hold: None,
+                last_submit: None,
             }),
             notify: Notify::new(),
         });
@@ -135,6 +168,9 @@ impl Session {
                 if !response.is_empty() && replies.blocking_send(Some(response)).is_err() {
                     tracing::debug!("PTY reply writer closed");
                 }
+                // Rendering and delivery both observe output; wake both, retaining
+                // one permit for a observer registering after this update.
+                reader_state.notify.notify_waiters();
                 reader_state.notify.notify_one();
             }
         });
@@ -187,6 +223,12 @@ impl Session {
         Ok(Self {
             id,
             argv: spec.argv,
+            name: spec.name,
+            harness: spec.harness,
+            deliver: spec.deliver,
+            token: spec.token,
+            input_gate: tokio::sync::Mutex::new(()),
+            message_notify: Notify::new(),
             shared,
             input,
             master,
@@ -200,8 +242,63 @@ impl Session {
         &self.id
     }
 
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn harness(&self) -> Harness {
+        self.harness
+    }
+
+    pub fn deliver(&self) -> Deliver {
+        self.deliver
+    }
+
+    pub(crate) fn token(&self) -> &str {
+        &self.token
+    }
+
+    pub fn held(&self) -> bool {
+        self.lock().hold.is_some()
+    }
+
+    pub(crate) fn note_human_input(&self, bytes: &[u8]) {
+        if messaging::input_is_typing(bytes) {
+            self.lock().hold.get_or_insert(Hold::HumanDraft);
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        self.lock().hold = None;
+        self.message_notify.notify_one();
+    }
+
+    pub(crate) fn message_notify(&self) -> &Notify {
+        &self.message_notify
+    }
+
+    pub(crate) async fn begin_delivery(&self) -> Option<Delivery<'_>> {
+        let gate = self.input_gate.lock().await;
+        let state = self.lock();
+        if state.exit_code.is_some()
+            || state.hold.is_some()
+            || !harness::ready(
+                self.harness,
+                &state.emulator.screen(),
+                state.emulator.is_scrolled(),
+            )
+        {
+            return None;
+        }
+        Some(Delivery {
+            session: self,
+            _gate: gate,
+        })
+    }
+
     /// Blocking enqueue for synchronous callers; async callers use `enqueue`.
     pub fn write_input(&self, bytes: &[u8]) -> anyhow::Result<()> {
+        let _gate = self.input_gate.blocking_lock();
         let permit = self.input.blocking_send(Some(bytes.to_vec()));
         permit.context("session input is closed")
     }
@@ -234,6 +331,7 @@ impl Session {
     }
 
     pub(crate) async fn enqueue(&self, bytes: Vec<u8>) -> anyhow::Result<bool> {
+        let _gate = self.input_gate.lock().await;
         let permit = match self.input.reserve().await {
             Ok(permit) => permit,
             Err(_) if self.exit_code().is_some() => return Ok(false),
@@ -305,6 +403,62 @@ impl Session {
             }
             notified.await;
         }
+    }
+}
+
+impl Delivery<'_> {
+    pub(crate) async fn submit(self, paste: Vec<u8>, gap: Duration) -> DeliveryOutcome {
+        // shortcut: a child that never reads can hold this gate indefinitely under
+        // input backpressure; add a timeout if an unattended session stalls on it.
+        let Ok(permit) = self.session.input.reserve().await else {
+            return DeliveryOutcome::Failed("session input is closed".into());
+        };
+        permit.send(Some(paste));
+        tokio::time::sleep(gap).await;
+        {
+            let mut state = self.session.lock();
+            if let Some(outcome) = self.recheck(&mut state) {
+                return outcome;
+            }
+        }
+        let Ok(permit) = self.session.input.reserve().await else {
+            return DeliveryOutcome::Failed("session input is closed".into());
+        };
+        let mut state = self.session.lock();
+        // Reserving may wait under backpressure; observe again before committing CR.
+        if let Some(outcome) = self.recheck(&mut state) {
+            return outcome;
+        }
+        permit.send(Some(vec![b'\r']));
+        state.last_submit = Some(Instant::now());
+        DeliveryOutcome::Submitted
+    }
+
+    fn recheck(&self, state: &mut State) -> Option<DeliveryOutcome> {
+        if state.exit_code.is_some() {
+            return Some(DeliveryOutcome::Failed(
+                "recipient exited during delivery".into(),
+            ));
+        }
+        let human_input = state.hold.is_some();
+        if human_input
+            || !harness::ready(
+                self.session.harness,
+                &state.emulator.screen(),
+                state.emulator.is_scrolled(),
+            )
+        {
+            state.hold = Some(Hold::UnsubmittedEnvelope);
+            return Some(DeliveryOutcome::Unsubmitted(
+                if human_input {
+                    "human_input"
+                } else {
+                    "screen_not_ready"
+                }
+                .into(),
+            ));
+        }
+        None
     }
 }
 

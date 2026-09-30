@@ -73,6 +73,25 @@ fn recognizes_each_command() {
         machine.feed(&[0, b'[']),
         vec![Action::Command(Command::ScrollMode)]
     );
+    assert_eq!(
+        machine.feed(&[0, b'r']),
+        vec![Action::Command(Command::Release)]
+    );
+}
+
+#[test]
+fn release_survives_split_reads_and_is_protected_inside_paste() {
+    let mut machine = PrefixMachine::new(0);
+    assert!(machine.feed(&[0]).is_empty());
+    assert_eq!(machine.feed(b"r"), vec![Action::Command(Command::Release)]);
+
+    let mut machine = PrefixMachine::new(0);
+    let paste = b"\x1b[200~\0r\x1b[201~";
+    assert_eq!(machine.feed(paste), vec![Action::Forward(paste.to_vec())]);
+    assert_eq!(
+        machine.feed(&[0, b'r']),
+        vec![Action::Command(Command::Release)]
+    );
 }
 
 #[test]
