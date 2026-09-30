@@ -357,6 +357,11 @@ hook):
   start or end of the prompt without them. Single lines up to 686 characters arrive unwrapped; the exact collapse
   threshold is not pinned. Every delivered envelope has newlines, so the matcher
   unwraps first.
+- Each tab in pasted text reaches the hook as four spaces (a fixed four, not aligned to tab
+  stops). The Claude Code profile therefore compares the prompt with the envelope after
+  the same expansion; without it a message containing a tab can never match and is
+  blocked as corrupted on every attempt. Blank lines, indentation, trailing spaces,
+  Unicode, and shell-looking text arrive unchanged.
 - Input sent as raw keystrokes in small paced chunks arrives unwrapped, but one fast raw
   write is collapsed too, so typing an envelope is not a reliable way around the
   wrapper.

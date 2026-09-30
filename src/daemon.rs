@@ -281,11 +281,15 @@ impl Runtime {
                     )
                     && !message.observed
                 {
-                    let envelope = messaging::render_envelope(
-                        &format!("m_{seq}"),
-                        &message.sender_address,
-                        &message.subject,
-                        &message.body,
+                    // The hook sees the envelope as the harness transformed it on paste.
+                    let envelope = harness::paste_view(
+                        session.harness(),
+                        &messaging::render_envelope(
+                            &format!("m_{seq}"),
+                            &message.sender_address,
+                            &message.subject,
+                            &message.body,
+                        ),
                     );
                     known.push((seq, envelope));
                 }

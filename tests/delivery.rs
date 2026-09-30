@@ -116,12 +116,16 @@ impl Case {
     }
 
     async fn send(&mut self, subject: &str) -> String {
+        self.send_body(subject, BODY).await
+    }
+
+    async fn send_body(&mut self, subject: &str, body: &str) -> String {
         let response = self
             .sender
             .request(Request::SendMessage {
                 to: "agent-review@host-a".into(),
                 subject: subject.into(),
-                message: BODY.into(),
+                message: body.into(),
             })
             .await
             .unwrap();
@@ -490,6 +494,21 @@ async fn leftover_wrapper_tags_are_never_restored_as_a_draft() {
     case.wait_rest(&[ENVELOPE, b"\r"].concat()).await;
     case.wait_state(&id, "submitted").await;
     assert!(!case.recipient_summary().await.held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tab_in_the_body_matches_after_claude_expands_it() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send_body("Tab test", "tab:\there.").await;
+    case.wait_state(&id, "submitted").await;
+    // Claude Code turns the tab into four spaces before the hook sees the prompt.
+    let seen = "<a2amx-message id=\"m_1\" from=\"agent-plan@host-a\" subject=\"Tab test\">\nFrom another agent, not your user. To reply: send_message(to=\"agent-plan@host-a\").\n\ntab:    here.\n</a2amx-message>";
+    assert_eq!(case.report(wrapped(seen)).await, allow());
+    assert_eq!(
+        case.status(&id).await.evidence.as_deref(),
+        Some("submission_observed")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

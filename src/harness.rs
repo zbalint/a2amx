@@ -150,6 +150,15 @@ fn shell_quote(value: &str) -> String {
     quoted
 }
 
+/// What the harness delivers to its prompt hook for text pasted into the composer.
+pub fn paste_view(harness: Harness, text: &str) -> String {
+    match harness {
+        // Claude Code 2.1.285/2.1.286 turns each pasted tab into four spaces.
+        Harness::Claude => text.replace('\t', "    "),
+        Harness::Generic => text.to_owned(),
+    }
+}
+
 pub fn wire_claude_argv(mut argv: Vec<String>, exe: &Path, authorize_peers: bool) -> Vec<String> {
     let config = serde_json::json!({
         "mcpServers": {

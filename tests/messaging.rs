@@ -265,6 +265,16 @@ fn claude_readiness_accepts_idle_and_mid_turn_composers() {
 }
 
 #[test]
+fn claude_paste_view_expands_each_tab_to_four_spaces() {
+    assert_eq!(
+        harness::paste_view(Harness::Claude, "a\tb\n\tc"),
+        "a    b\n    c"
+    );
+    assert_eq!(harness::paste_view(Harness::Claude, "no tabs"), "no tabs");
+    assert_eq!(harness::paste_view(Harness::Generic, "a\tb"), "a\tb");
+}
+
+#[test]
 fn claude_readiness_accepts_the_non_breaking_space_after_the_glyph() {
     // Claude Code 2.1.286 draws its composer as the glyph plus U+00A0, not a plain space.
     let rules = "─".repeat(40);
