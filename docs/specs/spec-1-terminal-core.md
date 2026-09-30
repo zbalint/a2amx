@@ -518,3 +518,34 @@ current tree: the only matches outside `todo!()` bodies that §3–§9 replace a
 `src/lib.rs:3` (this amendment), `src/lib.rs:6` (the `shortcut:` comment removed
 above), and `src/main.rs:11` (a body in §9's scope). No other file needs a scope
 change.
+
+## Amendment 2: child environment (§6.1)
+
+OMP reported (correctly, verified against `alacritty_terminal-0.26.0`
+`src/tty/unix.rs:229-241` and by a real PTY probe) that `tty::new` does not give the
+child exactly `spec.env`: the child inherits the daemon's environment, the library
+sets `ALACRITTY_WINDOW_ID`, `USER`, `HOME`, and `WINDOWID` first, then applies
+`Options.env` (so supplied entries override those), and finally always removes
+`XDG_ACTIVATION_TOKEN` and `DESKTOP_STARTUP_ID`.
+
+Resolution: the pinned library's behavior is accepted, and it **replaces** the
+"environment = the environment given in `spec.env`" clause of §6.1 with:
+
+> The child's environment is the daemon's own environment overlaid with every
+> `spec.env` entry (a supplied entry wins over an inherited or library-set one),
+> with `TERM=xterm-256color` and `COLORTERM=truecolor` applied last so they win.
+> The library-set `ALACRITTY_WINDOW_ID`, `WINDOWID`, `USER`, and `HOME` may appear
+> when `spec.env` does not override them. `XDG_ACTIVATION_TOKEN` and
+> `DESKTOP_STARTUP_ID` are removed by the library even if supplied; this is
+> accepted and not worked around.
+
+Consequences to implement and test, and nothing more: no `env_clear` workaround,
+no wrapper program, no fork of or patch to the dependency. Leave a `// shortcut:`
+comment at the `tty::Options.env` construction: variables present in the daemon
+environment but unset in the client's stay visible to the child; upgrade to an
+exact environment if a later spec needs isolation. The §10 daemon tests assert only
+that supplied entries (for example `OUT`) reach the child and that `TERM` and
+`COLORTERM` have the required values; no test may assert that a supplied
+`XDG_ACTIVATION_TOKEN` or `DESKTOP_STARTUP_ID` arrives or that daemon-only
+variables are absent. §9's "full environment" sent by `a2amx new` is unchanged.
+§13 is unchanged.
