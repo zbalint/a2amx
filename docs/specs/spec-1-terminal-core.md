@@ -549,3 +549,36 @@ that supplied entries (for example `OUT`) reach the child and that `TERM` and
 `XDG_ACTIVATION_TOKEN` or `DESKTOP_STARTUP_ID` arrives or that daemon-only
 variables are absent. §9's "full environment" sent by `a2amx new` is unchanged.
 §13 is unchanged.
+
+## Amendment 3: fixture correction in `tests/emulator_roundtrip.rs`
+
+OMP reported (correctly; verified against `alacritty_terminal-0.26.0`
+`src/term/mod.rs:714-723`, where `swap_alt` copies the primary cursor into the
+alternate buffer, and by a runtime probe) that the scaffold test
+`snapshot_roundtrips_alt_screen_and_input_modes` has a wrong fixture. It feeds
+`main`, enters the alternate buffer, and writes `alt`, then asserts `'a'` at
+`(0, 0)`. After `main` the cursor is at column 4, so `alt` lands at `(0, 4)`.
+The snapshot round trip itself is faithful (`source == restored` in the probe). The
+scaffold author's fixture, not the renderer, is wrong.
+
+Resolution: this single test's input is corrected, and nothing else in the file
+changes. Replace
+
+```rust
+roundtrip(b"main\x1b[?1049h\x1b[?2004h\x1b[?1h\x1b[?1004halt")
+```
+
+with
+
+```rust
+roundtrip(b"main\x1b[?1049h\x1b[H\x1b[?2004h\x1b[?1h\x1b[?1004halt")
+```
+
+(an explicit cursor-home after entering the alternate buffer). Every assertion in
+the test stays exactly as written, including `screen.cell(0, 0).ch == 'a'`, the four
+`modes` assertions, and `original.screen() == screen`. This is the only permitted
+edit to `tests/emulator_roundtrip.rs`; §10's "unchanged in meaning" holds because
+the test still verifies the same behavior (alt-screen contents and input modes
+survive a snapshot round trip). No renderer or emulator behavior is to be changed
+to make the old fixture pass: cursor normalization differing from alacritty is
+explicitly not required. §13 is unchanged.
