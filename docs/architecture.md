@@ -160,6 +160,16 @@ human. A2AMX does not solve transport encryption, what a configured bind address
 exposes, a hostile process running as the same OS user, or multi-tenant isolation.
 The documentation names these limits so that operators can decide.
 
+Visibility of delivered messages: a message is delivered by pasting it into the
+harness composer, so to the harness it is an ordinary prompt. Every prompt hook,
+transcript, and memory or logging tool attached to that harness sees the full envelope,
+not only A2AMX. In a run with a memory system that captures prompts as traces, delivered
+envelopes were stored as user prompts and so were the agents' replies. The operator
+decides what those tools may keep; do not send secrets in a message body on the
+assumption that it stays in `messages.db`. The `<a2amx-message` tag is a stable marker
+such tools can use to recognize and separate agent messages from human prompts, and it
+will not be renamed without a deprecation path.
+
 Open: exact exchange/workspace visibility rules and management permissions.
 Agents should only discover and message recipients authorized for their scope.
 
