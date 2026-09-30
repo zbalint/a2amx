@@ -849,8 +849,8 @@ Files to add:
     of a focus report (`\x1b[I`) and of an SGR mouse report on a fresh session does
     **not** set `held`; `Release` clears the hold and the message is then delivered
     (`submitted`).
-  - `deliver: Hold` session: the message stays `pending` (`deliver_hold`) and `$OUT`
-    files never appear.
+  - `deliver: Hold` session: the message stays `pending` (`deliver_hold`) and `$OUT.paste`,
+    `$OUT.cr` and `$OUT.gap_ms` never appear.
   - ordering: two messages sent back to back are both `submitted`, and in every
     observation of `ListMessages` the second is never `submitted` while the first is
     not.
@@ -896,7 +896,8 @@ i=0
 while [ "$i" -lt "$cols" ]; do rule="$rule─"; i=$((i + 1)); done
 printf '\033[2J\033[?2004h\033[2;1H%s\033[3;1H❯ \033[4;1H%s\033[3;3H\033[?25h' "$rule" "$rule"
 stty raw -echo
-dd bs=1 count="$PASTE_LEN" of="$OUT.paste" 2>/dev/null
+dd bs=1 count="$PASTE_LEN" of="$OUT.paste.tmp" 2>/dev/null
+mv "$OUT.paste.tmp" "$OUT.paste"
 t1=$(date +%s%N)
 if [ "$MODE" = dialog_after_paste ]; then
   printf '\033[2J\033[H Enter to confirm · Esc to cancel'
@@ -910,7 +911,7 @@ sleep 30
 
 Synchronize the delivery tests on observed state, not time: wait until the fake's
 composer is on the mirrored screen (an attachment fed into an `Emulator`, or the
-existence of `$OUT.paste` where the test needs the paste) before sending human input,
+existence of `$OUT.paste`, which the fixture creates only once the whole paste has arrived) before sending human input,
 and after sending an `Input` frame do a `Redraw` round trip (send `Redraw`, read the
 resulting `Data`) before checking `List`, because the daemon processes an
 attachment's frames in order. Compare the `--mcp-config` command path after
@@ -970,3 +971,15 @@ for `validate_name` / `validate_host` is corrected accordingly: both reject `Age
 `-a`, and a 64-character name; only `validate_name` rejects `s12`. No other section
 changes; the §14 naming bullet that lists `s12` concerns session names
 (`validate_name`) and stays as written. Scope and acceptance are unchanged.
+
+## Amendment 2 (adjudicating OMP BLOCKED: Hold test vs `fake_claude.sh`)
+
+The §14 fixture created `$OUT.paste` the moment `dd` started, before any input, so the
+S8 `deliver: Hold` assertion "`$OUT` files never appear" could not hold, and "existence
+of `$OUT.paste`" did not mean the paste had arrived. The fixture now writes the paste to
+`$OUT.paste.tmp` and renames it to `$OUT.paste` after `dd` returns, so `$OUT.paste`
+exists only once all `PASTE_LEN` bytes were received. The Hold test is unchanged and
+now satisfiable: with no paste, `dd` blocks and no `$OUT.paste` appears (an
+`$OUT.paste.tmp` may exist, empty; the Hold test asserts only that `$OUT.paste`,
+`$OUT.cr` and `$OUT.gap_ms` do not exist). The fixture content in §14 is the amended
+one and remains "exactly this content". Scope and acceptance are unchanged.
