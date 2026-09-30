@@ -1,6 +1,8 @@
 # Architecture
 
-Status: design draft. No implementation or compatibility results are implied.
+Status: design draft, with one implemented slice: the terminal core (see
+[Implemented: terminal core](#implemented-terminal-core)). Everything else here is
+a proposal, and no compatibility results are implied.
 
 This document owns topology and scope. [Delivery](delivery.md) owns input and
 receipt semantics; [validation](validation-plan.md) defines how to test them.
@@ -196,6 +198,41 @@ Bound scrollback, terminal frames, and input queues. Drain PTY output independen
 of database operations and slow clients. A lagging display may be resynchronized;
 input and durable message evidence must never be silently discarded.
 
+## Implemented: terminal core
+
+Built from [spec 1](specs/spec-1-terminal-core.md); the spec is the contract, this
+section is the summary.
+
+- One `a2amx daemon` process owns sessions; clients are thin. Sessions live as long
+  as the daemon (no persistence across restarts). Each session is one PTY, its
+  child, and an `Emulator` (the only user of `alacritty_terminal`'s terminal types).
+- The attach client redraws from the emulator, like tmux: one full render, then
+  damage-based updates. The daemon never forwards raw PTY bytes. No graphics,
+  hyperlinks, clipboard writes, application titles, or bell reach the client.
+- Query replies come only from the emulator and are written to the PTY, so they are
+  answered while detached. `TERM=xterm-256color`, `COLORTERM=truecolor`, kitty
+  keyboard protocol off.
+- PTY output is drained by a per-session thread that never waits on a client. A
+  slow client only delays its own attachment task.
+- Input is never dropped: a bounded queue (256 chunks) feeds one writer thread, and
+  enqueueing applies backpressure to that client's connection.
+- One controlling attachment per session. `--force` takeover is ordered: the old
+  attachment receives `Detached` and closes before the new one registers. There is
+  deliberately no deadline, so a stalled old client delays a takeover of that
+  session (other sessions and control requests stay responsive).
+- The child's environment is the daemon's own overlaid with the client's
+  environment, with `TERM` and `COLORTERM` last. `DESKTOP_STARTUP_ID` and
+  `XDG_ACTIVATION_TOKEN` are always removed by the pinned library.
+- Local IPC is TCP (default `127.0.0.1:0`; the bound addresses are written to
+  `addr`), authenticated by an `admin.token` file. The state directory is 0700 and
+  its files 0600. Framing is a `u32` big-endian length plus payload, with JSON on the
+  control channel and tagged binary frames on attach streams.
+- The client has a prefix state machine (bracketed-paste aware), a scroll mode, and
+  a session picker.
+
+Not yet built: per-session tokens, the MCP server, hooks, envelopes, the dirty
+flag, SQLite, and everything cross-host.
+
 ## Wrappers and containers
 
 The launched command is an argument vector, not a shell-interpolated string.
@@ -251,9 +288,10 @@ See [delivery recovery](delivery.md#recovery-and-retry) for side-effect ambiguit
 | Durable messages, receipts, and visible uncertainty | Offline outgoing queues | Exactly-once model processing |
 | Remote launch, attach, switch, detach, resize | Session survival through supervisor crash | Container management and model inference |
 
-Candidates, not pinned dependencies: Tokio, portable-pty, rusqlite, rmcp,
-serde/serde_json, clap, tracing, crossterm, and ratatui. A UI framework is not a
-terminal emulator.
+Candidates, not pinned dependencies: rusqlite, rmcp, crossterm, and ratatui.
+Already in use by the terminal core: Tokio, serde/serde_json, clap, tracing,
+rustix, and `alacritty_terminal` (including its `tty` module for PTYs, so
+portable-pty is not used). A UI framework is not a terminal emulator.
 
 Decision: the terminal emulator is `alacritty_terminal`, kept behind a small
 interface of A2AMX's own so it can be replaced. It is maintained, tracks the modes

@@ -1,6 +1,6 @@
 # Validation plan
 
-Status: checks to run while building the first slices. No implementation exists yet.
+Status: checks to run while building the first slices. Only the terminal core is implemented (see architecture).
 
 PTY hosting, typing into a harness, and prompt-submit hooks are established practice
 and are not re-proven here. The checks below cover what is specific to A2AMX: safe

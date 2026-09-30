@@ -6,9 +6,12 @@ A terminal multiplexer and message exchange for communication between AI agent s
 
 ## Status
 
-A2AMX is in the design stage. This repository contains design documents, not a
-working application. Commands, interfaces, and dependencies described here are
-proposals unless identified as requirements.
+The terminal core is implemented: a local daemon that owns PTY sessions, keeps
+their screen state while detached, and lets one human attach, detach, switch, and
+scroll from a client that redraws from the terminal model. Messaging, the MCP
+server, hooks, persistence, and cross-host support are not built yet. Everything
+in the design documents beyond the terminal core is still a proposal unless
+identified as a requirement.
 
 The implementation direction is **Rust on Linux**, with communication and session
 management across multiple hosts from the outset.
@@ -66,16 +69,35 @@ hosting does not imply safe automatic message delivery into every terminal progr
 | [Delivery](docs/delivery.md) | Input arbitration, message evidence, hooks, retry, ordering, or failure recovery |
 | [Validation plan](docs/validation-plan.md) | The checks each implementation slice must pass |
 
-The next milestone is a first implementation slice: one host, PTY hosting with
-attach and detach, and message delivery through the PTY to the target harnesses
-(Claude Code, Codex, OMP), including mid-turn. Cross-host support follows. The
-checks each slice must pass are in the validation plan.
+The terminal-core slice is done; its locked spec is
+[docs/specs/spec-1-terminal-core.md](docs/specs/spec-1-terminal-core.md). The next
+milestone is message delivery through the PTY to the target harnesses (Claude Code,
+Codex, OMP), including mid-turn. Cross-host support follows. The checks each slice
+must pass are in the validation plan.
 
-## Contributing during the design stage
+## Building and trying it
+
+```sh
+cargo build
+cargo test
+a2amx daemon                        # prints "listening on <addr>"
+a2amx new -- sh                     # start and attach; Ctrl-Space d detaches
+a2amx list
+a2amx attach <id> [--force]
+a2amx kill <id>
+```
+
+The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,
+then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-Space (`--prefix` or
+`A2AMX_PREFIX` to change it). After the prefix: `d` detach, `w` session picker, `[`
+scroll mode, and the prefix twice sends a literal prefix.
+
+## Contributing
 
 Design feedback and reproducible, sanitized compatibility findings are welcome.
 Identify whether a suggestion changes a requirement, a proposal, or an open
-question. There is no build or test command yet because no implementation exists.
+question. Before sending a change, `cargo test`, `cargo clippy --all-targets -- -D
+warnings`, and `cargo fmt --check` must pass; see [AGENTS.md](AGENTS.md).
 
 This is a public repository. Use fictional identities and example hosts in docs
 and fixtures. Keep credentials, personal infrastructure details, private agent
