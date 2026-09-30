@@ -621,3 +621,25 @@ asserts that startup fails and leaves no `admin.token`. The fix is in the fixtur
 in §5: version 3 is the smallest version this spec does not define. A tree-wide search for
 `user_version` and `schema version` in `src/` and `tests/` found no other fixture that
 depends on version 2 being unsupported. Scope and acceptance are unchanged.
+
+## Amendment 2 (adjudicating OMP question: `cat` recorder vs installed uutils)
+
+§13's fixture ends with `exec cat >> "$OUT.rest"`. On this environment `cat` is uutils
+coreutils 0.8.0, which does not reliably pass a PTY byte stream through: in a re-run under a
+PTY the bytes written after the first paste and `CR` (`x`, `y`) never reached `$OUT.rest`,
+while the recorder below kept them. The lock-time statement in §13 that later single bytes
+landed in `$OUT.rest` was wrong: the lock-time run printed `\x1b[200~draft\x1b[201~\r`
+without the trailing `xy`, and that output was misread as complete.
+
+The final line of `tests/fixtures/fake_claude.sh` is therefore exactly
+
+```sh
+exec dd bs=1 >> "$OUT.rest" 2>/dev/null
+```
+
+replacing `exec cat >> "$OUT.rest"`; the rest of the §13 fixture is unchanged. The line
+names no `if=` and no `of=`: `dd` only reads its standard input (the PTY) one byte at a
+time and the shell appends its standard output to `$OUT.rest`, a file in the test's temp
+dir. No other change to the fixture or to any test's expected bytes. Re-run under a PTY
+with the replaced line, `$OUT.rest` held `\x1b[200~draft\x1b[201~\rxy`, i.e. every byte
+written after the first `CR`. Scope and acceptance are unchanged.
