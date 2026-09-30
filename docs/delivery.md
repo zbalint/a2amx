@@ -1,7 +1,10 @@
 # Message delivery
 
-Status: proposed semantics. This document defines the delivery contract to build
-and check, not implemented behavior.
+Status: proposed semantics, with one implemented slice: single-machine PTY delivery
+ending at "submitted, outcome unknown" (see
+[Implemented: PTY delivery](#implemented-pty-delivery)). Everything else in this
+document, including hooks and receipts, defines the contract to build and check, not
+implemented behavior.
 
 ## Guarantees and limits
 
@@ -241,6 +244,63 @@ IDs, incarnation, and evidence before resuming delivery. The protocol is open.
 An acceptance-idempotency key would deduplicate a retried send after a lost central
 response. It cannot deduplicate model actions. Without such a mechanism or a status
 lookup, report ambiguous acceptance instead of encouraging blind resend.
+
+## Implemented: PTY delivery
+
+Built from [spec 2](specs/spec-2-messaging.md); the spec is the contract, this
+section is the summary. There are no hooks or receipts yet (spec 2b), so a message
+never goes beyond "submitted, outcome unknown".
+
+**Message states.** `pending`, `delivering`, `submitted`, `unsubmitted`, `cancelled`,
+`undeliverable`. `pending` and `delivering` are open. Nothing expires automatically;
+the human lists, cancels a pending message, or releases a hold. Each intentional
+attempt is a row in `attempts`, recorded as `started` before any PTY byte is written.
+A crash in that window recovers as `unknown`.
+
+**Delivery transaction.** One task per session takes the lowest pending message and,
+when no hold applies, runs this on the PTY writer with the input gate held:
+
+1. Check that the session is alive, not held, and that the harness profile says the
+   composer is ready.
+2. Record the attempt, then write the envelope as one bracketed paste.
+3. Wait a fixed 400 ms. A paste followed by `CR` in one write does not submit in
+   Claude Code; a `CR` sent separately 300 ms or more later does, including
+   mid-turn, where Claude Code queues the message.
+4. Check readiness again. If a human typed or the screen changed, set a hold, send no
+   `CR`, and record `unsubmitted` with the reason (`human_input` or
+   `screen_not_ready`). Otherwise send `CR` as its own write and record `submitted`.
+
+Human keystrokes wait behind the transaction on the bounded input queue and are never
+dropped. Terminal query replies bypass the gate so they stay serviceable. A 1 second
+cooldown follows each submission. An earlier unresolved message blocks later ones, so
+order is acceptance order.
+
+**Readiness.** `--harness claude` inspects the screen: bracketed paste on, not
+scrolled back, cursor visible, `❯ ` at the cursor row's start between two full-width
+rules above and below, and no row containing `Enter to confirm` or `Esc to cancel`.
+Bracketed paste alone is not enough because Claude Code keeps it enabled while a
+dialog is open. `--harness generic` is ready when bracketed paste is on and the
+session is not scrolled back. The default for `claude` is `--deliver auto` and for
+`generic` is `--deliver hold`, which never injects.
+
+**Holds and pending reasons.** The first that applies is reported as `hold_reason`:
+
+| Reason | Meaning |
+| --- | --- |
+| `deliver_hold` | the session was started with `--deliver hold` |
+| `unsubmitted_envelope` | an envelope was pasted but not submitted; it may still be in the composer |
+| `human_draft` | a human typed or pasted since the last release |
+| `queued` | an earlier message for this recipient is still open |
+| `not_ready` | the harness profile says the composer is not ready |
+| `cooldown` | a message was submitted less than a second ago |
+
+The dirty flag is set by human typing or pasting; focus reports and mouse reports do
+not count. With no hook yet, only an explicit release clears it: the prefix then `r`
+while attached. Detach does not clear it.
+
+**Not implemented.** Corrupted-submission verdicts, draft restoration, submission
+observation, native in-harness channels, cross-host routing, and Codex and OMP
+profiles.
 
 ## Harness adapter responsibilities
 

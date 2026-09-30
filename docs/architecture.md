@@ -1,8 +1,9 @@
 # Architecture
 
-Status: design draft, with one implemented slice: the terminal core (see
-[Implemented: terminal core](#implemented-terminal-core)). Everything else here is
-a proposal, and no compatibility results are implied.
+Status: design draft, with two implemented slices: the terminal core (see
+[Implemented: terminal core](#implemented-terminal-core)) and the single-machine
+messaging core (see [Implemented: messaging core](#implemented-messaging-core)).
+Everything else here is a proposal, and no compatibility results are implied.
 
 This document owns topology and scope. [Delivery](delivery.md) owns input and
 receipt semantics; [validation](validation-plan.md) defines how to test them.
@@ -124,6 +125,7 @@ Proposed agent-facing tools:
 ```text
 list_agents()
 send_message(to, subject, message)
+message_status(id)
 ```
 
 The directory returns authorized recipients and their availability. A successful
@@ -230,8 +232,61 @@ section is the summary.
 - The client has a prefix state machine (bracketed-paste aware), a scroll mode, and
   a session picker.
 
-Not yet built: per-session tokens, the MCP server, hooks, envelopes, the dirty
-flag, SQLite, and everything cross-host.
+## Implemented: messaging core
+
+Built from [spec 2](specs/spec-2-messaging.md); the spec is the contract, this
+section is the summary. One daemon acts as both broker and host supervisor on one
+machine; there is no central-versus-host split yet.
+
+- **Durable acceptance.** `send_message` succeeds only after the message is committed
+  to SQLite (`messages.db` in the state dir: WAL, `synchronous=FULL`, 0600 with its
+  `-wal` and `-shm` files). All SQLite work runs on one dedicated thread that owns the
+  connection. Tables `messages` and `attempts` carry a `PRAGMA user_version`
+  migration; `attempts` exists so a later receipt can attach without a schema
+  change. Message ids are `m_<seq>`.
+- **Restart behavior.** Sessions do not survive a daemon restart, so messages still
+  open at startup become `undeliverable` with detail `daemon_restarted`, and a
+  graceful shutdown marks the remaining open ones `daemon_stopped`. Session ids
+  restart at `s1`, so every ownership check and `--session` filter is restricted to
+  the current run (a random boot id stored on each row). Terminal messages are purged
+  after 7 days, hourly and at startup; open messages are never purged.
+- **Identity from the token.** Each session gets a random 64-hex token at spawn, passed
+  as `A2AMX_TOKEN` with `A2AMX_ADDR` in the child's environment (never argv). A
+  connection that presents a session token has only session powers (`list_agents`,
+  `send_message`, and `message_status` for its own messages); the sender is always
+  that session. The admin token keeps the human's powers and cannot send.
+- **Addresses.** A session is `<name>@<host>` (`a2amx new --name`, daemon
+  `--host-name`) or `<id>@<host>` when unnamed. Names match `[a-z0-9][a-z0-9-]{0,62}`,
+  may not look like a session id (`s12`), and are unique among all sessions still in
+  the registry, exited ones included.
+- **Limits.** Subject 200 bytes and body 32 KiB with control characters rejected
+  (the envelope terminator too); 50 open messages per recipient; 10 000 stored
+  messages; 20 accepted sends per minute per sender session (in memory only).
+  Errors carry a code: `unknown_recipient`, `recipient_exited`, `too_large`,
+  `queue_full`, `rate_limited`, `invalid_content`, `unknown_message`, `internal`.
+- **Delivery.** One task per session delivers its pending messages in acceptance
+  order. See [delivery](delivery.md#implemented-pty-delivery) for the transaction and
+  the hold reasons. Delivery ends at "submitted, outcome unknown".
+- **MCP server.** `a2amx mcp` is a hand-written stdio JSON-RPC server with three
+  tools: `list_agents`, `send_message`, `message_status`. It runs wherever the
+  harness runs and connects to the daemon over TCP. A `send_message` whose connection
+  is lost reports `unknown_outcome` and is never retried.
+- **Claude Code wiring.** `a2amx new --harness claude` appends `--mcp-config`,
+  `--allowedTools`, and (unless `--no-authorize-peers`) an `--append-system-prompt`
+  that authorizes peer messages, because Claude Code otherwise declines to act on a
+  pasted envelope. The wording is provisional.
+- **Human controls.** `a2amx list` gains NAME, PENDING, and HELD columns; `a2amx
+  messages [--session S] [--state ...]` lists messages; `a2amx cancel <id>` cancels a
+  pending one; the prefix then `r` releases a session's hold. Nothing expires or
+  retries automatically.
+
+Known gaps kept as `// shortcut:` comments where the code lives: a split escape
+sequence can hold a session, the paste-then-`CR` gap is one fixed constant, an
+unreadable PTY can hold the writer gate, and message bodies are stored as plaintext.
+
+Not yet built: hooks and submission receipts (spec 2b, one harness at a time,
+starting with Claude Code), agent-initiated launch, Codex and OMP profiles, and
+everything cross-host.
 
 ## Wrappers and containers
 
@@ -288,10 +343,10 @@ See [delivery recovery](delivery.md#recovery-and-retry) for side-effect ambiguit
 | Durable messages, receipts, and visible uncertainty | Offline outgoing queues | Exactly-once model processing |
 | Remote launch, attach, switch, detach, resize | Session survival through supervisor crash | Container management and model inference |
 
-Candidates, not pinned dependencies: rusqlite, rmcp, crossterm, and ratatui.
-Already in use by the terminal core: Tokio, serde/serde_json, clap, tracing,
-rustix, and `alacritty_terminal` (including its `tty` module for PTYs, so
-portable-pty is not used). A UI framework is not a terminal emulator.
+Candidates, not pinned dependencies: rmcp, crossterm, and ratatui. Already in use:
+Tokio, serde/serde_json, clap, tracing, rustix, `alacritty_terminal` (including its
+`tty` module for PTYs, so portable-pty is not used), and rusqlite with the bundled
+SQLite. The MCP server is hand-written on serde_json rather than using rmcp. A UI framework is not a terminal emulator.
 
 Decision: the terminal emulator is `alacritty_terminal`, kept behind a small
 interface of A2AMX's own so it can be replaced. It is maintained, tracks the modes
