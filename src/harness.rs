@@ -154,7 +154,38 @@ fn shell_quote(value: &str) -> String {
 pub fn paste_view(harness: Harness, text: &str) -> String {
     match harness {
         // Claude Code 2.1.285/2.1.286 turns each pasted tab into four spaces.
-        Harness::Claude => text.replace('\t', "    "),
+        Harness::Claude => {
+            let text = text.replace('\t', "    ");
+            // Claude Code 2.1.286 escapes pasted_content after < or </, ignoring ASCII case.
+            // shortcut: runs like <<pasted_content, Unicode case folding, and other versions
+            // were not probed; re-probe before extending this rule.
+            let mut escaped = String::new();
+            let mut start = 0;
+            for (index, character) in text.char_indices() {
+                if character != '<' {
+                    continue;
+                }
+                let suffix = &text.as_bytes()[index + 1..];
+                let suffix = suffix.strip_prefix(b"/").unwrap_or(suffix);
+                if suffix
+                    .get(..b"pasted_content".len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"pasted_content"))
+                {
+                    if start == 0 {
+                        escaped.reserve(text.len() + 1);
+                    }
+                    escaped.push_str(&text[start..=index]);
+                    escaped.push('\\');
+                    start = index + 1;
+                }
+            }
+            if start == 0 {
+                text
+            } else {
+                escaped.push_str(&text[start..]);
+                escaped
+            }
+        }
         Harness::Generic => text.to_owned(),
     }
 }

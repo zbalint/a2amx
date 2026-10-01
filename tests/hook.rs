@@ -132,7 +132,7 @@ impl HookCase {
             })
             .await
             .unwrap();
-        let Response::Accepted { id } = response else {
+        let Response::Accepted { id, .. } = response else {
             panic!("message not accepted")
         };
         id

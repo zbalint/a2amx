@@ -301,9 +301,12 @@ machine; there is no central-versus-host split yet.
   (reported as `evidence: write_complete`); with the Claude Code hook a matching
   prompt reaches `submission_observed`.
 - **MCP server.** `a2amx mcp` is a hand-written stdio JSON-RPC server with three
-  tools: `list_agents`, `send_message`, `message_status`. It runs wherever the
-  harness runs and connects to the daemon over TCP. A `send_message` whose connection
-  is lost reports `unknown_outcome` and is never retried.
+  tools: `list_agents`, `send_message`, and `message_status`. It runs wherever the
+  harness runs and connects to the daemon over TCP. Status includes `hold_reason` and
+  `hold_explanation` plus `accepted_at` and `updated_at` Unix seconds. A successful
+  `send_message` may include `recipient_hold` when the recipient is held. A
+  `send_message` whose connection is lost reports `unknown_outcome` and is never
+  retried.
 - **Claude Code wiring.** `a2amx new --harness claude` appends `--mcp-config`,
   `--allowedTools`, and (unless `--no-authorize-peers`) an `--append-system-prompt`
   that authorizes peer messages, because Claude Code otherwise declines to act on a
@@ -315,24 +318,20 @@ machine; there is no central-versus-host split yet.
   error and always exits 0. The daemon unwraps the harness's paste wrappers, matches
   the whole text against the envelope it delivered, and answers allow or block: an
   exact envelope records a receipt, a human prompt clears the human hold, and an
-  envelope mixed with other text is blocked, re-queued as a new attempt, and the
-  human's text is restored as a paste without Enter (three strikes per session, then
-  the `corrupted_submissions` hold). See [delivery](delivery.md#implemented-claude-code-hook).
-- **Human controls.** `a2amx list` gains NAME, PENDING, and HELD columns; `a2amx
-  messages [--session S] [--state ...]` lists messages; `a2amx cancel <id>` cancels a
-  pending one; the prefix then `r` releases a session's hold. Nothing expires or
-  retries automatically.
+  envelope mixed with other text is blocked and re-queued as a new attempt until its
+  second rejection, when it becomes `undeliverable` with detail
+  `unmatchable_submission`. Each rejection still counts toward the session's
+  three-in-row `corrupted_submissions` hold. See
+  [delivery](delivery.md#implemented-claude-code-hook).
+- **Human controls.** `a2amx list` gains NAME, PENDING, and HELD columns; HELD
+  shows the hold reason (or `-` when clear); `a2amx messages [--session S]
+  [--state ...]` lists messages; `a2amx cancel <id>` cancels a pending one; the
+  prefix then `r` releases a session's hold. Pending messages do not expire;
+  corrupted messages retry only until their per-message rejection limit.
 
 Known gaps kept as `// shortcut:` comments where the code lives: a split escape
 sequence can hold a session, the paste-then-`CR` gap is one fixed constant, an
 unreadable PTY can hold the writer gate, and message bodies are stored as plaintext.
-
-Known gaps found in the first real runs, not yet fixed: a message body that contains
-the text of Claude Code's paste wrapper tag is rewritten by Claude Code, can never
-match, and is blocked on every attempt (see [delivery](delivery.md#implemented-claude-code-hook));
-a hold on a session blocks every later message to it, not only the bad one; and a
-sender sees `accepted` and, later, `pending`, with no notice that its message was
-blocked or held.
 
 Not yet built: hooks and receipts for Codex and OMP, agent-initiated launch, Codex and
 OMP delivery profiles, and everything cross-host.

@@ -21,7 +21,7 @@ use crate::emulator::Size;
 use crate::harness::{self, Deliver};
 use crate::messaging::{self, COOLDOWN, Limits, MessageState, code};
 use crate::session::{AttachmentSlot, Hold, Session, SessionId, SessionSpec};
-use crate::store::{self, CancelResult, InsertError, Message, NewMessage, Store};
+use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     AgentSummary, ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary,
 };
@@ -84,6 +84,14 @@ fn failed(code: &str, message: &str) -> Response {
     Response::Failed {
         code: code.into(),
         message: message.into(),
+    }
+}
+
+fn session_hold_reason(hold: Hold) -> &'static str {
+    match hold {
+        Hold::HumanDraft => "human_draft",
+        Hold::UnsubmittedEnvelope => "unsubmitted_envelope",
+        Hold::CorruptedSubmissions => "corrupted_submissions",
     }
 }
 
@@ -252,6 +260,15 @@ impl Runtime {
                 recipient.message_notify().notify_one();
                 Response::Accepted {
                     id: format!("m_{seq}"),
+                    recipient_hold: if recipient.deliver() == Deliver::Hold {
+                        Some("deliver_hold".into())
+                    } else {
+                        recipient
+                            .lock()
+                            .hold
+                            .map(session_hold_reason)
+                            .map(str::to_owned)
+                    },
                 }
             }
             Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
@@ -320,13 +337,28 @@ impl Runtime {
                 && !remainder.contains("</pasted_content"))
             .then(|| messaging::sanitize_draft(remainder.trim()));
             session.note_corrupted(draft);
+            let mut undeliverable = false;
             for (seq, _) in known {
-                self.store.reject_attempt(seq).await?;
+                if self
+                    .store
+                    .reject_attempt(seq, messaging::MAX_MESSAGE_REJECTIONS)
+                    .await?
+                    == RejectOutcome::Undeliverable
+                {
+                    undeliverable = true;
+                }
             }
             session.message_notify().notify_one();
             return Ok(Response::PromptVerdict {
                 verdict: "block".into(),
-                reason: Some(messaging::CORRUPTED_SUBMISSION_REASON.into()),
+                reason: Some(
+                    if undeliverable {
+                        messaging::UNMATCHABLE_SUBMISSION_REASON
+                    } else {
+                        messaging::CORRUPTED_SUBMISSION_REASON
+                    }
+                    .into(),
+                ),
             });
         }
         Ok(Response::PromptVerdict {
@@ -368,12 +400,8 @@ impl Runtime {
                 None
             } else if session.deliver() == Deliver::Hold {
                 Some("deliver_hold")
-            } else if state.hold == Some(Hold::UnsubmittedEnvelope) {
-                Some("unsubmitted_envelope")
-            } else if state.hold == Some(Hold::CorruptedSubmissions) {
-                Some("corrupted_submissions")
-            } else if state.hold == Some(Hold::HumanDraft) {
-                Some("human_draft")
+            } else if let Some(reason) = state.hold.map(session_hold_reason) {
+                Some(reason)
             } else if queued {
                 Some("queued")
             } else if !harness::ready(
@@ -401,6 +429,11 @@ impl Runtime {
             state: message.state.as_str().into(),
             detail: message.detail,
             hold_reason: hold_reason.map(str::to_owned),
+            hold_explanation: hold_reason
+                .and_then(messaging::hold_explanation)
+                .map(str::to_owned),
+            accepted_at: Some(message.accepted_at),
+            updated_at: Some(message.updated_at),
             evidence: if message.state == MessageState::Submitted {
                 Some(
                     if message.observed {
@@ -828,6 +861,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                             ),
                             pending: counts.get(&session.id().0).copied().unwrap_or(0),
                             held: state.hold.is_some(),
+                            hold_reason: state.hold.map(session_hold_reason).map(str::to_owned),
                         }
                     })
                     .collect();

@@ -171,6 +171,8 @@ pub enum Response {
     },
     Accepted {
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recipient_hold: Option<String>,
     },
     Failed {
         code: String,
@@ -209,6 +211,8 @@ pub struct SessionSummary {
     pub pending: u32,
     #[serde(default, skip_serializing_if = "is_default")]
     pub held: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_reason: Option<String>,
 }
 
 // Preserve terminal-core JSON when the additive fields carry their defaults.
@@ -234,6 +238,12 @@ pub struct MessageInfo {
     pub hold_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_explanation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
 }
 
 /// Server-to-client stream frame.

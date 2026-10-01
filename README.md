@@ -110,9 +110,9 @@ then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
 `A2AMX_PREFIX` to change it). After the prefix: `d` detach, `w` session picker, `[`
 scroll mode, `r` releases the session's message hold, and the prefix twice sends a
 literal prefix. In `a2amx list`, ATTACHED means a human client is attached, not that
-the session is reachable: a detached session still receives messages. HELD means a
-hold is stopping delivery; a session that looks idle with an empty composer may hold
-after you typed in it, and `r` clears it.
+the session is reachable: a detached session still receives messages. HELD shows the
+reason a hold is stopping delivery (`-` when clear); a session that looks idle with
+an empty composer may hold after you typed in it, and `r` clears it.
 
 ## Using it with agents
 
@@ -125,11 +125,10 @@ after you typed in it, and `r` clears it.
 - Keep credentials out of message bodies. A prompt hook, transcript, or memory tool
   attached to the harness sees the full message, and some keep it with no way to
   delete it.
-- Do not write the text of Claude Code's paste wrapper tag in a message body. Claude
-  Code rewrites it, the message can never match, and the session ends up held after
-  three blocked attempts. Describe it in words. Until this is fixed, `a2amx messages`
-  shows such a message as `pending` with the hold reason, and `a2amx cancel` removes
-  it.
+- Claude Code escapes its own paste-wrapper tag when it appears in pasted text, and
+  A2AMX models that behavior on Claude Code 2.1.286, so a body containing the tag
+  text remains matchable there. A sender can still avoid writing the wrapper tag in
+  a message body when practical.
 - A sender's `accepted` means the daemon took the message, not that it was delivered.
   Check `message_status` when the reply matters.
 

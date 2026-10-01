@@ -677,11 +677,10 @@ fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 8]> {
                     "no".to_owned()
                 },
                 session.pending.to_string(),
-                if session.held {
-                    "yes".to_owned()
-                } else {
-                    "no".to_owned()
-                },
+                session
+                    .hold_reason
+                    .clone()
+                    .unwrap_or_else(|| "-".to_owned()),
                 format!("{}x{}", session.cols, session.rows),
                 session.argv.join(" "),
             ]

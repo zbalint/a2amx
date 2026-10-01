@@ -10,7 +10,7 @@ use std::thread::{self, JoinHandle};
 
 use a2amx::client::Client;
 use a2amx::harness::{Deliver, Harness};
-use a2amx::wire::{Request, Response, encode_frame};
+use a2amx::wire::{MessageInfo, Request, Response, encode_frame};
 use serde_json::{Value, json};
 
 struct McpProcess {
@@ -222,7 +222,7 @@ async fn mcp_initialize_tools_and_message_calls() {
         json!([
             {
                 "name": "list_agents",
-                "description": "List the agent sessions you can message.",
+                "description": "List the agent sessions you can message. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
@@ -231,7 +231,7 @@ async fn mcp_initialize_tools_and_message_calls() {
             },
             {
                 "name": "send_message",
-                "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was read or acted on.",
+                "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. Plain text; do not write the text of a paste-wrapper tag in a body.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -254,7 +254,7 @@ async fn mcp_initialize_tools_and_message_calls() {
             },
             {
                 "name": "message_status",
-                "description": "Show the state of a message you sent.",
+                "description": "Show the state of a message you sent. \"state\" and \"detail\" say whether it was delivered, is waiting, or was given up on; \"hold_reason\" and \"hold_explanation\" say what a waiting message needs; \"evidence\" of submission_observed means the recipient's prompt hook saw it submitted; \"accepted_at\" and \"updated_at\" are Unix seconds.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {"id": {"type": "string"}},
@@ -289,7 +289,7 @@ async fn mcp_initialize_tools_and_message_calls() {
             }
         }
     })));
-    assert_eq!(accepted, json!({"id":"m_1","status":"accepted"}));
+    assert_eq!(accepted, json!({"id":"m_1","status":"accepted","recipient_hold":"deliver_hold"}));
 
     let status = tool_result(&mcp.send(json!({
         "jsonrpc": "2.0",
@@ -297,17 +297,25 @@ async fn mcp_initialize_tools_and_message_calls() {
         "method": "tools/call",
         "params": {"name": "message_status", "arguments": {"id": "m_1"}}
     })));
+    assert_eq!(status["id"], "m_1");
+    assert_eq!(status["to"], "agent-review@host-a");
+    assert_eq!(status["state"], "pending");
+    assert_eq!(status["detail"], Value::Null);
+    assert_eq!(status["hold_reason"], "deliver_hold");
     assert_eq!(
-        status,
-        json!({
-            "id": "m_1",
-            "to": "agent-review@host-a",
-            "state": "pending",
-            "detail": null,
-            "hold_reason": "deliver_hold",
-            "evidence": null
-        })
+        status["hold_explanation"],
+        "The recipient session only holds messages; a person must deliver by hand or restart it with automatic delivery."
     );
+    assert_eq!(status["evidence"], Value::Null);
+    let accepted_at = status["accepted_at"]
+        .as_i64()
+        .expect("accepted_at is an integer");
+    let updated_at = status["updated_at"]
+        .as_i64()
+        .expect("updated_at is an integer");
+    assert!(accepted_at > 0);
+    assert!(updated_at > 0);
+    assert!(accepted_at <= updated_at);
 
     let unknown_recipient = failed_tool_result(&mcp.send(json!({
         "jsonrpc": "2.0",
@@ -324,6 +332,102 @@ async fn mcp_initialize_tools_and_message_calls() {
     })));
     assert_eq!(unknown_recipient["code"], "unknown_recipient");
     }).await.expect("MCP pipe scenario");
+}
+
+#[test]
+fn mcp_accepted_omits_absent_recipient_hold() {
+    let (addr, server) = spawn_scripted_server(|listener| {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("accept accepted response connection");
+        expect_hello(&mut stream);
+        assert!(matches!(
+            read_request(&mut stream),
+            Request::SendMessage { .. }
+        ));
+        write_response(
+            &mut stream,
+            &Response::Accepted {
+                id: "m_1".to_owned(),
+                recipient_hold: None,
+            },
+        );
+    });
+
+    let mut mcp = McpProcess::spawn(addr, &"a".repeat(64));
+    let response = mcp.send(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "send_message",
+            "arguments": {
+                "to": "agent-review@host-a",
+                "subject": "Parser issue",
+                "message": "No recipient hold was reported.",
+            }
+        }
+    }));
+    assert_eq!(
+        tool_result(&response),
+        json!({"id": "m_1", "status": "accepted"})
+    );
+    server.join().expect("accepted response server");
+}
+
+#[test]
+fn mcp_status_serializes_optional_visibility_fields_as_null() {
+    let (addr, server) = spawn_scripted_server(|listener| {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("accept status response connection");
+        expect_hello(&mut stream);
+        assert_eq!(
+            read_request(&mut stream),
+            Request::MessageStatus { id: "m_1".into() }
+        );
+        write_response(
+            &mut stream,
+            &Response::Status {
+                message: MessageInfo {
+                    id: "m_1".into(),
+                    from: "agent-plan@host-a".into(),
+                    to: "agent-review@host-a".into(),
+                    subject: "Parser issue".into(),
+                    state: "submitted".into(),
+                    detail: None,
+                    hold_reason: None,
+                    evidence: None,
+                    hold_explanation: None,
+                    accepted_at: None,
+                    updated_at: None,
+                },
+            },
+        );
+    });
+
+    let mut mcp = McpProcess::spawn(addr, &"a".repeat(64));
+    let response = mcp.send(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "message_status", "arguments": {"id": "m_1"}}
+    }));
+    assert_eq!(
+        tool_result(&response),
+        json!({
+            "id": "m_1",
+            "to": "agent-review@host-a",
+            "state": "submitted",
+            "detail": null,
+            "hold_reason": null,
+            "evidence": null,
+            "hold_explanation": null,
+            "accepted_at": null,
+            "updated_at": null,
+        })
+    );
+    server.join().expect("status response server");
 }
 
 #[tokio::test]
@@ -548,6 +652,7 @@ fn mcp_send_never_retries_after_transport_loss() {
                         &mut retry,
                         &Response::Accepted {
                             id: "m_retry".to_owned(),
+                            recipient_hold: None,
                         },
                     );
                     return;

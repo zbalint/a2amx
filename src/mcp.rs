@@ -188,7 +188,12 @@ impl McpServer {
                     })
                     .await?;
                 match response {
-                    Response::Accepted { id } => Ok(json!({"id": id, "status": "accepted"})),
+                    Response::Accepted { id, recipient_hold } => match recipient_hold {
+                        Some(recipient_hold) => Ok(
+                            json!({"id": id, "status": "accepted", "recipient_hold": recipient_hold}),
+                        ),
+                        None => Ok(json!({"id": id, "status": "accepted"})),
+                    },
                     response => response_payload(response),
                 }
             }
@@ -202,6 +207,9 @@ impl McpServer {
                         "detail": message.detail,
                         "hold_reason": message.hold_reason,
                         "evidence": message.evidence,
+                        "hold_explanation": message.hold_explanation,
+                        "accepted_at": message.accepted_at,
+                        "updated_at": message.updated_at,
                     })),
                     response => response_payload(response),
                 }
@@ -357,7 +365,7 @@ fn tool_schemas() -> Value {
     json!([
         {
             "name": "list_agents",
-            "description": "List the agent sessions you can message.",
+            "description": "List the agent sessions you can message. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages.",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -366,7 +374,7 @@ fn tool_schemas() -> Value {
         },
         {
             "name": "send_message",
-            "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was read or acted on.",
+            "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. Plain text; do not write the text of a paste-wrapper tag in a body.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -389,7 +397,7 @@ fn tool_schemas() -> Value {
         },
         {
             "name": "message_status",
-            "description": "Show the state of a message you sent.",
+            "description": "Show the state of a message you sent. \"state\" and \"detail\" say whether it was delivered, is waiting, or was given up on; \"hold_reason\" and \"hold_explanation\" say what a waiting message needs; \"evidence\" of submission_observed means the recipient's prompt hook saw it submitted; \"accepted_at\" and \"updated_at\" are Unix seconds.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"id": {"type": "string"}},

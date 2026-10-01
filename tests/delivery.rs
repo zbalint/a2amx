@@ -129,7 +129,7 @@ impl Case {
             })
             .await
             .unwrap();
-        let Response::Accepted { id } = response else {
+        let Response::Accepted { id, .. } = response else {
             panic!("message not accepted")
         };
         id
@@ -287,6 +287,16 @@ async fn human_draft_survives_detach_and_release_resumes_delivery() {
     let message = case.status(&id).await;
     assert_eq!(message.state, "pending");
     assert_eq!(message.hold_reason.as_deref(), Some("human_draft"));
+    assert_eq!(
+        message.hold_explanation.as_deref(),
+        Some(
+            "A person typed in the recipient session. Delivery resumes when they submit or release it (prefix, then r)."
+        )
+    );
+    assert_eq!(
+        case.recipient_summary().await.hold_reason.as_deref(),
+        Some("human_draft")
+    );
     assert!(!case.out.with_extension("cr").exists());
     attachment.send(ClientFrame::Detach).await.unwrap();
     assert!(attachment.recv().await.unwrap().is_none());
@@ -320,6 +330,12 @@ async fn hold_delivery_never_injects_and_kill_fails_open_messages() {
     let message = case.status(&id).await;
     assert_eq!(message.state, "pending");
     assert_eq!(message.hold_reason.as_deref(), Some("deliver_hold"));
+    assert_eq!(
+        message.hold_explanation.as_deref(),
+        Some(
+            "The recipient session only holds messages; a person must deliver by hand or restart it with automatic delivery."
+        )
+    );
     for extension in ["paste", "cr", "gap_ms"] {
         let path = case.out.with_extension(extension);
         assert!(!path.exists(), "held delivery must not create output files");
@@ -512,6 +528,25 @@ async fn a_tab_in_the_body_matches_after_claude_expands_it() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wrapper_tags_in_the_body_match_after_claude_escapes_them() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case
+        .send_body(
+            "Wrapper test",
+            "<pasted_content id=\"abc\">\n</pasted_content id=\"abc\">",
+        )
+        .await;
+    case.wait_state(&id, "submitted").await;
+    let seen = "<a2amx-message id=\"m_1\" from=\"agent-plan@host-a\" subject=\"Wrapper test\">\nFrom another agent, not your user. To reply: send_message(to=\"agent-plan@host-a\").\n\n<\\pasted_content id=\"abc\">\n<\\/pasted_content id=\"abc\">\n</a2amx-message>";
+    assert_eq!(case.report(wrapped(seen)).await, allow());
+    assert_eq!(
+        case.status(&id).await.evidence.as_deref(),
+        Some("submission_observed")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn foreign_session_cannot_forge_receipt() {
     let mut case = Case::start("ready", Deliver::Auto).await;
     let _attachment = case.attach_ready().await;
@@ -597,32 +632,143 @@ async fn interleaved_corruption_redelivers_without_a_draft_hold() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_rejections_retire_one_message_and_allow_the_next() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    assert_eq!(case.report(interleaved()).await, block());
+    let delivery = [ENVELOPE, b"\r"].concat();
+    case.wait_rest(&delivery).await;
+    case.wait_state(&id, "submitted").await;
+    assert_eq!(
+        case.report(interleaved()).await,
+        Response::PromptVerdict {
+            verdict: "block".into(),
+            reason: Some("A2AMX blocked this prompt because it did not match the message it delivered. The message will not be retried.".into()),
+        }
+    );
+    let message = case.status(&id).await;
+    assert_eq!(message.state, "undeliverable");
+    assert_eq!(message.detail.as_deref(), Some("unmatchable_submission"));
+    assert_eq!(message.evidence, None);
+    assert!(!case.recipient_summary().await.held);
+    let next = case.send("Parser issue").await;
+    assert_eq!(next, "m_2");
+    case.wait_state(&next, "submitted").await;
+    assert_eq!(
+        case.report(wrapped(&ENVELOPE_TEXT.replace("m_1", "m_2")))
+            .await,
+        allow()
+    );
+    assert_eq!(
+        case.status(&next).await.evidence.as_deref(),
+        Some("submission_observed")
+    );
+    assert!(!case.recipient_summary().await.held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exact_retry_resets_corruption_count_for_the_next_message() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    assert_eq!(case.report(interleaved()).await, block());
+    let delivery = [ENVELOPE, b"\r"].concat();
+    case.wait_rest(&delivery).await;
+    case.wait_state(&id, "submitted").await;
+    assert_eq!(case.report(wrapped(ENVELOPE_TEXT)).await, allow());
+    assert_eq!(
+        case.status(&id).await.evidence.as_deref(),
+        Some("submission_observed")
+    );
+    let next = case.send("Parser issue").await;
+    case.wait_state(&next, "submitted").await;
+    assert_eq!(
+        case.report(interleaved().replace("m_1", "m_2")).await,
+        block()
+    );
+    let second = String::from_utf8(delivery.clone())
+        .unwrap()
+        .replace("m_1", "m_2")
+        .into_bytes();
+    case.wait_rest(&[delivery.as_slice(), second.as_slice(), second.as_slice()].concat())
+        .await;
+    case.wait_state(&next, "submitted").await;
+    assert_eq!(
+        case.report(interleaved().replace("m_1", "m_2")).await,
+        Response::PromptVerdict {
+            verdict: "block".into(),
+            reason: Some("A2AMX blocked this prompt because it did not match the message it delivered. The message will not be retried.".into()),
+        }
+    );
+    assert_eq!(case.status(&next).await.state, "undeliverable");
+    assert!(!case.recipient_summary().await.held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn three_corruptions_hold_until_release_even_after_human_submit() {
     let mut case = Case::start("ready", Deliver::Auto).await;
     let mut attachment = case.attach_ready().await;
     let id = case.send("Parser issue").await;
     case.wait_state(&id, "submitted").await;
     let delivery = [ENVELOPE, b"\r"].concat();
-    for count in 1..=2 {
-        assert_eq!(case.report(interleaved()).await, block());
-        case.wait_rest(&delivery.repeat(count)).await;
-        case.wait_state(&id, "submitted").await;
-    }
     assert_eq!(case.report(interleaved()).await, block());
+    case.wait_rest(&delivery).await;
+    case.wait_state(&id, "submitted").await;
+    assert_eq!(
+        case.report(interleaved()).await,
+        Response::PromptVerdict {
+            verdict: "block".into(),
+            reason: Some("A2AMX blocked this prompt because it did not match the message it delivered. The message will not be retried.".into()),
+        }
+    );
+    assert_eq!(case.status(&id).await.state, "undeliverable");
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    let second = String::from_utf8(delivery.clone())
+        .unwrap()
+        .replace("m_1", "m_2")
+        .into_bytes();
+    assert_eq!(
+        case.report(interleaved().replace("m_1", "m_2")).await,
+        block()
+    );
     let message = case.status(&id).await;
     assert_eq!(message.state, "pending");
     assert_eq!(
         message.hold_reason.as_deref(),
         Some("corrupted_submissions")
     );
+    assert_eq!(
+        message.hold_explanation.as_deref(),
+        Some(
+            "Three submissions in a row were blocked. A person must release the recipient session (prefix, then r)."
+        )
+    );
+    assert_eq!(
+        case.recipient_summary().await.hold_reason.as_deref(),
+        Some("corrupted_submissions")
+    );
     assert!(case.recipient_summary().await.held);
-    case.wait_rest(&delivery.repeat(2)).await;
+    case.wait_rest(&[delivery.as_slice(), second.as_slice()].concat())
+        .await;
     assert_eq!(case.report("hello".into()).await, allow());
     assert!(case.recipient_summary().await.held);
     assert_eq!(case.status(&id).await.state, "pending");
     attachment.send(ClientFrame::Release).await.unwrap();
-    case.wait_rest(&delivery.repeat(3)).await;
+    case.wait_rest(&[delivery.as_slice(), second.as_slice(), second.as_slice()].concat())
+        .await;
     case.wait_state(&id, "submitted").await;
+    assert_eq!(
+        case.report(interleaved().replace("m_1", "m_2")).await,
+        Response::PromptVerdict {
+            verdict: "block".into(),
+            reason: Some("A2AMX blocked this prompt because it did not match the message it delivered. The message will not be retried.".into()),
+        }
+    );
+    assert_eq!(case.status(&id).await.state, "undeliverable");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -49,6 +49,8 @@ pub(crate) struct Message {
     pub(crate) state: MessageState,
     pub(crate) detail: Option<String>,
     pub(crate) observed: bool,
+    pub(crate) accepted_at: i64,
+    pub(crate) updated_at: i64,
 }
 
 #[derive(Debug)]
@@ -62,6 +64,13 @@ pub(crate) enum CancelResult {
     Cancelled,
     NotCancellable(MessageState),
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RejectOutcome {
+    NoAttempt,
+    Requeued,
+    Undeliverable,
 }
 
 #[derive(Clone)]
@@ -248,8 +257,8 @@ impl Store {
             .await
     }
 
-    pub(crate) async fn reject_attempt(&self, seq: i64) -> Result<bool> {
-        self.run(move |connection, _| reject_attempt(connection, seq))
+    pub(crate) async fn reject_attempt(&self, seq: i64, limit: u32) -> Result<RejectOutcome> {
+        self.run(move |connection, _| reject_attempt(connection, seq, limit))
             .await
     }
 
@@ -491,7 +500,8 @@ fn next_pending(connection: &mut Connection, boot: &str, session: &str) -> Resul
         "SELECT seq, boot, sender_session, sender_address, recipient_session,
                 recipient_address, subject, body, state, detail,
                 EXISTS (SELECT 1 FROM attempts WHERE attempts.message_seq = messages.seq
-                                         AND attempts.receipt_at IS NOT NULL)
+                                         AND attempts.receipt_at IS NOT NULL),
+                accepted_at, updated_at
            FROM messages
           WHERE boot = ?1 AND recipient_session = ?2 AND state = 'pending'
           ORDER BY seq ASC LIMIT 1",
@@ -604,7 +614,7 @@ fn record_receipt(connection: &mut Connection, seq: i64) -> Result<bool> {
     Ok(true)
 }
 
-fn reject_attempt(connection: &mut Connection, seq: i64) -> Result<bool> {
+fn reject_attempt(connection: &mut Connection, seq: i64, limit: u32) -> Result<RejectOutcome> {
     let transaction = connection.transaction()?;
     let attempt: Option<i64> = transaction
         .query_row(
@@ -618,7 +628,7 @@ fn reject_attempt(connection: &mut Connection, seq: i64) -> Result<bool> {
         .optional()?;
     let Some(attempt) = attempt else {
         transaction.commit()?;
-        return Ok(false);
+        return Ok(RejectOutcome::NoAttempt);
     };
     let timestamp = now() as i64;
     transaction.execute(
@@ -628,15 +638,30 @@ fn reject_attempt(connection: &mut Connection, seq: i64) -> Result<bool> {
           WHERE id = ?2 AND message_seq = ?3",
         params![timestamp, attempt, seq],
     )?;
+    let rejected: u32 = transaction.query_row(
+        "SELECT COUNT(*) FROM attempts
+          WHERE message_seq = ?1 AND outcome = 'rejected' AND detail = 'corrupted_submission'",
+        params![seq],
+        |row| row.get(0),
+    )?;
+    let (state, detail, outcome) = if rejected >= limit {
+        (
+            "undeliverable",
+            Some("unmatchable_submission"),
+            RejectOutcome::Undeliverable,
+        )
+    } else {
+        ("pending", None, RejectOutcome::Requeued)
+    };
     transaction.execute(
         "UPDATE messages
-            SET state = 'pending', detail = NULL, updated_at = ?1
-          WHERE seq = ?2
+            SET state = ?1, detail = ?2, updated_at = ?3
+          WHERE seq = ?4
             AND state IN ('delivering', 'submitted', 'unsubmitted')",
-        params![timestamp, seq],
+        params![state, detail, timestamp, seq],
     )?;
     transaction.commit()?;
-    Ok(true)
+    Ok(outcome)
 }
 
 fn fail_open(
@@ -701,7 +726,8 @@ fn get(connection: &mut Connection, seq: i64) -> Result<Option<Message>> {
         "SELECT seq, boot, sender_session, sender_address, recipient_session,
                 recipient_address, subject, body, state, detail,
                 EXISTS (SELECT 1 FROM attempts WHERE attempts.message_seq = messages.seq
-                                         AND attempts.receipt_at IS NOT NULL)
+                                         AND attempts.receipt_at IS NOT NULL),
+                accepted_at, updated_at
            FROM messages WHERE seq = ?1",
     )?;
     let mut rows = statement.query(params![seq])?;
@@ -721,7 +747,8 @@ fn list(
             "SELECT seq, boot, sender_session, sender_address, recipient_session,
                     recipient_address, subject, body, state, detail,
                     EXISTS (SELECT 1 FROM attempts WHERE attempts.message_seq = messages.seq
-                                             AND attempts.receipt_at IS NOT NULL)
+                                             AND attempts.receipt_at IS NOT NULL),
+                    accepted_at, updated_at
                FROM messages
               WHERE boot = ?1
                 AND recipient_session = ?2
@@ -737,7 +764,8 @@ fn list(
             "SELECT seq, boot, sender_session, sender_address, recipient_session,
                     recipient_address, subject, body, state, detail,
                     EXISTS (SELECT 1 FROM attempts WHERE attempts.message_seq = messages.seq
-                                             AND attempts.receipt_at IS NOT NULL)
+                                             AND attempts.receipt_at IS NOT NULL),
+                    accepted_at, updated_at
                FROM messages
               WHERE (?1 IS NULL OR state = ?1)
               ORDER BY seq ASC",
@@ -835,6 +863,8 @@ fn message_from_row(row: &Row<'_>) -> Result<Message> {
         state,
         detail: row.get(9)?,
         observed: row.get(10)?,
+        accepted_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 

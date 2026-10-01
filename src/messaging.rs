@@ -12,8 +12,33 @@ pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 pub const PASTE_GAP: Duration = Duration::from_millis(400);
 pub const COOLDOWN: Duration = Duration::from_secs(1);
 pub const MAX_CORRUPTED_SUBMISSIONS: u32 = 3;
+pub const MAX_MESSAGE_REJECTIONS: u32 = 2;
+pub const UNMATCHABLE_SUBMISSION_REASON: &str = "A2AMX blocked this prompt because it did not match the message it delivered. The message will not be retried.";
 pub const MAX_RESTORE_BYTES: usize = 64 * 1024;
 pub const CORRUPTED_SUBMISSION_REASON: &str = "A2AMX blocked this prompt because it mixed your text with a peer message. The message will be delivered again.";
+
+pub fn hold_explanation(reason: &str) -> Option<&'static str> {
+    match reason {
+        "deliver_hold" => Some(
+            "The recipient session only holds messages; a person must deliver by hand or restart it with automatic delivery.",
+        ),
+        "unsubmitted_envelope" => {
+            Some("A message was pasted into the recipient's prompt box and not submitted yet.")
+        }
+        "corrupted_submissions" => Some(
+            "Three submissions in a row were blocked. A person must release the recipient session (prefix, then r).",
+        ),
+        "human_draft" => Some(
+            "A person typed in the recipient session. Delivery resumes when they submit or release it (prefix, then r).",
+        ),
+        "queued" => Some("An earlier message to this recipient is still open."),
+        "not_ready" => {
+            Some("The recipient's prompt box is not ready, for example a dialog is open.")
+        }
+        "cooldown" => Some("A message was submitted less than a second ago."),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {

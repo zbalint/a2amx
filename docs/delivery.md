@@ -136,10 +136,14 @@ the submitted text to the supervisor and obeys the verdict:
 - The prompt is exactly a recorded envelope, or contains no envelope: allow it.
 - The prompt contains an envelope's identifier but is not exactly that envelope
   (a human draft was merged in, or characters were interleaved): it is corrupted.
-  Block it, or replace it where the harness allows. Record a known rejection for the
-  attempt and queue the envelope again as a new attempt. The supervisor keeps the
-  full submitted text, so it restores the human's draft to the composer later,
-  pasted without Enter, once the session is idle.
+  Block it, or replace it where the harness allows. Record a known rejection for
+  the attempt and queue the envelope again as a new attempt while this message has
+  fewer than two rejected attempts. On its second rejection, set the message to
+  `undeliverable` with detail `unmatchable_submission`; do not retry it.
+  Each rejection still counts toward the session's corrupted-submission count, so
+  repeated bad messages can still reach the three-in-a-row session backstop.
+  The supervisor keeps the full submitted text, so it restores the human's draft to
+  the composer later, pasted without Enter, once the session is idle.
 
 The model never sees the corrupted prompt, and no human text is lost. What each hook
 can do, from the harness documentation or source at the time of writing:
@@ -297,6 +301,13 @@ session is not scrolled back. The default for `claude` is `--deliver auto` and f
 | `not_ready` | the harness profile says the composer is not ready |
 | `cooldown` | a message was submitted less than a second ago |
 
+The `corrupted_submissions` hold remains a session-level backstop: a session is
+held after three corrupted submissions in a row, even when those submissions came
+from different messages. A single message contributes at most two rejected
+attempts; its second rejection makes it `undeliverable` with detail
+`unmatchable_submission`, which is not an open state and therefore does not block
+later messages by itself.
+
 The dirty flag is set by human typing or pasting; focus reports and mouse reports do
 not count. An explicit release clears it: the prefix then `r` while attached. Where a
 hook exists (Claude Code), a hook-observed human submit clears it too. Detach does not
@@ -329,7 +340,7 @@ stale or foreign id never blocks typing.
 | --- | --- | --- |
 | Exactly one known envelope | allow | Receipt recorded; the `human_draft` and `unsubmitted_envelope` holds clear; the corrupted-submission count resets |
 | No known envelope | allow | The composer was emptied by a human submit: the `human_draft` and `unsubmitted_envelope` holds clear |
-| A known envelope plus other text, or characters interleaved into it | block | Attempt recorded as `rejected`; the message goes back to `pending` for a new attempt; the human's own text is restored as a paste without Enter once the session is idle, under a `human_draft` hold; interleaved text is not restored and stays in the transcript |
+| A known envelope plus other text, or characters interleaved into it | block | Attempt recorded as `rejected`; the message goes back to `pending` for a new attempt until its second rejection, then becomes `undeliverable` with detail `unmatchable_submission`; the human's own text is restored as a paste without Enter once the session is idle, under a `human_draft` hold; interleaved text is not restored and stays in the transcript |
 
 Three corrupted submissions in a row on one session stop the cycle with the
 `corrupted_submissions` hold, cleared only by an explicit release. A block shows
@@ -342,6 +353,12 @@ transcript, and the model never sees the prompt.
 for one with a receipt. A missing receipt is never a failure. A receipt can arrive
 before the writer records its own outcome; whichever lands first wins, and a late write
 outcome never downgrades a receipt or overwrites a rejection.
+
+An accepted send may include `recipient_hold`: `deliver_hold` for a recipient
+started with hold delivery, or the session-level hold reason when delivery is held.
+`message_status` reports `hold_explanation` alongside a hold reason when one is
+present. It also reports `accepted_at` and `updated_at` as Unix seconds; absent
+optional values are `null`.
 
 **Observed Claude Code behavior** (2.1.285 and 2.1.286, through a PTY with a logging
 hook):
@@ -364,11 +381,11 @@ hook):
   between `<` and `/` (`<\/pasted_content`). This holds with or without attributes, in
   the middle of a line, and for any letter case; text that already has the backslash
   is not escaped again, and the bare word without a `<` is left alone. Other markup,
-  including `<a2amx-message`, is not touched. The matcher does not apply this rewrite
-  yet, so a message whose body contains the wrapper tag text can never match and is
-  blocked on every attempt until three strikes hold the session. The sender has to
-  resend it without that text. Observed on Claude Code 2.1.286 with a blocking hook
-  and bracketed pastes; it was also seen in a real run.
+  including `<a2amx-message`, is not touched. The matcher applies this same
+  wrapper escaping for Claude Code 2.1.286, so a message whose body contains
+  wrapper-tag text remains matchable; senders may still avoid writing that text
+  when they can. This behavior was observed with a blocking hook and bracketed
+  pastes on Claude Code 2.1.286.
 - A short paste with two newlines reached the hook unwrapped, and a paste with three
   newlines arrived wrapped, in the same probe; the collapse threshold is not measured.
   Delivered envelopes are long enough to be wrapped.

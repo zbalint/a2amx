@@ -275,6 +275,54 @@ fn claude_paste_view_expands_each_tab_to_four_spaces() {
 }
 
 #[test]
+fn claude_paste_view_escapes_wrapper_tags_only() {
+    let cases = [
+        (
+            "x\n<pasted_content id=\"abc\">\ny",
+            "x\n<\\pasted_content id=\"abc\">\ny",
+        ),
+        (
+            "x\n</pasted_content id=\"abc\">\ny",
+            "x\n<\\/pasted_content id=\"abc\">\ny",
+        ),
+        ("x\n<pasted_content>\ny", "x\n<\\pasted_content>\ny"),
+        (
+            "x\n<PASTED_CONTENT id=\"a\">\ny",
+            "x\n<\\PASTED_CONTENT id=\"a\">\ny",
+        ),
+        ("x\n<pasted_content\ny", "x\n<\\pasted_content\ny"),
+        (
+            "x <pasted_content id=\"abc\"> y\nz",
+            "x <\\pasted_content id=\"abc\"> y\nz",
+        ),
+        ("x\npasted_content bare\ny", "x\npasted_content bare\ny"),
+        (
+            "x\n<a2amx-message id=\"m_1\" from=\"a@b\">\ny",
+            "x\n<a2amx-message id=\"m_1\" from=\"a@b\">\ny",
+        ),
+        ("x\n</a2amx-message>\ny", "x\n</a2amx-message>\ny"),
+        (
+            "x\n<channel source=\"s\">\ny",
+            "x\n<channel source=\"s\">\ny",
+        ),
+        ("x\n<system-reminder>\ny", "x\n<system-reminder>\ny"),
+        ("x\n<command-name>\ny", "x\n<command-name>\ny"),
+        (
+            "x\n<\\pasted_content already\ny",
+            "x\n<\\pasted_content already\ny",
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(harness::paste_view(Harness::Claude, input), expected);
+        assert_eq!(harness::paste_view(Harness::Generic, input), input);
+    }
+    assert_eq!(
+        harness::paste_view(Harness::Claude, "é\t<pasted_content> </PaStEd_CoNtEnT>界"),
+        "é    <\\pasted_content> <\\/PaStEd_CoNtEnT>界"
+    );
+}
+
+#[test]
 fn claude_readiness_accepts_the_non_breaking_space_after_the_glyph() {
     // Claude Code 2.1.286 draws its composer as the glyph plus U+00A0, not a plain space.
     let rules = "─".repeat(40);

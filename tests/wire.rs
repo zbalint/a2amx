@@ -1,7 +1,7 @@
 use a2amx::emulator::Scroll;
 use a2amx::wire::{
-    ClientFrame, FrameDecoder, MAX_FRAME_LEN, Request, Response, ServerFrame, SessionSummary,
-    encode_frame,
+    ClientFrame, FrameDecoder, MAX_FRAME_LEN, MessageInfo, Request, Response, ServerFrame,
+    SessionSummary, encode_frame,
 };
 
 #[test]
@@ -118,6 +118,7 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             address: String::new(),
             pending: 0,
             held: false,
+            hold_reason: None,
         }],
     };
     let json = serde_json::to_string(&response).unwrap_or_default();
@@ -297,9 +298,15 @@ fn messaging_control_variants_round_trip() {
         detail: None,
         hold_reason: Some("human_draft".into()),
         evidence: None,
+        hold_explanation: None,
+        accepted_at: None,
+        updated_at: None,
     };
     let responses = [
-        Response::Accepted { id: "m_1".into() },
+        Response::Accepted {
+            id: "m_1".into(),
+            recipient_hold: None,
+        },
         Response::Failed {
             code: "queue_full".into(),
             message: "recipient queue is full".into(),
@@ -368,6 +375,9 @@ fn prompt_reports_verdicts_and_optional_evidence_have_exact_json() {
     let old = r#"{"id":"m_1","from":"agent-plan@host-a","to":"agent-review@host-a","subject":"Parser issue","state":"submitted","detail":null,"hold_reason":null}"#;
     let mut message: MessageInfo = serde_json::from_str(old).unwrap();
     assert_eq!(message.evidence, None);
+    assert_eq!(message.hold_explanation, None);
+    assert_eq!(message.accepted_at, None);
+    assert_eq!(message.updated_at, None);
     assert_eq!(serde_json::to_string(&message).unwrap(), old);
     message.evidence = Some("submission_observed".into());
     let observed = r#"{"id":"m_1","from":"agent-plan@host-a","to":"agent-review@host-a","subject":"Parser issue","state":"submitted","detail":null,"hold_reason":null,"evidence":"submission_observed"}"#;
@@ -375,5 +385,99 @@ fn prompt_reports_verdicts_and_optional_evidence_have_exact_json() {
     assert_eq!(
         serde_json::from_str::<MessageInfo>(observed).unwrap(),
         message
+    );
+}
+
+#[test]
+fn additive_visibility_fields_round_trip() {
+    let accepted = Response::Accepted {
+        id: "m_2".into(),
+        recipient_hold: Some("deliver_hold".into()),
+    };
+    let accepted_json = serde_json::json!({
+        "type": "accepted",
+        "id": "m_2",
+        "recipient_hold": "deliver_hold",
+    });
+    assert_eq!(serde_json::to_value(&accepted).unwrap(), accepted_json);
+    assert_eq!(
+        serde_json::from_value::<Response>(accepted_json).unwrap(),
+        accepted
+    );
+
+    let sessions = Response::Sessions {
+        sessions: vec![SessionSummary {
+            id: "s2".into(),
+            argv: vec!["sh".into()],
+            cols: 120,
+            rows: 40,
+            exit_code: None,
+            attached: false,
+            name: Some("agent-review".into()),
+            address: "agent-review@host-a".into(),
+            pending: 1,
+            held: true,
+            hold_reason: Some("human_draft".into()),
+        }],
+    };
+    let sessions_json = serde_json::json!({
+        "type": "sessions",
+        "sessions": [{
+            "id": "s2",
+            "argv": ["sh"],
+            "cols": 120,
+            "rows": 40,
+            "exit_code": null,
+            "attached": false,
+            "name": "agent-review",
+            "address": "agent-review@host-a",
+            "pending": 1,
+            "held": true,
+            "hold_reason": "human_draft",
+        }],
+    });
+    assert_eq!(serde_json::to_value(&sessions).unwrap(), sessions_json);
+    assert_eq!(
+        serde_json::from_value::<Response>(sessions_json).unwrap(),
+        sessions
+    );
+
+    let status = Response::Status {
+        message: MessageInfo {
+            id: "m_2".into(),
+            from: "agent-plan@host-a".into(),
+            to: "agent-review@host-a".into(),
+            subject: "Parser issue".into(),
+            state: "pending".into(),
+            detail: None,
+            hold_reason: Some("deliver_hold".into()),
+            evidence: Some("write_complete".into()),
+            hold_explanation: Some(
+                "The recipient session only holds messages; a person must deliver by hand or restart it with automatic delivery.".into(),
+            ),
+            accepted_at: Some(2_000_000_000),
+            updated_at: Some(2_000_000_001),
+        },
+    };
+    let status_json = serde_json::json!({
+        "type": "status",
+        "message": {
+            "id": "m_2",
+            "from": "agent-plan@host-a",
+            "to": "agent-review@host-a",
+            "subject": "Parser issue",
+            "state": "pending",
+            "detail": null,
+            "hold_reason": "deliver_hold",
+            "evidence": "write_complete",
+            "hold_explanation": "The recipient session only holds messages; a person must deliver by hand or restart it with automatic delivery.",
+            "accepted_at": 2_000_000_000i64,
+            "updated_at": 2_000_000_001i64,
+        },
+    });
+    assert_eq!(serde_json::to_value(&status).unwrap(), status_json);
+    assert_eq!(
+        serde_json::from_value::<Response>(status_json).unwrap(),
+        status
     );
 }

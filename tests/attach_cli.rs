@@ -240,7 +240,7 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     let listing = String::from_utf8(listed.stdout)?;
     assert!(listing.starts_with("ID  NAME  STATE    ATTACHED  PENDING  HELD  SIZE   COMMAND\n"));
     assert!(
-        listing.contains("s1  -     running  no        0        no    80x24  sh -c sleep 30\n")
+        listing.contains("s1  -     running  no        0        -     80x24  sh -c sleep 30\n")
     );
 
     let explicit = run_binary(second_dir.path(), &["list"], &environment)?;
@@ -399,7 +399,7 @@ async fn named_session_appears_in_the_list_table() -> anyhow::Result<()> {
     );
     assert!(
         listing
-            .contains("s1  agent-plan  running  no        0        no    80x24  sh -c sleep 30\n")
+            .contains("s1  agent-plan  running  no        0        -     80x24  sh -c sleep 30\n")
     );
     Ok(())
 }
@@ -516,15 +516,18 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
     attached.send(b"x")?;
     wait_for_held(dir.path(), "s1", true).await;
-    let (listing, code) = run_cli(dir.path(), &["list"])?;
-    assert_eq!(code, 0);
-    assert!(listing.contains("s1  -     running  yes       0        yes"));
+    let listed = run_binary(dir.path(), &["list"], &[])?;
+    assert_eq!(listed.status.code(), Some(0));
+    let listing = String::from_utf8(listed.stdout)?;
+    assert!(listing.contains(
+        "s1  -     running  yes       0        human_draft  80x24  sh -c stty raw -echo; cat\n"
+    ));
 
     attached.send(&[2, b'r'])?;
     wait_for_held(dir.path(), "s1", false).await;
     let (listing, code) = run_cli(dir.path(), &["list"])?;
     assert_eq!(code, 0);
-    assert!(listing.contains("s1  -     running  yes       0        no"));
+    assert!(listing.contains("s1  -     running  yes       0        -"));
 
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
@@ -570,7 +573,13 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
             message: "I found the regression.".into(),
         })
         .await?;
-    assert_eq!(accepted, Response::Accepted { id: "m_1".into() });
+    assert_eq!(
+        accepted,
+        Response::Accepted {
+            id: "m_1".into(),
+            recipient_hold: None
+        }
+    );
     wait_for_message_state(dir.path(), "m_1", "submitted").await;
 
     let accepted = sender
@@ -580,7 +589,13 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
             message: "Another issue.".into(),
         })
         .await?;
-    assert_eq!(accepted, Response::Accepted { id: "m_2".into() });
+    assert_eq!(
+        accepted,
+        Response::Accepted {
+            id: "m_2".into(),
+            recipient_hold: None
+        }
+    );
     let accepted = sender
         .request(Request::SendMessage {
             to: "agent-review@host-a".into(),
@@ -588,7 +603,13 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
             message: "Subjects print as stored.".into(),
         })
         .await?;
-    assert_eq!(accepted, Response::Accepted { id: "m_3".into() });
+    assert_eq!(
+        accepted,
+        Response::Accepted {
+            id: "m_3".into(),
+            recipient_hold: None
+        }
+    );
     assert_eq!(
         admin
             .request(Request::Kill {
@@ -645,7 +666,10 @@ async fn cancel_is_silent_on_success_and_reports_errors() -> anyhow::Result<()> 
                 message: "Cancel me.".into(),
             })
             .await?,
-        Response::Accepted { id: "m_1".into() }
+        Response::Accepted {
+            id: "m_1".into(),
+            recipient_hold: Some("deliver_hold".into())
+        }
     );
 
     let cancelled = run_binary(dir.path(), &["cancel", "m_1"], &[])?;

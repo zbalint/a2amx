@@ -69,8 +69,14 @@ fn failed_code(response: Response) -> String {
     }
 }
 
-fn accepted(response: Response, id: &str) {
-    assert_eq!(response, Response::Accepted { id: id.to_owned() });
+fn accepted(response: Response, id: &str, recipient_hold: Option<&str>) {
+    assert_eq!(
+        response,
+        Response::Accepted {
+            id: id.to_owned(),
+            recipient_hold: recipient_hold.map(str::to_owned),
+        }
+    );
 }
 
 fn assert_secure_database(dir: &Path) {
@@ -267,6 +273,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
     accepted(
         send(&mut sender, "agent-review@host-a", "subject", "message").await,
         "m_1",
+        Some("deliver_hold"),
     );
     let response_text = serde_json::to_string(&status(&mut sender, "m_1").await).unwrap();
     assert!(!response_text.contains(&admin_token));
@@ -440,6 +447,7 @@ async fn message_status_visibility_and_hold_reason() {
     accepted(
         send(&mut sender, "recipient@host-a", "subject", "body").await,
         "m_1",
+        Some("deliver_hold"),
     );
     let message = match status(&mut sender, "m_1").await {
         Response::Status { message } => message,
@@ -450,6 +458,17 @@ async fn message_status_visibility_and_hold_reason() {
     assert_eq!(message.to, "recipient@host-a");
     assert_eq!(message.state, "pending");
     assert_eq!(message.hold_reason.as_deref(), Some("deliver_hold"));
+    assert_eq!(
+        message.hold_explanation.as_deref(),
+        Some(
+            "The recipient session only holds messages; a person must deliver by hand or restart it with automatic delivery."
+        )
+    );
+    let accepted_at = message.accepted_at.expect("accepted_at is present");
+    let updated_at = message.updated_at.expect("updated_at is present");
+    assert!(accepted_at > 0);
+    assert!(updated_at > 0);
+    assert!(accepted_at <= updated_at);
     assert_eq!(
         failed_code(status(&mut other, "m_1").await),
         "unknown_message"
@@ -531,10 +550,12 @@ async fn pending_limit_and_content_errors() {
     accepted(
         send(&mut sender, "recipient@host-a", "one", "body").await,
         "m_1",
+        Some("deliver_hold"),
     );
     accepted(
         send(&mut sender, "recipient@host-a", "two", "body").await,
         "m_2",
+        Some("deliver_hold"),
     );
     assert_eq!(
         failed_code(send(&mut sender, "recipient@host-a", "three", "body").await),
@@ -586,10 +607,12 @@ async fn stored_limit_and_rate_limit_are_independent() {
     accepted(
         send(&mut sender, "recipient@host-a", "one", "body").await,
         "m_1",
+        Some("deliver_hold"),
     );
     accepted(
         send(&mut sender, "recipient@host-a", "two", "body").await,
         "m_2",
+        Some("deliver_hold"),
     );
     assert_eq!(
         failed_code(send(&mut sender, "recipient@host-a", "three", "body").await),
@@ -645,10 +668,12 @@ async fn rate_limit_does_not_cross_sender_sessions() {
     accepted(
         send(&mut sender, "recipient@host-a", "one", "body").await,
         "m_1",
+        Some("deliver_hold"),
     );
     accepted(
         send(&mut sender, "recipient@host-a", "two", "body").await,
         "m_2",
+        Some("deliver_hold"),
     );
     assert_eq!(
         failed_code(send(&mut sender, "recipient@host-a", "three", "body").await),
@@ -657,6 +682,7 @@ async fn rate_limit_does_not_cross_sender_sessions() {
     accepted(
         send(&mut other, "recipient@host-a", "other", "body").await,
         "m_3",
+        Some("deliver_hold"),
     );
     daemon.shutdown().await.unwrap();
 }
@@ -704,10 +730,12 @@ async fn recipient_exit_cancelling_and_filtering() {
     accepted(
         send(&mut sender, "recipient@host-a", "one", "body").await,
         "m_1",
+        Some("deliver_hold"),
     );
     accepted(
         send(&mut sender, "recipient@host-a", "two", "body").await,
         "m_2",
+        Some("deliver_hold"),
     );
     assert_eq!(
         admin
@@ -777,10 +805,12 @@ async fn not_ready_and_queued_hold_reasons() {
     accepted(
         send(&mut sender, "recipient@host-a", "one", "body").await,
         "m_1",
+        None,
     );
     accepted(
         send(&mut sender, "recipient@host-a", "two", "body").await,
         "m_2",
+        None,
     );
     let first = wait_status(&mut sender, "m_1", |message| {
         message.hold_reason.as_deref() == Some("not_ready")
@@ -819,6 +849,7 @@ async fn graceful_restart_marks_exited_and_continues_ids() {
     accepted(
         send(&mut sender, "recipient@host-a", "one", "body").await,
         "m_1",
+        Some("deliver_hold"),
     );
     daemon.shutdown().await.unwrap();
 
@@ -865,6 +896,7 @@ async fn graceful_restart_marks_exited_and_continues_ids() {
     accepted(
         send(&mut new_sender, "new-recipient@host-a", "next", "body").await,
         "m_2",
+        Some("deliver_hold"),
     );
     let current_boot = match new_admin
         .request(Request::ListMessages {
@@ -914,6 +946,7 @@ async fn retention_zero_and_database_permissions() {
     accepted(
         send(&mut sender, "recipient@host-a", "one", "body").await,
         "m_1",
+        Some("deliver_hold"),
     );
     assert_secure_database(dir.path());
     daemon.shutdown().await.unwrap();
@@ -976,6 +1009,7 @@ async fn abrupt_binary_restart_recovers_pending_as_daemon_restarted() {
     accepted(
         send(&mut sender, "recipient@host-a", "one", "body").await,
         "m_1",
+        Some("deliver_hold"),
     );
     child.kill();
 
