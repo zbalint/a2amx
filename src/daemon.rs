@@ -17,10 +17,11 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::client::Framed;
+use crate::delivery::{Channel, PtyChannel};
 use crate::emulator::Size;
 use crate::harness::{self, Deliver};
-use crate::messaging::{self, COOLDOWN, Limits, MessageState, code};
-use crate::session::{AttachmentSlot, Hold, Session, SessionId, SessionSpec};
+use crate::messaging::{self, Limits, MessageState, code};
+use crate::session::{AttachmentSlot, Session, SessionId, SessionSpec};
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     AgentSummary, ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary,
@@ -84,14 +85,6 @@ fn failed(code: &str, message: &str) -> Response {
     Response::Failed {
         code: code.into(),
         message: message.into(),
-    }
-}
-
-fn session_hold_reason(hold: Hold) -> &'static str {
-    match hold {
-        Hold::HumanDraft => "human_draft",
-        Hold::UnsubmittedEnvelope => "unsubmitted_envelope",
-        Hold::CorruptedSubmissions => "corrupted_submissions",
     }
 }
 
@@ -187,7 +180,8 @@ impl Runtime {
                     .insert(number, session.clone());
                 let store = self.store.clone();
                 let boot = self.boot.clone();
-                let task = tokio::spawn(crate::delivery::run(session, store, boot));
+                let task =
+                    tokio::spawn(crate::delivery::run(PtyChannel::new(session), store, boot));
                 self.deliveries
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -263,10 +257,8 @@ impl Runtime {
                     recipient_hold: if recipient.deliver() == Deliver::Hold {
                         Some("deliver_hold".into())
                     } else {
-                        recipient
-                            .lock()
-                            .hold
-                            .map(session_hold_reason)
+                        PtyChannel::new(recipient.clone())
+                            .hold_reason()
                             .map(str::to_owned)
                     },
                 }
@@ -395,28 +387,17 @@ impl Runtime {
                 .store
                 .has_earlier_open(&self.boot, &message.recipient_session, message.seq)
                 .await?;
-            let state = session.lock();
-            if state.exit_code.is_some() {
+            let channel = PtyChannel::new(session.clone());
+            if session.exit_code().is_some() {
                 None
             } else if session.deliver() == Deliver::Hold {
                 Some("deliver_hold")
-            } else if let Some(reason) = state.hold.map(session_hold_reason) {
+            } else if let Some(reason) = channel.hold_reason() {
                 Some(reason)
             } else if queued {
                 Some("queued")
-            } else if !harness::ready(
-                session.harness(),
-                &state.emulator.screen(),
-                state.emulator.is_scrolled(),
-            ) {
-                Some("not_ready")
-            } else if state
-                .last_submit
-                .is_some_and(|time| time.elapsed() < COOLDOWN)
-            {
-                Some("cooldown")
             } else {
-                None
+                channel.unready_reason()
             }
         } else {
             None
@@ -845,6 +826,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     .unwrap_or_else(|e| e.into_inner())
                     .values()
                     .map(|session| {
+                        let hold_reason = PtyChannel::new(session.clone()).hold_reason();
                         let state = session.lock();
                         SessionSummary {
                             id: session.id().0.clone(),
@@ -860,8 +842,8 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                                 &runtime.host_name,
                             ),
                             pending: counts.get(&session.id().0).copied().unwrap_or(0),
-                            held: state.hold.is_some(),
-                            hold_reason: state.hold.map(session_hold_reason).map(str::to_owned),
+                            held: hold_reason.is_some(),
+                            hold_reason: hold_reason.map(str::to_owned),
                         }
                     })
                     .collect();

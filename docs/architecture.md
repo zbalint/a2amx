@@ -300,6 +300,9 @@ machine; there is no central-versus-host split yet.
   the hold reasons. Without a hook delivery ends at "submitted, outcome unknown"
   (reported as `evidence: write_complete`); with the Claude Code hook a matching
   prompt reaches `submission_observed`.
+  Delivery runs behind a `Channel` seam in `src/delivery.rs`. The loop owns ordering,
+  attempts and outcomes; a channel owns how a message reaches the recipient and why
+  it cannot right now, and the PTY channel is the only implementation.
 - **MCP server.** `a2amx mcp` is a hand-written stdio JSON-RPC server with three
   tools: `list_agents`, `send_message`, and `message_status`. It runs wherever the
   harness runs and connects to the daemon over TCP. Status includes `hold_reason` and

@@ -206,7 +206,8 @@ profile: with a hook or extension the message reaches "submission observed", and
 without one it stays "write complete, outcome unknown". Native channels, such as an
 extension pushing messages into a live OMP session (its extension API appears to
 allow this; source read, not run), are post-MVP optimizations that remove PTY risk
-for that harness.
+for that harness. The channel is now a trait (`Channel` in `src/delivery.rs`, spec 2d),
+and the PTY channel is its only implementation.
 
 Evidence differs by channel. A native-channel handoff shows the harness asked for and
 received the text, not that it was submitted through the composer or processed.
