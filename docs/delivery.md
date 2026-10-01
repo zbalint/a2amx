@@ -318,8 +318,10 @@ channels, cross-host routing, and Codex and OMP profiles.
 
 ## Implemented: Claude Code hook
 
-Built from [spec 2b](specs/spec-2b-hooks-receipts.md); the spec is the contract, this
-section is the summary.
+Built from [spec 2b](specs/spec-2b-hooks-receipts.md), extended by
+[spec 2c](specs/spec-2c-delivery-robustness.md) (wrapper-tag escaping, the per-message
+rejection limit, sender visibility); the specs are the contract, this section is the
+summary.
 
 **Install and failure.** `a2amx new --harness claude` appends `--settings <json>`
 holding one `UserPromptSubmit` command hook that runs `a2amx hook`. Nothing is written

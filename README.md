@@ -76,8 +76,9 @@ hosting does not imply safe automatic message delivery into every terminal progr
 
 The terminal-core, messaging-core, and Claude Code hook slices are done; their locked
 specs are [spec 1](docs/specs/spec-1-terminal-core.md),
-[spec 2](docs/specs/spec-2-messaging.md), and
-[spec 2b](docs/specs/spec-2b-hooks-receipts.md). The next milestones are the Codex and
+[spec 2](docs/specs/spec-2-messaging.md),
+[spec 2b](docs/specs/spec-2b-hooks-receipts.md), and
+[spec 2c](docs/specs/spec-2c-delivery-robustness.md). The next milestones are the Codex and
 OMP profiles, each with its own hook, then cross-host support. The checks each slice
 must pass, and the results recorded so far, are in the validation plan.
 
