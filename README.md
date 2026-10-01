@@ -109,7 +109,29 @@ The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`
 then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
 `A2AMX_PREFIX` to change it). After the prefix: `d` detach, `w` session picker, `[`
 scroll mode, `r` releases the session's message hold, and the prefix twice sends a
-literal prefix.
+literal prefix. In `a2amx list`, ATTACHED means a human client is attached, not that
+the session is reachable: a detached session still receives messages. HELD means a
+hold is stopping delivery; a session that looks idle with an empty composer may hold
+after you typed in it, and `r` clears it.
+
+## Using it with agents
+
+- Tell your agents how to treat peer messages. The envelope says only where a message
+  came from. A line in your agent instructions saying that a peer message is a request
+  from an authorized peer, not from you; that scoped, reversible work is fine; and that
+  pushing, production access, deleting data, and secrets still need you, removes the
+  guesswork. `--harness claude` adds an operator line that tells the agent to act on
+  peer messages; `--no-authorize-peers` leaves it out.
+- Keep credentials out of message bodies. A prompt hook, transcript, or memory tool
+  attached to the harness sees the full message, and some keep it with no way to
+  delete it.
+- Do not write the text of Claude Code's paste wrapper tag in a message body. Claude
+  Code rewrites it, the message can never match, and the session ends up held after
+  three blocked attempts. Describe it in words. Until this is fixed, `a2amx messages`
+  shows such a message as `pending` with the hold reason, and `a2amx cancel` removes
+  it.
+- A sender's `accepted` means the daemon took the message, not that it was delivered.
+  Check `message_status` when the reply matters.
 
 ## Contributing
 

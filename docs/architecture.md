@@ -166,9 +166,27 @@ transcript, and memory or logging tool attached to that harness sees the full en
 not only A2AMX. In a run with a memory system that captures prompts as traces, delivered
 envelopes were stored as user prompts and so were the agents' replies. The operator
 decides what those tools may keep; do not send secrets in a message body on the
-assumption that it stays in `messages.db`. The `<a2amx-message` tag is a stable marker
-such tools can use to recognize and separate agent messages from human prompts, and it
-will not be renamed without a deprecation path.
+assumption that it stays in `messages.db`. Such a tool may keep the envelope verbatim
+and offer no way to delete it. The `<a2amx-message` tag is a stable marker such tools
+can use to recognize and separate agent messages from human prompts, and it will not
+be renamed without a deprecation path.
+
+Whether a tool treats a peer message differently from a human prompt is the operator's
+setup, not something A2AMX can decide for it. For agents the practical answer is an
+instruction the operator gives them: a peer message is a request from an authorized
+peer, not from the user; scoped, reversible work is fine; pushing, touching a default
+branch, production access, deleting data, and handling secrets still need the user;
+and a memory stored because of a peer message should say so. A2AMX cannot enforce
+this, and the sentence in the envelope states only the origin.
+
+Authorization of peers: `--harness claude` appends an operator line to the session's
+system prompt saying that messages in `<a2amx-message>` tags are requests from peer
+agents the user has authorized; `--no-authorize-peers` omits it. Two agents that
+reported on their first real runs said that line was what made them act on a message;
+the envelope sentence alone said only where it came from, and without the line they
+would have asked their user first. The line carries no per-peer or per-task limit, so
+any peer holding a session token can direct an agent started with it. Narrowing that
+belongs to the envelope and authorization design, which is unresolved.
 
 Open: exact exchange/workspace visibility rules and management permissions.
 Agents should only discover and message recipients authorized for their scope.
@@ -308,6 +326,13 @@ machine; there is no central-versus-host split yet.
 Known gaps kept as `// shortcut:` comments where the code lives: a split escape
 sequence can hold a session, the paste-then-`CR` gap is one fixed constant, an
 unreadable PTY can hold the writer gate, and message bodies are stored as plaintext.
+
+Known gaps found in the first real runs, not yet fixed: a message body that contains
+the text of Claude Code's paste wrapper tag is rewritten by Claude Code, can never
+match, and is blocked on every attempt (see [delivery](delivery.md#implemented-claude-code-hook));
+a hold on a session blocks every later message to it, not only the bad one; and a
+sender sees `accepted` and, later, `pending`, with no notice that its message was
+blocked or held.
 
 Not yet built: hooks and receipts for Codex and OMP, agent-initiated launch, Codex and
 OMP delivery profiles, and everything cross-host.

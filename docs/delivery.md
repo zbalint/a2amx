@@ -348,8 +348,9 @@ hook):
 
 - The hook payload is a JSON object with `session_id`, `transcript_path`, `cwd`,
   `prompt_id`, `permission_mode`, `hook_event_name`, and `prompt`.
-- A paste with a newline, or a single line of roughly 1000 characters or more, shows in
-  the composer as `[Pasted text #N]` and reaches the hook as a blank line, an opening
+- A multi-line paste (see the threshold note below), or a single line of roughly 1000
+  characters or more, shows in the composer as `[Pasted text #N]` and reaches the hook
+  as a blank line, an opening
   `<pasted_content id="ID">` line, the text, and a closing `</pasted_content id="ID">`
   line. The id is random. When the paste is the whole prompt and Claude Code queues it
   mid-turn, the prompt's ends are trimmed: the blank line before the opening tag and the
@@ -357,6 +358,20 @@ hook):
   start or end of the prompt without them. Single lines up to 686 characters arrive unwrapped; the exact collapse
   threshold is not pinned. Every delivered envelope has newlines, so the matcher
   unwraps first.
+- Claude Code escapes its own wrapper tag when it appears in pasted text: the text `<`
+  followed by `pasted_content` reaches the hook with a backslash after the `<`
+  (`<\pasted_content`), and the closing form `</pasted_content` with the backslash
+  between `<` and `/` (`<\/pasted_content`). This holds with or without attributes, in
+  the middle of a line, and for any letter case; text that already has the backslash
+  is not escaped again, and the bare word without a `<` is left alone. Other markup,
+  including `<a2amx-message`, is not touched. The matcher does not apply this rewrite
+  yet, so a message whose body contains the wrapper tag text can never match and is
+  blocked on every attempt until three strikes hold the session. The sender has to
+  resend it without that text. Observed on Claude Code 2.1.286 with a blocking hook
+  and bracketed pastes; it was also seen in a real run.
+- A short paste with two newlines reached the hook unwrapped, and a paste with three
+  newlines arrived wrapped, in the same probe; the collapse threshold is not measured.
+  Delivered envelopes are long enough to be wrapped.
 - Each tab in pasted text reaches the hook as four spaces (a fixed four, not aligned to tab
   stops). The Claude Code profile therefore compares the prompt with the envelope after
   the same expansion; without it a message containing a tab can never match and is
