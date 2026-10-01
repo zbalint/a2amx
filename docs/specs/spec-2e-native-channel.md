@@ -58,10 +58,14 @@ so its messages wait with `channel_down`; do not release 2e alone.
 - **D5.** A negative acknowledgement ends the attempt as `failed`: the message becomes
   `undeliverable` with the reason as detail. No retry, no store change (the store requeues
   only corrupted PTY submissions).
-- **D6.** Bridge death. Before the `deliver` frame was written: the message stays
-  `pending`. After the frame was written and before an acknowledgement: `submitted`,
-  `write_complete`, never resent. After the acknowledgement: unchanged. A reconnecting
-  bridge never causes a resend. Reconnecting is the extension's job: the bridge exits when
+- **D6.** Bridge death (amended by Amendment 1). When no accepted bridge is attached at
+  the moment the loop considers the message, `begin` returns `None` and the message stays
+  `pending` (`channel_down` or `channel_refused`); nothing is written. When the bridge
+  vanishes after `begin` returned a ticket and before `native_send` queued the frame, the
+  attempt ends `unsubmitted` with detail `bridge_disconnected`: visible, terminal, never
+  resent. When it vanishes after the frame was queued for writing and before an
+  acknowledgement, the message is `submitted` with `write_complete`, never resent. After
+  the acknowledgement: unchanged. A reconnecting bridge never causes a resend. Reconnecting is the extension's job: the bridge exits when
   its daemon link ends and the extension respawns it (probe `b271e01a` (c) showed the
   extension can supervise a child). (Refinement of the owner's "Rust side owns
   reconnect": a respawned bridge needs the extension to resend `hello` and `state` anyway,
@@ -259,12 +263,16 @@ pub(crate) struct NativeTicket<'a> { session: &'a Session }
    `impl Ticket for NativeTicket<'_>`, `submit(self, id, envelope)`:
    - `let Some(receiver) = self.session.native_send(id, envelope) else { return
      DeliveryOutcome::Unsubmitted("bridge_disconnected".into()) };` (the bridge vanished
-     between `begin` and here; the frame was never written).
+     between `begin` and here; the frame was never queued). Leave a `// shortcut:`
+     comment on it: the attempt already started, and the store cannot return a started
+     attempt to `pending`, so this instant ends `unsubmitted` instead; requeue it (a
+     store change) only if this window shows up in practice.
    - `match tokio::time::timeout(ACK_TIMEOUT, receiver).await`:
      `Ok(Ok(Ok(())))` gives `DeliveryOutcome::Submitted`; `Ok(Ok(Err(reason)))` gives
      `DeliveryOutcome::Failed(reason)`; `Ok(Err(_))` (the connection ended after the frame
-     was written) and `Err(_)` (no answer in time) both give `DeliveryOutcome::Submitted`,
-     because the frame may have reached OMP and a resend could duplicate the message.
+     was queued, written or not) and `Err(_)` (no answer in time) both give
+     `DeliveryOutcome::Submitted`, because the frame may have reached OMP and a resend
+     could duplicate the message.
    - `const ACK_TIMEOUT: Duration = Duration::from_secs(10);` with a `// shortcut:` comment:
      a fixed timeout, make it configurable if a slow bridge needs longer.
 3. **`AnyChannel` and `AnyTicket`**, enum delegation (the shape was compiled and run with
@@ -457,7 +465,9 @@ One test per behavior, written failing first:
     the connection, then wait until a new `.bridge()` succeeds (the first attachment is
     gone; a rejected attempt means it is not); on that new link send no `hello` yet,
     send the message: it stays `pending` with reason `channel_down`; then `hello`
-    brings the `deliver`.
+    brings the `deliver`. (The message is sent only after the first attachment is gone, so
+    `begin` returns `None`; the instant between a claim and the queueing is not tested,
+    because no public seam can force it.)
 12. `the_bridge_relays_hello_state_and_delivery_over_stdio`: through the real binary, the
     `hello` and `state` lines reach the daemon (a message sent afterwards produces a
     `{"type":"deliver",...}` line with the literal envelope on stdout; the daemon's `ready`
@@ -507,7 +517,7 @@ Total new tests: 17. The existing 157 and the four spec-2d unit tests stay.
 The extension, its embedding and its version file, `-e` and `--append-system-prompt`
 wiring, the OMP operator line, `--no-authorize-peers` for OMP, and the smoke run against
 OMP (all spec 2f); a Codex channel; automatic bridge reconnect; a persisted channel on the
-receipt; any change to `src/store.rs`, to existing tests, to the MCP tool descriptions or
+receipt; returning a started attempt to `pending` (Amendment 1); any change to `src/store.rs`, to existing tests, to the MCP tool descriptions or
 to the existing JSON of the wire types; choosing a channel anywhere except
 `AnyChannel::for_session`; refactors beyond what sections 4 to 13 name.
 
@@ -542,3 +552,36 @@ exactly `?? tests/bridge.rs`; the third prints nothing (exit status 1); the four
 exactly `src/daemon.rs`, `src/delivery.rs`, `src/harness.rs`; the fifth prints exactly
 `src/delivery.rs`; the last prints nothing. The existing test count is 161; with the 17
 new tests `cargo test` reports 178 passed. Leave the diff uncommitted and unmerged.
+
+## Amendment 1: bridge death and the started attempt
+
+OMP stopped with `BLOCKED — SPEC ADJUDICATION REQUIRED` before editing anything. The claim
+is real; verified against the spec and the source:
+
+- The delivery loop calls `store.begin_attempt` before `ticket.submit`
+  (`src/delivery.rs`), so once `begin` returned a ticket the message is `delivering`.
+- `finish_attempt` maps the outcome `unsubmitted` to the message state `unsubmitted`
+  (`src/store.rs`), which `next_pending` never selects again. Only `reject_attempt`
+  returns a message to `pending`, and it is hard-coded to corrupted PTY submissions.
+- Section 0 forbids touching `src/store.rs` and section 8 keeps `run` otherwise unchanged.
+
+So the first sentence of the original D6 ("before the deliver frame was written: the
+message stays `pending`") could not hold for the instant between the claim and the
+queueing of the frame, and the internal queue between `native_send` and the socket write
+(section 9) adds a second instant that section 8 already classified as `submitted`.
+
+**Ruling** (settled with the owner, the narrower rule over a store change): D6 in section
+2 now reads as the three cases it lists. The case the owner meant, a bridge that is gone
+when the loop considers the message, keeps the message `pending`; test 11 exercises
+exactly that. The two instants inside a delivery attempt end `unsubmitted`
+(`bridge_disconnected`) before the frame is queued and `submitted` (`write_complete`)
+after, both terminal for the attempt and neither ever resent. No code path in this spec
+returns a started attempt to `pending`.
+
+**Changes**, all in this document: section 2 D6 (text replaced); section 8, the
+`native_send` and timeout bullets (wording, and the `// shortcut:` comment on the
+`bridge_disconnected` branch); section 14 test 11 (a note, no new test); section 16 (one
+out-of-scope item). The test total stays 17 new and 178 overall. The docs bullet of
+section 15 that says "the bridge-death rules of D6" now means the three cases above: the
+docs section must state them in these words, including that a message claimed in the
+instant the bridge vanishes ends `unsubmitted`.
