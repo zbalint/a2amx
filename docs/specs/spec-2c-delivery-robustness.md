@@ -9,13 +9,14 @@
 - `src/harness.rs`, `src/messaging.rs`, `src/daemon.rs`, `src/store.rs`, `src/wire.rs`,
   `src/mcp.rs`, `src/main.rs` (the `list` table only)
 - `tests/messaging.rs`, `tests/delivery.rs`, `tests/mcp.rs`, `tests/wire.rs`,
-  `tests/attach_cli.rs`, `tests/broker.rs`
+  `tests/attach_cli.rs`, `tests/broker.rs`, and `tests/hook.rs` for the one pattern named
+  in Amendment 1
 - `docs/delivery.md`, `docs/architecture.md`, `README.md`, `docs/validation-plan.md`
 
 Does not touch: `src/emulator.rs`, `src/prefix.rs`, `src/hook.rs`, `src/delivery.rs`,
 `src/session.rs`, `src/client.rs`, `src/cli.rs`, `Cargo.toml`, `Cargo.lock`,
-`tests/hook.rs`, every other `tests/` file, the locked spec documents under
-`docs/specs/`, the Codex and OMP profiles. No new dependency. Do not commit and do not
+every other `tests/` file, every other line of `tests/hook.rs`, the locked spec
+documents under `docs/specs/`, the Codex and OMP profiles. No new dependency. Do not commit and do not
 merge.
 
 ## 1. Why
@@ -163,7 +164,8 @@ this section the second block ends that message. Rewrite it as instance 2: keep 
 later assertions (still held after a human submit of `hello`, the blocked message stays
 `pending`, a release redelivers it) and adjust each `wait_rest` repeat count to the number
 of pastes actually made so far. `interleaved_corruption_redelivers_without_a_draft_hold`
-(line 587) blocks once and is unaffected. `tests/hook.rs` blocks once and is unaffected.
+(line 587) blocks once and is unaffected. `tests/hook.rs` blocks once and its behavior is
+unaffected; see Amendment 1 for the one pattern in it that must change.
 
 ## 5. Sender visibility (D3, D4)
 
@@ -308,3 +310,21 @@ least one line inside `paste_view`; the third lists at least `src/daemon.rs`,
 `src/messaging.rs`, `src/wire.rs`, `src/mcp.rs` and one file under `tests/`; the fourth
 shows both names defined in `src/messaging.rs` and used in `src/daemon.rs`; the last
 prints nothing. Leave the diff uncommitted and unmerged.
+
+## Amendment 1: a destructuring pattern in `tests/hook.rs`
+
+**Gap.** Section 5 adds `recipient_hold` to `Response::Accepted` and lists the struct
+literals and equality assertions that need the new field. It did not cover destructuring
+patterns. `tests/hook.rs` line 135, `let Response::Accepted { id } = response else {`, does
+not compile once the variant has a second field, and `tests/hook.rs` was on the
+does-not-touch list. The full classification of every use of `Accepted` in `src` and
+`tests` found exactly three destructuring patterns: `src/mcp.rs` line 191 (section 5
+already rewrites it), `tests/delivery.rs` line 132 (in scope), and `tests/hook.rs` line
+135 (out of scope; this amendment fixes the gap). The `Response::Status { message }`
+patterns bind the whole `MessageInfo` and are unaffected by its new fields.
+
+**Change.** Add `tests/hook.rs` to the scope for this one edit only: line 135 becomes
+`let Response::Accepted { id, .. } = response else {`. Change `tests/delivery.rs` line 132
+the same way. No other line of `tests/hook.rs` changes, and no assertion in it is
+rewritten. Everything else in the spec is unchanged, including its acceptance commands:
+`git diff --name-only` must now list `tests/hook.rs` once among the allowed paths.
