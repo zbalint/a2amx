@@ -206,8 +206,8 @@ profile: with a hook or extension the message reaches "submission observed", and
 without one it stays "write complete, outcome unknown". Native channels, such as an
 extension pushing messages into a live OMP session (its extension API appears to
 allow this; source read, not run), are post-MVP optimizations that remove PTY risk
-for that harness. The channel is now a trait (`Channel` in `src/delivery.rs`, spec 2d),
-and the PTY channel is its only implementation.
+for that harness. The channel is now a trait (`Channel` in `src/delivery.rs`, spec 2d);
+the PTY channel serves every harness and the native channel serves `omp` (spec 2e).
 
 Evidence differs by channel. A native-channel handoff shows the harness asked for and
 received the text, not that it was submitted through the composer or processed.
@@ -356,6 +356,8 @@ transcript, and the model never sees the prompt.
 for one with a receipt. A missing receipt is never a failure. A receipt can arrive
 before the writer records its own outcome; whichever lands first wins, and a late write
 outcome never downgrades a receipt or overwrites a rejection.
+A native channel reports `native_receipt` for a `submitted` message whose harness
+reported it entering the conversation.
 
 An accepted send may include `recipient_hold`: `deliver_hold` for a recipient
 started with hold delivery, or the session-level hold reason when delivery is held.
@@ -407,6 +409,59 @@ hook):
 **Not implemented.** Hooks for Codex and OMP, cross-host receipts and replay, a
 timeout or expiry for messages with no receipt, and restoring a pending draft across a
 daemon restart.
+
+## Implemented: native channel (OMP)
+
+An `omp` session stays PTY-hosted for human use, but message delivery uses only the
+native channel, never a silent PTY fallback. The extension and its launch wiring
+ship in spec 2f; until then, an `omp` session's messages wait with `channel_down`.
+Do not release spec 2e alone.
+
+Three links carry the protocol. The OMP extension talks newline-delimited JSON
+on the stdin and stdout of `a2amx omp-bridge`. The bridge authenticates with the
+session's environment token and switches a daemon connection to length-prefixed
+JSON bridge frames after `bridge_attach`. Tool requests ride the stdio link as
+`mcp` lines, then use a second ordinary daemon connection through the existing
+MCP server; responses return as `mcp` lines, and notifications get no response.
+Frames and lines have the existing 1 MiB payload limit.
+
+The extension first sends `hello`, with the bridge protocol integer, its OMP
+version and any missing APIs. The daemon answers `ready`, or `refused` for a
+protocol mismatch or missing APIs and closes the link. OMP's version is logged,
+not enforced. `state` reports idle, queued-message and human-draft state.
+`deliver` carries the message id and the same rendered envelope as the PTY
+channel. `ack` means OMP queued it, giving `write_complete`; `nack` makes it
+`undeliverable` with the supplied reason, without retry. A later `receipt`
+reports an agent-attributed message entering the conversation with byte-exact
+envelope text and upgrades evidence to `native_receipt`. No receipt is not a failure.
+
+Native sessions have no human-cleared delivery hold. Their self-clearing waiting
+reasons, in precedence order, are:
+
+- `channel_refused`: the last hello was refused; update A2AMX or OMP to resolve the
+  protocol mismatch or missing feature. A later accepted hello clears it.
+- `channel_down`: no accepted extension is connected; wait for it to connect.
+- `draft_present`: a person has unsent prompt-box text; wait until it is sent or cleared.
+- `in_flight`: an earlier message is queued but has not entered the conversation.
+
+Idleness never blocks delivery: messages arriving mid-turn use `followUp`, with
+one message in flight at a time.
+
+Bridge death has three cases. When no accepted bridge is attached when the loop
+considers a message, it stays `pending` with `channel_down` or `channel_refused`.
+When the bridge vanishes after `begin` claimed the message and before
+`native_send` queued the frame, the message ends `unsubmitted` with detail
+`bridge_disconnected`: visible, terminal, never resent. When it vanishes after
+the frame was queued for writing, written or not, and before acknowledgement, the
+message is `submitted` with `write_complete`, never resent. After acknowledgement
+it is unchanged. No path returns a started attempt to `pending`; reconnecting
+never causes a resend.
+
+The bridge exits successfully on stdin EOF or refusal, and with an error on a
+lost daemon link or invalid input. It does not reconnect or keep a replay cache;
+the extension respawns it after an error and sends `hello` and `state` again.
+Only one bridge may attach to a session; a second is rejected without disturbing
+the first.
 
 ## Harness adapter responsibilities
 

@@ -44,6 +44,7 @@ pub enum Command {
         detach: bool,
         #[arg(long)]
         name: Option<String>,
+        /// Harness profile. omp delivers through an OMP extension; without it, messages wait (channel_down).
         #[arg(long, value_enum, default_value_t = Harness::Generic)]
         harness: Harness,
         #[arg(long, value_enum)]
@@ -83,6 +84,8 @@ pub enum Command {
     },
     /// Cancel a pending message.
     Cancel { message: String },
+    /// Run the OMP extension's bridge to the daemon (reads and writes JSON lines on stdio).
+    OmpBridge,
     /// Run the stdio MCP server.
     Mcp,
     /// Run the prompt-submit hook adapter (reads the harness payload on stdin).

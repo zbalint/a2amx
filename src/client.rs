@@ -9,7 +9,9 @@ use anyhow::{Context, bail};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::wire::{ClientFrame, FrameDecoder, Request, Response, ServerFrame};
+use crate::wire::{
+    BridgeDown, BridgeUp, ClientFrame, FrameDecoder, Request, Response, ServerFrame,
+};
 
 const UNREACHABLE: &str = "cannot reach the a2amx daemon: start it with `a2amx daemon`";
 
@@ -119,6 +121,17 @@ impl Client {
             _ => bail!("unexpected daemon attach response"),
         }
     }
+
+    /// Sends `bridge_attach`; on `attached` switches this connection to bridge frames.
+    pub async fn bridge(mut self) -> anyhow::Result<BridgeLink> {
+        match self.request(Request::BridgeAttach).await? {
+            Response::Attached => Ok(BridgeLink {
+                connection: self.connection,
+            }),
+            Response::Error { message } => bail!(message),
+            _ => bail!("unexpected daemon bridge response"),
+        }
+    }
 }
 
 pub struct Attachment {
@@ -143,6 +156,25 @@ impl Attachment {
             .recv()
             .await?
             .map(|payload| ServerFrame::decode(&payload))
+            .transpose()
+    }
+}
+
+pub struct BridgeLink {
+    connection: Framed,
+}
+
+impl BridgeLink {
+    pub async fn send(&mut self, frame: BridgeUp) -> anyhow::Result<()> {
+        self.connection.send(&serde_json::to_vec(&frame)?).await
+    }
+
+    /// `Ok(None)` when the daemon closed the connection. Cancellation safe.
+    pub async fn recv(&mut self) -> anyhow::Result<Option<BridgeDown>> {
+        self.connection
+            .recv()
+            .await?
+            .map(|payload| serde_json::from_slice(&payload).map_err(Into::into))
             .transpose()
     }
 }

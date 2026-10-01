@@ -62,6 +62,7 @@ cargo fmt --check
 | `wire` | Framing, control JSON, stream frames |
 | `session` | One PTY, its child, its emulator |
 | `daemon` / `client` | TCP server and the client API |
+| `bridge` | The `omp-bridge` relay between an OMP extension and the daemon |
 | `cli` | Command-line shape |
 
 ## Public repository rules

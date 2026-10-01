@@ -21,6 +21,7 @@ pub enum Harness {
     Claude,
     #[default]
     Generic,
+    Omp,
 }
 
 #[derive(
@@ -35,7 +36,7 @@ pub enum Deliver {
 impl Harness {
     pub fn default_deliver(self) -> Deliver {
         match self {
-            Self::Claude => Deliver::Auto,
+            Self::Claude | Self::Omp => Deliver::Auto,
             Self::Generic => Deliver::Hold,
         }
     }
@@ -131,7 +132,7 @@ fn claude_ready(screen: &Screen, scrolled: bool) -> bool {
 
 pub fn ready(harness: Harness, screen: &Screen, scrolled: bool) -> bool {
     match harness {
-        Harness::Generic => screen.modes.bracketed_paste && !scrolled,
+        Harness::Generic | Harness::Omp => screen.modes.bracketed_paste && !scrolled,
         Harness::Claude => claude_ready(screen, scrolled),
     }
 }
@@ -186,7 +187,7 @@ pub fn paste_view(harness: Harness, text: &str) -> String {
                 escaped
             }
         }
-        Harness::Generic => text.to_owned(),
+        Harness::Generic | Harness::Omp => text.to_owned(),
     }
 }
 

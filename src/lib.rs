@@ -3,6 +3,7 @@
 //! Terminal-core modules expose the screen model, PTY sessions, local daemon,
 //! framing, prefix handling, and human client.
 
+pub mod bridge;
 pub mod cli;
 pub mod client;
 pub mod daemon;

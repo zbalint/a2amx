@@ -63,13 +63,13 @@ pub(crate) fn configuration() -> Result<(SocketAddr, String)> {
     Ok((address, token))
 }
 
-enum StdioEvent {
+pub(crate) enum StdioEvent {
     Line(Vec<u8>),
     Eof,
     Error(String),
 }
 
-fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<StdioEvent> {
+pub(crate) fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<StdioEvent> {
     let (sender, receiver) = mpsc::unbounded_channel();
     thread::spawn(move || {
         let stdin = io::stdin();
@@ -107,14 +107,14 @@ async fn write_response(response: Value) -> Result<()> {
     Ok(())
 }
 
-struct McpServer {
+pub(crate) struct McpServer {
     address: SocketAddr,
     token: String,
     client: Option<Client>,
 }
 
 impl McpServer {
-    fn new(address: SocketAddr, token: String) -> Self {
+    pub(crate) fn new(address: SocketAddr, token: String) -> Self {
         Self {
             address,
             token,
@@ -122,7 +122,7 @@ impl McpServer {
         }
     }
 
-    async fn handle_line(&mut self, line: &[u8]) -> Option<Value> {
+    pub(crate) async fn handle_line(&mut self, line: &[u8]) -> Option<Value> {
         let value = match serde_json::from_slice::<Value>(line) {
             Ok(value) => value,
             Err(_) => return Some(error_response(Value::Null, -32700, "parse error")),

@@ -9,6 +9,7 @@ use anyhow::{Context, anyhow};
 use clap::Parser;
 use tokio::sync::mpsc;
 
+use a2amx::bridge;
 use a2amx::cli::{Cli, Command};
 use a2amx::client::{Attachment, Client};
 use a2amx::daemon::{Daemon, DaemonConfig};
@@ -49,6 +50,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
     match &cli.command {
         Command::Mcp => return mcp::run().await,
         Command::Hook => return hook::run().await,
+        Command::OmpBridge => return bridge::run().await,
         _ => {}
     }
     let home = resolve_home(home_arg)?;
@@ -60,7 +62,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             run_attach_command(home, prefix, session, force).await
         }
         Command::Kill { session } => run_kill(home, session).await,
-        Command::Mcp | Command::Hook => {
+        Command::Mcp | Command::Hook | Command::OmpBridge => {
             unreachable!("early dispatch returned before resolving home")
         }
         Command::Messages { session, state } => run_messages(home, session, state).await,
@@ -723,9 +725,11 @@ fn message_value_rows(messages: &[MessageInfo]) -> Vec<[String; 6]> {
                     .detail
                     .clone()
                     .or_else(|| message.hold_reason.clone())
-                    .or_else(|| {
-                        (message.evidence.as_deref() == Some("submission_observed"))
-                            .then(|| "submission_observed".to_owned())
+                    .or_else(|| match message.evidence.as_deref() {
+                        Some("submission_observed") | Some("native_receipt") => {
+                            message.evidence.clone()
+                        }
+                        _ => None,
                     })
                     .unwrap_or_else(|| "-".to_owned()),
                 message.subject.clone(),

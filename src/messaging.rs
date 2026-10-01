@@ -36,6 +36,18 @@ pub fn hold_explanation(reason: &str) -> Option<&'static str> {
             Some("The recipient's prompt box is not ready, for example a dialog is open.")
         }
         "cooldown" => Some("A message was submitted less than a second ago."),
+        "channel_down" => Some(
+            "The recipient's A2AMX extension is not connected; the message waits until it connects.",
+        ),
+        "channel_refused" => Some(
+            "The recipient's A2AMX extension refused to connect (a version mismatch or an OMP feature it needs is missing); a person must update A2AMX or OMP.",
+        ),
+        "draft_present" => Some(
+            "A person has unsent text in the recipient's prompt box; delivery resumes when it is sent or cleared.",
+        ),
+        "in_flight" => Some(
+            "An earlier message is queued in the recipient and has not entered its conversation yet.",
+        ),
         _ => None,
     }
 }

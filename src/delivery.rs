@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
 
-use crate::harness::{self, Deliver};
+use crate::harness::{self, Deliver, Harness};
 use crate::messaging::{COOLDOWN, PASTE_GAP, paste_bytes, render_envelope};
 use crate::session::{Delivery, DeliveryOutcome, Hold, Session};
 use crate::store::Store;
@@ -38,7 +38,7 @@ pub(crate) trait Channel: Send + Sync {
 
 pub(crate) trait Ticket: Send {
     /// Hands the rendered envelope to the recipient.
-    fn submit(self, envelope: &str) -> impl Future<Output = DeliveryOutcome> + Send;
+    fn submit(self, id: &str, envelope: &str) -> impl Future<Output = DeliveryOutcome> + Send;
 }
 
 pub(crate) struct PtyChannel {
@@ -56,6 +56,35 @@ impl PtyChannel {
 }
 
 pub(crate) struct PtyTicket<'a>(Delivery<'a>);
+
+pub(crate) struct NativeChannel {
+    session: Arc<Session>,
+}
+
+pub(crate) struct NativeTicket<'a> {
+    session: &'a Session,
+}
+
+pub(crate) enum AnyChannel {
+    Pty(PtyChannel),
+    Native(NativeChannel),
+}
+
+pub(crate) enum AnyTicket<'a> {
+    Pty(PtyTicket<'a>),
+    Native(NativeTicket<'a>),
+}
+
+impl AnyChannel {
+    /// `omp` sessions get the native channel, every other harness the PTY channel.
+    pub(crate) fn for_session(session: Arc<Session>) -> Self {
+        if session.harness() == Harness::Omp {
+            Self::Native(NativeChannel { session })
+        } else {
+            Self::Pty(PtyChannel::new(session))
+        }
+    }
+}
 
 impl Channel for PtyChannel {
     type Ticket<'a> = PtyTicket<'a>;
@@ -114,8 +143,146 @@ impl Channel for PtyChannel {
 }
 
 impl Ticket for PtyTicket<'_> {
-    async fn submit(self, envelope: &str) -> DeliveryOutcome {
+    async fn submit(self, _id: &str, envelope: &str) -> DeliveryOutcome {
         self.0.submit(paste_bytes(envelope), PASTE_GAP).await
+    }
+}
+
+impl Channel for NativeChannel {
+    type Ticket<'a> = NativeTicket<'a>;
+
+    fn session_id(&self) -> &str {
+        &self.session.id().0
+    }
+
+    fn exited(&self) -> bool {
+        self.session.exit_code().is_some()
+    }
+
+    fn deliver(&self) -> Deliver {
+        self.session.deliver()
+    }
+
+    fn message_notify(&self) -> &Notify {
+        self.session.message_notify()
+    }
+
+    fn wake(&self) -> &Notify {
+        self.session.notify()
+    }
+
+    async fn prepare(&self) {}
+
+    async fn begin(&self) -> Option<Self::Ticket<'_>> {
+        self.session
+            .native_reason()
+            .is_none()
+            .then(|| NativeTicket {
+                session: &self.session,
+            })
+    }
+
+    fn hold_reason(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn unready_reason(&self) -> Option<&'static str> {
+        self.session.native_reason()
+    }
+}
+
+// shortcut: a fixed timeout; make it configurable if a slow bridge needs longer.
+const ACK_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl Ticket for NativeTicket<'_> {
+    async fn submit(self, id: &str, envelope: &str) -> DeliveryOutcome {
+        let Some(receiver) = self.session.native_send(id, envelope) else {
+            // shortcut: the attempt already started, and the store cannot return a
+            // started attempt to pending, so this instant ends `unsubmitted` instead;
+            // requeue it (a store change) only if this window shows up in practice.
+            return DeliveryOutcome::Unsubmitted("bridge_disconnected".into());
+        };
+        match tokio::time::timeout(ACK_TIMEOUT, receiver).await {
+            Ok(Ok(Ok(()))) => DeliveryOutcome::Submitted,
+            Ok(Ok(Err(reason))) => DeliveryOutcome::Failed(reason),
+            Ok(Err(_)) | Err(_) => DeliveryOutcome::Submitted,
+        }
+    }
+}
+
+impl Channel for AnyChannel {
+    type Ticket<'a> = AnyTicket<'a>;
+
+    fn session_id(&self) -> &str {
+        match self {
+            Self::Pty(channel) => channel.session_id(),
+            Self::Native(channel) => channel.session_id(),
+        }
+    }
+
+    fn exited(&self) -> bool {
+        match self {
+            Self::Pty(channel) => channel.exited(),
+            Self::Native(channel) => channel.exited(),
+        }
+    }
+
+    fn deliver(&self) -> Deliver {
+        match self {
+            Self::Pty(channel) => channel.deliver(),
+            Self::Native(channel) => channel.deliver(),
+        }
+    }
+
+    fn message_notify(&self) -> &Notify {
+        match self {
+            Self::Pty(channel) => channel.message_notify(),
+            Self::Native(channel) => channel.message_notify(),
+        }
+    }
+
+    fn wake(&self) -> &Notify {
+        match self {
+            Self::Pty(channel) => channel.wake(),
+            Self::Native(channel) => channel.wake(),
+        }
+    }
+
+    async fn prepare(&self) {
+        match self {
+            Self::Pty(channel) => channel.prepare().await,
+            Self::Native(channel) => channel.prepare().await,
+        }
+    }
+
+    async fn begin(&self) -> Option<Self::Ticket<'_>> {
+        match self {
+            Self::Pty(channel) => channel.begin().await.map(AnyTicket::Pty),
+            Self::Native(channel) => channel.begin().await.map(AnyTicket::Native),
+        }
+    }
+
+    fn hold_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Pty(channel) => channel.hold_reason(),
+            Self::Native(channel) => channel.hold_reason(),
+        }
+    }
+
+    fn unready_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Pty(channel) => channel.unready_reason(),
+            Self::Native(channel) => channel.unready_reason(),
+        }
+    }
+}
+
+impl Ticket for AnyTicket<'_> {
+    async fn submit(self, id: &str, envelope: &str) -> DeliveryOutcome {
+        match self {
+            Self::Pty(ticket) => ticket.submit(id, envelope).await,
+            Self::Native(ticket) => ticket.submit(id, envelope).await,
+        }
     }
 }
 
@@ -163,13 +330,9 @@ pub(crate) async fn run<C: Channel>(channel: C, store: Store, boot: String) {
             let Some(attempt) = store.begin_attempt(head.seq).await? else {
                 return Ok(true);
             };
-            let envelope = render_envelope(
-                &format!("m_{}", head.seq),
-                &head.sender_address,
-                &head.subject,
-                &head.body,
-            );
-            let outcome = ticket.submit(&envelope).await;
+            let id = format!("m_{}", head.seq);
+            let envelope = render_envelope(&id, &head.sender_address, &head.subject, &head.body);
+            let outcome = ticket.submit(&id, &envelope).await;
             let (outcome, detail) = match &outcome {
                 DeliveryOutcome::Submitted => ("submitted", None),
                 DeliveryOutcome::Unsubmitted(reason) => ("unsubmitted", Some(reason.as_str())),
@@ -272,7 +435,7 @@ mod tests {
     }
 
     impl Ticket for FakeTicket {
-        async fn submit(self, envelope: &str) -> DeliveryOutcome {
+        async fn submit(self, _id: &str, envelope: &str) -> DeliveryOutcome {
             self.0
                 .envelopes
                 .lock()

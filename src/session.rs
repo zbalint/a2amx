@@ -15,11 +15,12 @@ use std::time::{Duration, Instant};
 use alacritty_terminal::tty::{self, ChildEvent, EventedPty};
 use anyhow::{Context, bail};
 use rustix::process::{Pid, Signal, kill_process_group};
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 
 use crate::emulator::{Emulator, Size, window_size};
 use crate::harness::{self, Deliver, Harness};
 use crate::messaging;
+use crate::wire::BridgeDown;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionId(pub String);
@@ -69,6 +70,22 @@ pub(crate) struct State {
     pub last_submit: Option<Instant>,
     pub restore: Option<String>,
     pub corrupted: u32,
+    pub native: NativeSlot,
+}
+
+#[derive(Default)]
+pub(crate) struct NativeSlot {
+    connected: bool,
+    refused: bool,
+    draft: bool,
+    in_flight: bool,
+    link: Option<mpsc::UnboundedSender<BridgeDown>>,
+    waiting: Option<(String, oneshot::Sender<Result<(), String>>)>,
+}
+
+pub(crate) struct NativeGuard {
+    session: Arc<Session>,
+    pub(crate) down: mpsc::UnboundedReceiver<BridgeDown>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +154,7 @@ impl Session {
                 last_submit: None,
                 restore: None,
                 corrupted: 0,
+                native: NativeSlot::default(),
             }),
             notify: Notify::new(),
         });
@@ -366,6 +384,113 @@ impl Session {
         &self.message_notify
     }
 
+    pub(crate) fn native_attach(self: &Arc<Self>) -> Option<NativeGuard> {
+        let mut state = self.lock();
+        if state.native.link.is_some() {
+            return None;
+        }
+        let (sender, receiver) = mpsc::unbounded_channel();
+        state.native.link = Some(sender);
+        drop(state);
+        Some(NativeGuard {
+            session: self.clone(),
+            down: receiver,
+        })
+    }
+
+    pub(crate) fn native_accept(&self) {
+        let mut state = self.lock();
+        state.native.connected = true;
+        state.native.refused = false;
+        drop(state);
+        self.message_notify.notify_one();
+    }
+
+    pub(crate) fn native_refuse(&self) {
+        let mut state = self.lock();
+        state.native.refused = true;
+        state.native.connected = false;
+        drop(state);
+        self.message_notify.notify_one();
+    }
+
+    pub(crate) fn native_state(&self, draft: bool, pending: bool) {
+        let mut state = self.lock();
+        state.native.draft = draft;
+        state.native.in_flight = pending;
+        drop(state);
+        self.message_notify.notify_one();
+    }
+
+    pub(crate) fn native_ack(&self, id: &str, result: Result<(), String>) {
+        let sender = {
+            let mut state = self.lock();
+            let matches_id = state
+                .native
+                .waiting
+                .as_ref()
+                .is_some_and(|(waiting_id, _)| waiting_id == id);
+            if !matches_id {
+                return;
+            }
+            let Some((_, sender)) = state.native.waiting.take() else {
+                return;
+            };
+            if result.is_ok() {
+                state.native.in_flight = true;
+            }
+            sender
+        };
+        let _ = sender.send(result);
+        self.message_notify.notify_one();
+    }
+
+    pub(crate) fn native_received(&self) {
+        let mut state = self.lock();
+        state.native.in_flight = false;
+        drop(state);
+        self.message_notify.notify_one();
+    }
+
+    pub(crate) fn native_send(
+        &self,
+        id: &str,
+        envelope: &str,
+    ) -> Option<oneshot::Receiver<Result<(), String>>> {
+        let mut state = self.lock();
+        let native = &mut state.native;
+        let link = native.link.as_ref()?;
+        let (sender, receiver) = oneshot::channel();
+        native.waiting = Some((id.to_owned(), sender));
+        if link
+            .send(BridgeDown::Deliver {
+                id: id.to_owned(),
+                envelope: envelope.to_owned(),
+            })
+            .is_err()
+        {
+            native.waiting = None;
+            return None;
+        }
+        drop(state);
+        Some(receiver)
+    }
+
+    pub(crate) fn native_reason(&self) -> Option<&'static str> {
+        let state = self.lock();
+        if state.native.refused {
+            Some("channel_refused")
+        } else if !state.native.connected {
+            Some("channel_down")
+        } else if state.native.draft {
+            Some("draft_present")
+        } else if state.native.in_flight {
+            Some("in_flight")
+        } else {
+            None
+        }
+    }
+
     pub(crate) async fn begin_delivery(&self) -> Option<Delivery<'_>> {
         let gate = self.input_gate.lock().await;
         let state = self.lock();
@@ -492,6 +617,19 @@ impl Session {
             }
             notified.await;
         }
+    }
+}
+
+impl Drop for NativeGuard {
+    fn drop(&mut self) {
+        let mut state = self.session.lock();
+        state.native.connected = false;
+        state.native.link = None;
+        state.native.waiting = None;
+        state.native.draft = false;
+        state.native.in_flight = false;
+        drop(state);
+        self.session.message_notify.notify_one();
     }
 }
 

@@ -13,6 +13,8 @@ use crate::harness::{Deliver, Harness};
 /// Largest accepted frame payload. Decoding rejects longer frames.
 pub const MAX_FRAME_LEN: usize = 1 << 20;
 
+pub const BRIDGE_PROTOCOL: u32 = 1;
+
 /// Largest client input payload in one stream frame.
 pub const MAX_INPUT_LEN: usize = 8 * 1024;
 
@@ -153,6 +155,41 @@ pub enum Request {
     CancelMessage {
         id: String,
     },
+    BridgeAttach,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BridgeUp {
+    Hello {
+        protocol: u32,
+        omp_version: String,
+        #[serde(default)]
+        missing: Vec<String>,
+    },
+    State {
+        idle: bool,
+        pending: bool,
+        draft: bool,
+    },
+    Ack {
+        id: String,
+    },
+    Nack {
+        id: String,
+        reason: String,
+    },
+    Receipt {
+        id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BridgeDown {
+    Ready,
+    Refused { reason: String },
+    Deliver { id: String, envelope: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

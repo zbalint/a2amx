@@ -17,14 +17,15 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::client::Framed;
-use crate::delivery::{Channel, PtyChannel};
+use crate::delivery::{AnyChannel, Channel};
 use crate::emulator::Size;
-use crate::harness::{self, Deliver};
+use crate::harness::{self, Deliver, Harness};
 use crate::messaging::{self, Limits, MessageState, code};
-use crate::session::{AttachmentSlot, Session, SessionId, SessionSpec};
+use crate::session::{AttachmentSlot, NativeGuard, Session, SessionId, SessionSpec};
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
-    AgentSummary, ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary,
+    AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo, Request,
+    Response, ServerFrame, SessionSummary,
 };
 
 pub struct DaemonConfig {
@@ -180,8 +181,11 @@ impl Runtime {
                     .insert(number, session.clone());
                 let store = self.store.clone();
                 let boot = self.boot.clone();
-                let task =
-                    tokio::spawn(crate::delivery::run(PtyChannel::new(session), store, boot));
+                let task = tokio::spawn(crate::delivery::run(
+                    AnyChannel::for_session(session),
+                    store,
+                    boot,
+                ));
                 self.deliveries
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -257,7 +261,7 @@ impl Runtime {
                     recipient_hold: if recipient.deliver() == Deliver::Hold {
                         Some("deliver_hold".into())
                     } else {
-                        PtyChannel::new(recipient.clone())
+                        AnyChannel::for_session(recipient.clone())
                             .hold_reason()
                             .map(str::to_owned)
                     },
@@ -387,7 +391,7 @@ impl Runtime {
                 .store
                 .has_earlier_open(&self.boot, &message.recipient_session, message.seq)
                 .await?;
-            let channel = PtyChannel::new(session.clone());
+            let channel = AnyChannel::for_session(session.clone());
             if session.exit_code().is_some() {
                 None
             } else if session.deliver() == Deliver::Hold {
@@ -418,7 +422,15 @@ impl Runtime {
             evidence: if message.state == MessageState::Submitted {
                 Some(
                     if message.observed {
-                        "submission_observed"
+                        // shortcut: a removed session reports submission_observed for a
+                        // native receipt; persist the channel with the receipt if that matters.
+                        if lookup(self, &message.recipient_session)
+                            .is_some_and(|(_, session)| session.harness() == Harness::Omp)
+                        {
+                            "native_receipt"
+                        } else {
+                            "submission_observed"
+                        }
                     } else {
                         "write_complete"
                     }
@@ -802,7 +814,8 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 Request::SendMessage { .. }
                     | Request::ListAgents
                     | Request::MessageStatus { .. }
-                    | Request::ReportPrompt { .. },
+                    | Request::ReportPrompt { .. }
+                    | Request::BridgeAttach,
             )
         {
             response(
@@ -826,7 +839,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     .unwrap_or_else(|e| e.into_inner())
                     .values()
                     .map(|session| {
-                        let hold_reason = PtyChannel::new(session.clone()).hold_reason();
+                        let hold_reason = AnyChannel::for_session(session.clone()).hold_reason();
                         let state = session.lock();
                         SessionSummary {
                             id: session.id().0.clone(),
@@ -928,6 +941,29 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 },
                 Role::Session(id) => runtime.report_prompt(id, prompt).await?,
             },
+            Request::BridgeAttach => match &role {
+                Role::Admin => Response::Error {
+                    message: "bridge_attach needs a session token".into(),
+                },
+                Role::Session(id) => {
+                    let Some((_, session)) = lookup(&runtime, id) else {
+                        anyhow::bail!("bridge session disappeared");
+                    };
+                    if session.harness() != Harness::Omp {
+                        Response::Error {
+                            message: "session is not an omp session".into(),
+                        }
+                    } else if let Some(guard) = session.native_attach() {
+                        response(&mut connection, Response::Attached).await?;
+                        bridge(&mut connection, &runtime, session, guard).await?;
+                        return Ok(());
+                    } else {
+                        Response::Error {
+                            message: "a bridge is already attached to this session".into(),
+                        }
+                    }
+                }
+            },
             Request::MessageStatus { id } => runtime.message_status(&role, &id).await?,
             Request::ListMessages { session, state } => {
                 let filter = state.as_deref().map(MessageState::parse);
@@ -968,6 +1004,92 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
         response(&mut connection, result).await?;
     }
     Ok(())
+}
+
+async fn bridge(
+    connection: &mut Framed,
+    runtime: &Arc<Runtime>,
+    session: Arc<Session>,
+    mut guard: NativeGuard,
+) -> anyhow::Result<()> {
+    let first = tokio::time::timeout(Duration::from_secs(5), connection.recv()).await;
+    let Ok(Ok(Some(bytes))) = first else {
+        return Ok(());
+    };
+    let Ok(BridgeUp::Hello {
+        protocol,
+        omp_version,
+        missing,
+    }) = serde_json::from_slice(&bytes)
+    else {
+        return Ok(());
+    };
+    let refusal = if protocol != BRIDGE_PROTOCOL {
+        Some("protocol_mismatch".to_owned())
+    } else if !missing.is_empty() {
+        Some(format!("missing_apis: {}", missing.join(", ")))
+    } else {
+        None
+    };
+    if let Some(reason) = refusal {
+        session.native_refuse();
+        connection
+            .send(&serde_json::to_vec(&BridgeDown::Refused { reason })?)
+            .await?;
+        return Ok(());
+    }
+    session.native_accept();
+    connection
+        .send(&serde_json::to_vec(&BridgeDown::Ready)?)
+        .await?;
+    tracing::info!(%omp_version, session = %session.id().0, "native bridge accepted");
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    loop {
+        tokio::select! {
+            bytes = connection.recv() => {
+                let Some(bytes) = bytes? else {
+                    return Ok(());
+                };
+                let Ok(frame) = serde_json::from_slice::<BridgeUp>(&bytes) else {
+                    return Ok(());
+                };
+                match frame {
+                    BridgeUp::Hello { .. } => return Ok(()),
+                    BridgeUp::State { draft, pending, .. } => session.native_state(draft, pending),
+                    BridgeUp::Ack { id } => session.native_ack(&id, Ok(())),
+                    BridgeUp::Nack { id, reason } => session.native_ack(&id, Err(reason)),
+                    BridgeUp::Receipt { id } => {
+                        if let Some(seq) = parse_message_id(&id)
+                            && let Some(message) = runtime.store.get(seq).await?
+                            && message.boot == runtime.boot
+                            && message.recipient_session == session.id().0
+                            && matches!(
+                                message.state,
+                                MessageState::Delivering
+                                    | MessageState::Submitted
+                                    | MessageState::Unsubmitted
+                            )
+                            && !message.observed
+                        {
+                            runtime.store.record_receipt(seq).await?;
+                            session.native_received();
+                        }
+                    }
+                }
+            }
+            frame = guard.down.recv() => {
+                let Some(frame) = frame else {
+                    return Ok(());
+                };
+                connection.send(&serde_json::to_vec(&frame)?).await?;
+            }
+            _ = interval.tick() => {
+                if session.exit_code().is_some() {
+                    return Ok(());
+                }
+            }
+        }
+    }
 }
 
 fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {
