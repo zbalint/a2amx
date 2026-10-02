@@ -272,3 +272,25 @@ git status --short
 All three cargo commands exit 0 with no warnings; `cargo test` shows no failures and no newly
 ignored tests. `git status --short` lists only the files in section 0. Do not run the
 installed daemon or touch `~/.a2amx`; every daemon the tests start uses a temp state dir.
+
+## Amendment 1: the toggle and address checks are a new test
+
+Section 0 and section 8 disagreed about `tests/attach_cli.rs`: section 8 put the toggle and
+last-row assertions into the existing `custom_prefix_and_sigwinch_resize_reach_attached_session`
+while section 0 allowed only size-literal changes to existing code. This amendment resolves it.
+It overrides the conflicting parts of sections 0 and 8.
+
+- The existing `custom_prefix_and_sigwinch_resize_reach_attached_session` changes only its two
+  literals: `24 80` becomes `23 80` and `10 40` becomes `9 40`. Nothing else in it changes.
+- The toggle sequence and the address check of section 8 go into one **new** test in
+  `tests/attach_cli.rs`, `status_line_toggles_and_shows_the_session_address`. It creates the
+  session with `new --detach --name agent-plan` and the same resize-reporting script as the
+  existing test, attaches with the default prefix (the toggle chord is the bytes `[2, b's']`),
+  and follows the section 8 sequence exactly: `23 80`, resize to 40x10 and `9 40`, toggle and
+  `10 40` with no address on the last screen row, resize to 50x12 and `12 50`, toggle and
+  `11 50` with `agent-plan@` on the last screen row. It also asserts `agent-plan@` on the last
+  row right after the first attach. It ends with the detach chord (`[2, b'd']`) and
+  `[detached from s1]`.
+- Section 0's allowance for `tests/attach_cli.rs` reads: the size literals of section 8, plus
+  the new test above, plus any further literal that fails only because an attached PTY is one
+  row shorter. Nothing else in that file changes.
