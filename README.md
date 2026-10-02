@@ -107,6 +107,12 @@ environment. `a2amx hook` is the Claude Code `UserPromptSubmit` hook, installed 
 an inline `--settings` argument; it reads the harness payload on stdin, always exits 0,
 and prints output only when it blocks a prompt.
 
+Claude delivery uses a Claude Code channel by default, preserving any composer draft.
+`--harness claude --no-channel` keeps terminal delivery. Channel startup auto-accepts
+Claude's development-channel dialog; this research preview needs a claude.ai or Console
+login. A successful write has `write_complete` evidence until the prompt hook confirms
+`native_receipt`; a missing receipt never triggers a resend.
+
 `--harness omp` writes the A2AMX extension into the state directory, loads it into OMP
 with `-e` and a per-session `--config` overlay, and delivers messages natively without
 typing into the terminal.

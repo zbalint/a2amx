@@ -63,6 +63,8 @@ cargo fmt --check
 | `session` | One PTY, its child, its emulator |
 | `daemon` / `client` | TCP server and the client API |
 | `bridge` | The `omp-bridge` relay between an OMP extension and the daemon |
+| `mcp` | The stdio MCP server and its authenticated agent tools |
+| `channel` | The `a2amx mcp --channel` process that relays daemon deliveries to Claude Code as channel events |
 | `omp` | The embedded OMP extension and its launch files |
 | `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
 | `cli` | Command-line shape |

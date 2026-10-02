@@ -4,6 +4,7 @@
 //! framing, prefix handling, and human client.
 
 pub mod bridge;
+mod channel;
 pub mod cli;
 pub mod client;
 pub mod codex;

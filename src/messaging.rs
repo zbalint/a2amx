@@ -308,6 +308,19 @@ pub fn paste_bytes(envelope: &str) -> Vec<u8> {
     bytes
 }
 
+pub fn unwrap_channel(prompt: &str) -> Option<String> {
+    let inner = prompt
+        .strip_prefix("<channel source=\"a2amx\">\n")?
+        .strip_suffix("\n</channel>")?;
+    (!inner.is_empty()).then(|| inner.to_owned())
+}
+
+pub fn channel_view(envelope: &str) -> String {
+    // shortcut: only the lowercase closing tag was probed on Claude Code 2.1.288;
+    // other wrapper forms are unprobed, and a mismatch merely means no receipt.
+    envelope.replace("</channel>", "<\\/channel>")
+}
+
 /// Replace every complete paste wrapper with its inner text.
 pub fn unwrap_pastes(prompt: &str) -> String {
     // shortcut: wrapper shapes were observed on Claude Code 2.1.285/2.1.286 (idle submits keep

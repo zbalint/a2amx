@@ -91,10 +91,11 @@ pub(crate) enum AnyTicket<'a> {
 }
 
 impl AnyChannel {
-    /// `omp` and `codex` sessions get a native channel, every other harness the PTY
-    /// channel.
+    /// OMP, Codex, and channel-enabled Claude sessions use native delivery; the
+    /// other sessions use the PTY channel.
     pub(crate) fn for_session(session: Arc<Session>) -> Self {
         match (session.harness(), session.codex().cloned()) {
+            (Harness::Claude, _) if session.channel() => Self::Native(NativeChannel { session }),
             (Harness::Omp, _) => Self::Native(NativeChannel { session }),
             (Harness::Codex, Some(link)) => Self::Codex(CodexChannel { session, link }),
             _ => Self::Pty(PtyChannel::new(session)),

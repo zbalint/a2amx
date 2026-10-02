@@ -302,26 +302,39 @@ machine; there is no central-versus-host split yet.
   prompt reaches `submission_observed`.
   Delivery runs behind a `Channel` seam in `src/delivery.rs`. The loop owns ordering,
   attempts and outcomes; a channel owns how a message reaches the recipient and why
-  it cannot right now; the PTY channel serves every harness, the `omp` harness uses
+  it cannot right now; the PTY channel remains available for generic and opted-out Claude
+  sessions. Claude uses `a2amx mcp --channel` by default (`src/channel.rs`, spec 2g),
+  while `--no-channel` keeps the PTY route. The `omp` harness uses
   a native channel (spec 2e) fed by an OMP extension through the `a2amx omp-bridge` relay,
   and the `codex` harness uses a native channel on a private `codex app-server` that the
   daemon starts for the session (`src/codex.rs`).
-- **MCP server.** `a2amx mcp` is a hand-written stdio JSON-RPC server with three
+- **MCP server.** `src/mcp.rs` owns `a2amx mcp`, a hand-written stdio JSON-RPC server with three
   tools: `list_agents`, `send_message`, and `message_status`. It runs wherever the
   harness runs and connects to the daemon over TCP. Status includes `hold_reason` and
   `hold_explanation` plus `accepted_at` and `updated_at` Unix seconds. A successful
   `send_message` may include `recipient_hold` when the recipient is held. A
   `send_message` whose connection is lost reports `unknown_outcome` and is never
   retried.
+- **Claude channel.** `src/channel.rs` owns the daemon bridge behind `a2amx mcp --channel`.
+  It converts deliveries to `notifications/claude/channel`, acknowledges completed stdout
+  writes, and immediately clears pending state so Claude can batch messages. MCP responses
+  and channel notifications share one output loop. A lost bridge shows `channel_down`;
+  tool calls keep working. The daemon accepts the development-channel dialog with one Enter
+  during the first 60 seconds. Channel prompt receipts upgrade evidence to `native_receipt`
+  without touching PTY holds; unmatched channel prompts always proceed.
 - **Claude Code wiring.** `a2amx new --harness claude` appends `--mcp-config`,
-  `--allowedTools`, and (unless `--no-authorize-peers`) an `--append-system-prompt`
+  `--dangerously-load-development-channels server:a2amx`, `--allowedTools`, and
+  (unless `--no-authorize-peers`) an `--append-system-prompt`
   that authorizes peer messages, because Claude Code otherwise declines to act on a
-  pasted envelope. The wording is provisional.
+  peer envelope. `--no-channel` omits the development-channel flags and uses plain MCP
+  with terminal delivery. The wording is provisional.
 - **Claude Code hook.** The same launch also appends an inline `--settings` argument
   holding one `UserPromptSubmit` command hook that runs `a2amx hook`. The hook reads
   the harness payload on stdin, sends the prompt to the daemon with the session token
   (`ReportPrompt`), and prints a block decision or nothing; it fails open on every
-  error and always exits 0. The daemon unwraps the harness's paste wrappers, matches
+  error and always exits 0. For channel events the daemon matches the exact channel
+  wrapper and transformed envelope, recording a native receipt when they match and
+  allowing every channel prompt. For terminal delivery it unwraps the harness's paste wrappers, matches
   the whole text against the envelope it delivered, and answers allow or block: an
   exact envelope records a receipt, a human prompt clears the human hold, and an
   envelope mixed with other text is blocked and re-queued as a new attempt until its

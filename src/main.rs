@@ -48,7 +48,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
     let prefix = cli.prefix;
     let home_arg = cli.home;
     match &cli.command {
-        Command::Mcp => return mcp::run().await,
+        Command::Mcp { channel } => return mcp::run(*channel).await,
         Command::Hook => return hook::run().await,
         Command::OmpBridge => return bridge::run().await,
         _ => {}
@@ -62,7 +62,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             run_attach_command(home, prefix, session, force).await
         }
         Command::Kill { session } => run_kill(home, session).await,
-        Command::Mcp | Command::Hook | Command::OmpBridge => {
+        Command::Mcp { .. } | Command::Hook | Command::OmpBridge => {
             unreachable!("early dispatch returned before resolving home")
         }
         Command::Messages { session, state } => run_messages(home, session, state).await,
@@ -126,17 +126,21 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         harness,
         deliver,
         no_authorize_peers,
+        no_channel,
         command,
     } = options
     else {
         return Err(anyhow!("expected new session options"));
     };
     let command = match harness {
-        Harness::Claude => a2amx::harness::wire_claude_argv(
-            command,
-            &std::env::current_exe()?,
-            !no_authorize_peers,
-        ),
+        Harness::Claude => {
+            let exe = std::env::current_exe()?;
+            if no_channel {
+                a2amx::harness::wire_claude_argv(command, &exe, !no_authorize_peers)
+            } else {
+                a2amx::harness::wire_claude_channel_argv(command, &exe, !no_authorize_peers)
+            }
+        }
         Harness::Omp => {
             let install_home = home.clone();
             let installed =
@@ -162,6 +166,9 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     }
     if harness == Harness::Codex && no_authorize_peers {
         env.push((a2amx::codex::NO_AUTHORIZE_ENV.to_owned(), "1".to_owned()));
+    }
+    if harness == Harness::Claude && !no_channel {
+        env.push((a2amx::harness::CHANNEL_ENV.to_owned(), "1".to_owned()));
     }
     let response = client
         .request(Request::NewSession {

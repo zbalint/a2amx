@@ -51,6 +51,9 @@ pub enum Command {
         deliver: Option<Deliver>,
         #[arg(long)]
         no_authorize_peers: bool,
+        /// Claude only: deliver by typing into the terminal instead of through a channel.
+        #[arg(long)]
+        no_channel: bool,
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },
@@ -86,8 +89,11 @@ pub enum Command {
     Cancel { message: String },
     /// Run the OMP extension's bridge to the daemon (reads and writes JSON lines on stdio).
     OmpBridge,
-    /// Run the stdio MCP server.
-    Mcp,
+    /// Run the MCP server; --channel also delivers messages as Claude Code channel events.
+    Mcp {
+        #[arg(long)]
+        channel: bool,
+    },
     /// Run the prompt-submit hook adapter (reads the harness payload on stdin).
     Hook,
 }

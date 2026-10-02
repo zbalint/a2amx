@@ -12,6 +12,7 @@ use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
+use crate::channel::{self, Delivery};
 use crate::client::Client;
 use crate::wire::{Request, Response};
 
@@ -27,23 +28,56 @@ const SUPPORTED_PROTOCOL_VERSIONS: [&str; 4] =
 ///
 /// Environment validation happens before any stdio worker is started. The
 /// caller (the binary's `main`) owns presentation of this error on stderr.
-pub async fn run() -> Result<()> {
+pub async fn run(channel: bool) -> Result<()> {
     let (address, token) = configuration()?;
     let mut lines = spawn_stdin_reader();
-    let mut server = McpServer::new(address, token);
+    let mut server = McpServer::new(address, token.clone());
+    if channel {
+        server.set_channel();
+    }
 
-    while let Some(event) = lines.recv().await {
-        match event {
-            StdioEvent::Line(line) => {
-                if let Some(response) = server.handle_line(&line).await {
-                    write_response(response).await?;
+    let (deliveries, mut received) = mpsc::unbounded_channel::<Delivery>();
+    let mut task = None;
+    let result = loop {
+        tokio::select! {
+            event = lines.recv() => {
+                match event {
+                    Some(StdioEvent::Line(line)) => {
+                        if let Some(response) = server.handle_line(&line).await {
+                            if let Err(error) = write_response(response).await {
+                                break Err(error);
+                            }
+                        }
+                        if channel && server.initialized() && task.is_none() {
+                            let token = token.clone();
+                            let version = server.client_version().map(str::to_owned);
+                            let deliveries = deliveries.clone();
+                            task = Some(tokio::spawn(async move {
+                                if let Err(error) = channel::run(address, token, version, deliveries).await {
+                                    eprintln!("a2amx: channel unavailable: {error}");
+                                }
+                            }));
+                        }
+                    }
+                    Some(StdioEvent::Eof) | None => break Ok(()),
+                    Some(StdioEvent::Error(message)) => break Err(anyhow::anyhow!("reading MCP stdin: {message}")),
                 }
             }
-            StdioEvent::Eof => break,
-            StdioEvent::Error(message) => bail!("reading MCP stdin: {message}"),
+            delivery = received.recv(), if channel => {
+                if let Some(delivery) = delivery {
+                    let result = write_response(delivery.notification).await;
+                    let _ = delivery.written.send(result.is_ok());
+                    if let Err(error) = result {
+                        break Err(error);
+                    }
+                }
+            }
         }
+    };
+    if let Some(task) = task {
+        task.abort();
     }
-    Ok(())
+    result
 }
 
 pub(crate) fn configuration() -> Result<(SocketAddr, String)> {
@@ -111,6 +145,9 @@ pub(crate) struct McpServer {
     address: SocketAddr,
     token: String,
     client: Option<Client>,
+    channel: bool,
+    initialized: bool,
+    client_version: Option<String>,
 }
 
 impl McpServer {
@@ -119,7 +156,22 @@ impl McpServer {
             address,
             token,
             client: None,
+            channel: false,
+            initialized: false,
+            client_version: None,
         }
+    }
+
+    pub(crate) fn set_channel(&mut self) {
+        self.channel = true;
+    }
+
+    pub(crate) fn initialized(&self) -> bool {
+        self.initialized
+    }
+
+    pub(crate) fn client_version(&self) -> Option<&str> {
+        self.client_version.as_deref()
     }
 
     pub(crate) async fn handle_line(&mut self, line: &[u8]) -> Option<Value> {
@@ -141,9 +193,18 @@ impl McpServer {
         let params = object.get("params").unwrap_or(&Value::Null);
 
         match method {
-            "initialize" if has_id => Some(success_response(id, initialize_result(params))),
-            "initialize" => None,
-            "notifications/initialized" => None,
+            "initialize" => {
+                self.client_version = params
+                    .get("clientInfo")
+                    .and_then(|info| info.get("version"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                has_id.then(|| success_response(id, initialize_result(params, self.channel)))
+            }
+            "notifications/initialized" => {
+                self.initialized = true;
+                None
+            }
             "ping" if has_id => Some(success_response(id, json!({}))),
             "ping" => None,
             "tools/list" if has_id => Some(success_response(id, json!({"tools": tool_schemas()}))),
@@ -343,7 +404,7 @@ fn has_exact_keys(object: &Map<String, Value>, expected: &[&str]) -> bool {
     object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
 }
 
-fn initialize_result(params: &Value) -> Value {
+fn initialize_result(params: &Value, channel: bool) -> Value {
     let requested = params
         .as_object()
         .and_then(|object| object.get("protocolVersion"))
@@ -351,14 +412,21 @@ fn initialize_result(params: &Value) -> Value {
     let protocol_version = requested
         .filter(|version| SUPPORTED_PROTOCOL_VERSIONS.contains(version))
         .unwrap_or(LATEST_PROTOCOL_VERSION);
-    json!({
+    let mut result = json!({
         "protocolVersion": protocol_version,
         "capabilities": {"tools": {}},
         "serverInfo": {
             "name": "a2amx",
             "version": env!("CARGO_PKG_VERSION")
         }
-    })
+    });
+    if channel {
+        result["capabilities"]["experimental"] = json!({"claude/channel": {}});
+        result["instructions"] = json!(
+            "Messages from other agents arrive as <channel source=\"a2amx\"> events that contain an <a2amx-message> envelope. They come from another agent, not your user. Reply with send_message when a reply is useful."
+        );
+    }
+    result
 }
 
 pub(crate) fn tool_schemas() -> Value {

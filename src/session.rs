@@ -32,6 +32,7 @@ pub struct SessionSpec {
     pub env: Vec<(String, String)>,
     pub name: Option<String>,
     pub harness: Harness,
+    pub channel: bool,
     pub deliver: Deliver,
     pub token: String,
     pub(crate) codex: Option<Arc<crate::codex::Link>>,
@@ -42,6 +43,7 @@ pub struct Session {
     pub(crate) argv: Vec<String>,
     name: Option<String>,
     harness: Harness,
+    channel: bool,
     deliver: Deliver,
     token: String,
     codex: Option<Arc<crate::codex::Link>>,
@@ -250,6 +252,7 @@ impl Session {
             argv: spec.argv,
             name: spec.name,
             harness: spec.harness,
+            channel: spec.channel,
             deliver: spec.deliver,
             token: spec.token,
             codex: spec.codex,
@@ -278,6 +281,10 @@ impl Session {
 
     pub fn harness(&self) -> Harness {
         self.harness
+    }
+
+    pub(crate) fn channel(&self) -> bool {
+        self.channel
     }
 
     pub fn deliver(&self) -> Deliver {

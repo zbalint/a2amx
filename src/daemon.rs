@@ -187,6 +187,11 @@ impl Runtime {
         env.push(("A2AMX_ADDR".into(), address));
         let mut argv = argv;
         let mut codex = None;
+        let channel = harness == Harness::Claude
+            && env
+                .iter()
+                .any(|(key, value)| key == harness::CHANNEL_ENV && value == "1");
+        env.retain(|(key, _)| key != harness::CHANNEL_ENV);
         if harness == Harness::Codex {
             // shortcut: the client signals --no-authorize-peers through the request
             // environment; give the wire request a field if more flags need this.
@@ -225,6 +230,7 @@ impl Runtime {
                     env,
                     name,
                     harness,
+                    channel,
                     deliver: deliver.unwrap_or_else(|| harness.default_deliver()),
                     token,
                     codex,
@@ -247,6 +253,9 @@ impl Runtime {
                     store.clone(),
                     boot.clone(),
                 ))];
+                if channel {
+                    tasks.push(tokio::spawn(accept_channel_dialog(session.clone())));
+                }
                 if let Some(link) = session.codex().cloned() {
                     tasks.push(tokio::spawn(codex::run(session, link, store, boot)));
                 }
@@ -342,6 +351,39 @@ impl Runtime {
     async fn report_prompt(&self, session_id: &str, prompt: String) -> anyhow::Result<Response> {
         let (_, session) =
             lookup(self, session_id).ok_or_else(|| anyhow::anyhow!("session is unavailable"))?;
+        if session.channel() {
+            if let Some(inner) = messaging::unwrap_channel(&prompt) {
+                let ids = messaging::envelope_ids(&inner);
+                if let [seq] = ids.as_slice() {
+                    if let Some(message) = self.store.get(*seq).await? {
+                        if message.boot == self.boot
+                            && message.recipient_session == session_id
+                            && matches!(
+                                message.state,
+                                MessageState::Delivering
+                                    | MessageState::Submitted
+                                    | MessageState::Unsubmitted
+                            )
+                            && !message.observed
+                            && inner
+                                == messaging::channel_view(&messaging::render_envelope(
+                                    &format!("m_{seq}"),
+                                    &message.sender_address,
+                                    &message.subject,
+                                    &message.body,
+                                ))
+                        {
+                            self.store.record_receipt(*seq).await?;
+                            session.native_received();
+                        }
+                    }
+                }
+                return Ok(Response::PromptVerdict {
+                    verdict: "allow".into(),
+                    reason: None,
+                });
+            }
+        }
         let text = messaging::unwrap_pastes(&prompt);
         let mut known = Vec::new();
         // shortcut: a session-token holder can forge prompts for that session;
@@ -490,6 +532,7 @@ impl Runtime {
                         // native receipt; persist the channel with the receipt if that matters.
                         if lookup(self, &message.recipient_session).is_some_and(|(_, session)| {
                             matches!(session.harness(), Harness::Omp | Harness::Codex)
+                                || session.channel()
                         }) {
                             "native_receipt"
                         } else {
@@ -504,6 +547,27 @@ impl Runtime {
                 None
             },
         })
+    }
+}
+
+async fn accept_channel_dialog(session: Arc<Session>) {
+    // shortcut: fixed 60 s window and one string match; re-probe the dialog text
+    // when Claude Code changes it.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        if session.exit_code().is_some() {
+            return;
+        }
+        let visible = harness::channel_dialog_visible(&session.lock().emulator.screen());
+        if visible {
+            match tokio::task::spawn_blocking(move || session.write_input(b"\r")).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::debug!(%error, "channel dialog Enter failed"),
+                Err(error) => tracing::debug!(%error, "channel dialog input task failed"),
+            }
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -1014,7 +1078,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     let Some((_, session)) = lookup(&runtime, id) else {
                         anyhow::bail!("bridge session disappeared");
                     };
-                    if session.harness() != Harness::Omp {
+                    if session.harness() != Harness::Omp && !session.channel() {
                         Response::Error {
                             message: "session is not an omp session".into(),
                         }

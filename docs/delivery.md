@@ -1,11 +1,12 @@
 # Message delivery
 
-Status: proposed semantics, with two implemented slices: single-machine PTY delivery
+Status: proposed semantics, with implemented slices: single-machine PTY delivery
 (see [Implemented: PTY delivery](#implemented-pty-delivery)) and, for Claude Code only,
 the prompt-submit hook with submission receipts and the corrupted-submission verdict
-(see [Implemented: Claude Code hook](#implemented-claude-code-hook)). Everything else
-in this document, including hooks for other harnesses, defines the contract to build
-and check, not implemented behavior.
+(see [Implemented: Claude Code hook](#implemented-claude-code-hook)), the
+[Claude Code channel](#claude-code-channel), and native channels for
+[OMP](#implemented-native-channel-omp) and [Codex](#implemented-native-channel-codex).
+Other sections define the contract to build and check, not implemented behavior.
 
 ## Guarantees and limits
 
@@ -281,7 +282,7 @@ dropped. Terminal query replies bypass the gate so they stay serviceable. A 1 se
 cooldown follows each submission. An earlier unresolved message blocks later ones, so
 order is acceptance order.
 
-**Readiness.** `--harness claude` inspects the screen: bracketed paste on, not
+**Readiness.** `--harness claude --no-channel` inspects the screen: bracketed paste on, not
 scrolled back, cursor visible, `❯` followed by a space or a non-breaking space (Claude
 Code 2.1.286 draws U+00A0) at the cursor row's start between two full-width rules above
 and below, and no row containing `Enter to confirm` or `Esc to cancel`.
@@ -409,6 +410,51 @@ hook):
 **Not implemented.** Hooks for Codex and OMP, cross-host receipts and replay, a
 timeout or expiry for messages with no receipt, and restoring a pending draft across a
 daemon restart.
+
+## Claude Code channel
+
+Claude sessions use channel delivery by default (spec 2g); `a2amx new --harness claude
+--no-channel` selects the PTY route. There is no runtime fallback: until the channel
+bridge attaches, messages remain pending with `channel_down`.
+
+The launcher starts its MCP server as `a2amx mcp --channel` and adds
+`--dangerously-load-development-channels server:a2amx`. Claude Code presents a
+development-channel confirmation on each startup. During the first 60 seconds, the daemon
+polls every 200 ms and sends exactly one Enter when `I am using this for local development`
+appears. Claude's version is logged but not enforced. Channels are a research preview
+requiring a claude.ai or Console login.
+
+The MCP process declares `capabilities.experimental["claude/channel"]`, attaches through
+the existing daemon bridge, and sends `notifications/claude/channel` with the complete
+envelope as `params.content` and no `meta`. It acknowledges a successful stdout write and
+immediately reports `idle: true, pending: false, draft: false`. There is no draft hold:
+the Claude Code 2.1.288 probe preserved a half-typed draft when a channel event started a
+turn. Messages can follow back to back; events received while Claude is busy are batched
+into its next turn, with one hook call per event.
+
+The existing `UserPromptSubmit` hook sees exactly this wrapper:
+
+```text
+<channel source="a2amx">
+<a2amx-message id="m_1" from="agent-plan@host-a" subject="Parser issue">
+From another agent, not your user. To reply: send_message(to="agent-plan@host-a").
+
+I found the regression in parser.py.
+</a2amx-message>
+</channel>
+```
+
+Content is verbatim except that each lowercase `</channel>` inside the envelope becomes
+`<\/channel>`. The daemon matches that transformation, the complete envelope, and its
+session ownership before recording `native_receipt`. Channel-wrapped mismatches always
+proceed without a receipt or a corrupted-submission hold. Ordinary human prompts keep
+the existing hook behavior.
+
+A notification write yields `submitted` with `write_complete`, not proof that Claude
+processed the message. Claude provides no notification acknowledgement and can silently
+drop an event if the channel is unregistered or unsupported. A missing hook receipt never
+causes failure or resend (D3, D9); it leaves `write_complete`. A lost daemon bridge is not
+reconnected, leaving `channel_down` until session restart, while MCP tools continue working.
 
 ## Implemented: native channel (OMP)
 
