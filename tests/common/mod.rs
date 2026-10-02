@@ -24,14 +24,31 @@ pub async fn start_daemon() -> (TempDir, Daemon) {
 }
 
 pub async fn start_daemon_in(dir: &Path, host_name: Option<&str>, limits: Limits) -> Daemon {
-    Daemon::start(DaemonConfig {
-        state_dir: dir.to_path_buf(),
-        listen: vec!["127.0.0.1:0".parse().expect("loopback address")],
-        host_name: host_name.map(str::to_owned),
-        limits,
-    })
-    .await
-    .expect("daemon starts")
+    // Restart tests start a daemon right after shutting one down on the same dir. Under load
+    // the old flock can outlive `shutdown` for a moment (suspected: a PTY child forked by a
+    // parallel test inherits the fd until it execs), so retry that one error briefly.
+    // shortcut: fixed 5s budget; find who holds the lock if this ever needs more.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let started = Daemon::start(DaemonConfig {
+            state_dir: dir.to_path_buf(),
+            listen: vec!["127.0.0.1:0".parse().expect("loopback address")],
+            host_name: host_name.map(str::to_owned),
+            limits,
+        })
+        .await;
+        match started {
+            Err(error)
+                if error
+                    .to_string()
+                    .contains("another a2amx daemon is running")
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            other => return other.expect("daemon starts"),
+        }
+    }
 }
 
 pub async fn eventually<F, Fut, T>(mut check: F) -> T
