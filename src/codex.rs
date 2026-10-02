@@ -369,7 +369,8 @@ pub(crate) async fn start(
     let mut child = command
         .spawn()
         .with_context(|| format!("starting {program} app-server"))?;
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // The first start after a host reboot is slow (cold caches, Codex's own /tmp state).
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut last = anyhow!("not started");
     loop {
         if let Some(status) = child.try_wait()? {
