@@ -523,3 +523,45 @@ Run order for the resumed run: apply 1 and 2, `cargo fmt`, then
 `cargo test --test omp_smoke -- --ignored --test-threads=1`, then the full section 12
 sequence. If tests 1 or 3 fail for a reason other than the two above, stop and report
 BLOCKED with the full request dump, not a summary.
+
+## Amendment 4 (after OMP BLOCKED on the native receipt of test 1)
+
+Amendment 3 worked: tests 2 and 3 pass, and test 1 passes its immediate assertion. Test 1
+now fails the 60 s `native_receipt` wait although the fake server received the exact
+envelope. The cause is a defect in the section 3.5 safety net, found with a throwaway probe
+that logged `message_end` and `reportState` on real OMP 18.4.8 (the probe was removed; the
+extension file is byte-identical to yours):
+
+```
+.000 reportState (turn_end)  idle=false hasPending=false fifo=1 sawPending=true
+.001 message_end role=user attribution=agent fifo=0   <- the envelope, 1 ms later
+```
+
+When OMP starts the follow-up turn it dequeues the message (`hasPendingMessages()` turns
+false) at `turn_end`, and the user `message_end` follows about 1 ms later. The first safety
+net bullet ("seen true, now false: drop that entry") therefore fires in between and the
+receipt is lost. This amendment overrides section 3.4 and 3.5 where they differ; no other
+section, test or production file changes.
+
+1. **Late receipts.** An entry removed by either safety net bullet is not forgotten: move
+   it to a `late` list (keeping `id`, `envelope` and the time it was dropped). In the
+   receipt handling of section 3.4, when the FIFO is empty or its head does not equal
+   `text`, look for the oldest `late` entry whose `envelope === text`; if there is one,
+   remove it and send `{"type":"receipt","id":<its id>}` exactly as for a FIFO head, then
+   report state. The `delivering` and deferred-receipt rules stay as they are for the FIFO.
+   Discard `late` entries 120 s after they were dropped (check on each `reportState`) and
+   clear `late` when the bridge disconnects or the session shuts down, like `fifo`.
+   `pending` in the state frame stays `fifo.length > 0 || hasPending` and does not count
+   `late`.
+2. **Comment.** Update the `// shortcut:` comment near the 120 s grace to say the late list
+   keeps the same ceiling.
+3. **Docs.** `docs/delivery.md` (around line 496) describes the safety net; add one clause:
+   a dropped entry still receives its receipt if the matching `message_end` arrives within
+   120 s. No other documentation changes.
+4. **Acceptance.** Test 1 passes unchanged (receipt within 60 s, the recorded user message
+   equals `ENVELOPE_TEXT`, no `User interjection`) in
+   `cargo test --test omp_smoke -- --ignored --test-threads=1`, all three green. Then run
+   `cargo fmt`, the three cargo commands and the full section 12 sequence literally. If
+   test 1 still fails, stop and report BLOCKED with the full request dump and a timeline
+   of `message_end` and state events (log them to a temp file in a copy of the extension,
+   not in the committed file).
