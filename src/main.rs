@@ -18,7 +18,10 @@ use a2amx::harness::Harness;
 use a2amx::hook;
 use a2amx::mcp;
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
-use a2amx::wire::{ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary};
+use a2amx::status;
+use a2amx::wire::{
+    ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo,
+};
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -271,7 +274,9 @@ async fn run_attachment(
     cols: u16,
     rows: u16,
 ) -> anyhow::Result<()> {
-    let attachment = client.attach(&session, force, cols, rows).await?;
+    let attachment = client
+        .attach_status(&session, force, cols, pty_rows(rows, true))
+        .await?;
     let output = Output::start()?;
     let mut terminal = TerminalGuard::enter(output.handle()?)?;
     output.send(b"\x1b[?1049h".to_vec())?;
@@ -296,6 +301,10 @@ async fn run_attachment(
     write_stderr(format!("{}\n", outcome.message).into_bytes()).await
 }
 
+fn pty_rows(rows: u16, visible: bool) -> u16 {
+    if visible && rows >= 3 { rows - 1 } else { rows }
+}
+
 struct AttachOutcome {
     message: String,
 }
@@ -309,6 +318,8 @@ struct AttachmentState {
     prefix_machine: PrefixMachine,
     prefix_byte: u8,
     after_prefix: bool,
+    status_visible: bool,
+    status: Option<StatusInfo>,
     scroll_mode: bool,
     scroll_parser: ScrollParser,
     picker: Option<PickerState>,
@@ -334,11 +345,25 @@ impl AttachmentState {
             prefix_machine: PrefixMachine::new(prefix),
             prefix_byte: prefix,
             after_prefix: false,
+            status_visible: true,
+            status: None,
             scroll_mode: false,
             scroll_parser: ScrollParser::default(),
             picker: None,
             output,
         }
+    }
+
+    fn draw_status(&self) -> anyhow::Result<()> {
+        if self.status_visible && self.picker.is_none() && !self.scroll_mode {
+            self.output.send(status::render(
+                &self.session,
+                self.status.as_ref(),
+                self.cols,
+                self.rows,
+            ))?;
+        }
+        Ok(())
     }
 
     async fn handle_input(&mut self, bytes: &[u8]) -> anyhow::Result<Option<AttachOutcome>> {
@@ -432,6 +457,17 @@ impl AttachmentState {
                     .await?;
                     self.picker = Some(state);
                 }
+                Action::Command(PrefixCommand::StatusLine) => {
+                    self.status_visible = !self.status_visible;
+                    if let Some(attached) = self.attachment.as_mut() {
+                        attached
+                            .send(ClientFrame::Resize {
+                                cols: self.cols,
+                                rows: pty_rows(self.rows, self.status_visible),
+                            })
+                            .await?;
+                    }
+                }
                 Action::Command(PrefixCommand::Release) => {
                     if let Some(attached) = self.attachment.as_mut() {
                         attached.send(ClientFrame::Release).await?;
@@ -447,7 +483,12 @@ impl AttachmentState {
             let attach_result = match Client::connect(&self.home).await {
                 Ok(client) => {
                     client
-                        .attach(&self.session, false, self.cols, self.rows)
+                        .attach_status(
+                            &self.session,
+                            false,
+                            self.cols,
+                            pty_rows(self.rows, self.status_visible),
+                        )
                         .await
                 }
                 Err(error) => Err(error),
@@ -510,13 +551,23 @@ impl AttachmentState {
                     }
                     self.attachment = None;
                     let attach_result = match Client::connect(&self.home).await {
-                        Ok(client) => client.attach(&selected, false, self.cols, self.rows).await,
+                        Ok(client) => {
+                            client
+                                .attach_status(
+                                    &selected,
+                                    false,
+                                    self.cols,
+                                    pty_rows(self.rows, self.status_visible),
+                                )
+                                .await
+                        }
                         Err(error) => Err(error),
                     };
                     match attach_result {
                         Ok(next) => {
                             self.attachment = Some(next);
                             self.session = selected;
+                            self.status = None;
                             self.output
                                 .send(format!("\x1b]2;a2amx: {}\x07", self.session).into_bytes())?;
                             self.picker = None;
@@ -585,7 +636,7 @@ async fn run_attachment_loop(
                         picker.render(&state.output)?;
                     }
                     if let Some(attached) = state.attachment.as_mut() {
-                        attached.send(ClientFrame::Resize { cols: new_cols, rows: new_rows }).await?;
+                        attached.send(ClientFrame::Resize { cols: new_cols, rows: pty_rows(new_rows, state.status_visible) }).await?;
                     }
                 }
             }
@@ -601,10 +652,15 @@ async fn run_attachment_loop(
                     ServerFrame::Data(data) => {
                         if state.picker.is_none() {
                             state.output.send(data)?;
+                            state.draw_status()?;
                             if state.scroll_mode {
                                 state.output.send(scroll_status(state.cols, state.rows))?;
                             }
                         }
+                    }
+                    ServerFrame::Status(info) => {
+                        state.status = Some(info);
+                        state.draw_status()?;
                     }
                     ServerFrame::Exit(code) => {
                         return Ok(AttachOutcome {

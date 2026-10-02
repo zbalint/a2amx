@@ -265,9 +265,9 @@ async fn custom_prefix_and_sigwinch_resize_reach_attached_session() -> anyhow::R
         dir.path(),
         &[("A2AMX_PREFIX", "C-a")],
     )?;
-    attached.wait_for_text("24 80", WAIT)?;
+    attached.wait_for_text("23 80", WAIT)?;
     attached.resize(40, 10)?;
-    attached.wait_for_text("10 40", WAIT)?;
+    attached.wait_for_text("9 40", WAIT)?;
     attached.send(&[1, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
@@ -522,7 +522,7 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
     assert!(listing.contains(
-        "s1  -     running  yes       0        human_draft  80x24  sh -c stty raw -echo; cat\n"
+        "s1  -     running  yes       0        human_draft  80x23  sh -c stty raw -echo; cat\n"
     ));
 
     attached.send(&[2, b'r'])?;
@@ -686,5 +686,64 @@ async fn cancel_is_silent_on_success_and_reports_errors() -> anyhow::Result<()> 
         String::from_utf8(missing.stderr)?,
         "a2amx: unknown message m_99\n"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_line_toggles_and_shows_the_session_address() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let script = "stty size; trap 'stty size' WINCH; while :; do read line; done";
+    let (_, code) = run_cli(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "agent-plan",
+            "--",
+            "sh",
+            "-c",
+            script,
+        ],
+    )?;
+    assert_eq!(code, 0);
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("23 80", WAIT)?;
+    attached.wait_for_text("agent-plan@", WAIT)?;
+    assert!(
+        attached
+            .screen_text()
+            .lines()
+            .last()
+            .unwrap_or("")
+            .contains("agent-plan@")
+    );
+    attached.resize(40, 10)?;
+    attached.wait_for_text("9 40", WAIT)?;
+    attached.send(&[2, b's'])?;
+    attached.wait_for_text("10 40", WAIT)?;
+    assert!(
+        !attached
+            .screen_text()
+            .lines()
+            .last()
+            .unwrap_or("")
+            .contains("agent-plan@")
+    );
+    attached.resize(50, 12)?;
+    attached.wait_for_text("12 50", WAIT)?;
+    attached.send(&[2, b's'])?;
+    attached.wait_for_text("11 50", WAIT)?;
+    assert!(
+        attached
+            .screen_text()
+            .lines()
+            .last()
+            .unwrap_or("")
+            .contains("agent-plan@")
+    );
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
     Ok(())
 }

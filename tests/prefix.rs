@@ -183,3 +183,24 @@ fn byte_at_a_time_and_single_read_have_equal_normalized_actions() {
     }
     assert_eq!(normalized(actions), expected);
 }
+
+#[test]
+fn status_line_command_survives_split_reads_and_flushes_input() {
+    let mut machine = PrefixMachine::new(2);
+    assert_eq!(
+        machine.feed(&[2, b's']),
+        vec![Action::Command(Command::StatusLine)]
+    );
+    assert!(machine.feed(&[2]).is_empty());
+    assert_eq!(
+        machine.feed(b"s"),
+        vec![Action::Command(Command::StatusLine)]
+    );
+    assert_eq!(
+        machine.feed(&[b'x', 2, b's']),
+        vec![
+            Action::Forward(b"x".to_vec()),
+            Action::Command(Command::StatusLine)
+        ]
+    );
+}

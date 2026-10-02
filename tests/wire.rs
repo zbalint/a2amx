@@ -98,6 +98,7 @@ fn request_json_uses_exact_tagged_shapes() {
             force: true,
             cols: 120,
             rows: 40,
+            status: false,
         })
         .unwrap_or_default(),
         r#"{"type":"attach","session":"s1","force":true,"cols":120,"rows":40}"#
@@ -479,5 +480,50 @@ fn additive_visibility_fields_round_trip() {
     assert_eq!(
         serde_json::from_value::<Response>(status_json).unwrap(),
         status
+    );
+}
+
+#[test]
+fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
+    use a2amx::wire::StatusInfo;
+    let info = StatusInfo {
+        address: "agent-plan@host-a".into(),
+        pending: 2,
+        hold: Some("human_draft".into()),
+    };
+    let frame = ServerFrame::Status(info);
+    let encoded = frame.encode();
+    assert_eq!(encoded[0], 0x04);
+    assert_eq!(ServerFrame::decode(&encoded).unwrap(), frame);
+    assert!(ServerFrame::decode(&[0x04, b'x']).is_err());
+    assert!(
+        ServerFrame::decode(
+            &[vec![0x04], vec![b' '; a2amx::wire::MAX_SERVER_DATA_LEN + 1]].concat()
+        )
+        .is_err()
+    );
+    let request = Request::Attach {
+        session: "s1".into(),
+        force: false,
+        cols: 80,
+        rows: 23,
+        status: true,
+    };
+    assert_eq!(
+        serde_json::to_string(&request).unwrap(),
+        r#"{"type":"attach","session":"s1","force":false,"cols":80,"rows":23,"status":true}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Request>(
+            r#"{"type":"attach","session":"s1","force":false,"cols":80,"rows":23}"#
+        )
+        .unwrap(),
+        Request::Attach {
+            session: "s1".into(),
+            force: false,
+            cols: 80,
+            rows: 23,
+            status: false
+        }
     );
 }

@@ -13,6 +13,7 @@ pub enum Command {
     SessionPicker,
     ScrollMode,
     Release,
+    StatusLine,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +134,10 @@ impl PrefixMachine {
                                 b'[' => {
                                     Self::flush_forward(&mut actions, &mut forwarded);
                                     actions.push(Action::Command(Command::ScrollMode));
+                                }
+                                b's' => {
+                                    Self::flush_forward(&mut actions, &mut forwarded);
+                                    actions.push(Action::Command(Command::StatusLine));
                                 }
                                 b'r' => {
                                     Self::flush_forward(&mut actions, &mut forwarded);

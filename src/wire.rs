@@ -132,6 +132,8 @@ pub enum Request {
         force: bool,
         cols: u16,
         rows: u16,
+        #[serde(default, skip_serializing_if = "is_default")]
+        status: bool,
     },
     Kill {
         session: String,
@@ -283,12 +285,21 @@ pub struct MessageInfo {
     pub updated_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusInfo {
+    pub address: String,
+    pub pending: u32,
+    #[serde(default)]
+    pub hold: Option<String>,
+}
+
 /// Server-to-client stream frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServerFrame {
     Data(Vec<u8>),
     Exit(i32),
     Detached(String),
+    Status(StatusInfo),
 }
 
 /// Client-to-server stream frame.
@@ -314,6 +325,16 @@ impl ServerFrame {
                 let mut payload = Vec::with_capacity(5);
                 payload.push(0x02);
                 payload.extend_from_slice(&code.to_be_bytes());
+                payload
+            }
+            Self::Status(info) => {
+                // StatusInfo contains only strings, a u32 and an Option: JSON serialization
+                // to a Vec cannot fail for these types.
+                let body = serde_json::to_vec(info)
+                    .unwrap_or_else(|error| unreachable!("StatusInfo serialization: {error}"));
+                let mut payload = Vec::with_capacity(1 + body.len());
+                payload.push(0x04);
+                payload.extend_from_slice(&body);
                 payload
             }
             Self::Detached(reason) => {
@@ -350,6 +371,12 @@ impl ServerFrame {
             0x03 => Ok(Self::Detached(
                 String::from_utf8(body.to_vec()).map_err(anyhow::Error::new)?,
             )),
+            0x04 => {
+                if body.len() > MAX_SERVER_DATA_LEN {
+                    bail!("server status payload exceeds maximum {MAX_SERVER_DATA_LEN}");
+                }
+                Ok(Self::Status(serde_json::from_slice(body)?))
+            }
             _ => bail!("unknown server stream frame tag 0x{tag:02x}"),
         }
     }

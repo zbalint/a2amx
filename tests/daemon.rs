@@ -703,6 +703,7 @@ async fn malformed_stream_frame_disconnects_without_killing_the_session() {
                     force: false,
                     cols: 40,
                     rows: 5,
+                    status: false,
                 })
                 .unwrap(),
             )
@@ -743,7 +744,8 @@ async fn failed_attach_leaves_the_control_connection_usable() {
                 session: id,
                 force: false,
                 cols: 40,
-                rows: 5
+                rows: 5,
+                status: false,
             })
             .await
             .unwrap(),
@@ -1042,5 +1044,116 @@ async fn takeover_waits_for_received_input_to_enqueue_under_backpressure() {
     drop(input);
     assert!(matches!(next(&mut second).await, ServerFrame::Data(_)));
     assert!(list(&mut control).await[0].attached);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn opted_in_attachments_receive_initial_and_changed_status_only() {
+    use a2amx::harness::{Deliver, Harness};
+    use a2amx::wire::StatusInfo;
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let Response::Created { session: id } = admin
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), "stty raw -echo; cat".into()],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![],
+            name: Some("agent-review".into()),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Auto),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("created session");
+    };
+    let address = list(&mut admin)
+        .await
+        .into_iter()
+        .find(|s| s.id == id)
+        .unwrap()
+        .address;
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&id, false, 40, 10)
+        .await
+        .unwrap();
+    assert!(matches!(next(&mut attachment).await, ServerFrame::Data(_)));
+    assert_eq!(
+        next(&mut attachment).await,
+        ServerFrame::Status(StatusInfo {
+            address: address.clone(),
+            pending: 0,
+            hold: None,
+        })
+    );
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    eventually_sessions(&mut admin, |sessions| {
+        sessions
+            .iter()
+            .any(|s| s.id == id && s.hold_reason.as_deref() == Some("human_draft"))
+    })
+    .await;
+    let (_, token, addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("agent-plan"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let mut sender = Client::connect_addr(addr, &token).await.unwrap();
+    assert!(matches!(
+        sender
+            .request(Request::SendMessage {
+                to: address.clone(),
+                subject: "Status test".into(),
+                message: "hello".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Accepted { .. }
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(ServerFrame::Status(info)) = attachment.recv().await.unwrap() {
+                if info.pending == 1 {
+                    assert_eq!(
+                        info,
+                        StatusInfo {
+                            address: address.clone(),
+                            pending: 1,
+                            hold: Some("human_draft".into())
+                        }
+                    );
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("changed status within five seconds");
+    // A stable attachment sends no repeated status, and legacy attachments never opt in.
+    let other = create(&mut admin, &["sh", "-c", "sleep 30"], vec![]).await;
+    let mut legacy = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&other, false, 40, 10)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_millis(2500), async {
+        loop {
+            tokio::select! {
+                frame = legacy.recv() => assert!(!matches!(frame.unwrap(), Some(ServerFrame::Status(_)))),
+                frame = attachment.recv() => assert!(!matches!(frame.unwrap(), Some(ServerFrame::Status(_)))),
+            }
+        }
+    }).await.expect_err("observation ends at deadline");
     daemon.shutdown().await.unwrap();
 }

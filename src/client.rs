@@ -99,11 +99,34 @@ impl Client {
     }
 
     pub async fn attach(
+        self,
+        session: &str,
+        force: bool,
+        cols: u16,
+        rows: u16,
+    ) -> anyhow::Result<Attachment> {
+        self.attach_with_status(session, force, cols, rows, false)
+            .await
+    }
+
+    pub async fn attach_status(
+        self,
+        session: &str,
+        force: bool,
+        cols: u16,
+        rows: u16,
+    ) -> anyhow::Result<Attachment> {
+        self.attach_with_status(session, force, cols, rows, true)
+            .await
+    }
+
+    async fn attach_with_status(
         mut self,
         session: &str,
         force: bool,
         cols: u16,
         rows: u16,
+        status: bool,
     ) -> anyhow::Result<Attachment> {
         match self
             .request(Request::Attach {
@@ -111,6 +134,7 @@ impl Client {
                 force,
                 cols,
                 rows,
+                status,
             })
             .await?
         {

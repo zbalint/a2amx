@@ -26,7 +26,7 @@ use crate::session::{AttachmentSlot, NativeGuard, Session, SessionId, SessionSpe
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo, Request,
-    Response, ServerFrame, SessionSummary,
+    Response, ServerFrame, SessionSummary, StatusInfo,
 };
 
 pub struct DaemonConfig {
@@ -1030,13 +1030,22 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 force,
                 cols,
                 rows,
+                status,
             } => {
                 if cols == 0 || rows == 0 {
                     Response::Error {
                         message: "attachment dimensions must be nonzero".into(),
                     }
                 } else if let Some((_, session)) = lookup(&runtime, &id) {
-                    if attach(&mut connection, session, force, Size { cols, rows }).await? {
+                    if attach(
+                        &mut connection,
+                        session,
+                        force,
+                        Size { cols, rows },
+                        status.then(|| runtime.clone()),
+                    )
+                    .await?
+                    {
                         return Ok(());
                     }
                     continue;
@@ -1258,11 +1267,26 @@ impl Drop for AttachmentGuard {
     }
 }
 
+async fn attachment_status(
+    session: &Arc<Session>,
+    runtime: &Runtime,
+) -> anyhow::Result<StatusInfo> {
+    let counts = runtime.store.open_counts(&runtime.boot).await?;
+    Ok(StatusInfo {
+        address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
+        pending: counts.get(&session.id().0).copied().unwrap_or(0),
+        hold: AnyChannel::for_session(session.clone())
+            .hold_reason()
+            .map(str::to_owned),
+    })
+}
+
 async fn attach(
     connection: &mut Framed,
     session: Arc<Session>,
     force: bool,
     size: Size,
+    status: Option<Arc<Runtime>>,
 ) -> anyhow::Result<bool> {
     let (takeover, mut taken_over) = watch::channel(false);
     let (closed, completion) = watch::channel(false);
@@ -1345,6 +1369,17 @@ async fn attach(
         connection.stream.shutdown().await?;
         return Ok(true);
     }
+    let mut last = None;
+    if let Some(runtime) = status.as_ref() {
+        let info = attachment_status(&session, runtime).await?;
+        connection
+            .send(&ServerFrame::Status(info.clone()).encode())
+            .await?;
+        last = Some(info);
+    }
+    let period = Duration::from_secs(1);
+    let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         if *taken_over.borrow() {
             connection
@@ -1355,6 +1390,17 @@ async fn attach(
         }
         tokio::select! {
             _ = taken_over.changed() => {},
+            // shortcut: one-second poll per attachment; push from the store's write path if latency
+            // or load matters.
+            _ = ticker.tick() => {
+                if let Some(runtime) = status.as_ref() {
+                    let info = attachment_status(&session, runtime).await?;
+                    if last.as_ref() != Some(&info) {
+                        connection.send(&ServerFrame::Status(info.clone()).encode()).await?;
+                        last = Some(info);
+                    }
+                }
+            },
             _ = session.notify().notified() => {
                 let (bytes, exited) = {
                     let mut state = session.lock();
