@@ -199,6 +199,7 @@ impl Runtime {
                 &argv[0],
                 &self.state_dir,
                 &id.0,
+                cwd.as_deref().map(Path::new),
                 &env,
                 codex::server_config(&exe, authorize),
             )

@@ -333,6 +333,7 @@ pub(crate) async fn start(
     program: &str,
     state_dir: &Path,
     session_id: &str,
+    cwd: Option<&Path>,
     env: &[(String, String)],
     config: Vec<String>,
 ) -> anyhow::Result<Arc<Link>> {
@@ -366,6 +367,10 @@ pub(crate) async fn start(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
+    // With --remote the TUI's threads start in the app-server's directory, not its own.
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
     let mut child = command
         .spawn()
         .with_context(|| format!("starting {program} app-server"))?;

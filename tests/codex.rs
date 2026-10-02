@@ -26,6 +26,7 @@ printf '%s\\n' \"${A2AMX_TOKEN:-unset}\" > \"$ARGS_DIR/$role.token\"
 # Like Codex, answer on a short real socket and link the requested long path to it.
 if [ \"$role\" = server ] && [ -n \"$FAKE_SOCKET\" ]; then ln -sf \"$FAKE_SOCKET\" \"${3#unix://}\"; fi
 echo $$ > \"$ARGS_DIR/$role.pid\"
+pwd -P > \"$ARGS_DIR/$role.cwd\"
 exec sleep 60
 ";
 
@@ -42,16 +43,16 @@ struct Case {
 
 impl Case {
     async fn start() -> Self {
-        Self::launch(false, &[], |_| {}).await
+        Self::launch(false, &[], None, |_| {}).await
     }
 
     async fn start_with(configure: impl FnOnce(&FakeCodex)) -> Self {
-        Self::launch(false, &[], configure).await
+        Self::launch(false, &[], None, configure).await
     }
 
     /// A state dir so deep that its socket path exceeds the unix `SUN_LEN` limit.
     async fn start_deep() -> Self {
-        Self::launch(true, &[], |fake| {
+        Self::launch(true, &[], None, |fake| {
             fake.set_threads(&[("thread-1", idle())]);
             fake.auto_enter(true);
         })
@@ -59,12 +60,17 @@ impl Case {
     }
 
     async fn start_env(extra: &[(&str, &str)]) -> Self {
-        Self::launch(false, extra, |_| {}).await
+        Self::launch(false, extra, None, |_| {}).await
+    }
+
+    async fn start_in(cwd: &std::path::Path) -> Self {
+        Self::launch(false, &[], Some(cwd.to_string_lossy().into_owned()), |_| {}).await
     }
 
     async fn launch(
         deep: bool,
         extra: &[(&str, &str)],
+        cwd: Option<String>,
         configure: impl FnOnce(&FakeCodex),
     ) -> Self {
         let dir = tempfile::tempdir().unwrap();
@@ -106,7 +112,7 @@ impl Case {
                         argv: vec![program],
                         cols: 40,
                         rows: 10,
-                        cwd: None,
+                        cwd,
                         env,
                         name: Some("agent-impl".into()),
                         harness: Harness::Codex,
@@ -436,4 +442,18 @@ async fn killing_the_session_stops_its_app_server() {
         panic!("kill failed");
     };
     common::eventually(|| async { (!alive()).then_some(()) }).await;
+}
+
+#[tokio::test]
+async fn app_server_and_tui_start_in_the_requested_directory() {
+    let work = tempfile::tempdir().unwrap();
+    let expected = work
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let case = Case::start_in(work.path()).await;
+    assert_eq!(case.recorded("server.cwd").await, vec![expected.clone()]);
+    assert_eq!(case.recorded("tui.cwd").await, vec![expected]);
 }
