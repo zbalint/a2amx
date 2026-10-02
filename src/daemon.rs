@@ -58,6 +58,7 @@ struct Runtime {
     limits: Limits,
     address: String,
     state_dir: PathBuf,
+    exe: PathBuf,
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     new_session_gate: tokio::sync::Mutex<()>,
     deliveries: Mutex<Vec<JoinHandle<()>>>,
@@ -199,14 +200,19 @@ impl Runtime {
                 .iter()
                 .any(|(key, value)| key == codex::NO_AUTHORIZE_ENV && value == "1");
             env.retain(|(key, _)| key != codex::NO_AUTHORIZE_ENV);
-            let exe = std::env::current_exe()?;
+            let exe = self.exe.clone();
+            if let Some(message) =
+                tokio::task::spawn_blocking(move || codex::executable_error(&exe)).await?
+            {
+                return Ok(Response::Error { message });
+            }
             let started = codex::start(
                 &argv[0],
                 &self.state_dir,
                 &id.0,
                 cwd.as_deref().map(Path::new),
                 &env,
-                codex::server_config(&exe, authorize),
+                codex::server_config(&self.exe, authorize),
             )
             .await;
             let link = match started {
@@ -575,6 +581,14 @@ impl Daemon {
     /// Bind every listen address, write the chosen addresses to a file in the
     /// state dir, write the admin token file (mode 0600), and start serving.
     pub async fn start(config: DaemonConfig) -> anyhow::Result<Self> {
+        let exe = tokio::task::spawn_blocking(|| -> std::io::Result<PathBuf> {
+            let mut exe = std::env::current_exe()?;
+            if let Some(path) = exe.to_string_lossy().strip_suffix(" (deleted)") {
+                exe = PathBuf::from(path);
+            }
+            Ok(exe)
+        })
+        .await??;
         let path = config.state_dir.clone();
         let lock = tokio::task::spawn_blocking(move || -> anyhow::Result<File> {
             let mut missing = Vec::new();
@@ -681,6 +695,7 @@ impl Daemon {
             limits: config.limits,
             address: addrs[0].to_string(),
             state_dir: config.state_dir.clone(),
+            exe,
             // shortcut: accepted-send timestamps are memory-only; persist them if
             // rate limits must survive daemon restarts.
             rate: tokio::sync::Mutex::new(HashMap::new()),

@@ -294,6 +294,15 @@ impl Link {
     }
 }
 
+pub fn executable_error(exe: &Path) -> Option<String> {
+    (!exe.is_file()).then(|| {
+        format!(
+            "the daemon's executable is gone ({}); restart the daemon from the installed binary",
+            exe.to_string_lossy()
+        )
+    })
+}
+
 /// Config the app-server needs so its threads can message peers. The token reaches the
 /// MCP server through the inherited environment, never argv.
 pub(crate) fn server_config(exe: &Path, authorize_peers: bool) -> Vec<String> {

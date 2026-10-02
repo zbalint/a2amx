@@ -13,6 +13,9 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
+- Run a working session's daemon from the installed copy (`~/.a2amx/bin/a2amx`), not
+  from `target/`; development builds must not replace its executable.
+
 ## Rust conventions
 
 - No `unwrap()` or `expect()` outside tests (enforced by clippy lints). Return

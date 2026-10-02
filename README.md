@@ -144,6 +144,19 @@ an empty composer may hold after you typed in it, and `r` clears it.
 - A sender's `accepted` means the daemon took the message, not that it was delivered.
   Check `message_status` when the reply matters.
 
+## Dev build versus live install
+
+Build and test from the repository with `cargo build` and `cargo test`. Install a release
+copy with `scripts/install.sh`, then run the daemon from `~/.a2amx/bin/a2amx` and point
+your `amx` alias or launcher at that installed binary. `A2AMX_INSTALL_DIR` overrides the
+install directory; the state directory remains separate.
+
+Never run the daemon from `target/`: development builds replace that executable and can
+break the MCP command of a later Codex session. Install freely; the atomic install leaves
+a running daemon using its old image. Restart deliberately to pick up the new version,
+because restarting the daemon ends all sessions. The script leaves PATH, aliases, services,
+and daemon start or stop to the operator.
+
 ## Contributing
 
 Design feedback and reproducible, sanitized compatibility findings are welcome.
