@@ -404,3 +404,43 @@ set and the bridge child inherits it); the fifth prints exactly `extension/omp.t
 `src/omp.rs`; the last prints nothing. The existing test count is 178; with the six new wiring tests
 `cargo test` reports 184 passed and 3 ignored. The smoke tests all pass when run. Leave the
 diff uncommitted and unmerged.
+
+## Amendment 1 (after OMP BLOCKED on section 9)
+
+Two flaws in the locked text, both found by OMP running it literally. This amendment
+overrides sections 9 and 12 where they differ; nothing else changes.
+
+1. **Section 9 launch recipe.** `a2amx new` appends the wiring extras after the command
+   vector (section 5: no `--` inside the vector, so they go at the end). With
+   `sh -c '<script>' "<prompt>"` the shell sees `$0` = the prompt and `"$@"` = `-e`, the
+   extension path, `--config`, the overlay path, `--append-system-prompt`, the operator
+   line. The locked script used only `"$0"`, so `omp` never received the extras. The recipe
+   is now, in all three smoke tests:
+
+   ```sh
+   new --detach --name agent-review --harness omp -- sh -c 'exec omp -p --no-prewalk
+   --no-session --no-title --no-lsp --model fake/fake-1 "$@" "$0" < /dev/null' "<prompt>"
+   ```
+
+   (one script argument, written on one line in the test). Flags come first and the
+   prompt last, so OMP reads the prompt as its positional message. Section 8 is unchanged:
+   its `sh -c '...' sh` scripts print `"$@"`, which already holds exactly the extras.
+2. **Section 12, first command.** Git lists an untracked directory as one entry, so the
+   expected line `?? extension/omp.ts` is wrong; it is `?? extension/`. The list is
+   otherwise as written (twelve lines, with `?? extension/` in place of
+   `?? extension/omp.ts`). The `rg -l "a2amx:tools" extension src | sort` expectation is
+   unchanged.
+
+Notes for the resumed run, not spec changes:
+
+- Do not restart from scratch; resume from the existing partial diff. The defects you
+  listed (undeclared `lastStderrLine`, a possible synchronous state emission before the
+  acknowledgement, no-op child stream-error handlers), the two `unwrap_used` errors in
+  `tests/omp_wiring.rs`, the formatting diffs and the missing documentation are in scope
+  of section 0 and still yours to fix.
+- The `cargo test` failures you saw in `graceful_restart_marks_exited_and_continues_ids`
+  and `retention_zero_and_database_permissions` (another daemon running for the state dir)
+  and the baseline `modal_after_paste_holds_without_cr_until_explicit_release` are in
+  files this spec forbids touching. First check for a stray `a2amx` process left by an
+  earlier smoke attempt (`pgrep -af a2amx`) and re-run. If a test still fails with no
+  change of yours involved, stop and report it as BLOCKED with the output; do not edit it.
