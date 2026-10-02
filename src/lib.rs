@@ -13,6 +13,7 @@ pub mod harness;
 pub mod hook;
 pub mod mcp;
 pub mod messaging;
+pub mod omp;
 pub mod prefix;
 pub mod session;
 mod store;

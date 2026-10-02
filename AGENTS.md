@@ -63,6 +63,7 @@ cargo fmt --check
 | `session` | One PTY, its child, its emulator |
 | `daemon` / `client` | TCP server and the client API |
 | `bridge` | The `omp-bridge` relay between an OMP extension and the daemon |
+| `omp` | The embedded OMP extension and its launch files |
 | `cli` | Command-line shape |
 
 ## Public repository rules

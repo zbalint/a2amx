@@ -131,15 +131,35 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     else {
         return Err(anyhow!("expected new session options"));
     };
-    let command = if harness == Harness::Claude {
-        a2amx::harness::wire_claude_argv(command, &std::env::current_exe()?, !no_authorize_peers)
-    } else {
-        command
+    let command = match harness {
+        Harness::Claude => a2amx::harness::wire_claude_argv(
+            command,
+            &std::env::current_exe()?,
+            !no_authorize_peers,
+        ),
+        Harness::Omp => {
+            let install_home = home.clone();
+            let installed =
+                tokio::task::spawn_blocking(move || a2amx::omp::install(&install_home)).await??;
+            a2amx::harness::wire_omp_argv(
+                command,
+                &installed.extension,
+                &installed.overlay,
+                !no_authorize_peers,
+            )
+        }
+        Harness::Generic => command,
     };
     let mut client = Client::connect(&home).await?;
     let (cols, rows) = terminal_size_with_default()?;
     let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
-    let env = std::env::vars().collect();
+    let mut env: Vec<(String, String)> = std::env::vars().collect();
+    if harness == Harness::Omp {
+        env.push((
+            "A2AMX_BIN".to_owned(),
+            std::env::current_exe()?.to_string_lossy().into_owned(),
+        ));
+    }
     let response = client
         .request(Request::NewSession {
             argv: command,

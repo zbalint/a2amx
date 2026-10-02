@@ -361,7 +361,7 @@ fn initialize_result(params: &Value) -> Value {
     })
 }
 
-fn tool_schemas() -> Value {
+pub(crate) fn tool_schemas() -> Value {
     json!([
         {
             "name": "list_agents",

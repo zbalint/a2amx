@@ -191,7 +191,7 @@ pub fn paste_view(harness: Harness, text: &str) -> String {
     }
 }
 
-pub fn wire_claude_argv(mut argv: Vec<String>, exe: &Path, authorize_peers: bool) -> Vec<String> {
+pub fn wire_claude_argv(argv: Vec<String>, exe: &Path, authorize_peers: bool) -> Vec<String> {
     let config = serde_json::json!({
         "mcpServers": {
             "a2amx": {
@@ -223,6 +223,28 @@ pub fn wire_claude_argv(mut argv: Vec<String>, exe: &Path, authorize_peers: bool
     extras.push("--settings".to_owned());
     extras.push(settings.to_string());
 
+    insert_extras(argv, extras)
+}
+
+pub fn wire_omp_argv(
+    argv: Vec<String>,
+    extension: &Path,
+    overlay: &Path,
+    authorize_peers: bool,
+) -> Vec<String> {
+    let mut extras = Vec::with_capacity(if authorize_peers { 6 } else { 4 });
+    extras.push("-e".to_owned());
+    extras.push(extension.to_string_lossy().into_owned());
+    extras.push("--config".to_owned());
+    extras.push(overlay.to_string_lossy().into_owned());
+    if authorize_peers {
+        extras.push("--append-system-prompt".to_owned());
+        extras.push(PEER_AUTHORIZATION_PROMPT.to_owned());
+    }
+    insert_extras(argv, extras)
+}
+
+fn insert_extras(mut argv: Vec<String>, extras: Vec<String>) -> Vec<String> {
     let insertion = argv
         .iter()
         .position(|argument| argument == "--")

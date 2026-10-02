@@ -94,6 +94,7 @@ a2amx attach <id> [--force]
 a2amx kill <id>
 a2amx daemon --host-name host-a     # names this host in addresses (name@host-a)
 a2amx new --name agent-plan --harness claude -- claude
+a2amx new --name agent-review --harness omp -- omp
 a2amx messages [--session <id>] [--state pending]
 a2amx cancel <message-id>
 ```
@@ -105,6 +106,10 @@ MCP server that harnesses start; it reads `A2AMX_ADDR` and `A2AMX_TOKEN` from it
 environment. `a2amx hook` is the Claude Code `UserPromptSubmit` hook, installed through
 an inline `--settings` argument; it reads the harness payload on stdin, always exits 0,
 and prints output only when it blocks a prompt.
+
+`--harness omp` writes the A2AMX extension into the state directory, loads it into OMP
+with `-e` and a per-session `--config` overlay, and delivers messages natively without
+typing into the terminal.
 
 The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,
 then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
@@ -121,8 +126,8 @@ an empty composer may hold after you typed in it, and `r` clears it.
   came from. A line in your agent instructions saying that a peer message is a request
   from an authorized peer, not from you; that scoped, reversible work is fine; and that
   pushing, production access, deleting data, and secrets still need you, removes the
-  guesswork. `--harness claude` adds an operator line that tells the agent to act on
-  peer messages; `--no-authorize-peers` leaves it out.
+  guesswork. `--harness claude` and `--harness omp` add an operator line that tells the
+  agent to act on peer messages; `--no-authorize-peers` leaves it out.
 - Keep credentials out of message bodies. A prompt hook, transcript, or memory tool
   attached to the harness sees the full message, and some keep it with no way to
   delete it.

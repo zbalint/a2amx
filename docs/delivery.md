@@ -413,9 +413,9 @@ daemon restart.
 ## Implemented: native channel (OMP)
 
 An `omp` session stays PTY-hosted for human use, but message delivery uses only the
-native channel, never a silent PTY fallback. The extension and its launch wiring
-ship in spec 2f; until then, an `omp` session's messages wait with `channel_down`.
-Do not release spec 2e alone.
+native channel, never a silent PTY fallback. The extension (`extension/omp.ts`, spec 2f)
+feeds the channel; without a connected extension an `omp` session's messages wait
+with `channel_down`.
 
 Three links carry the protocol. The OMP extension talks newline-delimited JSON
 on the stdin and stdout of `a2amx omp-bridge`. The bridge authenticates with the
@@ -462,6 +462,52 @@ lost daemon link or invalid input. It does not reconnect or keep a replay cache;
 the extension respawns it after an error and sends `hello` and `state` again.
 Only one bridge may attach to a session; a second is rejected without disturbing
 the first.
+
+### Launch and extension
+
+`a2amx new --harness omp` atomically installs
+`<state dir>/omp/extension-<crate version>.ts` and `<state dir>/omp/overlay.yml`,
+rewriting either when its content differs. The directory is 0700 and both files
+are 0600, repaired even when their content is unchanged. Launch adds `-e` with
+the extension path, `--config` with the overlay path, and the shared operator line
+through `--append-system-prompt` unless `--no-authorize-peers` is set. It does not
+pass `--no-extensions` or change the user's OMP settings.
+
+The launcher adds `A2AMX_BIN` to the session environment; the daemon supplies
+`A2AMX_TOKEN` and `A2AMX_ADDR`. The extension starts `a2amx omp-bridge` with those
+inherited environment values, never credentials in argv or installed files.
+The overlay sets `tools.xdev: false` so `list_agents`, `send_message` and
+`message_status` are native tools: OMP 18.4.8 exposes extension tools only as
+`xd://` devices otherwise. The extension strips OMP's added `i` intent argument
+before relaying a tool call.
+
+Only the main agent registers tools, starts a bridge or delivers messages.
+Delivery uses agent attribution, omits `deliverAs` when idle and uses `followUp`
+mid-turn, never `steer`. A message that reaches OMP before the session's first
+turn is shown to the model with OMP's own date-and-directory reminder in front
+of it, which the envelope itself does not contain.
+
+State is reported after connection, on agent and turn lifecycle events, every
+send and matching receipt, and by an unreferenced 500 ms poll that sends only
+changes. Draft state comes from nonblank editor text and is false when the
+editor API is missing or throws. Pending state combines the extension's FIFO
+with OMP's queued-message flag; the state immediately after an acknowledgement
+always reports pending. A head seen pending is dropped when OMP's flag becomes
+false; an entry older than 120 s is dropped when that flag is false, preventing
+a missing or changed receipt event from blocking delivery forever; a dropped entry
+still receives its receipt if the matching `message_end` arrives within 120 s.
+
+Nonzero or signalled bridge exits reconnect with backoff starting at 300 ms,
+doubling to a 5 s cap. A successful connection resets it; ten consecutive
+failed starts show one notice with the last stderr line while retrying continues.
+Exit 0 stops, except a duplicate-bridge refusal retries because the old
+connection may still be closing. Protocol, missing-API and wrong-harness
+refusals are final. Errors notify once per reason through OMP's UI; senders see
+`channel_down` or `channel_refused`. Session shutdown closes the bridge's stdin,
+kills it after 1 s if needed, and never respawns it.
+
+`cargo test -- --ignored --test-threads=1` runs the real-OMP smoke tests serially
+against a fake model server; they skip when the `omp` binary cannot be launched.
 
 ## Harness adapter responsibilities
 
