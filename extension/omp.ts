@@ -238,7 +238,10 @@ export default function (pi) {
     try {
       pi.sendUserMessage(
         envelope,
-        idle ? { attribution: "agent" } : { deliverAs: "followUp", attribution: "agent" },
+        // aside: lands at the next step boundary without interrupting the tool batch. followUp
+        // waits for the turn to end, which a long goal-style turn never does, and a user
+        // interrupt then clears it.
+        idle ? { attribution: "agent" } : { deliverAs: "aside", attribution: "agent" },
       );
     } catch (error) {
       delivering = false;

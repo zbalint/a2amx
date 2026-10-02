@@ -444,7 +444,7 @@ reasons, in precedence order, are:
 - `draft_present`: a person has unsent prompt-box text; wait until it is sent or cleared.
 - `in_flight`: an earlier message is queued but has not entered the conversation.
 
-Idleness never blocks delivery: messages arriving mid-turn use `followUp`, with
+Idleness never blocks delivery: messages arriving mid-turn use `aside`, with
 one message in flight at a time.
 
 Bridge death has three cases. When no accepted bridge is attached when the loop
@@ -482,8 +482,11 @@ The overlay sets `tools.xdev: false` so `list_agents`, `send_message` and
 before relaying a tool call.
 
 Only the main agent registers tools, starts a bridge or delivers messages.
-Delivery uses agent attribution, omits `deliverAs` when idle and uses `followUp`
-mid-turn, never `steer`. A message that reaches OMP before the session's first
+Delivery uses agent attribution, omits `deliverAs` when idle and uses `aside`
+mid-turn: it lands at the next step boundary without interrupting a running tool
+batch, never `steer`. `followUp` was used first, but it waits for the turn to end,
+which a long goal-style turn never does, and an interrupt clears it. A message
+that reaches OMP before the session's first
 turn is shown to the model with OMP's own date-and-directory reminder in front
 of it, which the envelope itself does not contain.
 
