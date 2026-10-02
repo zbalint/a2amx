@@ -444,3 +444,51 @@ Notes for the resumed run, not spec changes:
   files this spec forbids touching. First check for a stray `a2amx` process left by an
   earlier smoke attempt (`pgrep -af a2amx`) and re-run. If a test still fails with no
   change of yours involved, stop and report it as BLOCKED with the output; do not edit it.
+
+## Amendment 2 (after OMP BLOCKED on the section 9 startup ordering)
+
+Observed on OMP 18.4.8 and reproduced by the spec author running the smoke tests against
+the current diff: OMP prefixes the first user message of a session with its own
+`<system-reminder> Today: ...; current working directory: ... </system-reminder>` text.
+A native message sent right after launch becomes that first message (OMP is idle before its
+first turn), so the model sees the envelope with the prefix. The locked section 9 asked for
+both an immediate send and a bare-envelope model message; that was unsatisfiable. The
+mid-turn `followUp` path, which is what test 1 is meant to exercise, is not affected.
+This amendment overrides sections 9 and 10 where they differ; the extension (section 3)
+does not change.
+
+1. **Test 1 timing.** `agent-plan` sends the message only after the fake server has
+   recorded the request whose last user text contains `SLOW` (poll every 100 ms, up to
+   30 s, failing with the recorded requests if it never appears). The reply stream for
+   `SLOW` lasts eight seconds, so the send lands mid-turn and OMP queues it as a
+   `followUp`. All other assertions of test 1 stay as written (the recorded user message
+   equal to `ENVELOPE_TEXT`, no `User interjection`, `native_receipt` within 60 s).
+2. **Test 3 lifetime.** `task` spawns the subagent asynchronously; in print mode OMP exits
+   when the main turn ends, so the subagent never got to send a request. For a
+   conversation whose first user text contains `SPAWN`, the fake server answers the request
+   that carries the `task` tool message with the same eight-chunk, one-second-apart stream
+   as `SLOW` instead of the single chunk `ok`. Test 3's assertions stay as written (the
+   request whose last user text contains `Reply with the word ok` lists no `send_message`,
+   the first request does); allow up to 30 s for that request.
+3. **Test 2.** It passed twice for the spec author on the current diff, run alone and as
+   part of a serial run (`--test-threads=1`). Run the three smoke tests serially, always
+   with `--test-threads=1`, because they share the machine's OMP worker processes. If test
+   2 still fails serially, stop and report BLOCKED with the fake server's full request
+   dump (the whole tool message text), not a summary.
+4. **Docs.** In `docs/delivery.md`, in the OMP part, add one sentence: a message that
+   reaches OMP before the session's first turn is shown to the model with OMP's own
+   date-and-directory reminder in front of it, which the envelope itself does not contain.
+
+Notes for the resumed run, not spec changes:
+
+- `cargo fmt --check` fails only in your own new or edited files: run `cargo fmt`, then
+  confirm `git status --porcelain` is unchanged in its file list.
+- `custom_prefix_and_sigwinch_resize_reach_attached_session` is an existing test in a
+  forbidden file. Run `cargo test` with nothing else running on the machine (no smoke run,
+  no second cargo). If it fails again, re-run it alone with
+  `cargo test --test attach_cli custom_prefix_and_sigwinch -- --nocapture`; when it passes
+  alone, record both results in your report and proceed; when it fails alone, stop and
+  report BLOCKED.
+- The documentation edits of section 10 (`README.md`, `docs/architecture.md`,
+  `docs/delivery.md`, `AGENTS.md`) are still to be written; the section 12 `git status`
+  list expects them.
