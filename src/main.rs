@@ -148,7 +148,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
                 !no_authorize_peers,
             )
         }
-        Harness::Generic => command,
+        Harness::Generic | Harness::Codex => command,
     };
     let mut client = Client::connect(&home).await?;
     let (cols, rows) = terminal_size_with_default()?;
@@ -159,6 +159,9 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             "A2AMX_BIN".to_owned(),
             std::env::current_exe()?.to_string_lossy().into_owned(),
         ));
+    }
+    if harness == Harness::Codex && no_authorize_peers {
+        env.push((a2amx::codex::NO_AUTHORIZE_ENV.to_owned(), "1".to_owned()));
     }
     let response = client
         .request(Request::NewSession {

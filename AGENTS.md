@@ -64,6 +64,7 @@ cargo fmt --check
 | `daemon` / `client` | TCP server and the client API |
 | `bridge` | The `omp-bridge` relay between an OMP extension and the daemon |
 | `omp` | The embedded OMP extension and its launch files |
+| `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
 | `cli` | Command-line shape |
 
 ## Public repository rules

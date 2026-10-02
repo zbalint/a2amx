@@ -512,6 +512,53 @@ kills it after 1 s if needed, and never respawns it.
 `cargo test -- --ignored --test-threads=1` runs the real-OMP smoke tests serially
 against a fake model server; they skip when the `omp` binary cannot be launched.
 
+## Implemented: native channel (Codex)
+
+Built without a spec, from probes of Codex 0.159 against live sessions. A `codex`
+session is hosted differently from the other harnesses: `a2amx new --harness codex --
+codex ...` makes the daemon start `codex app-server --listen unix://<state
+dir>/codex/<session>.sock` (directory 0700), then launch the TUI as `codex --remote
+unix://...`. The app-server is private to the session, so the TUI's conversation is
+the only one it has loaded; the daemon stops it when the session exits. It runs with
+the session's environment plus `-c` overrides that register the `a2amx mcp` server
+(tool calls approved, token and address passed by environment variable, never argv)
+and, unless `--no-authorize-peers`, the shared operator line as
+`developer_instructions`. Delivery uses only this channel; there is no PTY fallback.
+
+A poller connects to the app-server every 500 ms, never subscribes (so it never sees
+or answers an approval request), picks the most recently updated loaded thread, and
+reads its status. Delivery is one `turn/start` with the rendered envelope as the text
+and the message id (`m_N`) as `clientUserMessageId`. Started mid-turn it joins the
+running turn; the app-server accepts it at the next boundary. `ack` equals a
+successful `turn/start` (`write_complete`); a JSON-RPC rejection makes the message
+`undeliverable` with the server's text. The receipt is the thread item: a `userMessage`
+with that `clientId` and exactly the envelope text upgrades evidence to
+`native_receipt`. A different text is no receipt but still ends the wait. A message
+that never appears stops blocking the queue after 120 s.
+
+Self-clearing waiting reasons, in precedence order: `app_server_down` (no connection;
+the daemon never restarts the process), `no_thread` (nothing loaded, for example while
+the TUI shows a startup dialog such as an update prompt or a trust question),
+`waiting_on_approval` (any active flag: an approval or user-input dialog is open),
+`thread_error`, and `in_flight` (an earlier message has not shown up in the thread).
+A draft in the TUI composer is not a hold: the probes showed API injection leaves it
+untouched. While a dialog is open the app-server accepts `turn/start` but shows the
+message only after the dialog is resolved, which is why that state holds delivery.
+
+The daemon connects before it records an attempt, so an unreachable app-server leaves
+the message pending. Socket paths beyond the 108-byte unix limit work because Codex
+links the requested path to a short socket and the client follows the link.
+
+Hooks: `turn/start` on an idle thread starts a turn, so a `UserPromptSubmit` hook
+fires and a trace store sees the message as a user prompt; mid-turn messages join the
+running turn and fire no hook of their own. Receipts therefore come from the thread
+items, never from hooks.
+
+**Not implemented.** Restarting a dead app-server, resuming a conversation by
+re-attaching to an existing thread, Codex through the PTY channel, cross-host
+delivery, and the real-Codex smoke test (checked by hand against 0.159: delivery,
+receipt, and a reply sent by the model through the `a2amx` tools).
+
 ## Harness adapter responsibilities
 
 | Generic runtime | Harness-specific adapter |

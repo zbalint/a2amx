@@ -17,6 +17,7 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::client::Framed;
+use crate::codex;
 use crate::delivery::{AnyChannel, Channel};
 use crate::emulator::Size;
 use crate::harness::{self, Deliver, Harness};
@@ -56,6 +57,7 @@ struct Runtime {
     boot: String,
     limits: Limits,
     address: String,
+    state_dir: PathBuf,
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     new_session_gate: tokio::sync::Mutex<()>,
     deliveries: Mutex<Vec<JoinHandle<()>>>,
@@ -80,6 +82,34 @@ fn parse_message_id(id: &str) -> Option<i64> {
         return None;
     }
     digits.parse().ok().filter(|seq| *seq > 0)
+}
+
+/// Stores a native receipt when `id` is an open message of this daemon run addressed
+/// to `session` and no receipt exists yet; reports whether one was stored.
+pub(crate) async fn record_receipt(
+    store: &Store,
+    boot: &str,
+    session: &Session,
+    id: &str,
+) -> anyhow::Result<bool> {
+    let Some(seq) = parse_message_id(id) else {
+        return Ok(false);
+    };
+    let Some(message) = store.get(seq).await? else {
+        return Ok(false);
+    };
+    if message.boot != boot
+        || message.recipient_session != session.id().0
+        || !matches!(
+            message.state,
+            MessageState::Delivering | MessageState::Submitted | MessageState::Unsubmitted
+        )
+        || message.observed
+    {
+        return Ok(false);
+    }
+    store.record_receipt(seq).await?;
+    Ok(true)
 }
 
 fn failed(code: &str, message: &str) -> Response {
@@ -152,10 +182,39 @@ impl Runtime {
             .map_err(|_| anyhow::anyhow!("session id space exhausted"))?;
         let id = SessionId(format!("s{number}"));
         let address = self.address.clone();
+        let token = tokio::task::spawn_blocking(random_hex::<32>).await??;
+        env.push(("A2AMX_TOKEN".into(), token.clone()));
+        env.push(("A2AMX_ADDR".into(), address));
+        let mut argv = argv;
+        let mut codex = None;
+        if harness == Harness::Codex {
+            // shortcut: the client signals --no-authorize-peers through the request
+            // environment; give the wire request a field if more flags need this.
+            let authorize = !env
+                .iter()
+                .any(|(key, value)| key == codex::NO_AUTHORIZE_ENV && value == "1");
+            env.retain(|(key, _)| key != codex::NO_AUTHORIZE_ENV);
+            let exe = std::env::current_exe()?;
+            let started = codex::start(
+                &argv[0],
+                &self.state_dir,
+                &id.0,
+                &env,
+                codex::server_config(&exe, authorize),
+            )
+            .await;
+            let link = match started {
+                Ok(link) => link,
+                Err(error) => {
+                    return Ok(Response::Error {
+                        message: format!("{error:#}"),
+                    });
+                }
+            };
+            argv = codex::wire_argv(argv, link.socket());
+            codex = Some(link);
+        }
         let session = tokio::task::spawn_blocking(move || {
-            let token = random_hex::<32>()?;
-            env.push(("A2AMX_TOKEN".into(), token.clone()));
-            env.push(("A2AMX_ADDR".into(), address));
             Session::spawn(
                 id,
                 SessionSpec {
@@ -167,6 +226,7 @@ impl Runtime {
                     harness,
                     deliver: deliver.unwrap_or_else(|| harness.default_deliver()),
                     token,
+                    codex,
                 },
             )
         })
@@ -181,15 +241,18 @@ impl Runtime {
                     .insert(number, session.clone());
                 let store = self.store.clone();
                 let boot = self.boot.clone();
-                let task = tokio::spawn(crate::delivery::run(
-                    AnyChannel::for_session(session),
-                    store,
-                    boot,
-                ));
+                let mut tasks = vec![tokio::spawn(crate::delivery::run(
+                    AnyChannel::for_session(session.clone()),
+                    store.clone(),
+                    boot.clone(),
+                ))];
+                if let Some(link) = session.codex().cloned() {
+                    tasks.push(tokio::spawn(codex::run(session, link, store, boot)));
+                }
                 self.deliveries
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .push(task);
+                    .extend(tasks);
                 Ok(Response::Created { session: id })
             }
             Err(error) => Ok(Response::Error {
@@ -424,9 +487,9 @@ impl Runtime {
                     if message.observed {
                         // shortcut: a removed session reports submission_observed for a
                         // native receipt; persist the channel with the receipt if that matters.
-                        if lookup(self, &message.recipient_session)
-                            .is_some_and(|(_, session)| session.harness() == Harness::Omp)
-                        {
+                        if lookup(self, &message.recipient_session).is_some_and(|(_, session)| {
+                            matches!(session.harness(), Harness::Omp | Harness::Codex)
+                        }) {
                             "native_receipt"
                         } else {
                             "submission_observed"
@@ -552,6 +615,7 @@ impl Daemon {
             boot,
             limits: config.limits,
             address: addrs[0].to_string(),
+            state_dir: config.state_dir.clone(),
             // shortcut: accepted-send timestamps are memory-only; persist them if
             // rate limits must survive daemon restarts.
             rate: tokio::sync::Mutex::new(HashMap::new()),
@@ -1059,19 +1123,7 @@ async fn bridge(
                     BridgeUp::Ack { id } => session.native_ack(&id, Ok(())),
                     BridgeUp::Nack { id, reason } => session.native_ack(&id, Err(reason)),
                     BridgeUp::Receipt { id } => {
-                        if let Some(seq) = parse_message_id(&id)
-                            && let Some(message) = runtime.store.get(seq).await?
-                            && message.boot == runtime.boot
-                            && message.recipient_session == session.id().0
-                            && matches!(
-                                message.state,
-                                MessageState::Delivering
-                                    | MessageState::Submitted
-                                    | MessageState::Unsubmitted
-                            )
-                            && !message.observed
-                        {
-                            runtime.store.record_receipt(seq).await?;
+                        if record_receipt(&runtime.store, &runtime.boot, &session, &id).await? {
                             session.native_received();
                         }
                     }

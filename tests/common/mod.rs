@@ -3,6 +3,7 @@
 // Test-only code: clippy's allow-*-in-tests does not cover a shared helper module.
 #![allow(clippy::expect_used, clippy::unwrap_used, dead_code)]
 
+pub mod fake_codex;
 pub mod pty;
 
 use a2amx::client::Client;

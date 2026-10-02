@@ -44,7 +44,7 @@ pub enum Command {
         detach: bool,
         #[arg(long)]
         name: Option<String>,
-        /// Harness profile. omp delivers through an OMP extension; without it, messages wait (channel_down).
+        /// Harness profile. omp delivers through an OMP extension; without it, messages wait (channel_down). codex hosts a private app-server and delivers through it.
         #[arg(long, value_enum, default_value_t = Harness::Generic)]
         harness: Harness,
         #[arg(long, value_enum)]

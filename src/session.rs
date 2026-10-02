@@ -34,6 +34,7 @@ pub struct SessionSpec {
     pub harness: Harness,
     pub deliver: Deliver,
     pub token: String,
+    pub(crate) codex: Option<Arc<crate::codex::Link>>,
 }
 
 pub struct Session {
@@ -43,6 +44,7 @@ pub struct Session {
     harness: Harness,
     deliver: Deliver,
     token: String,
+    codex: Option<Arc<crate::codex::Link>>,
     input_gate: tokio::sync::Mutex<()>,
     message_notify: Notify,
     shared: Arc<Shared>,
@@ -250,6 +252,7 @@ impl Session {
             harness: spec.harness,
             deliver: spec.deliver,
             token: spec.token,
+            codex: spec.codex,
             input_gate: tokio::sync::Mutex::new(()),
             message_notify: Notify::new(),
             shared,
@@ -259,6 +262,10 @@ impl Session {
             drop_requested,
             child_done,
         })
+    }
+
+    pub(crate) fn codex(&self) -> Option<&Arc<crate::codex::Link>> {
+        self.codex.as_ref()
     }
 
     pub fn id(&self) -> &SessionId {

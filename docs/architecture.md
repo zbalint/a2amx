@@ -302,8 +302,10 @@ machine; there is no central-versus-host split yet.
   prompt reaches `submission_observed`.
   Delivery runs behind a `Channel` seam in `src/delivery.rs`. The loop owns ordering,
   attempts and outcomes; a channel owns how a message reaches the recipient and why
-  it cannot right now; the PTY channel serves every harness, and the `omp` harness uses
-  a native channel (spec 2e) fed by an OMP extension through the `a2amx omp-bridge` relay.
+  it cannot right now; the PTY channel serves every harness, the `omp` harness uses
+  a native channel (spec 2e) fed by an OMP extension through the `a2amx omp-bridge` relay,
+  and the `codex` harness uses a native channel on a private `codex app-server` that the
+  daemon starts for the session (`src/codex.rs`).
 - **MCP server.** `a2amx mcp` is a hand-written stdio JSON-RPC server with three
   tools: `list_agents`, `send_message`, and `message_status`. It runs wherever the
   harness runs and connects to the daemon over TCP. Status includes `hold_reason` and

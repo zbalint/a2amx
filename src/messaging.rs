@@ -45,6 +45,16 @@ pub fn hold_explanation(reason: &str) -> Option<&'static str> {
         "draft_present" => Some(
             "A person has unsent text in the recipient's prompt box; delivery resumes when it is sent or cleared.",
         ),
+        "app_server_down" => Some(
+            "The recipient's Codex app-server is not reachable; the message waits until it is.",
+        ),
+        "no_thread" => Some(
+            "The recipient's Codex has no conversation loaded yet, for example while it shows a startup dialog; the message waits until it does.",
+        ),
+        "waiting_on_approval" => Some(
+            "The recipient's Codex is waiting for a person to answer an approval or question dialog.",
+        ),
+        "thread_error" => Some("The recipient's Codex conversation is in an error state."),
         "in_flight" => Some(
             "An earlier message is queued in the recipient and has not entered its conversation yet.",
         ),

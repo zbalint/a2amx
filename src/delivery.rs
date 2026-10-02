@@ -6,6 +6,9 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
 
+use serde_json::json;
+
+use crate::codex::{CallError, Link, Rpc};
 use crate::harness::{self, Deliver, Harness};
 use crate::messaging::{COOLDOWN, PASTE_GAP, paste_bytes, render_envelope};
 use crate::session::{Delivery, DeliveryOutcome, Hold, Session};
@@ -65,23 +68,36 @@ pub(crate) struct NativeTicket<'a> {
     session: &'a Session,
 }
 
+pub(crate) struct CodexChannel {
+    session: Arc<Session>,
+    link: Arc<Link>,
+}
+
+pub(crate) struct CodexTicket<'a> {
+    link: &'a Link,
+    rpc: Rpc,
+}
+
 pub(crate) enum AnyChannel {
     Pty(PtyChannel),
     Native(NativeChannel),
+    Codex(CodexChannel),
 }
 
 pub(crate) enum AnyTicket<'a> {
     Pty(PtyTicket<'a>),
     Native(NativeTicket<'a>),
+    Codex(CodexTicket<'a>),
 }
 
 impl AnyChannel {
-    /// `omp` sessions get the native channel, every other harness the PTY channel.
+    /// `omp` and `codex` sessions get a native channel, every other harness the PTY
+    /// channel.
     pub(crate) fn for_session(session: Arc<Session>) -> Self {
-        if session.harness() == Harness::Omp {
-            Self::Native(NativeChannel { session })
-        } else {
-            Self::Pty(PtyChannel::new(session))
+        match (session.harness(), session.codex().cloned()) {
+            (Harness::Omp, _) => Self::Native(NativeChannel { session }),
+            (Harness::Codex, Some(link)) => Self::Codex(CodexChannel { session, link }),
+            _ => Self::Pty(PtyChannel::new(session)),
         }
     }
 }
@@ -210,6 +226,82 @@ impl Ticket for NativeTicket<'_> {
     }
 }
 
+impl Channel for CodexChannel {
+    type Ticket<'a> = CodexTicket<'a>;
+
+    fn session_id(&self) -> &str {
+        &self.session.id().0
+    }
+
+    fn exited(&self) -> bool {
+        self.session.exit_code().is_some()
+    }
+
+    fn deliver(&self) -> Deliver {
+        self.session.deliver()
+    }
+
+    fn message_notify(&self) -> &Notify {
+        self.session.message_notify()
+    }
+
+    fn wake(&self) -> &Notify {
+        self.session.notify()
+    }
+
+    async fn prepare(&self) {}
+
+    async fn begin(&self) -> Option<Self::Ticket<'_>> {
+        if self.link.reason().is_some() {
+            return None;
+        }
+        // Connect before the attempt is recorded: a dead server then leaves the message
+        // pending instead of ending an attempt that sent nothing.
+        match Rpc::connect(self.link.socket()).await {
+            Ok(rpc) => Some(CodexTicket {
+                link: &self.link,
+                rpc,
+            }),
+            Err(_) => {
+                self.link.down();
+                None
+            }
+        }
+    }
+
+    // A draft in the Codex composer is safe: the app-server never touches it.
+    fn hold_reason(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn unready_reason(&self) -> Option<&'static str> {
+        self.link.reason()
+    }
+}
+
+impl Ticket for CodexTicket<'_> {
+    async fn submit(mut self, id: &str, envelope: &str) -> DeliveryOutcome {
+        let Some(thread) = self.link.thread() else {
+            // shortcut: the attempt already started, so a thread that vanished between
+            // `begin` and now ends `unsubmitted` instead of returning to pending.
+            return DeliveryOutcome::Unsubmitted("no_thread".into());
+        };
+        let params = json!({
+            "threadId": thread,
+            "input": [{"type": "text", "text": envelope, "text_elements": []}],
+            "clientUserMessageId": id,
+        });
+        match self.rpc.call("turn/start", params).await {
+            Ok(_) => {}
+            Err(CallError::Rejected(reason)) => return DeliveryOutcome::Failed(reason),
+            // The server may have acted; the thread's items decide, never a resend.
+            Err(CallError::Transport(_)) => {}
+        }
+        self.link.expect(id, envelope);
+        DeliveryOutcome::Submitted
+    }
+}
+
 impl Channel for AnyChannel {
     type Ticket<'a> = AnyTicket<'a>;
 
@@ -217,6 +309,7 @@ impl Channel for AnyChannel {
         match self {
             Self::Pty(channel) => channel.session_id(),
             Self::Native(channel) => channel.session_id(),
+            Self::Codex(channel) => channel.session_id(),
         }
     }
 
@@ -224,6 +317,7 @@ impl Channel for AnyChannel {
         match self {
             Self::Pty(channel) => channel.exited(),
             Self::Native(channel) => channel.exited(),
+            Self::Codex(channel) => channel.exited(),
         }
     }
 
@@ -231,6 +325,7 @@ impl Channel for AnyChannel {
         match self {
             Self::Pty(channel) => channel.deliver(),
             Self::Native(channel) => channel.deliver(),
+            Self::Codex(channel) => channel.deliver(),
         }
     }
 
@@ -238,6 +333,7 @@ impl Channel for AnyChannel {
         match self {
             Self::Pty(channel) => channel.message_notify(),
             Self::Native(channel) => channel.message_notify(),
+            Self::Codex(channel) => channel.message_notify(),
         }
     }
 
@@ -245,6 +341,7 @@ impl Channel for AnyChannel {
         match self {
             Self::Pty(channel) => channel.wake(),
             Self::Native(channel) => channel.wake(),
+            Self::Codex(channel) => channel.wake(),
         }
     }
 
@@ -252,6 +349,7 @@ impl Channel for AnyChannel {
         match self {
             Self::Pty(channel) => channel.prepare().await,
             Self::Native(channel) => channel.prepare().await,
+            Self::Codex(channel) => channel.prepare().await,
         }
     }
 
@@ -259,6 +357,7 @@ impl Channel for AnyChannel {
         match self {
             Self::Pty(channel) => channel.begin().await.map(AnyTicket::Pty),
             Self::Native(channel) => channel.begin().await.map(AnyTicket::Native),
+            Self::Codex(channel) => channel.begin().await.map(AnyTicket::Codex),
         }
     }
 
@@ -266,6 +365,7 @@ impl Channel for AnyChannel {
         match self {
             Self::Pty(channel) => channel.hold_reason(),
             Self::Native(channel) => channel.hold_reason(),
+            Self::Codex(channel) => channel.hold_reason(),
         }
     }
 
@@ -273,6 +373,7 @@ impl Channel for AnyChannel {
         match self {
             Self::Pty(channel) => channel.unready_reason(),
             Self::Native(channel) => channel.unready_reason(),
+            Self::Codex(channel) => channel.unready_reason(),
         }
     }
 }
@@ -282,6 +383,7 @@ impl Ticket for AnyTicket<'_> {
         match self {
             Self::Pty(ticket) => ticket.submit(id, envelope).await,
             Self::Native(ticket) => ticket.submit(id, envelope).await,
+            Self::Codex(ticket) => ticket.submit(id, envelope).await,
         }
     }
 }

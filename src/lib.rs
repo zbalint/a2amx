@@ -6,6 +6,7 @@
 pub mod bridge;
 pub mod cli;
 pub mod client;
+pub mod codex;
 pub mod daemon;
 mod delivery;
 pub mod emulator;
