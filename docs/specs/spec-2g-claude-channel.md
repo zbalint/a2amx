@@ -328,3 +328,14 @@ cargo fmt --check
 
 Then `git status` shows only the files listed in section 0, uncommitted, and `git diff`
 touches no unmodified function outside the sections above.
+
+## Amendment 1 (after the developer reported BLOCKED on the section 4 argv count)
+
+Section 4 miscounted. `wire_claude_argv` pushes 8 extras with peer authorization and 6
+without (`tests/attach_cli.rs` pins both). The two channel flags add two entries, so
+`wire_claude_channel_argv` yields **10** extras with peer authorization and **8** without,
+not 12 and 10. Everything else in section 4 stands: `--dangerously-load-development-channels`
+and `server:a2amx` go right after the `--mcp-config` pair, the MCP entry's `args` is
+`["mcp","--channel"]`, and `wire_claude_argv` output is byte-identical to today. The only
+edit this amendment makes is that count; implement the argv test of section 9.3 against 10
+and 8. No other section changes.
