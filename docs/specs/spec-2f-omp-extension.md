@@ -492,3 +492,34 @@ Notes for the resumed run, not spec changes:
 - The documentation edits of section 10 (`README.md`, `docs/architecture.md`,
   `docs/delivery.md`, `AGENTS.md`) are still to be written; the section 12 `git status`
   list expects them.
+
+## Amendment 3 (after OMP BLOCKED on serial smoke tests 1 and 2)
+
+OMP's serial run (`--test-threads=1`) failed tests 1 and 2 with the real OMP 18.4.8, and
+both findings are test-fixture errors, not extension defects. This amendment overrides
+sections 9 and 10 and Amendment 2 where they differ; the extension (section 3) and every
+production file stay unchanged.
+
+1. **Test 2 (tool result shaken).** The fake model's `contextWindow` of 32000 is smaller
+   than OMP's own system prompt plus tool definitions need, so OMP's auto-shake compaction
+   (it is in the default compaction order) elides the tool result and the next request
+   carries `[shaken ~21 tokens — recover: artifact://0 (region 1)]` instead of the
+   `list_agents` listing. In `write_models` set `contextWindow: 1000000` (keep `maxTokens`
+   4096) and update the matching sentence in section 9. Change nothing else about test 2.
+   If the tool message is still shaken after this, stop and report BLOCKED with the full
+   request dump and the model entry you wrote.
+2. **Test 1 (immediate status).** A message OMP accepted (`ack`) is `submitted` with
+   evidence `write_complete` at once (section 3 and `docs/delivery.md`, native channel); it
+   is never `pending` after the bridge acknowledged it, and the native receipt arrives only
+   at `message_end`. Replace the immediate assertion `message.state == "pending"` with:
+   `message.evidence.as_deref() != Some("native_receipt")` and `message.state` is one of
+   `pending`, `delivering` or `submitted`, with the failure text unchanged in spirit (it
+   must still print `status_summary`). This proves the message was queued mid-turn and not
+   yet receipted. Drop the words "waits pending" from the section 9 description of test 1 in
+   favor of "is queued mid-turn". All later assertions of test 1 stay as written.
+3. **Docs.** No new documentation edit.
+
+Run order for the resumed run: apply 1 and 2, `cargo fmt`, then
+`cargo test --test omp_smoke -- --ignored --test-threads=1`, then the full section 12
+sequence. If tests 1 or 3 fail for a reason other than the two above, stop and report
+BLOCKED with the full request dump, not a summary.
