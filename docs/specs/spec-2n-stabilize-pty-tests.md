@@ -128,3 +128,28 @@ Everything else in section 0's "does not touch" list still applies.
    times with 0 failures, the 25 `delivery` runs and 5 full runs with 0 failures, then clippy and
    fmt, all with `env -u A2AMX_BIN`. 100 runs because the failure rate is about 5%: 30 runs
    pass by chance about one time in five.
+
+## Amendment 2 (architect, after BLOCKED m_174)
+
+**Claim verified.** Part B step 4 requires 5 full runs with 0 failures, and one full run failed
+`claude_channel::development_dialog_gets_exactly_one_enter_only_for_channel_sessions`
+(`tests/claude_channel.rs`, line 548: actual empty, expected `"\n"`), a file outside section 0's
+scope. The test creates a session with `NewSession` only and never attaches, so the part B daemon
+change cannot reach it. The test body shows the cause: the child runs
+`echo "$x" > "$OUT"`, so the shell creates and truncates `OUT` before it writes the newline,
+and the test's `common::eventually` accepts the first successful `read_to_string`, which can
+be the empty file. Architect measurement: on the untouched commit `ea4c528` (a separate
+worktree, no part B changes) this test failed 1 time in 60 solo runs, so it is a pre-existing
+flake that part B did not cause.
+
+**Decisions.**
+- **A2.1.** Scope for part B gains `tests/claude_channel.rs`, for exactly one change: make the
+  readiness wait of that one test accept only a non-empty read (for example
+  `.filter(|text| !text.is_empty())` inside the `eventually` closure). The asserted outcome
+  (`"\n"`, then `"\n"` again after one second, and the no-Enter case) is unchanged. No other
+  test and no other line of that file changes.
+- **A2.2.** The failure is recorded as pre-existing with the baseline measurement above; the
+  developer does not rerun the full loop to hide it. After A2.1 the 5 full runs must pass with
+  0 failures as part B step 4 says. If another unrelated flake appears in those runs, report
+  it with its failure text and a baseline measurement on a clean `HEAD` worktree (built on the
+  large disk, not under `/tmp`); it does not widen scope further without a new amendment.
