@@ -82,8 +82,8 @@ No exactly-once processing claim is made.
 
 ## Recorded results
 
-Observations so far. Each names the harness version and how it was observed; none has
-been run against a live pair of agents yet.
+Observations so far. Each names the harness version and how it was observed; only the
+stress run and the manual-use row involve live agents.
 
 | Check | Harness | Result |
 | --- | --- | --- |
@@ -101,10 +101,11 @@ been run against a live pair of agents yet.
 | Hook timeout | Claude Code 2.1.285 | A hook that exceeds its timeout is cut off, the prompt proceeds, and a notice is shown |
 | Raw-typed envelope | Claude Code 2.1.286 | Small paced chunks arrive unwrapped; one fast raw write is collapsed like a paste |
 | Duplicate and foreign receipts | automated tests | A repeated receipt is idempotent; a receipt from another session is ignored |
+| Manual use | Claude Code 2.1.288, Codex 0.160.0, OMP 18.5.0 | The operator reports that A2AMX works well with these versions in day-to-day use. This is not a scripted check and has no per-scenario evidence |
 
-Not yet checked: any of the above on Codex or OMP (block behavior on Codex in
-particular), a real run with two live agents messaging each other, and the cross-host
-sections of this plan.
+Not yet checked with recorded evidence: block behavior on Codex in particular, a
+scripted run with two live agents messaging each other on Codex or OMP, and the
+cross-host sections of this plan.
 
 ## Repository checks
 
