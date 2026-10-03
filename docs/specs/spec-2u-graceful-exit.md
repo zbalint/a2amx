@@ -7,6 +7,13 @@ implementation landed (the greps below were taken there); the gate greps found 1
 design of 2026-10-03 (backlog items F1 and F7) and the architect's probe of the same day (section 3 lists the facts this
 spec relies on).
 
+**Amendment 1** (2026-10-04, first developer BLOCKED, verified against `src/daemon.rs:212-243`
+and `src/codex.rs:372-404`): a `--harness codex` session always starts a Codex app-server from
+`argv[0]`, so a plain `sh -c` cannot be a Codex-harness fixture, and an OMP-harness session fails the
+reset gate without a connected bridge. Section 8 now uses the Claude harness (no app-server, no
+bridge; its gate is the `claude_ready` screen) for every automated fixture, the one-key OMP and
+Codex path is covered by the manual real-session check, and D7 is clarified about `Drop`.
+
 **Baseline:** develop at `7adc821`, the commit that implements spec 2t (`a2amx daemon
 {start,status,stop}`, `kill [--yes]`), plus the commit that adds this spec. **Location and branch:** main checkout `/home/zbalint/workspace/a2amx`, branch
 `develop`. Shared task `context_id`: `a2amx-graceful-exit`. Public test seams: the `a2amx` CLI and
@@ -72,9 +79,11 @@ keeps today's behavior, because a keypress there could destroy work or do nothin
   case per session is 13 s plus 3 s of KILL wait already there today.
 - **D7.** `Daemon::shutdown` already kills every session concurrently in a `JoinSet`; keep that.
   It reads the stop flag: a new `AtomicBool` `stop_now` on the daemon runtime, written by the
-  `Request::Shutdown { now }` arm before it notifies `stop_requested`, `Relaxed` is enough
-  because the notify orders it. A daemon stopped by a signal or by dropping (no request) uses
-  `now = false`.
+  `Request::Shutdown { now }` arm before it notifies `stop_requested`; `Relaxed` is enough
+  because the notify orders it. An explicit `Daemon::shutdown()` that no request preceded (the
+  SIGTERM and Ctrl-C paths in `main`) finds `stop_now` false and so is graceful. `Drop for
+  Daemon` and `Drop for Session` are unchanged: they stay the synchronous HUP, because a
+  destructor cannot run the async graceful sequence.
 - **D8.** The `a2amx daemon stop` client wait grows from 15 s to 30 s (the daemon needs up to 10
   s of graceful wait plus 3 s plus store close). The error text becomes `daemon did not stop
   within 30s`. The deadline is one constant in `src/main.rs`.
@@ -125,30 +134,38 @@ set `stop_now` before `stop_requested.notify_one()`. `Daemon::shutdown` (line 89
 Existing `Request::Kill` literals get `now: true` so those tests keep proving today's sequence
 (`tests/codex.rs:440`, `tests/delivery.rs:354,442`, `tests/attach_cli.rs:857`,
 `tests/broker.rs:251,365`, `tests/daemon.rs:201,334,459,593,623`). Then new tests, each failing
-first, through the CLI against a real daemon in a temp state dir:
+first, through the CLI against a real daemon in a temp state dir. Fixtures are `--harness claude`
+sessions running a `sh -c` script (no app-server and no bridge are needed for that harness). The
+script turns bracketed paste on, draws a screen that satisfies `claude_ready` (a `❯` plus U+00A0
+prompt row between two rule rows, away from the first and last rows, cursor visible), and records
+every byte it reads to a file in the temp dir. Variants differ only in when they exit.
 
-1. Fixture Codex-harness session (`--harness codex`, a `sh -c` that turns bracketed paste on and
-   exits 0 only on a `0x04` byte): `a2amx kill` ends it through the fixture and the daemon log
-   holds the `exited` line; `kill --now` on the same fixture ends it with no Ctrl-D (the fixture
-   records every byte it reads to a file in the temp dir; the file shows no `0x04`).
-2. Claude two-key sequence: a fixture session with the Claude harness whose screen satisfies
-   `claude_ready` (bracketed paste on, a `❯` prompt row between two rule rows) and that exits only
-   when it reads two `0x04` within 600 ms; a plain `kill` ends it.
-3. A Codex-harness fixture that never exits on `0x04`: `kill` falls back to HUP and the session
-   is gone; the log line says `timeout`. It runs with the real 10 s `GRACEFUL_TIMEOUT` (about 13
-   s) in the normal run, not `#[ignore]`d, and no new timing knob is added.
-4. A held session (a human draft on the fixture): `kill` does not send `0x04` (the recorded file
-   is empty) and ends it by HUP; the log line says `skipped`.
-5. A Generic session is killed by HUP with no `0x04`.
-6. `daemon stop --yes` with one idle fixture session ends it through Ctrl-D (log line) and the
-   daemon exits; `daemon stop --now --yes` records no `0x04`.
+1. Fixture that exits 0 on the first `0x04`: `a2amx kill` ends it, the record file shows a
+   `0x04`, and the daemon log holds the `exited` line. `kill --now` on the same fixture ends it
+   by HUP: the record file shows no `0x04` and the log has no `exited` line.
+2. Two-key window: a fixture that exits only after two `0x04` within 600 ms (it records
+   timestamps with `date +%s%N` or equivalent) is ended by a plain `kill`.
+3. A fixture that ignores `0x04`: `kill` falls back to HUP and the session is gone; the log line
+   says `timeout`. It runs with the real 10 s `GRACEFUL_TIMEOUT` (about 13 s) in the normal run,
+   not `#[ignore]`d, and no new timing knob is added.
+4. Gate refusal: a fixture whose screen is NOT ready (no prompt row, so `claude_ready` is false):
+   `kill` sends no `0x04` (the record file is empty) and ends it by HUP; the log line says
+   `skipped`. A human draft is not simulated.
+5. A Generic session is killed by HUP with no `0x04` (record file empty).
+6. `daemon stop --yes` with one idle fixture ends it through Ctrl-D (the log line) and the daemon
+   exits; `daemon stop --now --yes` records no `0x04`.
 7. The wire: a `Request::Kill` JSON without `now` deserializes to `now == false`; `Request::Shutdown
    { now: false }` serializes without a `now` key (assert on the literal JSON in `tests/daemon.rs`
    or a unit test that already covers `wire.rs` serialization).
 
+The OMP and Codex one-key behavior has no automated test (an OMP session needs a connected
+bridge and a Codex session a live app-server); the manual check below is its evidence, and the
+completion report says so.
+
 Manual check, recorded in the completion report: on a temp home, start real `omp` and `codex`
 sessions in a trusted directory, run `a2amx kill` on each and read `daemon.log` for `exited`
-(never touch the working daemon at `~/.a2amx`; use a temp `--home` with the installed binary).
+(never touch the working daemon at `~/.a2amx` and never run `scripts/install.sh`; use a temp
+`--home` with your own `target/debug/a2amx` build, because the installed binary lacks this spec).
 
 ## 9. Docs
 
