@@ -16,7 +16,8 @@ safety net that blocks a prompt mixing a peer message with a human draft.
 Claude Code sessions receive messages through a channel, OMP through an
 extension, and Codex through a private app-server. Sessions have names, a status
 line shows quota, and `a2amx team` starts and stops a team of sessions. Agent-initiated
-launch, hooks and receipts for Codex and OMP, and cross-host support are not built yet. Everything in the design documents beyond
+launch, a prompt-submit hook safety net for Codex and OMP (their native channels already record receipts), and
+cross-host support are not built yet. Everything in the design documents beyond
 these slices is still a proposal unless identified as a requirement.
 
 The implementation direction is **Rust on Linux**, with communication and session
@@ -83,7 +84,7 @@ specs are [spec 1](docs/specs/spec-1-terminal-core.md),
 [spec 2](docs/specs/spec-2-messaging.md),
 [spec 2b](docs/specs/spec-2b-hooks-receipts.md), and
 [spec 2c](docs/specs/spec-2c-delivery-robustness.md). The Claude channel, OMP extension, and Codex app-server delivery profiles
-followed as specs 2e to 2g and later. The next milestones are hooks and receipts for
+followed as specs 2e to 2g and later. The next milestones are prompt-submit hooks for
 Codex and OMP, then cross-host support. The checks each slice
 must pass, and the results recorded so far, are in the validation plan.
 

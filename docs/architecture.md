@@ -394,8 +394,8 @@ Known gaps kept as `// shortcut:` comments where the code lives: a split escape
 sequence can hold a session, the paste-then-`CR` gap is one fixed constant, an
 unreadable PTY can hold the writer gate, and message bodies are stored as plaintext.
 
-Not yet built: hooks and receipts for Codex and OMP, agent-initiated launch, and
-everything cross-host.
+Not yet built: prompt-submit hooks for Codex and OMP (their native channels already
+record receipts), agent-initiated launch, and everything cross-host.
 
 ## Wrappers and containers
 
