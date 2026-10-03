@@ -315,8 +315,9 @@ not count. An explicit release clears it: the prefix then `r` while attached. Wh
 hook exists (Claude Code), a hook-observed human submit clears it too. Detach does not
 clear it.
 
-**Not implemented.** Hooks for harnesses other than Claude Code, native in-harness
-channels, cross-host routing, and Codex and OMP profiles.
+**Not implemented.** Hooks for harnesses other than Claude Code and cross-host routing.
+Native in-harness delivery exists for Claude Code (channel), OMP (extension) and Codex
+(app-server).
 
 ## Implemented: Claude Code hook
 

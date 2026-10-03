@@ -13,8 +13,10 @@ messaging core is implemented too: durable SQLite messages, per-session tokens, 
 stdio MCP server, and delivery into a session's composer that protects an unfinished
 human draft. For Claude Code, a prompt-submit hook adds submission receipts and a
 safety net that blocks a prompt mixing a peer message with a human draft.
-Agent-initiated launch, hooks for Codex and OMP, their delivery profiles, and
-cross-host support are not built yet. Everything in the design documents beyond
+Claude Code sessions receive messages through a channel, OMP through an
+extension, and Codex through a private app-server. Sessions have names, a status
+line shows quota, and `a2amx team` starts and stops a team of sessions. Agent-initiated
+launch, hooks and receipts for Codex and OMP, and cross-host support are not built yet. Everything in the design documents beyond
 these slices is still a proposal unless identified as a requirement.
 
 The implementation direction is **Rust on Linux**, with communication and session
@@ -78,8 +80,9 @@ The terminal-core, messaging-core, and Claude Code hook slices are done; their l
 specs are [spec 1](docs/specs/spec-1-terminal-core.md),
 [spec 2](docs/specs/spec-2-messaging.md),
 [spec 2b](docs/specs/spec-2b-hooks-receipts.md), and
-[spec 2c](docs/specs/spec-2c-delivery-robustness.md). The next milestones are the Codex and
-OMP profiles, each with its own hook, then cross-host support. The checks each slice
+[spec 2c](docs/specs/spec-2c-delivery-robustness.md). The Claude channel, OMP extension, and Codex app-server delivery profiles
+followed as specs 2e to 2g and later. The next milestones are hooks and receipts for
+Codex and OMP, then cross-host support. The checks each slice
 must pass, and the results recorded so far, are in the validation plan.
 
 ## Building and trying it
