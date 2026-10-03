@@ -561,7 +561,8 @@ against a fake model server; they skip when the `omp` binary cannot be launched.
 
 ## Implemented: native channel (Codex)
 
-Built without a spec, from probes of Codex 0.159 against live sessions. A `codex`
+Built without a spec, from probes of Codex 0.159 against live sessions; the operator
+reports it working with Codex 0.160.0 as well. A `codex`
 session is hosted differently from the other harnesses: `a2amx new --harness codex --
 codex ...` makes the daemon start `codex app-server --listen unix://<state
 dir>/codex/<session>.sock` (directory 0700), then launch the TUI as `codex --remote

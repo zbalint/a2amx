@@ -2,9 +2,12 @@
 
 Status: design draft, with two implemented slices: the terminal core (see
 [Implemented: terminal core](#implemented-terminal-core)) and the single-machine
-messaging core, including the Claude Code hook (see
-[Implemented: messaging core](#implemented-messaging-core)).
-Everything else here is a proposal, and no compatibility results are implied.
+messaging core (see [Implemented: messaging core](#implemented-messaging-core)). The
+messaging core includes the Claude Code hook, native channels for Claude Code, OMP and
+Codex, session names, `a2amx team`, and quota reporting. Parts of the sections below
+that are written as proposals (local TCP IPC with session tokens, the stdio MCP
+server) are built in the single-machine case; the implemented sections say which.
+Everything cross-host is a proposal, and no compatibility results are implied.
 
 This document owns topology and scope. [Delivery](delivery.md) owns input and
 receipt semantics; [validation](validation-plan.md) defines how to test them.
@@ -445,7 +448,7 @@ See [delivery recovery](delivery.md#recovery-and-retry) for side-effect ambiguit
 | One central server, multiple enrolled Linux hosts | High availability and federation | Native Windows support |
 | Three tested harness profiles (Claude Code, Codex, OMP) with submission observation | More harnesses and wrapper certifications | Universal safe injection into arbitrary TUIs |
 | One human controller per session | Multiple viewers and richer layouts | LLM planning and orchestration |
-| PTY delivery channel, plus a native OMP channel; submission receipts optional per harness profile | Other native in-harness delivery channels, added as adapters | |
+| PTY delivery channel for generic sessions, plus native Claude Code, OMP and Codex channels; receipts optional per harness profile | Other native in-harness delivery channels, added as adapters | |
 | Durable messages, receipts, and visible uncertainty | Offline outgoing queues | Exactly-once model processing |
 | Remote launch, attach, switch, detach, resize | Session survival through supervisor crash | Container management and model inference |
 

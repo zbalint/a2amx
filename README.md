@@ -24,18 +24,20 @@ management across multiple hosts from the outset.
 
 ## The idea
 
-Interactive agent harnesses expose a terminal input path. A2AMX will launch them
-under pseudoterminals (PTYs), let people switch between their sessions, and use
-that same input path to deliver messages from other agents.
+Interactive agent harnesses expose a terminal input path. A2AMX launches them
+under pseudoterminals (PTYs) and lets people switch between their sessions. It
+delivers messages from other agents through each harness's native channel where one
+exists (Claude Code, OMP, Codex), and by typing into the terminal otherwise.
 
-Each agent has an MCP server for sending messages and a hook for observing prompt
-submission. A central daemon routes and persists messages across hosts. Each host
+Each agent has an MCP server for sending messages. Claude Code also has a hook for
+observing prompt submission; OMP and Codex report receipts through their channels. A central daemon routes and persists messages across hosts. Each host
 runs a launcher; the proposed architecture adds a persistent host supervisor to
 own local PTYs and keep sessions running when a client disconnects.
 
 For example, a planning agent on `host-a` could message a reviewing agent on
 `host-b`. The recipient's host would queue the message until delivery is permitted,
-inject a clearly attributed message, and report a matching submission-hook receipt.
+deliver a clearly attributed message, and report a receipt when the harness provides
+one.
 
 Claude Code and Codex can already message parallel sessions of their own kind, but
 not sessions of a different harness. A2AMX targets that gap, and also sessions on
