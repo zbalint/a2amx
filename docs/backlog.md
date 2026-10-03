@@ -32,7 +32,6 @@ lag the code.
 | --- | --- | --- |
 | U1 | `developer_instructions` taking effect in Codex, separate from the model acting on a peer request anyway | code |
 | U2 | Two simultaneous Codex sessions; `/new` thread switching (the poller takes the most recently updated loaded thread) | code |
-| U3 | OMP `aside` delivery during a long tool-calling turn with a live model | code |
 | U4 | Real-Codex smoke test as an ignored test, like the OMP ones | docs |
 | U5 | Limits at the edges: 50 open messages per recipient, 20 sends per minute per sender, bodies near 32 KiB, recipient exiting with an open message, daemon restart with open messages | docs |
 | U6 | A human typing exactly inside the paste-to-Enter window to force a real corrupted submission | docs |
@@ -62,3 +61,4 @@ lag the code.
 | C1 | Claude Code, OMP and live multi-agent spec delivery across harnesses | reported: used live to deliver several specs through agents on different harnesses |
 | C2 | Scroll in an attached OMP session | reported: wheel scrolling works after spec 2q (`0a4a9d9`) |
 | C3 | Status text claiming Codex and OMP receipts or delivery profiles were not built | `94c0672` |
+| C4 | Mid-turn message receiving on OMP (`aside`) and on Codex, with real harnesses | reported: tested by the owner |
