@@ -1,0 +1,10 @@
+# Copy to a2amx.toml, then run: a2amx team up
+[[session]]
+name = "architect"
+command = ["claude"]
+attach = true
+
+[[session]]
+name = "developer"
+command = ["omp"]
+cwd = "."

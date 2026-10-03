@@ -162,6 +162,8 @@ command = ["omp"]
 cwd = "."
 ```
 
+A copy to start from is in `a2amx.toml.example`; your own `a2amx.toml` is gitignored.
+
 Use `--file` for another file; relative `cwd` values are relative to that file's
 directory, while an omitted `cwd` uses the invoking directory. `up` skips and reports
 running sessions. An exited session holding a requested name stops the whole team
