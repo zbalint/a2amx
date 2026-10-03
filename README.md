@@ -128,7 +128,9 @@ The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`
 then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
 `A2AMX_PREFIX` to change it). After the prefix: `d` detach, `w` session picker, `[`
 scroll mode, `s` toggles the status line, `r` releases the session's message hold, and the prefix twice sends a
-literal prefix. The status line takes the terminal's last row and shows the session address,
+literal prefix. While a session has not turned on mouse reporting, the mouse wheel scrolls it (three lines a step) and
+enters scroll mode; hold Shift to select text with the mouse. Scrollback in the real terminal after you detach is not
+kept. The status line takes the terminal's last row and shows the session address,
 pending-message count, and a HELD alert with the hold reason. In `a2amx list`, ATTACHED means a human client is attached, not that
 the session is reachable: a detached session still receives messages. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with

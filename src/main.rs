@@ -19,6 +19,7 @@ use a2amx::emulator::Scroll;
 use a2amx::harness::{Deliver, Harness};
 use a2amx::hook;
 use a2amx::mcp;
+use a2amx::messaging::sgr_mouse_report_len;
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::status;
 use a2amx::team::{self, TeamSession};
@@ -29,6 +30,7 @@ use a2amx::wire::{
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const INPUT_CHUNK: usize = 8 * 1024;
+const MOUSE_CAPTURE: &[u8] = b"\x1b[?1000h\x1b[?1006h";
 const RESTORE_TERMINAL: &[u8] = b"\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1l\x1b>\x1b[?25h\x1b[?1049l";
 
 #[tokio::main]
@@ -664,6 +666,7 @@ struct AttachmentState {
     after_prefix: bool,
     status_visible: bool,
     status: Option<StatusInfo>,
+    session_mouse: bool,
     scroll_mode: bool,
     scroll_parser: ScrollParser,
     picker: Option<PickerState>,
@@ -691,6 +694,7 @@ impl AttachmentState {
             after_prefix: false,
             status_visible: true,
             status: None,
+            session_mouse: false,
             scroll_mode: false,
             scroll_parser: ScrollParser::default(),
             picker: None,
@@ -713,6 +717,27 @@ impl AttachmentState {
     async fn handle_input(&mut self, bytes: &[u8]) -> anyhow::Result<Option<AttachOutcome>> {
         let mut offset = 0;
         while offset < bytes.len() {
+            let report = if self.session_mouse {
+                None
+            } else {
+                find_mouse_report(bytes, offset)
+            };
+            if let Some((start, end)) = report {
+                if start == offset {
+                    let button = bytes[offset + 3..]
+                        .iter()
+                        .take_while(|byte| byte.is_ascii_digit())
+                        .fold(0u16, |value, byte| {
+                            value
+                                .saturating_mul(10)
+                                .saturating_add(u16::from(byte - b'0'))
+                        });
+                    self.handle_mouse_button(button).await?;
+                    offset = end;
+                    continue;
+                }
+            }
+            let segment_end = report.map_or(bytes.len(), |(start, _)| start);
             if self.picker.is_some() {
                 if let Some(outcome) = self
                     .handle_picker_input(&bytes[offset..offset + 1], bytes == [0x1b])
@@ -746,13 +771,14 @@ impl AttachmentState {
                 let count = if self.after_prefix {
                     self.after_prefix = false;
                     1
-                } else if let Some(index) =
-                    bytes[offset..].iter().position(|b| *b == self.prefix_byte)
+                } else if let Some(index) = bytes[offset..segment_end]
+                    .iter()
+                    .position(|b| *b == self.prefix_byte)
                 {
                     self.after_prefix = true;
                     index + 1
                 } else {
-                    bytes.len() - offset
+                    segment_end - offset
                 };
                 let actions = self.prefix_machine.feed(&bytes[offset..offset + count]);
                 if let Some(outcome) = self.handle_prefix_actions(actions).await? {
@@ -784,11 +810,7 @@ impl AttachmentState {
                     }));
                 }
                 Action::Command(PrefixCommand::ScrollMode) => {
-                    self.scroll_mode = true;
-                    self.scroll_parser.clear();
-                    if let Some(attached) = self.attachment.as_mut() {
-                        attached.send(ClientFrame::Redraw).await?;
-                    }
+                    self.enter_scroll_mode().await?;
                 }
                 Action::Command(PrefixCommand::SessionPicker) => {
                     let state = PickerState::open(
@@ -820,6 +842,74 @@ impl AttachmentState {
             }
         }
         Ok(None)
+    }
+
+    async fn enter_scroll_mode(&mut self) -> anyhow::Result<()> {
+        self.scroll_mode = true;
+        self.scroll_parser.clear();
+        if let Some(attached) = self.attachment.as_mut() {
+            attached.send(ClientFrame::Redraw).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_mouse_button(&mut self, button: u16) -> anyhow::Result<()> {
+        if self.picker.is_some() {
+            return Ok(());
+        }
+        match button {
+            64 => {
+                if !self.scroll_mode {
+                    self.enter_scroll_mode().await?;
+                }
+                // shortcut: the wheel uses a fixed three-line step; make it configurable only if asked.
+                for _ in 0..3 {
+                    if let Some(attached) = self.attachment.as_mut() {
+                        attached.send(ClientFrame::Scroll(Scroll::LineUp)).await?;
+                    }
+                }
+            }
+            65 if self.scroll_mode => {
+                // shortcut: the wheel uses a fixed three-line step; make it configurable only if asked.
+                for _ in 0..3 {
+                    if let Some(attached) = self.attachment.as_mut() {
+                        attached.send(ClientFrame::Scroll(Scroll::LineDown)).await?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn scan_session_mouse(&mut self, bytes: &[u8]) -> bool {
+        let mut found = false;
+        let mut offset = 0;
+        while offset + 3 < bytes.len() {
+            if bytes[offset] == 0x1b
+                && bytes.get(offset + 1) == Some(&b'[')
+                && bytes.get(offset + 2) == Some(&b'?')
+            {
+                let first = offset + 3;
+                let mut end = first;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if end > first && matches!(bytes.get(end), Some(b'h' | b'l')) {
+                    let mode = bytes[first..end].iter().fold(0u16, |value, byte| {
+                        value
+                            .saturating_mul(10)
+                            .saturating_add(u16::from(byte - b'0'))
+                    });
+                    if matches!(mode, 1000 | 1002 | 1003) {
+                        found = true;
+                        self.session_mouse = bytes[end] == b'h';
+                    }
+                }
+            }
+            offset += 1;
+        }
+        found
     }
 
     async fn restore_current(&mut self) -> anyhow::Result<bool> {
@@ -931,6 +1021,22 @@ impl AttachmentState {
     }
 }
 
+// shortcut: a report split across input chunks is typed input; reassemble only if it proves noisy.
+fn find_mouse_report(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
+    let mut offset = start;
+    while offset < bytes.len() {
+        if bytes[offset] == 0x1b
+            && bytes.get(offset + 1) == Some(&b'[')
+            && bytes.get(offset + 2) == Some(&b'<')
+            && let Some(end) = sgr_mouse_report_len(bytes, offset)
+        {
+            return Some((offset, end));
+        }
+        offset += 1;
+    }
+    None
+}
+
 async fn run_attachment_loop(
     attachment: Attachment,
     home: &Path,
@@ -994,8 +1100,12 @@ async fn run_attachment_loop(
                 };
                 match frame {
                     ServerFrame::Data(data) => {
+                        let has_mouse_mode = state.scan_session_mouse(&data);
                         if state.picker.is_none() {
                             state.output.send(data)?;
+                            if has_mouse_mode && !state.session_mouse {
+                                state.output.send(MOUSE_CAPTURE.to_vec())?;
+                            }
                             state.draw_status()?;
                             if state.scroll_mode {
                                 state.output.send(scroll_status(state.cols, state.rows))?;
