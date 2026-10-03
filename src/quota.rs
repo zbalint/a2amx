@@ -1,10 +1,15 @@
-//! Reads the remaining quota from a Claude or Codex status line on the screen.
+//! Reads remaining quota from harness status lines and OMP conversation errors.
 
 use crate::emulator::Screen;
+use crate::harness::Harness;
 use crate::wire::QuotaInfo;
 
 /// Status lines sit on the last rows; text higher up is conversation.
 const SCANNED_ROWS: usize = 3;
+// shortcut: a long multi-line draft in the editor can push the error out of this region; upgrade by
+// anchoring on the editor frame if that is seen.
+const OMP_SCANNED_ROWS: usize = 12;
+const OMP_LIMIT_CODE: &str = "code=usage_limit_reached";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Window {
@@ -20,20 +25,19 @@ const LABELS: [(&str, Window); 3] = [
 
 /// What the harness status line on the screen's last rows says about quota, or `None` when it
 /// says nothing.
-pub fn read(screen: &Screen) -> Option<QuotaInfo> {
-    let cols = usize::from(screen.size.cols);
+pub fn read(screen: &Screen, harness: Harness) -> Option<QuotaInfo> {
+    match harness {
+        Harness::Claude | Harness::Codex => read_windows(screen),
+        Harness::Omp => read_omp_limit(screen),
+        Harness::Generic => None,
+    }
+}
+
+fn read_windows(screen: &Screen) -> Option<QuotaInfo> {
     let rows = usize::from(screen.size.rows);
     let mut info = QuotaInfo::default();
     for row in (rows.saturating_sub(SCANNED_ROWS)..rows).rev() {
-        let mut text: Vec<char> = screen
-            .cells
-            .get(row * cols..(row + 1) * cols)?
-            .iter()
-            .map(|cell| if cell.ch == '\u{a0}' { ' ' } else { cell.ch })
-            .collect();
-        while text.last() == Some(&' ') {
-            text.pop();
-        }
+        let text = row_to_text(screen, row)?;
         for start in 0..text.len() {
             if let Some((window, percent)) = token_at(&text, start) {
                 let slot = match window {
@@ -45,6 +49,42 @@ pub fn read(screen: &Screen) -> Option<QuotaInfo> {
         }
     }
     (info != QuotaInfo::default()).then_some(info)
+}
+
+fn read_omp_limit(screen: &Screen) -> Option<QuotaInfo> {
+    let rows = usize::from(screen.size.rows);
+    for row in (rows.saturating_sub(OMP_SCANNED_ROWS)..rows).rev() {
+        let current: String = row_to_text(screen, row)?.into_iter().collect();
+        if !current.trim().starts_with("Error: ") {
+            continue;
+        }
+        let below: String = if row + 1 < rows {
+            row_to_text(screen, row + 1)?.into_iter().collect()
+        } else {
+            String::new()
+        };
+        if current.contains(OMP_LIMIT_CODE) || below.contains(OMP_LIMIT_CODE) {
+            return Some(QuotaInfo {
+                limit_reached: true,
+                ..Default::default()
+            });
+        }
+    }
+    None
+}
+
+fn row_to_text(screen: &Screen, row: usize) -> Option<Vec<char>> {
+    let cols = usize::from(screen.size.cols);
+    let mut text: Vec<char> = screen
+        .cells
+        .get(row * cols..(row + 1) * cols)?
+        .iter()
+        .map(|cell| if cell.ch == '\u{a0}' { ' ' } else { cell.ch })
+        .collect();
+    while text.last() == Some(&' ') {
+        text.pop();
+    }
+    Some(text)
 }
 
 /// A `<label> <N>% left` token starting at `start`, if one does.

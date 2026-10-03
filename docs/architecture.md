@@ -376,10 +376,11 @@ machine; there is no central-versus-host split yet.
   corrupted messages retry only until their per-message rejection limit.
 
 **Quota.** The daemon reads the last three screen rows of running Claude and Codex
-sessions for `5h N% left`, `weekly N% left` and `7d N% left`. It reports the result
-in `list`, in `list_agents`, and as `recipient_quota` on `send_message` when the
-recipient is at 0%. It never changes delivery because of it, and the value may be
-stale: it is whatever the harness last drew.
+sessions for `5h N% left`, `weekly N% left` and `7d N% left`. For running OMP sessions it
+looks in the last 12 rows for an `Error:` row naming `usage_limit_reached`, including wrapped
+errors, and reports it as `limit_reached`. It reports the result in `list`, in `list_agents`,
+and as `recipient_quota` on `send_message` when the recipient is exhausted. It never changes
+delivery because of it, and the value may be stale until the session prints again.
 
 Known gaps kept as `// shortcut:` comments where the code lives: a split escape
 sequence can hold a session, the paste-then-`CR` gap is one fixed constant, an

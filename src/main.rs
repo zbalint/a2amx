@@ -1130,11 +1130,16 @@ fn quota_cell(quota: Option<QuotaInfo>) -> String {
         return "-".to_owned();
     };
     let windows = [("5h", quota.five_hour), ("wk", quota.weekly)];
-    windows
+    let cell = windows
         .into_iter()
         .filter_map(|(label, percent)| percent.map(|percent| format!("{label} {percent}%")))
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    if cell.is_empty() && quota.limit_reached {
+        "limit".to_owned()
+    } else {
+        cell
+    }
 }
 
 fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 5]> {

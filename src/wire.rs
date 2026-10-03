@@ -271,15 +271,19 @@ pub struct QuotaInfo {
     pub five_hour: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weekly: Option<u8>,
+    /// The harness reported a usage limit in the conversation, with no window named.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub limit_reached: bool,
 }
 
 impl QuotaInfo {
-    /// Which windows are at 0%: `"5h"`, `"weekly"`, `"5h and weekly"`, or `None`.
+    /// Which quota is exhausted: a named window, `"usage"`, or `None`.
     pub fn exhausted(&self) -> Option<&'static str> {
         match (self.five_hour == Some(0), self.weekly == Some(0)) {
             (true, true) => Some("5h and weekly"),
             (true, false) => Some("5h"),
             (false, true) => Some("weekly"),
+            (false, false) if self.limit_reached => Some("usage"),
             (false, false) => None,
         }
     }

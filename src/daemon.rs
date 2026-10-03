@@ -1266,14 +1266,17 @@ async fn bridge(
     }
 }
 
-/// The quota a running claude or codex session's status line reports.
+/// The quota a running Claude, Codex or OMP session reports.
 fn session_quota(session: &Session) -> Option<QuotaInfo> {
     if session.exit_code().is_some()
-        || !matches!(session.harness(), Harness::Claude | Harness::Codex)
+        || !matches!(
+            session.harness(),
+            Harness::Claude | Harness::Codex | Harness::Omp
+        )
     {
         return None;
     }
-    quota::read(&session.lock().emulator.screen())
+    quota::read(&session.lock().emulator.screen(), session.harness())
 }
 
 fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {

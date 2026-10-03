@@ -9,19 +9,109 @@ use a2amx::quota;
 use a2amx::wire::{QuotaInfo, Request, Response, SessionSummary};
 
 fn screen_with(rows: u16, lines: &[(u16, &str)]) -> a2amx::emulator::Screen {
-    let mut emulator = Emulator::new(Size { cols: 100, rows });
+    let mut emulator = Emulator::new(Size { cols: 169, rows });
     for (row, text) in lines {
         emulator.feed(format!("\x1b[{row};1H{text}").as_bytes());
     }
     emulator.screen()
 }
 
+fn read_with(harness: Harness, rows: u16, lines: &[(u16, &str)]) -> Option<QuotaInfo> {
+    quota::read(&screen_with(rows, lines), harness)
+}
+
 fn read(rows: u16, lines: &[(u16, &str)]) -> Option<QuotaInfo> {
-    quota::read(&screen_with(rows, lines))
+    read_with(Harness::Codex, rows, lines)
 }
 
 fn info(five_hour: Option<u8>, weekly: Option<u8>) -> Option<QuotaInfo> {
-    Some(QuotaInfo { five_hour, weekly })
+    Some(QuotaInfo {
+        five_hour,
+        weekly,
+        ..Default::default()
+    })
+}
+
+#[test]
+fn reads_omp_usage_limit_error() {
+    let screen = screen_with(
+        51,
+        &[(
+            41,
+            "  Error: Codex error event: The usage limit has been reached (code=usage_limit_reached)",
+        )],
+    );
+    assert_eq!(
+        quota::read(&screen, Harness::Omp).and_then(|quota| quota.exhausted()),
+        Some("usage")
+    );
+}
+
+#[test]
+fn reads_omp_wrapped_usage_limit_error() {
+    let lines = [
+        (
+            43,
+            "  Error: Retry failed after 1 attempts: ... Original error: Codex error event: The usage limit has",
+        ),
+        (44, "  been reached (code=usage_limit_reached)"),
+    ];
+    assert_eq!(
+        read_with(Harness::Omp, 51, &lines),
+        Some(QuotaInfo {
+            limit_reached: true,
+            ..Default::default()
+        })
+    );
+}
+
+#[test]
+fn omp_error_outside_last_twelve_rows_is_ignored() {
+    let text =
+        "  Error: Codex error event: The usage limit has been reached (code=usage_limit_reached)";
+    assert_eq!(read_with(Harness::Omp, 51, &[(19, text)]), None);
+}
+
+#[test]
+fn omp_advisor_warning_is_not_a_limit() {
+    let text = "  Warning: advisor: Advisor \"Advisor\" quota exhausted — pausing until reset.";
+    assert_eq!(read_with(Harness::Omp, 51, &[(41, text)]), None);
+}
+
+#[test]
+fn omp_other_error_is_not_a_limit() {
+    let text = "  Error: Codex error event: overloaded (code=server_error)";
+    assert_eq!(read_with(Harness::Omp, 51, &[(41, text)]), None);
+}
+
+#[test]
+fn omp_quoted_error_is_not_a_limit() {
+    let text = "  the log said Error: Codex error event: usage (code=usage_limit_reached)";
+    assert_eq!(read_with(Harness::Omp, 51, &[(41, text)]), None);
+}
+
+#[test]
+fn omp_nonadjacent_code_is_not_a_limit() {
+    assert_eq!(
+        read_with(
+            Harness::Omp,
+            51,
+            &[(41, "Error: x"), (43, "(code=usage_limit_reached)")],
+        ),
+        None
+    );
+}
+
+#[test]
+fn generic_does_not_read_omp_error() {
+    let text =
+        "  Error: Codex error event: The usage limit has been reached (code=usage_limit_reached)";
+    assert_eq!(read_with(Harness::Generic, 51, &[(41, text)]), None);
+}
+
+#[test]
+fn empty_omp_screen_has_no_limit() {
+    assert_eq!(read_with(Harness::Omp, 51, &[]), None);
 }
 
 #[test]
@@ -77,15 +167,50 @@ fn short_and_empty_screens_are_handled() {
 
 #[test]
 fn exhausted_names_the_windows_at_zero() {
-    let exhausted = |five_hour, weekly| QuotaInfo { five_hour, weekly }.exhausted();
+    let exhausted = |five_hour, weekly| {
+        QuotaInfo {
+            five_hour,
+            weekly,
+            ..Default::default()
+        }
+        .exhausted()
+    };
     assert_eq!(exhausted(Some(0), Some(0)), Some("5h and weekly"));
     assert_eq!(exhausted(Some(0), Some(5)), Some("5h"));
     assert_eq!(exhausted(Some(5), Some(0)), Some("weekly"));
     assert_eq!(exhausted(Some(5), None), None);
+    assert_eq!(
+        QuotaInfo {
+            limit_reached: true,
+            ..Default::default()
+        }
+        .exhausted(),
+        Some("usage")
+    );
+    assert_eq!(
+        QuotaInfo {
+            limit_reached: true,
+            five_hour: Some(0),
+            ..Default::default()
+        }
+        .exhausted(),
+        Some("5h")
+    );
+    assert_eq!(
+        QuotaInfo {
+            limit_reached: false,
+            ..Default::default()
+        }
+        .exhausted(),
+        None
+    );
 }
 
 const EXHAUSTED_SCRIPT: &str = "printf '\\033[24;1H5h 0%% left 7d 80%% left'; exec sleep 30";
 const HEALTHY_SCRIPT: &str = "printf '\\033[24;1H5h 30%% left'; exec sleep 30";
+const OMP_EXHAUSTED_SCRIPT: &str =
+    "printf '\\033[41;1H  Error: Codex error event: x (code=usage_limit_reached)'; exec sleep 30";
+const OMP_HEALTHY_SCRIPT: &str = "printf '\\033[41;1H ready'; exec sleep 30";
 
 async fn status_line_session(
     admin: &mut Client,
@@ -93,11 +218,22 @@ async fn status_line_session(
     harness: Harness,
     script: &str,
 ) -> String {
+    status_line_session_sized(admin, name, harness, script, 80, 24).await
+}
+
+async fn status_line_session_sized(
+    admin: &mut Client,
+    name: &str,
+    harness: Harness,
+    script: &str,
+    cols: u16,
+    rows: u16,
+) -> String {
     let response = admin
         .request(Request::NewSession {
             argv: vec!["sh".into(), "-c".into(), script.into()],
-            cols: 80,
-            rows: 24,
+            cols,
+            rows,
             cwd: None,
             env: vec![],
             name: Some(name.to_owned()),
@@ -151,7 +287,8 @@ async fn list_and_list_agents_report_a_claude_session_quota() {
         quota,
         QuotaInfo {
             five_hour: Some(0),
-            weekly: Some(80)
+            weekly: Some(80),
+            ..Default::default()
         }
     );
     let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
@@ -162,6 +299,49 @@ async fn list_and_list_agents_report_a_claude_session_quota() {
         .find(|a| a.address.starts_with("agent-claude@"))
         .unwrap();
     assert_eq!(agent.quota, Some(quota));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_and_list_agents_report_an_omp_limit() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let omp = status_line_session_sized(
+        &mut admin,
+        "agent-omp",
+        Harness::Omp,
+        OMP_EXHAUSTED_SCRIPT,
+        169,
+        51,
+    )
+    .await;
+    let generic = status_line_session_sized(
+        &mut admin,
+        "agent-plain-omp",
+        Harness::Generic,
+        OMP_EXHAUSTED_SCRIPT,
+        169,
+        51,
+    )
+    .await;
+
+    let quota = quota_of(&mut admin, &omp).await;
+    assert_eq!(
+        quota,
+        QuotaInfo {
+            limit_reached: true,
+            ..Default::default()
+        }
+    );
+    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+        panic!("list_agents failed");
+    };
+    let agent = agents
+        .iter()
+        .find(|a| a.address.starts_with("agent-omp@"))
+        .unwrap();
+    assert_eq!(agent.quota, Some(quota));
+    assert_eq!(summary(&mut admin, &generic).await.quota, None);
     daemon.shutdown().await.unwrap();
 }
 
@@ -232,6 +412,71 @@ async fn send_message_reports_an_exhausted_recipient_and_delivery_is_unchanged()
     }
 
     assert_eq!(accepted[0].1.as_deref(), Some("5h quota exhausted"));
+    assert_eq!(accepted[1].1, None);
+    assert_eq!(accepted[0].0, accepted[1].0);
+    assert_eq!(
+        summary(&mut admin, &exhausted).await.hold_reason,
+        summary(&mut admin, &healthy).await.hold_reason
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn send_message_reports_omp_limit_without_changing_delivery() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let exhausted = status_line_session_sized(
+        &mut admin,
+        "agent-omp-out",
+        Harness::Omp,
+        OMP_EXHAUSTED_SCRIPT,
+        169,
+        51,
+    )
+    .await;
+    let healthy = status_line_session_sized(
+        &mut admin,
+        "agent-omp-ok",
+        Harness::Omp,
+        OMP_HEALTHY_SCRIPT,
+        169,
+        51,
+    )
+    .await;
+    quota_of(&mut admin, &exhausted).await;
+
+    let (_, token, address) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("agent-omp-sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let mut sender = Client::connect_addr(address, &token).await.unwrap();
+
+    let mut accepted = Vec::new();
+    for to in ["agent-omp-out@host-a", "agent-omp-ok@host-a"] {
+        let response = sender
+            .request(Request::SendMessage {
+                to: to.into(),
+                subject: "s".into(),
+                message: "m".into(),
+            })
+            .await
+            .unwrap();
+        let Response::Accepted {
+            recipient_hold,
+            recipient_quota,
+            ..
+        } = response
+        else {
+            panic!("expected accepted, got {response:?}");
+        };
+        accepted.push((recipient_hold, recipient_quota));
+    }
+
+    assert_eq!(accepted[0].1.as_deref(), Some("usage quota exhausted"));
     assert_eq!(accepted[1].1, None);
     assert_eq!(accepted[0].0, accepted[1].0);
     assert_eq!(

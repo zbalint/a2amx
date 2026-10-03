@@ -132,7 +132,10 @@ literal prefix. The status line takes the terminal's last row and shows the sess
 pending-message count, and a HELD alert with the hold reason. In `a2amx list`, ATTACHED means a human client is attached, not that
 the session is reachable: a detached session still receives messages. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with
-an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or Codex status line last said about remaining quota (5h and weekly percent left); it can be stale and is empty when no status line is recognised.
+an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or
+Codex status line last said about remaining quota (5h and weekly percent left); for OMP it shows
+`limit` when the session's last conversation rows show a Codex usage-limit error. It can be stale
+and is empty when no quota signal is recognised.
 
 ### Teams
 
