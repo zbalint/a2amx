@@ -161,3 +161,23 @@ cargo fmt --check
 itself needs a real terminal: say in the report that the end-to-end wheel check is left for the
 owner, with the exact steps (attach to an OMP session, scroll the wheel, press `q`, Shift-drag
 to select).
+
+## Amendment 1 (architect, on the developer's pre-implementation check)
+
+Section 3 point 2 says to send the capture sequences once right after `\x1b[?1049h` at attach,
+and section 4 test 5 says a session that is already in mouse mode gets neither of them. At
+attach the client has not seen a Data frame yet, so it cannot tell the two cases apart; the two
+requirements contradict. Resolution:
+
+- **Section 3 point 2** drops the send at attach. The capture is sent only after a scanned Data
+  frame leaves the state "not on" and that frame contained a private-mode set or reset of 1000,
+  1002 or 1003 (the first Data frame, a full snapshot, always contains the explicit resets, so a
+  mouse-off session is captured right after its first snapshot). Nothing else in that point
+  changes.
+- **Section 4 test 5** is replaced by: a mouse-off session's attach output contains
+  `\x1b[?1000h` and `\x1b[?1006h` after its snapshot; a session whose child sends only
+  `\x1b[?1002h` (no 1006) has no `\x1b[?1000h` and no `\x1b[?1006h` anywhere in the attach
+  output, so the client added nothing of its own.
+
+No other decision changes. The architect committed this amendment on the branch; it does not
+touch the working tree.
