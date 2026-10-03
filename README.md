@@ -78,6 +78,7 @@ hosting does not imply safe automatic message delivery into every terminal progr
 | [Architecture](docs/architecture.md) | Scope, topology, ownership, trust, terminal behavior, or unresolved architectural choices |
 | [Delivery](docs/delivery.md) | Input arbitration, message evidence, hooks, retry, ordering, or failure recovery |
 | [Validation plan](docs/validation-plan.md) | The checks each implementation slice must pass |
+| [Backlog](docs/backlog.md) | Open known items, issues, untested behavior, and ideas |
 
 The terminal-core, messaging-core, and Claude Code hook slices are done; their locked
 specs are [spec 1](docs/specs/spec-1-terminal-core.md),
