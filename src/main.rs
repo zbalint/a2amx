@@ -72,7 +72,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             }
         }
         options @ Command::New { .. } => run_new(home, prefix, options).await,
-        Command::List => run_list(home).await,
+        Command::List { details } => run_list(home, details).await,
         Command::Attach { session, force } => {
             run_attach_command(home, prefix, session, force).await
         }
@@ -340,7 +340,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     run_attachment(client, &home, prefix, session, false, cols, rows).await
 }
 
-async fn run_list(home: PathBuf) -> anyhow::Result<()> {
+async fn run_list(home: PathBuf, details: bool) -> anyhow::Result<()> {
     let mut client = Client::connect(&home).await?;
     let response = client.request(Request::List).await?;
     let sessions = match response {
@@ -348,10 +348,11 @@ async fn run_list(home: PathBuf) -> anyhow::Result<()> {
         Response::Error { message } => return Err(anyhow!(message)),
         other => return Err(anyhow!("unexpected daemon response: {other:?}")),
     };
-    write_stdout(format_session_table(&sessions).into_bytes()).await
+    write_stdout(format_session_table(&sessions, details).into_bytes()).await
 }
 
 async fn run_kill(home: PathBuf, session: String) -> anyhow::Result<()> {
+    let session = resolve_session(&home, &session).await?;
     let mut client = Client::connect(&home).await?;
     let response = client.request(Request::Kill { session }).await?;
     match response {
@@ -365,6 +366,10 @@ async fn run_messages(
     session: Option<String>,
     state: Option<String>,
 ) -> anyhow::Result<()> {
+    let session = match session {
+        Some(reference) => Some(resolve_session(&home, &reference).await?),
+        None => None,
+    };
     let mut client = Client::connect(&home).await?;
     let response = client
         .request(Request::ListMessages { session, state })
@@ -400,6 +405,7 @@ async fn run_attach_command(
     if !stdin_is_terminal() {
         return Err(anyhow!("attach needs a terminal on stdin"));
     }
+    let session = resolve_session(&home, &session).await?;
     let client = Client::connect(&home).await?;
     let (cols, rows) = terminal_size_with_default()?;
     run_attachment(client, &home, prefix, session, force, cols, rows).await
@@ -883,7 +889,11 @@ fn terminal_size_with_default() -> anyhow::Result<(u16, u16)> {
 }
 
 const SESSION_HEADERS: [&str; 9] = [
-    "ID", "NAME", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE", "COMMAND",
+    "ID", "NAME", "HARNESS", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
+];
+const DETAIL_HEADERS: [&str; 11] = [
+    "ID", "NAME", "HARNESS", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE", "CWD",
+    "COMMAND",
 ];
 const PICKER_HEADERS: [&str; 5] = ["ID", "STATE", "ATTACHED", "SIZE", "COMMAND"];
 const MESSAGE_HEADERS: [&str; 6] = ["ID", "FROM", "TO", "STATE", "DETAIL", "SUBJECT"];
@@ -895,6 +905,7 @@ fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 9]> {
             [
                 session.id.clone(),
                 session.name.clone().unwrap_or_else(|| "-".to_owned()),
+                session.harness.as_str().to_owned(),
                 match session.exit_code {
                     Some(code) => format!("exited({code})"),
                     None => "running".to_owned(),
@@ -911,7 +922,6 @@ fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 9]> {
                     .unwrap_or_else(|| "-".to_owned()),
                 quota_cell(session.quota),
                 format!("{}x{}", session.cols, session.rows),
-                session.argv.join(" "),
             ]
         })
         .collect()
@@ -999,8 +1009,43 @@ fn format_table<const N: usize>(headers: &[&str; N], rows: &[[String; N]]) -> St
     output
 }
 
-fn format_session_table(sessions: &[SessionSummary]) -> String {
-    format_table(&SESSION_HEADERS, &session_value_rows(sessions))
+fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
+    let rows = session_value_rows(sessions);
+    if details {
+        let rows: Vec<[String; 11]> = rows
+            .into_iter()
+            .zip(sessions)
+            .map(|(row, session)| {
+                let [
+                    id,
+                    name,
+                    harness,
+                    state,
+                    attached,
+                    pending,
+                    held,
+                    quota,
+                    size,
+                ] = row;
+                [
+                    id,
+                    name,
+                    harness,
+                    state,
+                    attached,
+                    pending,
+                    held,
+                    quota,
+                    size,
+                    session.cwd.clone().unwrap_or_else(|| "-".to_owned()),
+                    session.argv.join(" "),
+                ]
+            })
+            .collect();
+        format_table(&DETAIL_HEADERS, &rows)
+    } else {
+        format_table(&SESSION_HEADERS, &rows)
+    }
 }
 
 fn format_messages_table(messages: &[MessageInfo]) -> String {
@@ -1416,6 +1461,22 @@ async fn request_sessions(client: &mut Client) -> anyhow::Result<Vec<SessionSumm
         Response::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }
+}
+
+/// A name resolves to its id; other references remain for the daemon to judge.
+fn resolve_reference(sessions: &[SessionSummary], reference: &str) -> String {
+    sessions
+        .iter()
+        .find(|session| session.name.as_deref() == Some(reference))
+        .map_or_else(|| reference.to_owned(), |session| session.id.clone())
+}
+
+async fn resolve_session(home: &Path, reference: &str) -> anyhow::Result<String> {
+    let mut client = Client::connect(home).await?;
+    Ok(resolve_reference(
+        &request_sessions(&mut client).await?,
+        reference,
+    ))
 }
 
 #[derive(Default)]

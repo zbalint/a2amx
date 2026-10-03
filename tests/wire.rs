@@ -121,6 +121,8 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             held: false,
             hold_reason: None,
             quota: None,
+            harness: Default::default(),
+            cwd: None,
         }],
     };
     let json = serde_json::to_string(&response).unwrap_or_default();
@@ -424,6 +426,8 @@ fn additive_visibility_fields_round_trip() {
             held: true,
             hold_reason: Some("human_draft".into()),
             quota: None,
+            harness: Default::default(),
+            cwd: None,
         }],
     };
     let sessions_json = serde_json::json!({

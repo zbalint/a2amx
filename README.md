@@ -91,9 +91,9 @@ a2amx daemon                        # prints "listening on <addr>"
 a2amx daemon --background           # detached; output goes to <state dir>/daemon.log
 a2amx stop [--yes]                  # ends the daemon and every session; asks first if any run
 a2amx new -- sh                     # start and attach; Ctrl-B d detaches
-a2amx list
-a2amx attach <id> [--force]
-a2amx kill <id>
+a2amx list [--details]
+a2amx attach <id|name> [--force]
+a2amx kill <id|name>
 a2amx daemon --host-name host-a     # names this host in addresses (name@host-a)
 # --harness is inferred from the command name when omitted (claude, codex, omp)
 a2amx new --name agent-plan --harness claude -- claude
@@ -101,6 +101,8 @@ a2amx new --name agent-review --harness omp -- omp
 a2amx messages [--session <id>] [--state pending]
 a2amx cancel <message-id>
 ```
+
+Commands that take a session accept its name or its id.
 
 `--harness claude` wires the MCP server and the prompt-submit hook into Claude Code
 and delivers messages automatically; `--harness generic` (the default) holds them, and
@@ -126,7 +128,7 @@ then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
 scroll mode, `s` toggles the status line, `r` releases the session's message hold, and the prefix twice sends a
 literal prefix. The status line takes the terminal's last row and shows the session address,
 pending-message count, and a HELD alert with the hold reason. In `a2amx list`, ATTACHED means a human client is attached, not that
-the session is reachable: a detached session still receives messages. HELD shows the
+the session is reachable: a detached session still receives messages. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with
 an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or Codex status line last said about remaining quota (5h and weekly percent left); it can be stale and is empty when no status line is recognised.
 

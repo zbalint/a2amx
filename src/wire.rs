@@ -258,6 +258,10 @@ pub struct SessionSummary {
     pub hold_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota: Option<QuotaInfo>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub harness: Harness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// Percent left per quota window, as the harness's status line last showed it.

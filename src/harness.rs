@@ -35,6 +35,15 @@ pub enum Deliver {
 }
 
 impl Harness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Generic => "generic",
+            Self::Omp => "omp",
+            Self::Codex => "codex",
+        }
+    }
+
     /// The harness named by the command's executable, or `Generic` when it names none.
     pub fn infer(command: &[String]) -> Self {
         match command

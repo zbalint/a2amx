@@ -1022,6 +1022,10 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                             held: hold_reason.is_some(),
                             hold_reason: hold_reason.map(str::to_owned),
                             quota,
+                            harness: session.harness(),
+                            cwd: session
+                                .cwd()
+                                .map(|path| path.to_string_lossy().into_owned()),
                         }
                     })
                     .collect();

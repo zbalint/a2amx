@@ -357,7 +357,9 @@ machine; there is no central-versus-host split yet.
   `unmatchable_submission`. Each rejection still counts toward the session's
   three-in-row `corrupted_submissions` hold. See
   [delivery](delivery.md#implemented-claude-code-hook).
-- **Human controls.** `a2amx list` gains NAME, PENDING, and HELD columns; HELD
+- **Human controls.** `a2amx list` gains NAME, HARNESS, PENDING, and HELD columns;
+  `--details` appends CWD and COMMAND. The CLI resolves session names to ids before
+  attach, kill, and messages; the daemon still receives ids only. HELD
   shows the hold reason (or `-` when clear); `a2amx messages [--session S]
   [--state ...]` lists messages; `a2amx cancel <id>` cancels a pending one; the
   prefix then `r` releases a session's hold. Pending messages do not expire;

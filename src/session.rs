@@ -41,6 +41,7 @@ pub struct SessionSpec {
 pub struct Session {
     id: SessionId,
     pub(crate) argv: Vec<String>,
+    cwd: Option<std::path::PathBuf>,
     name: Option<String>,
     harness: Harness,
     channel: bool,
@@ -132,6 +133,7 @@ impl Session {
             .collect::<std::collections::HashMap<_, _>>();
         env.insert("TERM".into(), "xterm-256color".into());
         env.insert("COLORTERM".into(), "truecolor".into());
+        let cwd = spec.cwd.clone();
         let options = tty::Options {
             shell: Some(tty::Shell::new(program.clone(), spec.argv[1..].to_vec())),
             working_directory: spec.cwd,
@@ -250,6 +252,7 @@ impl Session {
         Ok(Self {
             id,
             argv: spec.argv,
+            cwd,
             name: spec.name,
             harness: spec.harness,
             channel: spec.channel,
@@ -277,6 +280,10 @@ impl Session {
 
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    pub fn cwd(&self) -> Option<&std::path::Path> {
+        self.cwd.as_deref()
     }
 
     pub fn harness(&self) -> Harness {

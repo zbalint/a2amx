@@ -186,7 +186,7 @@ fn harness_is_inferred_from_the_command() {
     let created = run(&home, &["new", "--detach", "--", claude.to_str().unwrap()]);
 
     assert!(created.status.success(), "stderr: {}", stderr(&created));
-    assert!(stdout(&run(&home, &["list"])).contains("--mcp-config"));
+    assert!(stdout(&run(&home, &["list", "--details"])).contains("--mcp-config"));
 }
 
 #[test]
@@ -210,5 +210,5 @@ fn explicit_generic_harness_wins_over_inference() {
     );
 
     assert!(created.status.success(), "stderr: {}", stderr(&created));
-    assert!(!stdout(&run(&home, &["list"])).contains("--mcp-config"));
+    assert!(!stdout(&run(&home, &["list", "--details"])).contains("--mcp-config"));
 }

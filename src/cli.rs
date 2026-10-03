@@ -61,7 +61,11 @@ pub enum Command {
         command: Vec<String>,
     },
     /// List sessions.
-    List,
+    List {
+        /// Also show each session's working directory and command.
+        #[arg(long)]
+        details: bool,
+    },
     /// Attach to a session.
     Attach {
         session: String,
