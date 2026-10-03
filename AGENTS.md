@@ -71,6 +71,7 @@ cargo fmt --check
 | `omp` | The embedded OMP extension and its launch files |
 | `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
 | `cli` | Command-line shape |
+| `team` | The team file and flag formats and the up-plan (pure; the commands live in `main`) |
 
 ## Public repository rules
 

@@ -267,6 +267,13 @@ section is the summary.
 - The client has a prefix state machine (bracketed-paste aware), a scroll mode, and
   a session picker.
 
+`team up` and `team down` are client-side commands; the daemon and wire are
+unchanged. The pure `team` module parses files and flags and plans launches.
+Before spawning, the CLI rejects all exited-name conflicts and skips running
+sessions. Preflight and spawning are deliberately non-atomic: a concurrent name
+claim fails at spawn, leaving earlier starts intact. Launches reuse `new`'s
+harness wiring; down targets only the requested names.
+
 ### Status line
 
 The attach client reserves the terminal's last row for a status line by default and

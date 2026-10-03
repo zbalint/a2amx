@@ -66,6 +66,11 @@ pub enum Command {
         #[arg(long)]
         details: bool,
     },
+    /// Start or stop sessions from a team file or NAME=EXECUTABLE arguments.
+    Team {
+        #[command(subcommand)]
+        action: TeamAction,
+    },
     /// Attach to a session.
     Attach {
         session: String,
@@ -109,4 +114,26 @@ pub enum Command {
     },
     /// Run the prompt-submit hook adapter (reads the harness payload on stdin).
     Hook,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TeamAction {
+    /// Start the sessions that are not running.
+    Up {
+        /// Team file (default: a2amx.toml). Cannot be combined with NAME=EXECUTABLE items.
+        #[arg(long, conflicts_with = "items")]
+        file: Option<PathBuf>,
+        /// Do not attach to any session.
+        #[arg(long)]
+        detach: bool,
+        /// NAME=EXECUTABLE; the first session is attached.
+        items: Vec<String>,
+    },
+    /// Kill the team's sessions, running or exited.
+    Down {
+        #[arg(long, conflicts_with = "names")]
+        file: Option<PathBuf>,
+        /// Session names (default: every name in the team file).
+        names: Vec<String>,
+    },
 }

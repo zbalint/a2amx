@@ -12,15 +12,16 @@ use clap::Parser;
 use tokio::sync::mpsc;
 
 use a2amx::bridge;
-use a2amx::cli::{Cli, Command};
+use a2amx::cli::{Cli, Command, TeamAction};
 use a2amx::client::{Attachment, Client};
 use a2amx::daemon::{self, Daemon, DaemonConfig};
 use a2amx::emulator::Scroll;
-use a2amx::harness::Harness;
+use a2amx::harness::{Deliver, Harness};
 use a2amx::hook;
 use a2amx::mcp;
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::status;
+use a2amx::team::{self, TeamSession};
 use a2amx::wire::{
     ClientFrame, MessageInfo, QuotaInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo,
 };
@@ -73,6 +74,14 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
         }
         options @ Command::New { .. } => run_new(home, prefix, options).await,
         Command::List { details } => run_list(home, details).await,
+        Command::Team { action } => match action {
+            TeamAction::Up {
+                file,
+                detach,
+                items,
+            } => run_team_up(home, prefix, file, detach, items).await,
+            TeamAction::Down { file, names } => run_team_down(home, file, names).await,
+        },
         Command::Attach { session, force } => {
             run_attach_command(home, prefix, session, force).await
         }
@@ -274,6 +283,62 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     else {
         return Err(anyhow!("expected new session options"));
     };
+    let mut client = Client::connect(&home).await?;
+    let (cols, rows) = terminal_size_with_default()?;
+    let session = create_session(
+        &home,
+        &mut client,
+        NewOptions {
+            name,
+            harness,
+            deliver,
+            no_authorize_peers,
+            no_channel,
+            command,
+            cwd: std::env::current_dir()?,
+            cols,
+            rows,
+        },
+    )
+    .await?;
+    if detach {
+        write_stdout(format!("{session}\n").into_bytes()).await?;
+        return Ok(());
+    }
+    if !stdin_is_terminal() {
+        return Err(anyhow!("attach needs a terminal on stdin"));
+    }
+    run_attachment(client, &home, prefix, session, false, cols, rows).await
+}
+
+struct NewOptions {
+    name: Option<String>,
+    harness: Option<Harness>,
+    deliver: Option<Deliver>,
+    no_authorize_peers: bool,
+    no_channel: bool,
+    command: Vec<String>,
+    cwd: PathBuf,
+    cols: u16,
+    rows: u16,
+}
+
+async fn create_session(
+    home: &Path,
+    client: &mut Client,
+    options: NewOptions,
+) -> anyhow::Result<String> {
+    let NewOptions {
+        name,
+        harness,
+        deliver,
+        no_authorize_peers,
+        no_channel,
+        command,
+        cwd,
+        cols,
+        rows,
+    } = options;
     let harness = harness.unwrap_or_else(|| Harness::infer(&command));
     let command = match harness {
         Harness::Claude => {
@@ -285,7 +350,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             }
         }
         Harness::Omp => {
-            let install_home = home.clone();
+            let install_home = home.to_owned();
             let installed =
                 tokio::task::spawn_blocking(move || a2amx::omp::install(&install_home)).await??;
             a2amx::harness::wire_omp_argv(
@@ -297,9 +362,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         }
         Harness::Generic | Harness::Codex => command,
     };
-    let mut client = Client::connect(&home).await?;
-    let (cols, rows) = terminal_size_with_default()?;
-    let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
+    let cwd = cwd.to_string_lossy().into_owned();
     let mut env: Vec<(String, String)> = std::env::vars().collect();
     if harness == Harness::Omp {
         env.push((
@@ -325,19 +388,154 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             deliver,
         })
         .await?;
-    let session = match response {
-        Response::Created { session } => session,
-        Response::Error { message } => return Err(anyhow!(message)),
-        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+    match response {
+        Response::Created { session } => Ok(session),
+        Response::Error { message } => Err(anyhow!(message)),
+        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
+}
+
+async fn read_team(file: PathBuf) -> anyhow::Result<Vec<TeamSession>> {
+    tokio::task::spawn_blocking(move || {
+        let text = std::fs::read_to_string(&file)
+            .with_context(|| format!("cannot read team file {}", file.display()))?;
+        team::parse(&text).with_context(|| format!("team file {}", file.display()))
+    })
+    .await?
+}
+
+async fn run_team_up(
+    home: PathBuf,
+    prefix: u8,
+    file: Option<PathBuf>,
+    detach: bool,
+    items: Vec<String>,
+) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir()?;
+    let (wanted, file_dir) = if items.is_empty() {
+        let file = cwd.join(file.unwrap_or_else(|| PathBuf::from("a2amx.toml")));
+        let file_dir = file.parent().unwrap_or(&cwd).to_owned();
+        (read_team(file).await?, file_dir)
+    } else {
+        (team::flag_sessions(&items)?, cwd.clone())
     };
-    if detach {
-        write_stdout(format!("{session}\n").into_bytes()).await?;
-        return Ok(());
+    let attach_name = wanted
+        .iter()
+        .find(|session| session.attach)
+        .map(|session| session.name.as_str());
+    let mut client = Client::connect(&home).await?;
+    let existing = request_sessions(&mut client).await?;
+    let actions = match team::plan(&wanted, &existing) {
+        Ok(actions) => actions,
+        Err(conflicts) => {
+            for conflict in conflicts {
+                write_stderr(
+                    format!(
+                        "session {} has exited ({}); run a2amx kill {} first\n",
+                        conflict.name, conflict.id, conflict.name,
+                    )
+                    .into_bytes(),
+                )
+                .await?;
+            }
+            return Err(anyhow!("team has exited session conflicts"));
+        }
+    };
+    let (cols, rows) = terminal_size_with_default()?;
+    let mut attached_id = None;
+    // shortcut: the conflict check and the spawns are not atomic; a name taken in between
+    // fails the spawn. A daemon-side batch request if concurrent clients make this matter.
+    for action in actions {
+        let (name, id) = match action {
+            team::Action::AlreadyRunning { name, id } => {
+                write_stdout(format!("already running {name} {id}\n").into_bytes()).await?;
+                (name, id)
+            }
+            team::Action::Start(session) => {
+                let name = session.name;
+                let result = create_session(
+                    &home,
+                    &mut client,
+                    NewOptions {
+                        name: Some(name.clone()),
+                        harness: None,
+                        deliver: None,
+                        no_authorize_peers: false,
+                        no_channel: false,
+                        command: session.command,
+                        cwd: session
+                            .cwd
+                            .map_or_else(|| cwd.clone(), |path| file_dir.join(path)),
+                        cols,
+                        rows,
+                    },
+                )
+                .await;
+                let id = result.with_context(|| format!("failed {name}"))?;
+                write_stdout(format!("started {name} {id}\n").into_bytes()).await?;
+                (name, id)
+            }
+        };
+        if attach_name == Some(name.as_str()) {
+            attached_id = Some(id);
+        }
     }
-    if !stdin_is_terminal() {
-        return Err(anyhow!("attach needs a terminal on stdin"));
+    if !detach && stdin_is_terminal() {
+        if let Some(session) = attached_id {
+            run_attachment(client, &home, prefix, session, false, cols, rows).await?;
+        }
     }
-    run_attachment(client, &home, prefix, session, false, cols, rows).await
+    Ok(())
+}
+
+async fn run_team_down(
+    home: PathBuf,
+    file: Option<PathBuf>,
+    names: Vec<String>,
+) -> anyhow::Result<()> {
+    let names = if names.is_empty() {
+        let file =
+            std::env::current_dir()?.join(file.unwrap_or_else(|| PathBuf::from("a2amx.toml")));
+        read_team(file)
+            .await?
+            .into_iter()
+            .map(|session| session.name)
+            .collect()
+    } else {
+        names
+    };
+    let mut client = Client::connect(&home).await?;
+    let sessions = request_sessions(&mut client).await?;
+    let mut failed = false;
+    for name in names {
+        let Some(session) = sessions
+            .iter()
+            .find(|session| session.name.as_deref() == Some(&name))
+        else {
+            write_stdout(format!("no session {name}\n").into_bytes()).await?;
+            continue;
+        };
+        let result = client
+            .request(Request::Kill {
+                session: session.id.clone(),
+            })
+            .await;
+        let error = match result {
+            Ok(Response::Ok) => {
+                write_stdout(format!("killed {name} {}\n", session.id).into_bytes()).await?;
+                continue;
+            }
+            Ok(Response::Error { message }) => message,
+            Ok(other) => format!("unexpected daemon response: {other:?}"),
+            Err(error) => error.to_string(),
+        };
+        write_stderr(format!("failed {name}: {error}\n").into_bytes()).await?;
+        failed = true;
+    }
+    if failed {
+        return Err(anyhow!("one or more team sessions could not be killed"));
+    }
+    Ok(())
 }
 
 async fn run_list(home: PathBuf, details: bool) -> anyhow::Result<()> {

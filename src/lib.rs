@@ -21,4 +21,5 @@ pub mod quota;
 pub mod session;
 pub mod status;
 mod store;
+pub mod team;
 pub mod wire;

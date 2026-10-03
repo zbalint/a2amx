@@ -94,6 +94,8 @@ a2amx new -- sh                     # start and attach; Ctrl-B d detaches
 a2amx list [--details]
 a2amx attach <id|name> [--force]
 a2amx kill <id|name>
+a2amx team up [--file F] [--detach] [NAME=EXE ...]   # a2amx.toml or bare executables
+a2amx team down [--file F] [NAME ...]
 a2amx daemon --host-name host-a     # names this host in addresses (name@host-a)
 # --harness is inferred from the command name when omitted (claude, codex, omp)
 a2amx new --name agent-plan --harness claude -- claude
@@ -131,6 +133,36 @@ pending-message count, and a HELD alert with the hold reason. In `a2amx list`, A
 the session is reachable: a detached session still receives messages. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with
 an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or Codex status line last said about remaining quota (5h and weekly percent left); it can be stale and is empty when no status line is recognised.
+
+### Teams
+
+`a2amx team up` reads `a2amx.toml` in the current directory by default:
+
+```toml
+[[session]]
+name = "architect"
+command = ["claude"]
+attach = true
+
+[[session]]
+name = "developer"
+command = ["omp"]
+cwd = "."
+```
+
+Use `--file` for another file; relative `cwd` values are relative to that file's
+directory, while an omitted `cwd` uses the invoking directory. `up` skips and reports
+running sessions. An exited session holding a requested name stops the whole team
+before any spawn; remove it with `a2amx kill NAME` first. If a later spawn fails,
+already-started sessions remain and no further session starts.
+
+Without a file, `a2amx team up architect=claude developer=omp` accepts bare
+executables only; commands with arguments need the file's argv arrays. The file
+may select one session to attach; the flag form attaches the first. `--detach`
+suppresses attachment, and nonterminal invocation never attaches.
+`a2amx team down` kills the file's named sessions, running or exited; explicit
+names select sessions directly. Missing names are reported without failing.
+`--file` cannot be combined with inline session items or names.
 
 ## Using it with agents
 
