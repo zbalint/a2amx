@@ -158,9 +158,11 @@ every byte it reads to a file in the temp dir. Variants differ only in when they
    { now: false }` serializes without a `now` key (assert on the literal JSON in `tests/daemon.rs`
    or a unit test that already covers `wire.rs` serialization).
 
-The OMP and Codex one-key behavior has no automated test (an OMP session needs a connected
-bridge and a Codex session a live app-server); the manual check below is its evidence, and the
-completion report says so.
+The one-key Codex path may additionally be tested with the wrapper pattern of `tests/codex.rs`
+(a program whose `app-server` branch links a socket and whose TUI branch runs the `sh -c` body);
+the developer may add one such test for test 1's behavior with `--harness codex`. An OMP session
+needs a connected bridge, so OMP's one-key path has no automated test; the manual check below
+covers OMP (and Codex when no wrapper test is added), and the completion report says which.
 
 Manual check, recorded in the completion report: on a temp home, start real `omp` and `codex`
 sessions in a trusted directory, run `a2amx kill` on each and read `daemon.log` for `exited`
