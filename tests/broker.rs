@@ -247,6 +247,9 @@ async fn session_tokens_roles_permissions_and_child_identity() {
         Request::Kill {
             session: sender_id.clone(),
         },
+        Request::Screen {
+            session: sender_id.clone(),
+        },
         Request::ListMessages {
             session: None,
             state: None,

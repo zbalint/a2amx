@@ -101,6 +101,7 @@ a2amx new -- sh                     # start and attach; Ctrl-B d detaches
 a2amx list [--details]
 a2amx attach <id|name> [--force]
 a2amx kill <id|name>
+a2amx screen <id|name> [--rows N]       # read visible screen text without attaching
 a2amx team up [--file F] [--detach] [NAME=EXE ...]   # a2amx.toml or bare executables
 a2amx team down [--file F] [NAME ...]
 a2amx daemon --host-name host-a     # names this host in addresses (name@host-a)

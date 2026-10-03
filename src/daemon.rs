@@ -1057,6 +1057,20 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     message: format!("unknown session {id}"),
                 },
             },
+            Request::Screen { session: id } => match lookup(&runtime, &id) {
+                Some((_, session)) => {
+                    let screen = {
+                        let state = session.lock();
+                        state.emulator.screen()
+                    };
+                    Response::Screen {
+                        lines: screen.text_lines(),
+                    }
+                }
+                None => Response::Error {
+                    message: format!("unknown session {id}"),
+                },
+            },
             Request::Attach {
                 session: id,
                 force,

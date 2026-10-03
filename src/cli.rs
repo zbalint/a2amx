@@ -80,6 +80,13 @@ pub enum Command {
     },
     /// Terminate a session.
     Kill { session: String },
+    /// Print a session's visible screen without attaching.
+    Screen {
+        session: String,
+        /// Keep only the last N visible lines.
+        #[arg(long)]
+        rows: Option<usize>,
+    },
     /// Stop the daemon. This ends every session.
     Stop {
         /// Do not ask for confirmation.

@@ -103,6 +103,15 @@ fn request_json_uses_exact_tagged_shapes() {
         .unwrap_or_default(),
         r#"{"type":"attach","session":"s1","force":true,"cols":120,"rows":40}"#
     );
+    let screen = Request::Screen {
+        session: "s1".to_owned(),
+    };
+    let screen_json = serde_json::to_string(&screen).unwrap_or_default();
+    assert_eq!(screen_json, r#"{"type":"screen","session":"s1"}"#);
+    assert_eq!(
+        serde_json::from_str::<Request>(&screen_json).ok(),
+        Some(screen)
+    );
 }
 
 #[test]
@@ -130,6 +139,16 @@ fn response_and_session_summary_shapes_remain_unchanged() {
         json,
         r#"{"type":"sessions","sessions":[{"id":"s1","argv":["cat"],"cols":80,"rows":24,"exit_code":null,"attached":false}]}"#
     );
+    assert_eq!(serde_json::from_str::<Response>(&json).ok(), Some(response));
+}
+
+#[test]
+fn screen_response_json_uses_exact_shape() {
+    let response = Response::Screen {
+        lines: vec!["first".to_owned(), "second".to_owned()],
+    };
+    let json = serde_json::to_string(&response).unwrap_or_default();
+    assert_eq!(json, r#"{"type":"screen","lines":["first","second"]}"#);
     assert_eq!(serde_json::from_str::<Response>(&json).ok(), Some(response));
 }
 

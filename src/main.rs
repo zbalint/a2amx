@@ -88,6 +88,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             run_attach_command(home, prefix, session, force).await
         }
         Command::Kill { session } => run_kill(home, session).await,
+        Command::Screen { session, rows } => run_screen(home, session, rows).await,
         Command::Stop { yes } => run_stop(home, yes).await,
         Command::Mcp { .. } | Command::Hook | Command::OmpBridge => {
             unreachable!("early dispatch returned before resolving home")
@@ -561,6 +562,28 @@ async fn run_kill(home: PathBuf, session: String) -> anyhow::Result<()> {
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }
 }
+
+async fn run_screen(home: PathBuf, session: String, rows: Option<usize>) -> anyhow::Result<()> {
+    let session = resolve_session(&home, &session).await?;
+    let mut client = Client::connect(&home).await?;
+    let response = client.request(Request::Screen { session }).await?;
+    let lines = match response {
+        Response::Screen { lines } => lines,
+        Response::Error { message } => return Err(anyhow!(message)),
+        other => return Err(anyhow!("unexpected screen response: {other:?}")),
+    };
+    let lines = if let Some(rows) = rows {
+        let start = lines.len().saturating_sub(rows);
+        lines.into_iter().skip(start).collect::<Vec<_>>()
+    } else {
+        lines
+    };
+    if lines.is_empty() {
+        return write_stdout(Vec::new()).await;
+    }
+    write_stdout(format!("{}\n", lines.join("\n")).into_bytes()).await
+}
+
 async fn run_messages(
     home: PathBuf,
     session: Option<String>,

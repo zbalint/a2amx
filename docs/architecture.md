@@ -272,6 +272,9 @@ section is the summary.
   control channel and tagged binary frames on attach streams.
 - The client has a prefix state machine (bracketed-paste aware), a scroll mode, and
   a session picker.
+- The admin-only `a2amx screen <id|name> [--rows N]` request copies visible text from
+  the session emulator without attaching, resizing, or sending input; it works for
+  attached, detached, and exited-until-killed sessions.
 
 The client owns the outer terminal's mouse while the session's mouse reporting is
 off: wheel reports become three-line scroll-mode steps and other reports are dropped.

@@ -106,6 +106,28 @@ impl Screen {
     pub fn cell(&self, row: u16, col: u16) -> &Cell {
         &self.cells[usize::from(row) * usize::from(self.size.cols) + usize::from(col)]
     }
+
+    /// Return active-screen text with trailing spaces and blank rows removed.
+    pub fn text_lines(&self) -> Vec<String> {
+        let cols = usize::from(self.size.cols);
+        let mut lines = Vec::with_capacity(usize::from(self.size.rows));
+        for row in 0..usize::from(self.size.rows) {
+            let start = row * cols;
+            let end = start + cols;
+            let mut line = String::with_capacity(cols);
+            for cell in &self.cells[start..end] {
+                if cell.attrs.contains(Attrs::WIDE_SPACER) {
+                    continue;
+                }
+                line.push(cell.ch);
+            }
+            lines.push(line.trim_end_matches(' ').to_owned());
+        }
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        lines
+    }
 }
 
 #[derive(Clone, Default)]

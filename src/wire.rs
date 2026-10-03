@@ -138,6 +138,9 @@ pub enum Request {
     Kill {
         session: String,
     },
+    Screen {
+        session: String,
+    },
     /// Admin only: ask the daemon to shut down.
     Shutdown,
     SendMessage {
@@ -204,6 +207,9 @@ pub enum Response {
     },
     Sessions {
         sessions: Vec<SessionSummary>,
+    },
+    Screen {
+        lines: Vec<String>,
     },
     Attached,
     Ok,

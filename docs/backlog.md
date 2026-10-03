@@ -54,6 +54,7 @@ lag the code.
 | F2 | Named launch templates in an operator config file, launch ownership (a launcher may kill only what it launched), trusted working directory so the Claude trust dialog cannot block unattended delivery | docs |
 | F3 | Scoping of `list_agents` (exchanges or workspaces) instead of every session seeing every session | docs |
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited`. Today an exited session keeps its name until `a2amx kill NAME`, and `team down` clears only the team file's names. Needs its own spec | reported |
+| F5 | Delete `scripts/screen-probe.py` after the owner confirms `a2amx screen` works in real use | spec 2r |
 
 ## Closed
 
