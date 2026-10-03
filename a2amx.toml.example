@@ -1,10 +1,12 @@
 # Copy to a2amx.toml, then run: a2amx team up
+# Session names are unique per daemon and shared by every project on the machine,
+# so prefix them with the project name (here "myproject-") to avoid collisions.
 [[session]]
-name = "architect"
+name = "myproject-architect"
 command = ["claude"]
 attach = true
 
 [[session]]
-name = "developer"
+name = "myproject-developer"
 command = ["omp"]
 cwd = "."
