@@ -8,6 +8,10 @@ target names who may trigger it; fail fast; OMP users may add `/prewalk restart`
 command), plus the architect's design, grounded by a probe of real claude, codex and omp sessions
 (section 3). Native message delivery is unchanged.
 
+**Amendment 1** (2026-10-03, developer BLOCKED): the section 0 scope for `src/messaging.rs` said
+"error codes only" while D3 and section 4.2 put `validate_reset_steps` there; the scope now
+allows both. No other text changes.
+
 **Baseline:** develop at the commit that adds this spec (on top of `9771c4f`). **Location and
 branch:** main checkout `/home/zbalint/workspace/a2amx`, branch `develop`. Shared task
 `context_id`: `a2amx-session-reset`. Public test seams: the `a2amx` CLI against a real daemon with
@@ -17,7 +21,8 @@ fake sessions (`tests/common`, as `tests/daemon_cli.rs` does), the broker path w
 **Scope.** May edit exactly these files and no others.
 
 - `src/wire.rs`, `src/team.rs`, `src/cli.rs`, `src/main.rs`, `src/session.rs`, `src/daemon.rs`,
-  `src/mcp.rs`, `src/messaging.rs` (error codes only)
+  `src/mcp.rs`, `src/messaging.rs` (the error codes of D8 and the shared validator
+  `validate_reset_steps` of D3, nothing else; amendment 1)
 - tests: `tests/daemon_cli.rs`, `tests/broker.rs`, `tests/wire.rs`, `tests/mcp.rs` (the exact
   tool list and schema assertions gain `reset_session`), `tests/team.rs` (the `TeamSession`
   literals gain the two new fields), and the mechanical
