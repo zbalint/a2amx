@@ -30,6 +30,7 @@ use a2amx::wire::{
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const INPUT_CHUNK: usize = 8 * 1024;
+const DAEMON_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const MOUSE_CAPTURE: &[u8] = b"\x1b[?1000h\x1b[?1006h";
 const RESTORE_TERMINAL: &[u8] = b"\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1l\x1b>\x1b[?25h\x1b[?1049l";
 
@@ -83,7 +84,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 }
             }
             DaemonAction::Status => return run_daemon_status(home).await,
-            DaemonAction::Stop { yes } => run_stop(home, yes).await,
+            DaemonAction::Stop { yes, now } => run_stop(home, yes, now).await,
         },
         options @ Command::New { .. } => run_new(home, prefix, options).await,
         Command::List { details } => run_list(home, details).await,
@@ -93,12 +94,12 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 detach,
                 items,
             } => run_team_up(home, prefix, file, detach, items).await,
-            TeamAction::Down { file, names } => run_team_down(home, file, names).await,
+            TeamAction::Down { file, names, now } => run_team_down(home, file, names, now).await,
         },
         Command::Attach { session, force } => {
             run_attach_command(home, prefix, session, force).await
         }
-        Command::Kill { session, yes } => run_kill(home, session, yes).await,
+        Command::Kill { session, yes, now } => run_kill(home, session, yes, now).await,
         Command::Reset { session } => run_reset(home, session).await,
         Command::Screen { session, rows } => run_screen(home, session, rows).await,
         Command::Messages { session, state } => run_messages(home, session, state).await,
@@ -284,7 +285,7 @@ async fn confirm(prompt: &str, refusal: &str) -> anyhow::Result<bool> {
     ))
 }
 
-async fn run_stop(home: PathBuf, yes: bool) -> anyhow::Result<()> {
+async fn run_stop(home: PathBuf, yes: bool, now: bool) -> anyhow::Result<()> {
     let Ok(mut client) = Client::connect(&home).await else {
         return write_stdout(b"no daemon running\n".to_vec()).await;
     };
@@ -306,15 +307,15 @@ async fn run_stop(home: PathBuf, yes: bool) -> anyhow::Result<()> {
             return write_stdout(b"not stopped\n".to_vec()).await;
         }
     }
-    match client.request(Request::Shutdown).await? {
+    match client.request(Request::Shutdown { now }).await? {
         Response::Ok => {}
         Response::Error { message } => return Err(anyhow!(message)),
         other => return Err(anyhow!("unexpected daemon response: {other:?}")),
     }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    while Client::connect(&home).await.is_ok() {
+    let deadline = tokio::time::Instant::now() + DAEMON_STOP_TIMEOUT;
+    while read_addrs(&home).await.is_ok() {
         if tokio::time::Instant::now() >= deadline {
-            return Err(anyhow!("daemon did not stop within 15s"));
+            return Err(anyhow!("daemon did not stop within 30s"));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -559,6 +560,7 @@ async fn run_team_down(
     home: PathBuf,
     file: Option<PathBuf>,
     names: Vec<String>,
+    now: bool,
 ) -> anyhow::Result<()> {
     let names = if names.is_empty() {
         let file =
@@ -585,6 +587,7 @@ async fn run_team_down(
         let result = client
             .request(Request::Kill {
                 session: session.id.clone(),
+                now,
             })
             .await;
         let error = match result {
@@ -616,7 +619,7 @@ async fn run_list(home: PathBuf, details: bool) -> anyhow::Result<()> {
     write_stdout(format_session_table(&sessions, details).into_bytes()).await
 }
 
-async fn run_kill(home: PathBuf, reference: String, yes: bool) -> anyhow::Result<()> {
+async fn run_kill(home: PathBuf, reference: String, yes: bool, now: bool) -> anyhow::Result<()> {
     let mut client = Client::connect(&home).await?;
     let sessions = request_sessions(&mut client).await?;
     let session = resolve_reference(&sessions, &reference);
@@ -634,7 +637,7 @@ async fn run_kill(home: PathBuf, reference: String, yes: bool) -> anyhow::Result
             return write_stdout(b"not killed\n".to_vec()).await;
         }
     }
-    match client.request(Request::Kill { session }).await? {
+    match client.request(Request::Kill { session, now }).await? {
         Response::Ok => Ok(()),
         Response::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),

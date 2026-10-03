@@ -258,6 +258,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
         },
         Request::Kill {
             session: sender_id.clone(),
+            now: true,
         },
         Request::Screen {
             session: sender_id.clone(),
@@ -370,7 +371,10 @@ async fn naming_addresses_and_role_expires_after_exit() {
 
     assert_eq!(
         admin
-            .request(Request::Kill { session: named_id })
+            .request(Request::Kill {
+                session: named_id,
+                now: true,
+            })
             .await
             .unwrap(),
         Response::Ok

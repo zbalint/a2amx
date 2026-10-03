@@ -141,6 +141,8 @@ pub enum Request {
     },
     Kill {
         session: String,
+        #[serde(default, skip_serializing_if = "is_default")]
+        now: bool,
     },
     Reset {
         session: String,
@@ -149,7 +151,10 @@ pub enum Request {
         session: String,
     },
     /// Admin only: ask the daemon to shut down.
-    Shutdown,
+    Shutdown {
+        #[serde(default, skip_serializing_if = "is_default")]
+        now: bool,
+    },
     SendMessage {
         to: String,
         subject: String,

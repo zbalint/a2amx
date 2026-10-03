@@ -96,15 +96,15 @@ cargo build
 cargo test
 a2amx daemon start [--foreground]  # start the daemon; detached by default
 a2amx daemon status               # show daemon state and session counts
-a2amx daemon stop [--yes]         # end the daemon and every session; asks first if any run
+a2amx daemon stop [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx new -- sh                   # start and attach; Ctrl-B d detaches
 a2amx list [--details]
 a2amx attach <id|name> [--force]
-a2amx kill <id|name> [--yes]
+a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx reset <id|name>               # type the configured reset sequence
 a2amx screen <id|name> [--rows N]   # read visible screen text without attaching
 a2amx team up [--file F] [--detach] [NAME=EXE ...]   # a2amx.toml or bare executables
-a2amx team down [--file F] [NAME ...]
+a2amx team down [--file F] [--now] [NAME ...]
 a2amx daemon start --host-name host-a  # names this host in addresses (name@host-a)
 # --harness is inferred from the command name when omitted (claude, codex, omp)
 a2amx new --name agent-plan --harness claude -- claude
@@ -112,6 +112,9 @@ a2amx new --name agent-review --harness omp -- omp
 a2amx messages [--session <id>] [--state pending]
 a2amx cancel <message-id>
 ```
+
+`kill`, `team down`, and `daemon stop` use graceful Ctrl-D by default; pass `--now`
+to skip it and use the immediate HUP/KILL path.
 
 Commands that take a session accept its name or its id.
 
@@ -191,7 +194,9 @@ executables only; commands with arguments need the file's argv arrays. The file
 may select one session to attach; the flag form attaches the first. `--detach`
 suppresses attachment, and nonterminal invocation never attaches.
 `a2amx team down` kills the file's named sessions, running or exited; explicit
-names select sessions directly. Missing names are reported without failing.
+names select sessions directly. It uses the same graceful Ctrl-D default as `kill`;
+pass `--now` to use the immediate HUP/KILL path. Missing names are reported without
+failing.
 `--file` cannot be combined with inline session items or names.
 
 ## Using it with agents

@@ -27,6 +27,8 @@ pub struct SessionId(pub String);
 const RESET_SETTLE: Duration = Duration::from_millis(1500); // shortcut: fixed settle; replace with a per-harness completion marker if a harness reports readiness early or needs longer.
 const RESET_POLL: Duration = Duration::from_millis(100);
 const RESET_TIMEOUT: Duration = Duration::from_secs(30);
+const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(10);
+const CLAUDE_EXIT_KEY_GAP: Duration = Duration::from_millis(300);
 
 pub struct SessionSpec {
     pub argv: Vec<String>,
@@ -772,8 +774,11 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn kill(&self) -> anyhow::Result<()> {
+    pub(crate) async fn kill(&self, graceful: bool) -> anyhow::Result<()> {
         if self.exit_code().is_some() {
+            return Ok(());
+        }
+        if graceful && self.harness != Harness::Generic && self.graceful_exit().await {
             return Ok(());
         }
         if let Err(error) = kill_process_group(self.pid, Signal::HUP) {
@@ -795,6 +800,84 @@ impl Session {
             self.wait_exit().await;
         }
         Ok(())
+    }
+
+    fn log_graceful(&self, outcome: &str, code: Option<&str>, error: Option<&anyhow::Error>) {
+        match (code, error) {
+            (Some(code), Some(error)) => tracing::info!(
+                session = %self.id.0,
+                outcome = outcome,
+                code = code,
+                %error,
+                "graceful exit"
+            ),
+            (Some(code), None) => tracing::info!(
+                session = %self.id.0,
+                outcome = outcome,
+                code = code,
+                "graceful exit"
+            ),
+            (None, Some(error)) => tracing::info!(
+                session = %self.id.0,
+                outcome = outcome,
+                %error,
+                "graceful exit"
+            ),
+            (None, None) => tracing::info!(
+                session = %self.id.0,
+                outcome = outcome,
+                "graceful exit"
+            ),
+        }
+    }
+
+    async fn graceful_exit(&self) -> bool {
+        let _guard = match self.begin_reset() {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.log_graceful("skipped", Some(error.code), None);
+                return false;
+            }
+        };
+        // shortcut: a human can start typing between this gate check and the key;
+        // re-check inside the input lock if a composer corruption is observed.
+        if let Some(code) = self.reset_gate_reason() {
+            self.log_graceful("skipped", Some(code), None);
+            return false;
+        }
+        let key = vec![0x04];
+        match self.enqueue(key.clone()).await {
+            Ok(true) => {}
+            Ok(false) => {
+                self.log_graceful("exited", None, None);
+                return true;
+            }
+            Err(error) => {
+                self.log_graceful("skipped", Some("input_closed"), Some(&error));
+                return false;
+            }
+        }
+        if self.harness == Harness::Claude {
+            // shortcut: fixed 300 ms against Claude's pending-exit window; use a
+            // screen-based wait if a Claude release shortens that window.
+            tokio::time::sleep(CLAUDE_EXIT_KEY_GAP).await;
+            match self.enqueue(key).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.log_graceful("exited", None, None);
+                    return true;
+                }
+                Err(error) => {
+                    self.log_graceful("skipped", Some("input_closed"), Some(&error));
+                    return false;
+                }
+            }
+        }
+        let exited = tokio::time::timeout(GRACEFUL_TIMEOUT, self.wait_exit())
+            .await
+            .is_ok();
+        self.log_graceful(if exited { "exited" } else { "timeout" }, None, None);
+        exited
     }
 
     async fn wait_exit(&self) {

@@ -855,7 +855,8 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
     assert_eq!(
         admin
             .request(Request::Kill {
-                session: "s2".into()
+                session: "s2".into(),
+                now: true,
             })
             .await?,
         Response::Ok

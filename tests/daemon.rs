@@ -14,6 +14,22 @@ use a2amx::wire::{ClientFrame, Request, Response, ServerFrame, SessionSummary, e
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+#[test]
+fn shutdown_wire_defaults_graceful_and_omits_false_now() {
+    let kill: Request = serde_json::from_str(r#"{"type":"kill","session":"s1"}"#).unwrap();
+    assert_eq!(
+        kill,
+        Request::Kill {
+            session: "s1".into(),
+            now: false,
+        }
+    );
+    let shutdown = Request::Shutdown { now: false };
+    assert_eq!(
+        serde_json::to_string(&shutdown).unwrap(),
+        r#"{"type":"shutdown"}"#
+    );
+}
 async fn create(client: &mut Client, argv: &[&str], env: Vec<(String, String)>) -> String {
     match client
         .request(Request::NewSession {
@@ -199,7 +215,8 @@ async fn failed_spawns_and_zero_sizes_leave_no_sessions() {
     assert!(matches!(
         client
             .request(Request::Kill {
-                session: "unknown".into()
+                session: "unknown".into(),
+                now: true,
             })
             .await
             .unwrap(),
@@ -331,7 +348,13 @@ async fn detached_queries_environment_and_final_output_are_preserved() {
     assert_eq!(next(&mut attachment).await, ServerFrame::Exit(7));
     assert!(attachment.recv().await.unwrap().is_none());
     assert_eq!(
-        client.request(Request::Kill { session: id }).await.unwrap(),
+        client
+            .request(Request::Kill {
+                session: id,
+                now: true,
+            })
+            .await
+            .unwrap(),
         Response::Ok
     );
     assert_eq!(list(&mut client).await, vec![]);
@@ -456,7 +479,13 @@ async fn kill_removes_running_session_and_shutdown_disconnects_attachments() {
     let mut client = Client::connect(dir.path()).await.unwrap();
     let id = create(&mut client, &["sh", "-c", "sleep 30"], vec![]).await;
     assert_eq!(
-        client.request(Request::Kill { session: id }).await.unwrap(),
+        client
+            .request(Request::Kill {
+                session: id,
+                now: true,
+            })
+            .await
+            .unwrap(),
         Response::Ok
     );
     assert_eq!(list(&mut client).await, vec![]);
@@ -591,7 +620,8 @@ async fn ids_are_numerically_ordered_and_not_reused_after_kill() {
     assert_eq!(
         client
             .request(Request::Kill {
-                session: "s1".into()
+                session: "s1".into(),
+                now: true,
             })
             .await
             .unwrap(),
@@ -620,7 +650,13 @@ async fn kill_escalates_ignored_hangup_and_reports_the_signal_exit() {
     let mut emu = Emulator::new(Size { cols: 40, rows: 5 });
     wait_text(&mut attachment, &mut emu, "ready").await;
     assert_eq!(
-        client.request(Request::Kill { session: id }).await.unwrap(),
+        client
+            .request(Request::Kill {
+                session: id,
+                now: true
+            })
+            .await
+            .unwrap(),
         Response::Ok
     );
     loop {

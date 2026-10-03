@@ -439,6 +439,7 @@ async fn killing_the_session_stops_its_app_server() {
     let Response::Ok = admin
         .request(Request::Kill {
             session: "s2".into(),
+            now: true,
         })
         .await
         .unwrap()

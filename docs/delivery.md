@@ -122,6 +122,14 @@ abandoning the text. Idle time, detach, and controller loss are not proof of an
 empty composer, so a dirty session stays held across detach and network reconnects.
 The operator is responsible for not leaving unsent text behind.
 
+Graceful termination reuses the reset gate and delivery hold: `kill`, `team down`,
+and daemon shutdown type raw Ctrl-D only when the session is alive, ready, idle, and
+not held or drafting. Claude receives a second raw Ctrl-D after 300 ms; the other
+known harnesses receive one. The bytes are never a paste and never followed by CR.
+`--now`, Generic sessions, and gate refusals use the existing HUP, three-second wait,
+and KILL fallback. A failed graceful wait is logged and falls back; A2AMX never sends
+Ctrl-C.
+
 A2AMX never sends Ctrl-C to clear a draft. Its meaning depends on the harness and
 the turn state: it interrupts a running turn in Claude Code even when text is in the
 composer, opens a cancel/background dialog in Codex mid-turn with an empty

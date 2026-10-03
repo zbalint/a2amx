@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -64,6 +64,7 @@ struct Runtime {
     new_session_gate: tokio::sync::Mutex<()>,
     deliveries: Mutex<Vec<JoinHandle<()>>>,
     stop_requested: tokio::sync::Notify,
+    stop_now: AtomicBool,
 }
 
 enum Role {
@@ -807,6 +808,7 @@ impl Daemon {
             new_session_gate: tokio::sync::Mutex::new(()),
             deliveries: Mutex::new(Vec::new()),
             stop_requested: tokio::sync::Notify::new(),
+            stop_now: AtomicBool::new(false),
         });
         let purge = {
             let store = runtime.store.clone();
@@ -925,9 +927,10 @@ impl Daemon {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+        let graceful = !self.runtime.stop_now.load(Ordering::Relaxed);
         let mut kills = JoinSet::new();
         for session in sessions {
-            kills.spawn(async move { session.kill().await });
+            kills.spawn(async move { session.kill(graceful).await });
         }
         while let Some(result) = kills.join_next().await {
             if let Err(error) = result
@@ -1125,15 +1128,16 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 Response::Sessions { sessions }
             }
             request @ Request::NewSession { .. } => runtime.create_session(request).await?,
-            Request::Shutdown => {
+            Request::Shutdown { now } => {
                 // Answer first: shutdown closes every connection, this one included.
+                runtime.stop_now.store(now, Ordering::Relaxed);
                 let sent = response(&mut connection, Response::Ok).await;
                 runtime.stop_requested.notify_one();
                 sent?;
                 continue;
             }
-            Request::Kill { session: id } => match lookup(&runtime, &id) {
-                Some((number, session)) => match session.kill().await {
+            Request::Kill { session: id, now } => match lookup(&runtime, &id) {
+                Some((number, session)) => match session.kill(!now).await {
                     Ok(()) => {
                         runtime
                             .sessions

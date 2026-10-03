@@ -245,7 +245,12 @@ section is the summary.
 - `a2amx daemon start` re-executes the binary in its own session with output appended
   to `<state dir>/daemon.log`, and waits until it answers. `a2amx daemon stop` sends
   the admin-only `Shutdown` request; the daemon answers, then shuts down as it does
-  on SIGTERM. No pid is stored.
+  on SIGTERM. Before the existing HUP/three-second/KILL fallback, the default kill,
+  team-down, and daemon-stop paths take the reset gate and type Ctrl-D for a ready
+  Claude, Codex, or OMP session (`--now` skips this graceful step), waiting up to
+  10 seconds for the child to exit. Claude receives two Ctrl-D bytes 300 ms apart.
+  No Ctrl-D is sent to Generic, held, drafting, busy, not-ready, or reset-running
+  sessions. No Ctrl-C is sent.
 - The attach client redraws from the emulator, like tmux: one full render, then
   damage-based updates. The daemon never forwards raw PTY bytes. No graphics,
   hyperlinks, clipboard writes, application titles, or bell reach the client.
@@ -281,12 +286,13 @@ off: wheel reports become three-line scroll-mode steps and other reports are dro
 It learns the session's mouse state from mode sequences in `Data` frames and leaves the
 mouse to the session when reporting is on.
 
-`team up` and `team down` are client-side commands; the daemon and wire are
-unchanged. The pure `team` module parses files and flags and plans launches.
-Before spawning, the CLI rejects all exited-name conflicts and skips running
-sessions. Preflight and spawning are deliberately non-atomic: a concurrent name
-claim fails at spawn, leaving earlier starts intact. Launches reuse `new`'s
-harness wiring; down targets only the requested names.
+`team up` and `team down` are client-side commands; `team down` sends the same
+graceful `Request::Kill` path as `kill` by default, or `now: true` for `--now`.
+The pure `team` module parses files and flags and plans launches. Before spawning,
+the CLI rejects all exited-name conflicts and skips running sessions. Preflight and
+spawning are deliberately non-atomic: a concurrent name claim fails at spawn,
+leaving earlier starts intact. Launches reuse `new`'s harness wiring; down targets
+only the requested names.
 
 ### Status line
 

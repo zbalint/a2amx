@@ -352,7 +352,8 @@ async fn hold_delivery_never_injects_and_kill_fails_open_messages() {
     assert_eq!(
         case.admin
             .request(Request::Kill {
-                session: case.recipient.clone()
+                session: case.recipient.clone(),
+                now: true,
             })
             .await
             .unwrap(),
@@ -440,7 +441,8 @@ async fn recipient_exit_during_paste_never_submits_cr() {
     assert_eq!(
         case.admin
             .request(Request::Kill {
-                session: case.recipient.clone()
+                session: case.recipient.clone(),
+                now: true,
             })
             .await
             .unwrap(),

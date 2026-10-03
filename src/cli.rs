@@ -84,6 +84,9 @@ pub enum Command {
         /// Do not ask for confirmation.
         #[arg(long)]
         yes: bool,
+        /// Skip the graceful exit and stop at once.
+        #[arg(long)]
+        now: bool,
     },
     /// Run the target session's configured reset sequence.
     Reset { session: String },
@@ -144,6 +147,9 @@ pub enum DaemonAction {
         /// Do not ask for confirmation.
         #[arg(long)]
         yes: bool,
+        /// Skip the graceful exit and stop at once.
+        #[arg(long)]
+        now: bool,
     },
 }
 #[derive(Debug, Subcommand)]
@@ -165,5 +171,8 @@ pub enum TeamAction {
         file: Option<PathBuf>,
         /// Session names (default: every name in the team file).
         names: Vec<String>,
+        /// Skip the graceful exit and stop at once.
+        #[arg(long)]
+        now: bool,
     },
 }

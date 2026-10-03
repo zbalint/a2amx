@@ -45,17 +45,16 @@ lag the code.
 | I2 | Spec 2f review nits: `child.kill` and `stdin.end` in the OMP extension shutdown may be unguarded; `unreachable!` in `src/omp.rs` `render_extension`; install cleanup can mask the original error | code |
 | I3 | A split escape sequence can hold a session; the paste-then-`CR` gap is one fixed constant; an unreadable PTY can hold the writer gate; message bodies are stored as plaintext | docs |
 | I4 | The Codex "Update available" startup dialog leaves no thread loaded, so messages wait with `no_thread` until a person presses Esc | manual |
+| I5 | Claude readiness during the Press Ctrl-D again footer is unprobed (spec 2u sends both keys without a gate between them) | spec 2u |
 
 ## Ideas and possible features
 
 | ID | Item | Evidence |
 | --- | --- | --- |
-| F1 | Graceful session stop when the daemon exits (today SIGHUP, then SIGKILL). Owner design in F7 | docs |
 | F2 | Named launch templates in an operator config file, launch ownership (a launcher may kill only what it launched), trusted working directory so the Claude trust dialog cannot block unattended delivery | docs |
 | F3 | Scoping of `list_agents` (exchanges or workspaces) instead of every session seeing every session | docs |
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited`. Today an exited session keeps its name until `a2amx kill NAME`, and `team down` clears only the team file's names. Needs its own spec | reported |
 | F5 | Delete `scripts/screen-probe.py` after the owner confirms `a2amx screen` works in real use | spec 2r |
-| F7 | Graceful exit for `kill`, `stop` and the daemon stopping: for an idle session type Ctrl-D (once for OMP and Codex, twice for Claude), wait for exit, otherwise fall back to the current HUP, wait, KILL sequence. Default, with `--now` to skip it; timeout at least 10 s; same gates as reset (running, no hold, no human draft, ready, OMP idle), checked before each key, never Ctrl-C; Generic sessions skip it. The once-versus-twice claim is unprobed, so a tester probe on an isolated daemon comes before the spec | reported |
 | F8 | Exit event: when a session in a team exits or crashes, the daemon messages the sessions that watch it at once. No timer, so it covers crashes only, not a looping peer. Smaller than F9 and built first | reported |
 | F9 | Heartbeat for chosen team sessions (team file, for example `heartbeat = "30m"`): an idle orchestrator or architect only wakes on messages, so it cannot notice a stuck peer. The daemon sends a message from a system sender when the session has been idle for the interval (any activity resets the timer), through the normal delivery gates, at most one undelivered at a time. The body is a digest of the watched peers: time in the current turn, time since the last message to or from the peer, time since the screen last changed, holds, and a hint to run `a2amx screen <peer>`. Skipped when every watched peer is idle with an empty queue; no quota handling. The daemon cannot tell long work from a loop, so the recipient judges. After F8 | reported |
 | F10 | `list_agents` (MCP) also returns each agent's `harness` (`claude`, `omp`, `codex`, `generic`) and its spawn `cwd`, both optional and omitted when unknown, named as in `a2amx list`. Owner idea 2026-10-04, queued as spec 2x after 2w. Touches the exact tool-shape assertions in `tests/mcp.rs` and `tests/bridge.rs` | reported |
