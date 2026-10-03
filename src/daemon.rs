@@ -22,11 +22,12 @@ use crate::delivery::{AnyChannel, Channel};
 use crate::emulator::Size;
 use crate::harness::{self, Deliver, Harness};
 use crate::messaging::{self, Limits, MessageState, code};
+use crate::quota;
 use crate::session::{AttachmentSlot, NativeGuard, Session, SessionId, SessionSpec};
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
-    AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo, Request,
-    Response, ServerFrame, SessionSummary, StatusInfo,
+    AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo, QuotaInfo,
+    Request, Response, ServerFrame, SessionSummary, StatusInfo,
 };
 
 pub struct DaemonConfig {
@@ -345,6 +346,9 @@ impl Runtime {
                             .hold_reason()
                             .map(str::to_owned)
                     },
+                    recipient_quota: session_quota(&recipient)
+                        .and_then(|quota| quota.exhausted())
+                        .map(|window| format!("{window} quota exhausted")),
                 }
             }
             Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
@@ -999,6 +1003,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     .values()
                     .map(|session| {
                         let hold_reason = AnyChannel::for_session(session.clone()).hold_reason();
+                        let quota = session_quota(session);
                         let state = session.lock();
                         SessionSummary {
                             id: session.id().0.clone(),
@@ -1016,6 +1021,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                             pending: counts.get(&session.id().0).copied().unwrap_or(0),
                             held: hold_reason.is_some(),
                             hold_reason: hold_reason.map(str::to_owned),
+                            quota,
                         }
                     })
                     .collect();
@@ -1096,6 +1102,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                         }
                         .into(),
                         attached: session.attached(),
+                        quota: session_quota(session),
                     })
                     .collect();
                 Response::Agents { agents }
@@ -1253,6 +1260,16 @@ async fn bridge(
             }
         }
     }
+}
+
+/// The quota a running claude or codex session's status line reports.
+fn session_quota(session: &Session) -> Option<QuotaInfo> {
+    if session.exit_code().is_some()
+        || !matches!(session.harness(), Harness::Claude | Harness::Codex)
+    {
+        return None;
+    }
+    quota::read(&session.lock().emulator.screen())
 }
 
 fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {

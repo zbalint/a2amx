@@ -128,7 +128,7 @@ literal prefix. The status line takes the terminal's last row and shows the sess
 pending-message count, and a HELD alert with the hold reason. In `a2amx list`, ATTACHED means a human client is attached, not that
 the session is reachable: a detached session still receives messages. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with
-an empty composer may hold after you typed in it, and `r` clears it.
+an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or Codex status line last said about remaining quota (5h and weekly percent left); it can be stale and is empty when no status line is recognised.
 
 ## Using it with agents
 

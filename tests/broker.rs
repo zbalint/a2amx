@@ -75,6 +75,7 @@ fn accepted(response: Response, id: &str, recipient_hold: Option<&str>) {
         Response::Accepted {
             id: id.to_owned(),
             recipient_hold: recipient_hold.map(str::to_owned),
+            recipient_quota: None,
         }
     );
 }

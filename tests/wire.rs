@@ -120,6 +120,7 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             pending: 0,
             held: false,
             hold_reason: None,
+            quota: None,
         }],
     };
     let json = serde_json::to_string(&response).unwrap_or_default();
@@ -307,6 +308,7 @@ fn messaging_control_variants_round_trip() {
         Response::Accepted {
             id: "m_1".into(),
             recipient_hold: None,
+            recipient_quota: None,
         },
         Response::Failed {
             code: "queue_full".into(),
@@ -317,6 +319,7 @@ fn messaging_control_variants_round_trip() {
                 address: "agent-plan@host-a".into(),
                 state: "running".into(),
                 attached: false,
+                quota: None,
             }],
         },
         Response::Status {
@@ -394,6 +397,7 @@ fn additive_visibility_fields_round_trip() {
     let accepted = Response::Accepted {
         id: "m_2".into(),
         recipient_hold: Some("deliver_hold".into()),
+        recipient_quota: None,
     };
     let accepted_json = serde_json::json!({
         "type": "accepted",
@@ -419,6 +423,7 @@ fn additive_visibility_fields_round_trip() {
             pending: 1,
             held: true,
             hold_reason: Some("human_draft".into()),
+            quota: None,
         }],
     };
     let sessions_json = serde_json::json!({

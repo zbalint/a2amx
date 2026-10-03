@@ -249,12 +249,20 @@ impl McpServer {
                     })
                     .await?;
                 match response {
-                    Response::Accepted { id, recipient_hold } => match recipient_hold {
-                        Some(recipient_hold) => Ok(
-                            json!({"id": id, "status": "accepted", "recipient_hold": recipient_hold}),
-                        ),
-                        None => Ok(json!({"id": id, "status": "accepted"})),
-                    },
+                    Response::Accepted {
+                        id,
+                        recipient_hold,
+                        recipient_quota,
+                    } => {
+                        let mut result = json!({"id": id, "status": "accepted"});
+                        if let Some(recipient_hold) = recipient_hold {
+                            result["recipient_hold"] = json!(recipient_hold);
+                        }
+                        if let Some(recipient_quota) = recipient_quota {
+                            result["recipient_quota"] = json!(recipient_quota);
+                        }
+                        Ok(result)
+                    }
                     response => response_payload(response),
                 }
             }
@@ -442,7 +450,7 @@ pub(crate) fn tool_schemas() -> Value {
         },
         {
             "name": "send_message",
-            "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. Plain text; do not write the text of a paste-wrapper tag in a body.",
+            "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. If recipient_quota is present, the recipient's harness reports that quota is used up and it may not answer until the quota resets. Plain text; do not write the text of a paste-wrapper tag in a body.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

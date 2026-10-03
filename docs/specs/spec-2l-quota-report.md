@@ -262,3 +262,16 @@ and report it as the known flake; any other failure is real. These need the new 
 run after implementation, not at lock time.
 
 `git diff --stat` shows only the files in section 0; `git diff --check` is clean.
+
+## Amendment 1 (architect, after the developer's report)
+
+Section 7 under-listed two mechanical consequences of the new field and column. Both are in
+files section 0 already permits, and both are covered by this amendment:
+
+- `tests/wire.rs` has a second `Response::Accepted` literal (the one with `recipient_hold:
+  Some(..)`, near line 394); it gains `recipient_quota: None` like the one at line 307.
+- `tests/attach_cli.rs` has three more `list` row assertions (near lines 246, 407 and 530)
+  whose expected text gains the `-` QUOTA cell, in addition to the three header assertions.
+
+No other existing assertion changes. The `QUOTA` cell with a value (for example `5h 0% wk 12%`)
+is not covered by a test in this spec; that is accepted.

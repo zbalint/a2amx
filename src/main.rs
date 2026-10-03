@@ -22,7 +22,7 @@ use a2amx::mcp;
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::status;
 use a2amx::wire::{
-    ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo,
+    ClientFrame, MessageInfo, QuotaInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo,
 };
 
 const DEFAULT_COLS: u16 = 80;
@@ -882,13 +882,13 @@ fn terminal_size_with_default() -> anyhow::Result<(u16, u16)> {
     ))
 }
 
-const SESSION_HEADERS: [&str; 8] = [
-    "ID", "NAME", "STATE", "ATTACHED", "PENDING", "HELD", "SIZE", "COMMAND",
+const SESSION_HEADERS: [&str; 9] = [
+    "ID", "NAME", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE", "COMMAND",
 ];
 const PICKER_HEADERS: [&str; 5] = ["ID", "STATE", "ATTACHED", "SIZE", "COMMAND"];
 const MESSAGE_HEADERS: [&str; 6] = ["ID", "FROM", "TO", "STATE", "DETAIL", "SUBJECT"];
 
-fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 8]> {
+fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 9]> {
     sessions
         .iter()
         .map(|session| {
@@ -909,11 +909,24 @@ fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 8]> {
                     .hold_reason
                     .clone()
                     .unwrap_or_else(|| "-".to_owned()),
+                quota_cell(session.quota),
                 format!("{}x{}", session.cols, session.rows),
                 session.argv.join(" "),
             ]
         })
         .collect()
+}
+
+fn quota_cell(quota: Option<QuotaInfo>) -> String {
+    let Some(quota) = quota else {
+        return "-".to_owned();
+    };
+    let windows = [("5h", quota.five_hour), ("wk", quota.weekly)];
+    windows
+        .into_iter()
+        .filter_map(|(label, percent)| percent.map(|percent| format!("{label} {percent}%")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 5]> {

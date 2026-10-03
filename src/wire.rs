@@ -214,6 +214,8 @@ pub enum Response {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recipient_hold: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recipient_quota: Option<String>,
     },
     Failed {
         code: String,
@@ -254,6 +256,29 @@ pub struct SessionSummary {
     pub held: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hold_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota: Option<QuotaInfo>,
+}
+
+/// Percent left per quota window, as the harness's status line last showed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct QuotaInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub five_hour: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly: Option<u8>,
+}
+
+impl QuotaInfo {
+    /// Which windows are at 0%: `"5h"`, `"weekly"`, `"5h and weekly"`, or `None`.
+    pub fn exhausted(&self) -> Option<&'static str> {
+        match (self.five_hour == Some(0), self.weekly == Some(0)) {
+            (true, true) => Some("5h and weekly"),
+            (true, false) => Some("5h"),
+            (false, true) => Some("weekly"),
+            (false, false) => None,
+        }
+    }
 }
 
 // Preserve terminal-core JSON when the additive fields carry their defaults.
@@ -266,6 +291,8 @@ pub struct AgentSummary {
     pub address: String,
     pub state: String,
     pub attached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota: Option<QuotaInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -231,7 +231,7 @@ async fn mcp_initialize_tools_and_message_calls() {
             },
             {
                 "name": "send_message",
-                "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. Plain text; do not write the text of a paste-wrapper tag in a body.",
+                "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. If recipient_quota is present, the recipient's harness reports that quota is used up and it may not answer until the quota resets. Plain text; do not write the text of a paste-wrapper tag in a body.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -334,6 +334,61 @@ async fn mcp_initialize_tools_and_message_calls() {
     }).await.expect("MCP pipe scenario");
 }
 
+fn accepted_tool_result(hold: Option<&str>, quota: Option<&str>) -> Value {
+    let (hold, quota) = (hold.map(str::to_owned), quota.map(str::to_owned));
+    let (addr, server) = spawn_scripted_server(move |listener| {
+        let (mut stream, _) = listener.accept().expect("accept accepted connection");
+        expect_hello(&mut stream);
+        assert!(matches!(
+            read_request(&mut stream),
+            Request::SendMessage { .. }
+        ));
+        write_response(
+            &mut stream,
+            &Response::Accepted {
+                id: "m_1".to_owned(),
+                recipient_hold: hold,
+                recipient_quota: quota,
+            },
+        );
+    });
+    let mut mcp = McpProcess::spawn(addr, &"a".repeat(64));
+    let response = mcp.send(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "send_message",
+            "arguments": {"to": "agent-review@host-a", "subject": "s", "message": "m"}
+        }
+    }));
+    let result = tool_result(&response);
+    drop(mcp);
+    server.join().expect("scripted daemon thread");
+    result
+}
+
+#[test]
+fn mcp_accepted_reports_recipient_quota() {
+    assert_eq!(
+        accepted_tool_result(None, Some("5h quota exhausted")),
+        json!({"id":"m_1","status":"accepted","recipient_quota":"5h quota exhausted"})
+    );
+}
+
+#[test]
+fn mcp_accepted_reports_hold_and_quota_together() {
+    assert_eq!(
+        accepted_tool_result(Some("deliver_hold"), Some("5h quota exhausted")),
+        json!({
+            "id":"m_1",
+            "status":"accepted",
+            "recipient_hold":"deliver_hold",
+            "recipient_quota":"5h quota exhausted"
+        })
+    );
+}
+
 #[test]
 fn mcp_accepted_omits_absent_recipient_hold() {
     let (addr, server) = spawn_scripted_server(|listener| {
@@ -350,6 +405,7 @@ fn mcp_accepted_omits_absent_recipient_hold() {
             &Response::Accepted {
                 id: "m_1".to_owned(),
                 recipient_hold: None,
+                recipient_quota: None,
             },
         );
     });
@@ -653,6 +709,7 @@ fn mcp_send_never_retries_after_transport_loss() {
                         &Response::Accepted {
                             id: "m_retry".to_owned(),
                             recipient_hold: None,
+                            recipient_quota: None,
                         },
                     );
                     return;

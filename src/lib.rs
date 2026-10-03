@@ -17,6 +17,7 @@ pub mod mcp;
 pub mod messaging;
 pub mod omp;
 pub mod prefix;
+pub mod quota;
 pub mod session;
 pub mod status;
 mod store;

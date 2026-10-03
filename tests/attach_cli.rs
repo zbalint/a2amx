@@ -238,16 +238,20 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     let listed = run_binary(first_dir.path(), &["list"], &environment)?;
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
-    assert!(listing.starts_with("ID  NAME  STATE    ATTACHED  PENDING  HELD  SIZE   COMMAND\n"));
     assert!(
-        listing.contains("s1  -     running  no        0        -     80x24  sh -c sleep 30\n")
+        listing.starts_with("ID  NAME  STATE    ATTACHED  PENDING  HELD  QUOTA  SIZE   COMMAND\n")
+    );
+    assert!(
+        listing
+            .contains("s1  -     running  no        0        -     -      80x24  sh -c sleep 30\n")
     );
 
     let explicit = run_binary(second_dir.path(), &["list"], &environment)?;
     assert_eq!(explicit.status.code(), Some(0));
     let explicit_listing = String::from_utf8(explicit.stdout)?;
     assert!(
-        explicit_listing.starts_with("ID  NAME  STATE  ATTACHED  PENDING  HELD  SIZE  COMMAND\n")
+        explicit_listing
+            .starts_with("ID  NAME  STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE  COMMAND\n")
     );
     assert!(!explicit_listing.contains("s1"));
     Ok(())
@@ -395,12 +399,13 @@ async fn named_session_appears_in_the_list_table() -> anyhow::Result<()> {
     assert!(output.status.success());
     let listing = String::from_utf8(output.stdout)?;
     assert!(
-        listing.starts_with("ID  NAME        STATE    ATTACHED  PENDING  HELD  SIZE   COMMAND\n")
+        listing.starts_with(
+            "ID  NAME        STATE    ATTACHED  PENDING  HELD  QUOTA  SIZE   COMMAND\n"
+        )
     );
-    assert!(
-        listing
-            .contains("s1  agent-plan  running  no        0        -     80x24  sh -c sleep 30\n")
-    );
+    assert!(listing.contains(
+        "s1  agent-plan  running  no        0        -     -      80x24  sh -c sleep 30\n"
+    ));
     Ok(())
 }
 
@@ -522,7 +527,7 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
     assert!(listing.contains(
-        "s1  -     running  yes       0        human_draft  80x23  sh -c stty raw -echo; cat\n"
+        "s1  -     running  yes       0        human_draft  -      80x23  sh -c stty raw -echo; cat\n"
     ));
 
     attached.send(&[2, b'r'])?;
@@ -579,7 +584,8 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
         accepted,
         Response::Accepted {
             id: "m_1".into(),
-            recipient_hold: None
+            recipient_hold: None,
+            recipient_quota: None
         }
     );
     wait_for_message_state(dir.path(), "m_1", "submitted").await;
@@ -595,7 +601,8 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
         accepted,
         Response::Accepted {
             id: "m_2".into(),
-            recipient_hold: None
+            recipient_hold: None,
+            recipient_quota: None
         }
     );
     let accepted = sender
@@ -609,7 +616,8 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
         accepted,
         Response::Accepted {
             id: "m_3".into(),
-            recipient_hold: None
+            recipient_hold: None,
+            recipient_quota: None
         }
     );
     assert_eq!(
@@ -670,7 +678,8 @@ async fn cancel_is_silent_on_success_and_reports_errors() -> anyhow::Result<()> 
             .await?,
         Response::Accepted {
             id: "m_1".into(),
-            recipient_hold: Some("deliver_hold".into())
+            recipient_hold: Some("deliver_hold".into()),
+            recipient_quota: None
         }
     );
 
