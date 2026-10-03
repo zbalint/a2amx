@@ -178,7 +178,8 @@ description is unchanged.
 type and `session_value_rows` return `[String; 9]`. The new cell, after the `HELD` cell, is `-`
 when `quota` is `None`; otherwise the present windows in order, joined by one space:
 `5h <N>%` then `wk <N>%`. Examples: `5h 0% wk 12%`, `5h 7%`, `wk 63%`. The picker
-(`PICKER_HEADERS`) does not change.
+uses the nine session columns plus a final `CWD` column, with narrow values shortened
+from the left to fit the terminal.
 
 ## 7. Mechanical changes to existing tests
 

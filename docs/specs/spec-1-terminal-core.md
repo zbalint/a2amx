@@ -389,13 +389,14 @@ reverse-video `[scroll: q to exit]` and restores the cursor to hidden.
 
 **Session picker** (`Command::SessionPicker`): stdin is not forwarded, incoming
 `Data` frames are discarded (not written), a second control connection lists
-sessions, and the client draws a full-screen list (header line
-`a2amx sessions: Enter attach, Esc or q cancel, Up/Down or j/k move`, one row per
-session in the `list` format with `>` on the selection and `(current)` on the
-attached one). Keys: `ESC[A`/`k` up, `ESC[B`/`j` down, `\r` select, `q` or a read
-that is exactly one `ESC` byte cancel. Cancel sends `Redraw`. Selecting the current
-session cancels; selecting another sends `Detach`, attaches to it (no `--force`);
-an attach error is shown on the footer row and the picker stays open.
+sessions, and the client draws a full-screen list (title line
+`a2amx sessions: Enter attach, Esc or q cancel, Up/Down or j/k move`, a column-header
+row, and one row per session using the nine `list` cells followed by `CWD`; `COMMAND`
+is omitted, `CWD` is shortened from the left when needed, and `>` marks the selection
+while `(current)` marks the attached one). Keys: `ESC[A`/`k` up, `ESC[B`/`j` down,
+`\r` select, `q` or a read that is exactly one `ESC` byte cancel. Cancel sends `Redraw`.
+Selecting the current session cancels; selecting another sends `Detach`, attaches to it
+(no `--force`); an attach error is shown on the footer row and the picker stays open.
 
 Shortcuts to leave as `// shortcut:` comments: ESC-alone detection in the picker is
 one-read based; the outer terminal title is not restored on exit.

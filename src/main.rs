@@ -1203,7 +1203,9 @@ const DETAIL_HEADERS: [&str; 11] = [
     "ID", "NAME", "HARNESS", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE", "CWD",
     "COMMAND",
 ];
-const PICKER_HEADERS: [&str; 5] = ["ID", "STATE", "ATTACHED", "SIZE", "COMMAND"];
+const PICKER_HEADERS: [&str; 10] = [
+    "ID", "NAME", "HARNESS", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE", "CWD",
+];
 const MESSAGE_HEADERS: [&str; 6] = ["ID", "FROM", "TO", "STATE", "DETAIL", "SUBJECT"];
 
 fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 9]> {
@@ -1252,23 +1254,33 @@ fn quota_cell(quota: Option<QuotaInfo>) -> String {
     }
 }
 
-fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 5]> {
-    sessions
-        .iter()
-        .map(|session| {
+fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 10]> {
+    session_value_rows(sessions)
+        .into_iter()
+        .zip(sessions)
+        .map(|(row, session)| {
+            let [
+                id,
+                name,
+                harness,
+                state,
+                attached,
+                pending,
+                held,
+                quota,
+                size,
+            ] = row;
             [
-                session.id.clone(),
-                match session.exit_code {
-                    Some(code) => format!("exited({code})"),
-                    None => "running".to_owned(),
-                },
-                if session.attached {
-                    "yes".to_owned()
-                } else {
-                    "no".to_owned()
-                },
-                format!("{}x{}", session.cols, session.rows),
-                session.argv.join(" "),
+                id,
+                name,
+                harness,
+                state,
+                attached,
+                pending,
+                held,
+                quota,
+                size,
+                session.cwd.clone().unwrap_or_else(|| "-".to_owned()),
             ]
         })
         .collect()
@@ -1739,32 +1751,30 @@ impl PickerState {
             &mut text,
             1,
             "a2amx sessions: Enter attach, Esc or q cancel, Up/Down or j/k move",
+            self.cols,
         );
-        let rows = session_rows(&self.sessions);
+        let (header, rows) = session_rows(&self.sessions, &self.current, self.selection, self.cols);
+        picker_line(&mut text, 2, &header, self.cols);
         for (index, row) in rows.iter().enumerate() {
-            let row_number = index + 2;
+            let row_number = index + 3;
             if row_number >= usize::from(self.rows) {
                 break;
             }
-            let marker = if index == self.selection { '>' } else { ' ' };
-            let mut line = String::with_capacity(row.len() + 12);
-            line.push(marker);
-            line.push_str(row);
-            if self.sessions[index].id == self.current {
-                line.push_str(" (current)");
-            }
-            picker_line(&mut text, row_number as u16, &line);
+            picker_line(&mut text, row_number as u16, row, self.cols);
         }
         picker_line(
             &mut text,
             self.rows.max(1),
             self.footer.as_deref().unwrap_or(""),
+            self.cols,
         );
         output.send(text.into_bytes())
     }
 }
 
-fn picker_line(text: &mut String, row: u16, line: &str) {
+fn picker_line(text: &mut String, row: u16, line: &str, cols: u16) {
+    // shortcut: picker clipping counts Unicode scalar values, not terminal cell widths.
+    let line = line.chars().take(usize::from(cols)).collect::<String>();
     text.push_str(&format!("\x1b[{row};1H\x1b[2K{line}"));
 }
 
@@ -1837,8 +1847,65 @@ impl PickerParser {
     }
 }
 
-fn session_rows(sessions: &[SessionSummary]) -> Vec<String> {
+// shortcut: picker widths use byte/scalar counts rather than terminal cell widths.
+fn session_rows(
+    sessions: &[SessionSummary],
+    current: &str,
+    selection: usize,
+    cols: u16,
+) -> (String, Vec<String>) {
     let rows = picker_value_rows(sessions);
     let widths = column_widths(&PICKER_HEADERS, &rows);
-    rows.iter().map(|row| format_row(row, &widths)).collect()
+    let fixed_prefix_width = widths[..9].iter().sum::<usize>() + 2 * 9;
+    let header_has_cwd = usize::from(cols) >= 1 + fixed_prefix_width + PICKER_HEADERS[9].len();
+    let mut header = String::new();
+    header.push(' ');
+    if header_has_cwd {
+        header.push_str(&format_row(&PICKER_HEADERS, &widths));
+    } else {
+        header.push_str(&format_row(&PICKER_HEADERS[..9], &widths[..9]));
+    }
+    let lines = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let suffix = if sessions[index].id == current {
+                " (current)"
+            } else {
+                ""
+            };
+            let marker = if index == selection { '>' } else { ' ' };
+            let mut line = String::new();
+            line.push(marker);
+            let available = usize::from(cols).saturating_sub(1 + fixed_prefix_width + suffix.len());
+            if available >= 4 {
+                let mut row = row.clone();
+                row[9] = shorten_left(&row[9], available);
+                line.push_str(&format_row(&row, &widths));
+            } else {
+                line.push_str(&format_row(&row[..9], &widths[..9]));
+            }
+            line.push_str(suffix);
+            line
+        })
+        .collect();
+    (header, lines)
+}
+
+fn shorten_left(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        return value.to_owned();
+    }
+    if width <= 1 {
+        return "…".chars().take(width).collect();
+    }
+    let tail = value
+        .chars()
+        .rev()
+        .take(width - 1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("…{tail}")
 }

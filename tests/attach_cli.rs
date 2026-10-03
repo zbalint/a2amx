@@ -336,6 +336,9 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
     // Entering and selecting the current row cancels and redraws the live session.
     attached.send(&[2, b'w'])?;
     attached.wait_for_text("a2amx sessions:", WAIT)?;
+    for header in ["NAME", "HARNESS", "PENDING", "HELD", "QUOTA", "CWD"] {
+        attached.wait_for_text(header, WAIT)?;
+    }
     attached.send(b"\r")?;
     attached.wait_for_text("one", WAIT)?;
 
@@ -366,6 +369,59 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
             .raw_output()
             .windows(b"\x1b[?1049l".len())
             .any(|window| window == b"\x1b[?1049l")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn picker_clips_long_cwd_to_narrow_terminal() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let cwd_root = tempfile::tempdir()?;
+    let long_cwd = cwd_root
+        .path()
+        .join("fictional-picker-working-directory")
+        .join("tail-of-picker-path");
+    std::fs::create_dir_all(&long_cwd)?;
+
+    let mut client = Client::connect(dir.path()).await?;
+    let response = client
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "stty size; trap 'stty size' WINCH; while :; do read line; done".into(),
+            ],
+            cols: 80,
+            rows: 24,
+            cwd: Some(long_cwd.to_string_lossy().into_owned()),
+            env: vec![],
+            name: None,
+            harness: Harness::Generic,
+            deliver: None,
+        })
+        .await?;
+    let Response::Created { session } = response else {
+        anyhow::bail!("new session response was not Created");
+    };
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", &session]), dir.path())?;
+    attached.wait_for_text("23 80", WAIT)?;
+    attached.resize(90, 10)?;
+    attached.wait_for_text("9 90", WAIT)?;
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("a2amx sessions:", WAIT)?;
+    let screen = attached.screen_text();
+    for line in screen.lines() {
+        assert!(
+            line.chars().count() <= 90,
+            "picker screen line exceeded width: {line:?}"
+        );
+    }
+    assert!(
+        screen
+            .lines()
+            .any(|line| line.contains("…-picker-path (current)")),
+        "picker did not left-shorten CWD: {screen:?}"
     );
     Ok(())
 }

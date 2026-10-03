@@ -692,9 +692,10 @@ Cancel { message: String },
   before sending; for `Generic` the argv is sent unchanged (and `--no-authorize-peers`
   has no effect). Send `name`, `harness`, `deliver` in `NewSession`. `--detach` still
   prints only the session id.
-- `list` prints the table below. The session picker keeps its spec 1 five-column
-  layout and its tests stay unchanged; generalize `format_row` to take slices so both
-  tables share it (do not add a second near-identical helper).
+- `list` prints the table below. The session picker uses the same nine session cells plus
+  a final `CWD` column (`COMMAND` is omitted), renders a column-header row, and
+  shortens `CWD` from the left when the terminal is narrow; generalize `format_row` to
+  take slices so both tables share it (do not add a second near-identical helper).
 - `mcp` runs `mcp::run()` and returns its exit status.
 - `messages` prints the table below; `cancel` prints nothing on success and
   `a2amx: <message>` with exit 1 on error (like `kill`).

@@ -48,8 +48,9 @@ the command, a `--details` flag that adds it back, and HARNESS and CWD columns.
 - **D6.** `HARNESS` shows the harness the session runs with, as `claude`, `codex`, `omp` or
   `generic`. `CWD` shows the directory the session was started in, or `-` when none was
   recorded. Neither cell is truncated.
-- **D7.** The attach picker (`w`) is unchanged, command column included. `list_agents` and
-  `send_message` (`src/mcp.rs`) are unchanged.
+- **D7.** The attach picker (`w`) uses the nine session columns plus a final `CWD`
+  column; `COMMAND` is omitted and narrow `CWD` values are shortened from the left.
+  `list_agents` and `send_message` (`src/mcp.rs`) are unchanged.
 - **D8.** The session summary on the wire carries `harness` and `cwd`.
 
 ## 3. `src/cli.rs`
@@ -118,8 +119,9 @@ takes `details: bool`.
   function: change it to return `Vec<Vec<String>>`, or build a second thin function that
   extends each 9-cell row with `cwd.clone().unwrap_or("-")` and `argv.join(" ")`. Whichever is
   smaller, `format_table` and `column_widths` (const-generic over the array length today) are
-  extended or called through a slice-based variant so both widths work. The picker's
-  `PICKER_HEADERS` / `picker_value_rows` / `session_rows` do not change.
+  extended or called through a slice-based variant so both widths work.
+- The picker uses the same nine cells and appends `CWD` as a width-limited final cell;
+  it renders a column-header row and omits `COMMAND`.
 - `format_session_table(sessions, details)` picks the header set.
 - Output rule unchanged: cells separated by two spaces, the last column unpadded.
 
@@ -201,8 +203,8 @@ Start a real daemon through `tests/common` and drive the `a2amx` binary as
 ## 9. Out of scope
 
 - Name resolution inside the daemon, in `lookup`, or in any wire request.
-- Changing the picker, `list_agents`, `send_message`, or `message_status`.
-- Truncating or wrapping long cells; a `--wide`/`--json` output mode.
+- Changing `list_agents`, `send_message`, or `message_status`.
+- Truncating or wrapping list cells; adding a `--wide`/`--json` output mode.
 - Removing exited sessions in bulk; renaming a session.
 - Any change to `new` output, to naming rules, or to address formats.
 
