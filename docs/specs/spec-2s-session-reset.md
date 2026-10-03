@@ -17,6 +17,11 @@ allows both. No other text changes.
 without touching `src/delivery.rs` or `src/codex.rs`; test 9 gains a no-interleave case. Scope
 unchanged.
 
+**Amendment 3** (2026-10-03, third developer BLOCKED, new evidence: `tests/bridge.rs:591` asserts
+the exact three-tool list; the architect then swept every place that names the tools): D12 added,
+and the scope gains `src/harness.rs` (one constant), `src/codex.rs` (one list) and the existing
+tests that assert those literals. Section 6 and the "does not touch" line are aligned.
+
 **Baseline:** develop at the commit that adds this spec (on top of `9771c4f`). **Location and
 branch:** main checkout `/home/zbalint/workspace/a2amx`, branch `develop`. Shared task
 `context_id`: `a2amx-session-reset`. Public test seams: the `a2amx` CLI against a real daemon with
@@ -27,17 +32,26 @@ fake sessions (`tests/common`, as `tests/daemon_cli.rs` does), the broker path w
 
 - `src/wire.rs`, `src/team.rs`, `src/cli.rs`, `src/main.rs`, `src/session.rs`, `src/daemon.rs`,
   `src/mcp.rs`, `src/messaging.rs` (the error codes of D8 and the shared validator
-  `validate_reset_steps` of D3, nothing else; amendment 1)
+  `validate_reset_steps` of D3, nothing else; amendment 1), `src/harness.rs` (only the
+  `CLAUDE_ALLOWED_TOOLS` constant gains `mcp__a2amx__reset_session`; amendment 3, D12),
+  `src/codex.rs` (only the tool-name list in `server_config` gains `reset_session`; amendment 3,
+  D12)
 - tests: `tests/daemon_cli.rs`, `tests/broker.rs`, `tests/wire.rs`, `tests/mcp.rs` (the exact
   tool list and schema assertions gain `reset_session`), `tests/team.rs` (the `TeamSession`
   literals gain the two new fields), and the mechanical
   `reset: vec![], control_from: vec![]` additions to every existing `NewSession` literal in
   `tests/attach_cli.rs`, `tests/claude_channel.rs`, `tests/codex.rs`, `tests/common/mod.rs`,
   `tests/daemon.rs`, `tests/delivery.rs`, `tests/hook.rs`, `tests/quota.rs`
+- tests, amendment 3 (existing exact-literal assertions that must follow the new tool):
+  `tests/bridge.rs` (`the_bridge_relays_the_three_tools` expects the four names; keep the test
+  name), and the allow-list literal `mcp__a2amx__...` in `tests/attach_cli.rs`,
+  `tests/claude_channel.rs`, `tests/messaging.rs`, and the approval-mode lines in
+  `tests/codex.rs` (about line 254). `tests/omp_wiring.rs` and `tests/omp_smoke.rs` only check
+  that the three existing names are present and stay unchanged.
 - docs: `README.md`, `docs/architecture.md`, `docs/delivery.md`, `docs/backlog.md`,
   `a2amx.toml.example`
 
-Does not touch: `src/harness.rs`, `src/delivery.rs`, `src/quota.rs`, `src/emulator.rs`,
+Does not touch: `src/delivery.rs`, `src/quota.rs`, `src/emulator.rs`,
 `extension/omp.ts`, `scripts/`, `Cargo.toml`, `Cargo.lock`, `AGENTS.md`, the other specs. No new
 dependency. Do not commit, stage or merge: leave the diff uncommitted for review.
 
@@ -133,6 +147,16 @@ mid-turn), so the feature is a small, gated control action and not a general "ty
   `// shortcut:` comment at the flag: Codex in-flight not gated, add a Codex in-flight flag to
   `Session` if a message is ever seen landing inside a reset.
 
+- **D12.** (Amendment 3.) `reset_session` is pre-approved for the agent harnesses exactly like the
+  three existing tools, so an unattended architect is not stopped by a permission prompt: add
+  `mcp__a2amx__reset_session` to `CLAUDE_ALLOWED_TOOLS` (`src/harness.rs`, the comma list keeps its
+  order, new name last) and `reset_session` to the tool-name list in `server_config`
+  (`src/codex.rs`, one `approval_mode="approve"` line more). The OMP extension has no approval
+  list. The safety gate is not the prompt but D4: the target's `control_from`, default nobody, and
+  D5. The existing tests that assert these literals are updated to the new literals and nothing
+  else in them changes. `bridge.rs`'s `the_bridge_relays_the_three_tools` expects
+  `["list_agents", "send_message", "message_status", "reset_session"]` (the test keeps its name).
+
 ## 3. Probe findings (2026-10-03, throwaway sessions of an isolated daemon)
 
 - **Claude Code 2.1.288:** `/clear` executes with raw typing plus CR or bracketed paste plus CR; no
@@ -222,7 +246,8 @@ Report per test whether a genuine RED run was captured.
 Arbitrary text typing for agents, queueing a reset for later, resetting while a human has a draft
 (even with a force option), changing native delivery, `list`/`list_agents` columns, automatic reset
 policies, re-sending any bootstrap after a reset (the architect's next ASSIGN does that), raw typed
-input, per-harness completion markers, Windows, and any change to `src/harness.rs`.
+input, per-harness completion markers, Windows, and any change to `src/harness.rs` other than the
+one constant of D12.
 
 ## 7. Acceptance
 
