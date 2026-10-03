@@ -274,6 +274,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     else {
         return Err(anyhow!("expected new session options"));
     };
+    let harness = harness.unwrap_or_else(|| Harness::infer(&command));
     let command = match harness {
         Harness::Claude => {
             let exe = std::env::current_exe()?;

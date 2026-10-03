@@ -35,6 +35,20 @@ pub enum Deliver {
 }
 
 impl Harness {
+    /// The harness named by the command's executable, or `Generic` when it names none.
+    pub fn infer(command: &[String]) -> Self {
+        match command
+            .first()
+            .and_then(|word| Path::new(word).file_name())
+            .and_then(|name| name.to_str())
+        {
+            Some("claude") => Self::Claude,
+            Some("codex") => Self::Codex,
+            Some("omp") => Self::Omp,
+            _ => Self::Generic,
+        }
+    }
+
     pub fn default_deliver(self) -> Deliver {
         match self {
             Self::Claude | Self::Omp | Self::Codex => Deliver::Auto,

@@ -47,9 +47,9 @@ pub enum Command {
         detach: bool,
         #[arg(long)]
         name: Option<String>,
-        /// Harness profile. omp delivers through an OMP extension; without it, messages wait (channel_down). codex hosts a private app-server and delivers through it.
-        #[arg(long, value_enum, default_value_t = Harness::Generic)]
-        harness: Harness,
+        /// Harness profile. Inferred from the command when omitted: claude, codex and omp are recognised by executable name, anything else is generic. omp delivers through an OMP extension; without it, messages wait (channel_down). codex hosts a private app-server and delivers through it.
+        #[arg(long, value_enum)]
+        harness: Option<Harness>,
         #[arg(long, value_enum)]
         deliver: Option<Deliver>,
         #[arg(long)]

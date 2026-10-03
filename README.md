@@ -95,6 +95,7 @@ a2amx list
 a2amx attach <id> [--force]
 a2amx kill <id>
 a2amx daemon --host-name host-a     # names this host in addresses (name@host-a)
+# --harness is inferred from the command name when omitted (claude, codex, omp)
 a2amx new --name agent-plan --harness claude -- claude
 a2amx new --name agent-review --harness omp -- omp
 a2amx messages [--session <id>] [--state pending]

@@ -166,3 +166,49 @@ fn background_reports_a_startup_failure() {
         "stderr: {message}"
     );
 }
+
+/// An executable named `claude` that only sleeps, so no real harness starts.
+fn fake_claude(dir: &Path) -> std::path::PathBuf {
+    let path = dir.join("claude");
+    std::fs::write(&path, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn harness_is_inferred_from_the_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let claude = fake_claude(dir.path());
+    assert!(run(&home, &["daemon", "--background"]).status.success());
+
+    let created = run(&home, &["new", "--detach", "--", claude.to_str().unwrap()]);
+
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    assert!(stdout(&run(&home, &["list"])).contains("--mcp-config"));
+}
+
+#[test]
+fn explicit_generic_harness_wins_over_inference() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let claude = fake_claude(dir.path());
+    assert!(run(&home, &["daemon", "--background"]).status.success());
+
+    let created = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--harness",
+            "generic",
+            "--",
+            claude.to_str().unwrap(),
+        ],
+    );
+
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    assert!(!stdout(&run(&home, &["list"])).contains("--mcp-config"));
+}
