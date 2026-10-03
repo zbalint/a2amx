@@ -24,6 +24,9 @@ use crate::wire::BridgeDown;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionId(pub String);
+const RESET_SETTLE: Duration = Duration::from_millis(1500); // shortcut: fixed settle; replace with a per-harness completion marker if a harness reports readiness early or needs longer.
+const RESET_POLL: Duration = Duration::from_millis(100);
+const RESET_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct SessionSpec {
     pub argv: Vec<String>,
@@ -34,6 +37,8 @@ pub struct SessionSpec {
     pub harness: Harness,
     pub channel: bool,
     pub deliver: Deliver,
+    pub reset: Vec<String>,
+    pub control_from: Vec<String>,
     pub token: String,
     pub(crate) codex: Option<Arc<crate::codex::Link>>,
 }
@@ -46,6 +51,8 @@ pub struct Session {
     harness: Harness,
     channel: bool,
     deliver: Deliver,
+    reset: Vec<String>,
+    control_from: Vec<String>,
     token: String,
     codex: Option<Arc<crate::codex::Link>>,
     input_gate: tokio::sync::Mutex<()>,
@@ -56,6 +63,8 @@ pub struct Session {
     pid: Pid,
     drop_requested: Arc<AtomicBool>,
     child_done: Arc<AtomicBool>,
+    // shortcut: Codex in-flight delivery is not gated; add a Codex in-flight flag to Session if a message lands inside a reset.
+    resetting: AtomicBool,
 }
 
 struct Shared {
@@ -82,6 +91,7 @@ pub(crate) struct State {
 pub(crate) struct NativeSlot {
     connected: bool,
     refused: bool,
+    idle: bool,
     draft: bool,
     in_flight: bool,
     link: Option<mpsc::UnboundedSender<BridgeDown>>,
@@ -109,6 +119,22 @@ pub(crate) enum DeliveryOutcome {
     Submitted,
     Unsubmitted(String),
     Failed(String),
+}
+
+#[derive(Debug)]
+pub(crate) struct ResetError {
+    pub(crate) code: &'static str,
+    pub(crate) step: Option<(usize, usize)>,
+    pub(crate) message: String,
+}
+
+pub(crate) struct ResetGuard<'a>(&'a Session);
+
+impl Drop for ResetGuard<'_> {
+    fn drop(&mut self) {
+        self.0.resetting.store(false, Ordering::Release);
+        self.0.message_notify.notify_one();
+    }
 }
 
 pub(crate) struct AttachmentSlot {
@@ -257,6 +283,8 @@ impl Session {
             harness: spec.harness,
             channel: spec.channel,
             deliver: spec.deliver,
+            reset: spec.reset,
+            control_from: spec.control_from,
             token: spec.token,
             codex: spec.codex,
             input_gate: tokio::sync::Mutex::new(()),
@@ -267,6 +295,7 @@ impl Session {
             pid,
             drop_requested,
             child_done,
+            resetting: AtomicBool::new(false),
         })
     }
 
@@ -295,7 +324,15 @@ impl Session {
     }
 
     pub fn deliver(&self) -> Deliver {
-        self.deliver
+        if self.resetting.load(Ordering::Acquire) {
+            Deliver::Hold
+        } else {
+            self.deliver
+        }
+    }
+
+    pub(crate) fn control_from(&self) -> &[String] {
+        &self.control_from
     }
 
     pub(crate) fn token(&self) -> &str {
@@ -435,8 +472,9 @@ impl Session {
         self.message_notify.notify_one();
     }
 
-    pub(crate) fn native_state(&self, draft: bool, pending: bool) {
+    pub(crate) fn native_state(&self, idle: bool, draft: bool, pending: bool) {
         let mut state = self.lock();
+        state.native.idle = idle;
         state.native.draft = draft;
         state.native.in_flight = pending;
         drop(state);
@@ -510,6 +548,137 @@ impl Session {
         } else {
             None
         }
+    }
+    fn reset_native_reason(&self) -> Option<&'static str> {
+        if self.harness != Harness::Omp {
+            return None;
+        }
+        let state = self.lock();
+        if !state.native.connected || state.native.refused {
+            Some("not_ready")
+        } else if state.native.draft {
+            Some("draft_present")
+        } else if !state.native.idle || state.native.in_flight || state.native.waiting.is_some() {
+            Some("busy")
+        } else {
+            None
+        }
+    }
+
+    fn reset_gate_reason(&self) -> Option<&'static str> {
+        if self.exit_code().is_some() {
+            return Some(messaging::code::EXITED);
+        }
+        {
+            let state = self.lock();
+            if let Some(hold) = state.hold {
+                return Some(match hold {
+                    Hold::HumanDraft => messaging::code::DRAFT_PRESENT,
+                    Hold::UnsubmittedEnvelope | Hold::CorruptedSubmissions => messaging::code::HELD,
+                });
+            }
+            if !harness::ready(
+                self.harness,
+                &state.emulator.screen(),
+                state.emulator.is_scrolled(),
+            ) {
+                return Some(messaging::code::NOT_READY);
+            }
+        }
+        self.reset_native_reason()
+    }
+
+    fn reset_error(
+        code: &'static str,
+        step: Option<(usize, usize)>,
+        message: impl Into<String>,
+    ) -> ResetError {
+        ResetError {
+            code,
+            step,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn begin_reset(&self) -> Result<ResetGuard<'_>, ResetError> {
+        self.resetting
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| {
+                Self::reset_error(messaging::code::BUSY, None, "reset is already running")
+            })?;
+        self.message_notify.notify_one();
+        Ok(ResetGuard(self))
+    }
+
+    pub(crate) async fn reset_sequence(&self) -> Result<u32, ResetError> {
+        let _guard = self.begin_reset()?;
+        let steps = if self.reset.is_empty() {
+            vec!["/clear".to_owned()]
+        } else {
+            self.reset.clone()
+        };
+        let total = steps.len();
+        for (index, step) in steps.iter().enumerate() {
+            let number = index + 1;
+            if let Some(code) = self.reset_gate_reason() {
+                return Err(Self::reset_error(
+                    code,
+                    Some((number, total)),
+                    format!("reset gate rejected step {number} of {total}"),
+                ));
+            }
+            let Some(delivery) = self.begin_delivery().await else {
+                let code = self.reset_gate_reason().unwrap_or(messaging::code::HELD);
+                return Err(Self::reset_error(
+                    code,
+                    Some((number, total)),
+                    format!("reset gate rejected step {number} of {total}"),
+                ));
+            };
+            match delivery
+                .submit(messaging::paste_bytes(step), messaging::PASTE_GAP)
+                .await
+            {
+                DeliveryOutcome::Submitted => {}
+                DeliveryOutcome::Unsubmitted(reason) => {
+                    return Err(Self::reset_error(
+                        messaging::code::HELD,
+                        Some((number, total)),
+                        format!("step {number} of {total} was not submitted: {reason}"),
+                    ));
+                }
+                DeliveryOutcome::Failed(reason) => {
+                    return Err(Self::reset_error(
+                        messaging::code::WRITE_FAILED,
+                        Some((number, total)),
+                        format!("step {number} of {total} failed: {reason}"),
+                    ));
+                }
+            }
+            let deadline = Instant::now() + RESET_TIMEOUT;
+            tokio::time::sleep(RESET_SETTLE).await;
+            loop {
+                if self.exit_code().is_some() {
+                    return Err(Self::reset_error(
+                        messaging::code::EXITED,
+                        Some((number, total)),
+                        format!("session exited during step {number} of {total}"),
+                    ));
+                }
+                if self.reset_gate_reason().is_none() {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    return Err(Self::reset_error(
+                        messaging::code::STEP_TIMEOUT,
+                        Some((number, total)),
+                        format!("step {number} of {total} did not become ready"),
+                    ));
+                }
+                tokio::time::sleep(RESET_POLL).await;
+            }
+        }
+        Ok(total as u32)
     }
 
     pub(crate) async fn begin_delivery(&self) -> Option<Delivery<'_>> {

@@ -101,6 +101,7 @@ a2amx new -- sh                     # start and attach; Ctrl-B d detaches
 a2amx list [--details]
 a2amx attach <id|name> [--force]
 a2amx kill <id|name>
+a2amx reset <id|name>                 # type the configured reset sequence
 a2amx screen <id|name> [--rows N]       # read visible screen text without attaching
 a2amx team up [--file F] [--detach] [NAME=EXE ...]   # a2amx.toml or bare executables
 a2amx team down [--file F] [NAME ...]
@@ -147,6 +148,13 @@ Codex status line last said about remaining quota (5h and weekly percent left); 
 `limit` when the session's last conversation rows show a Codex usage-limit error. It can be stale
 and is empty when no quota signal is recognised.
 
+`a2amx reset <id|name>` types `/clear` by default, or the ordered `--reset` sequence
+configured for the session. Each step is bracketed-pasted, submitted with one Enter,
+and waits for the harness to become ready before the next step. A reset fails fast on
+an active draft, a held or non-ready session, a write error, or a 30-second per-step
+timeout; one reset runs at a time. Session-token callers need the target's
+`control_from` consent.
+
 ### Teams
 
 `a2amx team up` reads `a2amx.toml` in the current directory by default:
@@ -156,12 +164,19 @@ and is empty when no quota signal is recognised.
 name = "architect"
 command = ["claude"]
 attach = true
+reset = ["/clear", "/prewalk restart"]
+control_from = ["developer"]
 
 [[session]]
 name = "developer"
 command = ["omp"]
 cwd = "."
 ```
+
+`reset` is optional; omitting it uses `/clear`. If present it must contain one to
+eight slash commands, each at most 200 bytes and without control characters.
+`control_from` lists named sessions allowed to invoke this session's reset through
+the MCP tool; the CLI/admin token is always allowed.
 
 A copy to start from is in `a2amx.toml.example`; your own `a2amx.toml` is gitignored.
 

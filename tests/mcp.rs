@@ -216,7 +216,7 @@ async fn mcp_initialize_tools_and_message_calls() {
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool name"))
         .collect::<Vec<_>>();
-    assert_eq!(names, ["list_agents", "send_message", "message_status"]);
+    assert_eq!(names, ["list_agents", "send_message", "message_status", "reset_session"]);
     assert_eq!(
         tools["result"]["tools"],
         json!([
@@ -261,9 +261,25 @@ async fn mcp_initialize_tools_and_message_calls() {
                     "required": ["id"],
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "reset_session",
+                "description": "Run the target session's configured reset sequence. The target must have granted your session consent through control_from.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "to": {
+                            "type": "string",
+                            "description": "Target session name or address."
+                        }
+                    },
+                    "required": ["to"],
+                    "additionalProperties": false
+                }
             }
         ])
     );
+
 
     let agents = tool_result(&mcp.send(json!({
         "jsonrpc": "2.0",
@@ -332,6 +348,39 @@ async fn mcp_initialize_tools_and_message_calls() {
     })));
     assert_eq!(unknown_recipient["code"], "unknown_recipient");
     }).await.expect("MCP pipe scenario");
+}
+#[test]
+fn mcp_reset_session_returns_text_and_rejects_extra_keys() {
+    let (addr, server) = spawn_scripted_server(|listener| {
+        let (mut stream, _) = listener.accept().expect("accept reset connection");
+        expect_hello(&mut stream);
+        assert_eq!(
+            read_request(&mut stream),
+            Request::Reset {
+                session: "target@host-a".into()
+            }
+        );
+        write_response(&mut stream, &Response::Reset { steps: 2 });
+    });
+    let mut mcp = McpProcess::spawn(addr, &"a".repeat(64));
+    let extra = mcp.send(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "reset_session", "arguments": {"to": "target", "extra": true}}
+    }));
+    assert_eq!(extra["error"]["code"], -32602);
+    let response = mcp.send(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "reset_session", "arguments": {"to": "target@host-a"}}
+    }));
+    assert_eq!(
+        tool_result(&response),
+        json!({"message": "reset target@host-a: 2 steps", "steps": 2})
+    );
+    server.join().expect("reset MCP server");
 }
 
 fn accepted_tool_result(hold: Option<&str>, quota: Option<&str>) -> Value {

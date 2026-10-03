@@ -54,6 +54,8 @@ impl Case {
                 rows: 24,
                 cwd: None,
                 env,
+                reset: vec![],
+                control_from: vec![],
                 name: Some("agent-review".into()),
                 harness: Harness::Claude,
                 deliver: Some(Deliver::Auto),
@@ -427,7 +429,7 @@ fn channel_launch_adds_development_flags_and_preserves_plain_launch() {
                 "--dangerously-load-development-channels",
                 "server:a2amx",
                 "--allowedTools",
-                "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status"
+                "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status,mcp__a2amx__reset_session"
             ]
         );
         assert_eq!(argv[argv.len() - 4], "--settings");
@@ -449,7 +451,7 @@ fn channel_launch_adds_development_flags_and_preserves_plain_launch() {
         &plain[3..6],
         [
             "--allowedTools",
-            "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status",
+            "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status,mcp__a2amx__reset_session",
             "--settings"
         ]
     );
@@ -533,7 +535,7 @@ async fn development_dialog_gets_exactly_one_enter_only_for_channel_sessions() {
         }
         let response = admin.request(Request::NewSession {
             argv: vec!["sh".into(), "-c".into(), "printf 'I am using this for local development\\n'; read x; echo \"$x\" > \"$OUT\"; read x; echo \"$x\" >> \"$OUT\"; sleep 30".into()],
-            cols:80, rows:24, cwd:None, env, name:Some("agent-review".into()), harness:Harness::Claude, deliver:Some(Deliver::Auto),
+            cols:80, rows:24, cwd:None, env, reset:vec![], control_from:vec![], name:Some("agent-review".into()), harness:Harness::Claude, deliver:Some(Deliver::Auto),
         }).await.unwrap();
         assert!(matches!(response, Response::Created { .. }));
         if channel {

@@ -88,6 +88,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             run_attach_command(home, prefix, session, force).await
         }
         Command::Kill { session } => run_kill(home, session).await,
+        Command::Reset { session } => run_reset(home, session).await,
         Command::Screen { session, rows } => run_screen(home, session, rows).await,
         Command::Stop { yes } => run_stop(home, yes).await,
         Command::Mcp { .. } | Command::Hook | Command::OmpBridge => {
@@ -281,6 +282,8 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         deliver,
         no_authorize_peers,
         no_channel,
+        reset,
+        control_from,
         command,
     } = options
     else {
@@ -297,6 +300,8 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             deliver,
             no_authorize_peers,
             no_channel,
+            reset,
+            control_from,
             command,
             cwd: std::env::current_dir()?,
             cols,
@@ -320,6 +325,8 @@ struct NewOptions {
     deliver: Option<Deliver>,
     no_authorize_peers: bool,
     no_channel: bool,
+    reset: Vec<String>,
+    control_from: Vec<String>,
     command: Vec<String>,
     cwd: PathBuf,
     cols: u16,
@@ -337,11 +344,17 @@ async fn create_session(
         deliver,
         no_authorize_peers,
         no_channel,
+        reset,
+        control_from,
         command,
         cwd,
         cols,
         rows,
     } = options;
+    a2amx::messaging::validate_reset_steps(&reset)?;
+    for controller in &control_from {
+        a2amx::messaging::validate_name(controller)?;
+    }
     let harness = harness.unwrap_or_else(|| Harness::infer(&command));
     let command = match harness {
         Harness::Claude => {
@@ -386,6 +399,8 @@ async fn create_session(
             rows,
             cwd: Some(cwd),
             env,
+            reset,
+            control_from,
             name,
             harness,
             deliver,
@@ -465,6 +480,8 @@ async fn run_team_up(
                         deliver: None,
                         no_authorize_peers: false,
                         no_channel: false,
+                        reset: session.reset.unwrap_or_default(),
+                        control_from: session.control_from,
                         command: session.command,
                         cwd: session
                             .cwd
@@ -558,6 +575,26 @@ async fn run_kill(home: PathBuf, session: String) -> anyhow::Result<()> {
     let response = client.request(Request::Kill { session }).await?;
     match response {
         Response::Ok => Ok(()),
+        Response::Error { message } => Err(anyhow!(message)),
+        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
+}
+
+async fn run_reset(home: PathBuf, reference: String) -> anyhow::Result<()> {
+    let session = resolve_session(&home, &reference).await?;
+    let mut client = Client::connect(&home).await?;
+    match client
+        .request(Request::Reset {
+            session: session.clone(),
+        })
+        .await?
+    {
+        Response::Reset { steps } => {
+            let noun = if steps == 1 { "step" } else { "steps" };
+            write_stdout(format!("reset {session}: {steps} {noun}\n").into_bytes()).await?;
+            Ok(())
+        }
+        Response::Failed { code, message } => Err(anyhow!("{code}: {message}")),
         Response::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }

@@ -118,6 +118,10 @@ pub enum Request {
         rows: u16,
         cwd: Option<String>,
         env: Vec<(String, String)>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        reset: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        control_from: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(default, skip_serializing_if = "is_default")]
@@ -136,6 +140,9 @@ pub enum Request {
         status: bool,
     },
     Kill {
+        session: String,
+    },
+    Reset {
         session: String,
     },
     Screen {
@@ -215,6 +222,9 @@ pub enum Response {
     Ok,
     Error {
         message: String,
+    },
+    Reset {
+        steps: u32,
     },
     Accepted {
         id: String,

@@ -148,6 +148,8 @@ impl Runtime {
             rows,
             cwd,
             mut env,
+            reset,
+            control_from,
             name,
             harness,
             deliver,
@@ -159,6 +161,18 @@ impl Runtime {
             return Ok(Response::Error {
                 message: "command and nonzero dimensions are required".into(),
             });
+        }
+        if let Err(error) = messaging::validate_reset_steps(&reset) {
+            return Ok(Response::Error {
+                message: error.to_string(),
+            });
+        }
+        for controller in &control_from {
+            if let Err(error) = messaging::validate_name(controller) {
+                return Ok(Response::Error {
+                    message: format!("control_from entry {controller:?}: {error}"),
+                });
+            }
         }
         let _gate = self.new_session_gate.lock().await;
         if let Some(name) = &name {
@@ -240,6 +254,8 @@ impl Runtime {
                     harness,
                     channel,
                     deliver: deliver.unwrap_or_else(|| harness.default_deliver()),
+                    reset,
+                    control_from,
                     token,
                     codex,
                 },
@@ -355,6 +371,82 @@ impl Runtime {
             Err(InsertError::Internal(error)) => {
                 tracing::error!(%error, "message acceptance failed");
                 failed(code::INTERNAL, "message storage failed")
+            }
+        }
+    }
+
+    fn reset_target(&self, reference: &str) -> Option<Arc<Session>> {
+        if let Some((_, session)) = lookup(self, reference) {
+            return Some(session);
+        }
+        let local = messaging::local_part(reference, &self.host_name)?;
+        if let Some((_, session)) = lookup(self, local) {
+            return Some(session);
+        }
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .find(|session| session.name() == Some(local))
+            .cloned()
+    }
+
+    fn reset_audit(&self, sender: &str, target: &str, outcome: &str, step: Option<(usize, usize)>) {
+        tracing::info!(
+            sender,
+            target,
+            outcome,
+            step = ?step,
+            "session reset attempt"
+        );
+    }
+
+    async fn reset_session(&self, role: &Role, reference: String) -> Response {
+        let sender = match role {
+            Role::Admin => "admin".to_owned(),
+            Role::Session(id) => lookup(self, id).map_or_else(
+                || id.clone(),
+                |(_, session)| messaging::address(session.name(), id, &self.host_name),
+            ),
+        };
+        let Some(target) = self.reset_target(&reference) else {
+            self.reset_audit(&sender, &reference, messaging::code::UNKNOWN_SESSION, None);
+            return failed(messaging::code::UNKNOWN_SESSION, "unknown session");
+        };
+        let target_address = messaging::address(target.name(), &target.id().0, &self.host_name);
+        let permitted = match role {
+            Role::Admin => true,
+            Role::Session(sender_id) => {
+                sender_id != &target.id().0
+                    && lookup(self, sender_id)
+                        .and_then(|(_, session)| session.name().map(str::to_owned))
+                        .is_some_and(|name| target.control_from().iter().any(|item| item == &name))
+            }
+        };
+        if !permitted {
+            self.reset_audit(
+                &sender,
+                &target_address,
+                messaging::code::NOT_PERMITTED,
+                None,
+            );
+            return failed(
+                messaging::code::NOT_PERMITTED,
+                "sender is not permitted to reset this session",
+            );
+        }
+        if target.exit_code().is_some() {
+            self.reset_audit(&sender, &target_address, messaging::code::EXITED, None);
+            return failed(messaging::code::EXITED, "session has exited");
+        }
+        match target.reset_sequence().await {
+            Ok(steps) => {
+                self.reset_audit(&sender, &target_address, "ok", None);
+                Response::Reset { steps }
+            }
+            Err(error) => {
+                self.reset_audit(&sender, &target_address, error.code, error.step);
+                failed(error.code, &error.message)
             }
         }
     }
@@ -975,6 +1067,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
             && !matches!(
                 &request,
                 Request::SendMessage { .. }
+                    | Request::Reset { .. }
                     | Request::ListAgents
                     | Request::MessageStatus { .. }
                     | Request::ReportPrompt { .. }
@@ -1057,6 +1150,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     message: format!("unknown session {id}"),
                 },
             },
+            Request::Reset { session } => runtime.reset_session(&role, session).await,
             Request::Screen { session: id } => match lookup(&runtime, &id) {
                 Some((_, session)) => {
                     let screen = {
@@ -1255,7 +1349,7 @@ async fn bridge(
                 };
                 match frame {
                     BridgeUp::Hello { .. } => return Ok(()),
-                    BridgeUp::State { draft, pending, .. } => session.native_state(draft, pending),
+                    BridgeUp::State { idle, draft, pending } => session.native_state(idle, draft, pending),
                     BridgeUp::Ack { id } => session.native_ack(&id, Ok(())),
                     BridgeUp::Nack { id, reason } => session.native_ack(&id, Err(reason)),
                     BridgeUp::Receipt { id } => {

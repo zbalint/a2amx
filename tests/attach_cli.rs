@@ -395,6 +395,8 @@ async fn picker_clips_long_cwd_to_narrow_terminal() -> anyhow::Result<()> {
             rows: 24,
             cwd: Some(long_cwd.to_string_lossy().into_owned()),
             env: vec![],
+            reset: vec![],
+            control_from: vec![],
             name: None,
             harness: Harness::Generic,
             deliver: None,
@@ -679,7 +681,7 @@ async fn claude_new_wires_mcp_and_optional_peer_authorization() -> anyhow::Resul
     assert_eq!(first_args[2], "--allowedTools");
     assert_eq!(
         first_args[3],
-        "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status"
+        "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status,mcp__a2amx__reset_session"
     );
     assert_eq!(first_args[4], "--append-system-prompt");
     assert_eq!(first_args[5], a2amx::harness::PEER_AUTHORIZATION_PROMPT);
@@ -719,7 +721,7 @@ async fn claude_new_wires_mcp_and_optional_peer_authorization() -> anyhow::Resul
             "--mcp-config",
             first_args[1],
             "--allowedTools",
-            "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status",
+            "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status,mcp__a2amx__reset_session",
             "--settings",
             first_args[7],
         ]
@@ -1035,6 +1037,8 @@ gate.recv(1)
                 rows: 512,
                 cwd: None,
                 env: vec![],
+                reset: vec![],
+                control_from: vec![],
                 name: Some("render-regression".into()),
                 harness: Harness::Generic,
                 deliver: Some(Deliver::Hold),

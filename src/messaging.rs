@@ -129,6 +129,15 @@ pub mod code {
     pub const INVALID_CONTENT: &str = "invalid_content";
     pub const UNKNOWN_MESSAGE: &str = "unknown_message";
     pub const INTERNAL: &str = "internal";
+    pub const NOT_PERMITTED: &str = "not_permitted";
+    pub const UNKNOWN_SESSION: &str = "unknown_session";
+    pub const EXITED: &str = "exited";
+    pub const HELD: &str = "held";
+    pub const NOT_READY: &str = "not_ready";
+    pub const DRAFT_PRESENT: &str = "draft_present";
+    pub const BUSY: &str = "busy";
+    pub const STEP_TIMEOUT: &str = "step_timeout";
+    pub const WRITE_FAILED: &str = "write_failed";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +183,27 @@ pub fn validate_name(name: &str) -> anyhow::Result<()> {
         && name.as_bytes()[1..].iter().all(u8::is_ascii_digit);
     if reserved_session_id {
         bail!("invalid name {name:?}: reserved for session ids (s[0-9]+)");
+    }
+    Ok(())
+}
+
+pub fn validate_reset_steps(steps: &[String]) -> anyhow::Result<()> {
+    if steps.len() > 8 {
+        bail!("reset sequence has at most 8 steps");
+    }
+    for (index, step) in steps.iter().enumerate() {
+        if !step.starts_with('/') {
+            bail!("reset step {} must start with '/'", index + 1);
+        }
+        if step.len() > 200 {
+            bail!("reset step {} is at most 200 bytes", index + 1);
+        }
+        if step.chars().any(char::is_control) {
+            bail!(
+                "reset step {} must not contain control characters",
+                index + 1
+            );
+        }
     }
     Ok(())
 }

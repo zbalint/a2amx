@@ -5,6 +5,8 @@
 name = "myproject-architect"
 command = ["claude"]
 attach = true
+# reset = ["/clear"]
+# control_from = ["myproject-developer"]
 
 [[session]]
 name = "myproject-developer"

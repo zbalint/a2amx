@@ -266,6 +266,23 @@ impl McpServer {
                     response => response_payload(response),
                 }
             }
+            ToolCall::ResetSession { to } => {
+                let response = self
+                    .send_request(Request::Reset {
+                        session: to.clone(),
+                    })
+                    .await?;
+                match response {
+                    Response::Reset { steps } => {
+                        let noun = if steps == 1 { "step" } else { "steps" };
+                        Ok(json!({
+                            "message": format!("reset {to}: {steps} {noun}"),
+                            "steps": steps,
+                        }))
+                    }
+                    response => response_payload(response),
+                }
+            }
             ToolCall::MessageStatus { id } => {
                 let response = self.read_request(Request::MessageStatus { id }).await?;
                 match response {
@@ -377,6 +394,9 @@ enum ToolCall {
     MessageStatus {
         id: String,
     },
+    ResetSession {
+        to: String,
+    },
 }
 
 fn parse_tool_call(params: &Value) -> std::result::Result<ToolCall, ()> {
@@ -403,6 +423,10 @@ fn parse_tool_call(params: &Value) -> std::result::Result<ToolCall, ()> {
         "message_status" if has_exact_keys(arguments, &["id"]) => {
             let id = arguments.get("id").and_then(Value::as_str).ok_or(())?;
             Ok(ToolCall::MessageStatus { id: id.to_owned() })
+        }
+        "reset_session" if has_exact_keys(arguments, &["to"]) => {
+            let to = arguments.get("to").and_then(Value::as_str).ok_or(())?;
+            Ok(ToolCall::ResetSession { to: to.to_owned() })
         }
         _ => Err(()),
     }
@@ -478,6 +502,21 @@ pub(crate) fn tool_schemas() -> Value {
                 "type": "object",
                 "properties": {"id": {"type": "string"}},
                 "required": ["id"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "reset_session",
+            "description": "Run the target session's configured reset sequence. The target must have granted your session consent through control_from.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": "Target session name or address."
+                    }
+                },
+                "required": ["to"],
                 "additionalProperties": false
             }
         }

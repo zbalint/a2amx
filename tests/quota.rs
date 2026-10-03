@@ -236,6 +236,8 @@ async fn status_line_session_sized(
             rows,
             cwd: None,
             env: vec![],
+            reset: vec![],
+            control_from: vec![],
             name: Some(name.to_owned()),
             harness,
             deliver: Some(Deliver::Hold),

@@ -76,6 +76,8 @@ fn request_json_uses_exact_tagged_shapes() {
         rows: 24,
         cwd: Some("/tmp/work".to_owned()),
         env: vec![("TERM".to_owned(), "xterm-256color".to_owned())],
+        reset: Vec::new(),
+        control_from: Vec::new(),
         name: None,
         harness: a2amx::harness::Harness::Generic,
         deliver: None,
@@ -112,6 +114,21 @@ fn request_json_uses_exact_tagged_shapes() {
         serde_json::from_str::<Request>(&screen_json).ok(),
         Some(screen)
     );
+}
+
+#[test]
+fn reset_request_and_response_use_exact_shapes() {
+    let request = Request::Reset {
+        session: "s2".to_owned(),
+    };
+    let json = serde_json::to_string(&request).unwrap_or_default();
+    assert_eq!(json, r#"{"type":"reset","session":"s2"}"#);
+    assert_eq!(serde_json::from_str::<Request>(&json).ok(), Some(request));
+
+    let response = Response::Reset { steps: 2 };
+    let json = serde_json::to_string(&response).unwrap_or_default();
+    assert_eq!(json, r#"{"type":"reset","steps":2}"#);
+    assert_eq!(serde_json::from_str::<Response>(&json).ok(), Some(response));
 }
 
 #[test]
@@ -294,6 +311,8 @@ fn messaging_control_variants_round_trip() {
             rows: 10,
             cwd: None,
             env: vec![],
+            reset: Vec::new(),
+            control_from: Vec::new(),
             name: Some("agent-review".into()),
             harness: a2amx::harness::Harness::Claude,
             deliver: Some(a2amx::harness::Deliver::Auto),

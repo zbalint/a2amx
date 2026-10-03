@@ -11,7 +11,7 @@ use std::time::Duration;
 use a2amx::client::Client;
 use a2amx::harness::{Deliver, Harness};
 use a2amx::messaging::Limits;
-use a2amx::wire::{Request, Response};
+use a2amx::wire::{BridgeDown, BridgeUp, Request, Response};
 
 struct DaemonChild(Option<Child>);
 
@@ -203,6 +203,8 @@ async fn session_tokens_roles_permissions_and_child_identity() {
                 ),
                 ("A2AMX_TOKEN".into(), supplied_token.into()),
             ],
+            reset: vec![],
+            control_from: vec![],
             name: Some("override".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
@@ -233,6 +235,8 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             rows: 10,
             cwd: None,
             env: vec![],
+            reset: vec![],
+            control_from: vec![],
             name: None,
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
@@ -329,6 +333,8 @@ async fn naming_addresses_and_role_expires_after_exit() {
                 rows: 10,
                 cwd: None,
                 env: vec![],
+                reset: vec![],
+                control_from: vec![],
                 name: Some(name.to_owned()),
                 harness: Harness::Generic,
                 deliver: Some(Deliver::Hold),
@@ -344,6 +350,8 @@ async fn naming_addresses_and_role_expires_after_exit() {
             rows: 10,
             cwd: None,
             env: vec![],
+            reset: vec![],
+            control_from: vec![],
             name: Some("agent-plan".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
@@ -381,6 +389,8 @@ async fn naming_addresses_and_role_expires_after_exit() {
             rows: 10,
             cwd: None,
             env: vec![],
+            reset: vec![],
+            control_from: vec![],
             name: Some("natural".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
@@ -411,6 +421,8 @@ async fn naming_addresses_and_role_expires_after_exit() {
             rows: 10,
             cwd: None,
             env: vec![],
+            reset: vec![],
+            control_from: vec![],
             name: Some("natural".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
@@ -716,6 +728,8 @@ async fn recipient_exit_cancelling_and_filtering() {
             rows: 10,
             cwd: None,
             env: vec![("EXIT".into(), exit_marker.to_string_lossy().into_owned())],
+            reset: vec![],
+            control_from: vec![],
             name: Some("recipient".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
@@ -831,6 +845,139 @@ async fn not_ready_and_queued_hold_reasons() {
 }
 
 #[tokio::test]
+async fn reset_authorizes_controller_and_rejects_unlisted_or_self() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (sender_id, sender_token, sender_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("controller"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (_other_id, other_token, other_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("other"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (_unnamed_id, unnamed_token, unnamed_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        None,
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let target = match admin
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf '\\033[?2004h'; cat".into(),
+            ],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec!["controller".into()],
+            name: Some("target".into()),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Hold),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected target response: {response:?}"),
+    };
+    let screen_before = match admin
+        .request(Request::Screen {
+            session: target.clone(),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Screen { lines } => lines,
+        response => panic!("unexpected screen response: {response:?}"),
+    };
+
+    let mut other = Client::connect_addr(other_addr, &other_token)
+        .await
+        .unwrap();
+    let denied = other
+        .request(Request::Reset {
+            session: target.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        denied,
+        Response::Failed { code, .. } if code == "not_permitted"
+    ));
+    let screen_after_other = match admin
+        .request(Request::Screen {
+            session: target.clone(),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Screen { lines } => lines,
+        response => panic!("unexpected screen response: {response:?}"),
+    };
+    assert_eq!(screen_after_other, screen_before);
+    let mut unnamed = Client::connect_addr(unnamed_addr, &unnamed_token)
+        .await
+        .unwrap();
+    let unnamed_denied = unnamed
+        .request(Request::Reset {
+            session: target.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        unnamed_denied,
+        Response::Failed { code, .. } if code == "not_permitted"
+    ));
+    let screen_after_unnamed = match admin
+        .request(Request::Screen {
+            session: target.clone(),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Screen { lines } => lines,
+        response => panic!("unexpected screen response: {response:?}"),
+    };
+    assert_eq!(screen_after_unnamed, screen_before);
+
+    let mut sender = Client::connect_addr(sender_addr, &sender_token)
+        .await
+        .unwrap();
+    let self_denied = sender
+        .request(Request::Reset {
+            session: sender_id.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        self_denied,
+        Response::Failed { code, .. } if code == "not_permitted"
+    ));
+    let allowed = sender
+        .request(Request::Reset { session: target })
+        .await
+        .unwrap();
+    assert!(matches!(allowed, Response::Reset { steps: 1 }));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn graceful_restart_marks_exited_and_continues_ids() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
@@ -843,6 +990,7 @@ async fn graceful_restart_marks_exited_and_continues_ids() {
         Deliver::Hold,
     )
     .await;
+
     let (_recipient_id, _recipient_token, _recipient) = session(
         &mut admin,
         dir.path(),
@@ -916,6 +1064,213 @@ async fn graceful_restart_marks_exited_and_continues_ids() {
     };
     assert_eq!(current_boot.len(), 1);
     assert_eq!(current_boot[0].id, "m_2");
+    daemon.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn reset_holds_message_delivery_until_sequence_finishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_sender_id, sender_token, sender_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("controller"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let target = match admin
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf '\\033[?2004h'; cat".into(),
+            ],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![],
+            reset: vec!["/clear".into(), "/second".into()],
+            control_from: vec!["controller".into()],
+            name: Some("target".into()),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Auto),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected target response: {response:?}"),
+    };
+    let target_for_reset = target.clone();
+    let mut resetter = Client::connect_addr(sender_addr, &sender_token)
+        .await
+        .unwrap();
+    let reset_task = tokio::spawn(async move {
+        resetter
+            .request(Request::Reset {
+                session: target_for_reset,
+            })
+            .await
+            .unwrap()
+    });
+    let mut reset_started = false;
+    for _ in 0..100 {
+        let screen = match admin
+            .request(Request::Screen {
+                session: target.clone(),
+            })
+            .await
+            .unwrap()
+        {
+            Response::Screen { lines } => lines,
+            response => panic!("unexpected screen response: {response:?}"),
+        };
+        if screen.iter().any(|line| line.contains("/clear")) {
+            reset_started = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(reset_started, "reset did not type its first step");
+    let mut sender = Client::connect_addr(sender_addr, &sender_token)
+        .await
+        .unwrap();
+    let accepted = send(&mut sender, "target@host-a", "during-reset", "queued").await;
+    assert!(matches!(
+        accepted,
+        Response::Accepted {
+            recipient_hold: Some(reason),
+            ..
+        } if reason == "deliver_hold"
+    ));
+    assert!(matches!(
+        reset_task.await.unwrap(),
+        Response::Reset { steps: 2 }
+    ));
+    let mut screen = Vec::new();
+    for _ in 0..100 {
+        screen = match admin
+            .request(Request::Screen {
+                session: target.clone(),
+            })
+            .await
+            .unwrap()
+        {
+            Response::Screen { lines } => lines,
+            response => panic!("unexpected screen response: {response:?}"),
+        };
+        if screen.iter().any(|line| line.contains("queued")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        screen.iter().any(|line| line.contains("queued")),
+        "queued message did not arrive after reset: {screen:?}"
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_rejects_an_in_flight_native_delivery_as_busy() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_sender_id, sender_token, sender_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("controller"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let output = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+    let target = match admin
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > \"$OUT\"; printf '\\033[?2004h'; sleep 30".into(),
+            ],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![("OUT".into(), output.path().to_string_lossy().into_owned())],
+            reset: vec![],
+            control_from: vec!["controller".into()],
+            name: Some("target".into()),
+            harness: Harness::Omp,
+            deliver: Some(Deliver::Auto),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected target response: {response:?}"),
+    };
+    let credentials = common::eventually(|| async {
+        let text = std::fs::read_to_string(output.path()).ok()?;
+        let mut lines = text.lines();
+        let token = lines.next()?.to_owned();
+        let address = lines.next()?.parse::<std::net::SocketAddr>().ok()?;
+        (token.len() == 64).then_some((token, address))
+    })
+    .await;
+    let mut bridge = Client::connect_addr(daemon.addrs()[0], &credentials.0)
+        .await
+        .unwrap()
+        .bridge()
+        .await
+        .unwrap();
+    bridge
+        .send(BridgeUp::Hello {
+            protocol: 1,
+            omp_version: "18.4.5".into(),
+            missing: vec![],
+        })
+        .await
+        .unwrap();
+    let ready = bridge.recv().await.unwrap();
+    assert!(matches!(ready, Some(BridgeDown::Ready)), "{ready:?}");
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: false,
+            draft: false,
+        })
+        .await
+        .unwrap();
+    let mut sender = Client::connect_addr(sender_addr, &sender_token)
+        .await
+        .unwrap();
+    let message = send(&mut sender, "target@host-a", "native", "queued").await;
+    let message_id = match message {
+        Response::Accepted { id, .. } => id,
+        response => panic!("unexpected send response: {response:?}"),
+    };
+    assert!(matches!(
+        bridge.recv().await.unwrap(),
+        Some(BridgeDown::Deliver { id, .. }) if id == message_id
+    ));
+    let mut resetter = Client::connect_addr(sender_addr, &sender_token)
+        .await
+        .unwrap();
+    let response = resetter
+        .request(Request::Reset { session: target })
+        .await
+        .unwrap();
+    assert!(matches!(
+        response,
+        Response::Failed { code, .. } if code == "busy"
+    ));
+    bridge
+        .send(BridgeUp::Nack {
+            id: message_id,
+            reason: "test".into(),
+        })
+        .await
+        .unwrap();
     daemon.shutdown().await.unwrap();
 }
 

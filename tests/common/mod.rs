@@ -88,6 +88,8 @@ pub async fn new_agent(
             rows: 10,
             cwd: None,
             env: vec![("OUT".into(), output.path().to_string_lossy().into_owned())],
+            reset: vec![],
+            control_from: vec![],
             name: name.map(str::to_owned),
             harness,
             deliver: Some(deliver),

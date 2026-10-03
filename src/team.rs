@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, bail};
 use serde::Deserialize;
 
-use crate::messaging::validate_name;
+use crate::messaging::{validate_name, validate_reset_steps};
 use crate::wire::SessionSummary;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -17,6 +17,10 @@ pub struct TeamSession {
     pub cwd: Option<String>,
     #[serde(default)]
     pub attach: bool,
+    #[serde(default)]
+    pub reset: Option<Vec<String>>,
+    #[serde(default)]
+    pub control_from: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +74,8 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             command: vec![executable.to_owned()],
             cwd: None,
             attach: index == 0,
+            reset: None,
+            control_from: Vec::new(),
         });
     }
     validate_sessions(&sessions)?;
@@ -129,6 +135,24 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
             bail!("session {}: at most one session can attach", session.name);
         }
         attached |= session.attach;
+        if let Some(reset) = &session.reset {
+            if reset.is_empty() {
+                bail!(
+                    "session {}: reset must contain at least one step",
+                    session.name
+                );
+            }
+            validate_reset_steps(reset)
+                .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
+        }
+        for name in &session.control_from {
+            validate_name(name).map_err(|error| {
+                anyhow::anyhow!(
+                    "session {} control_from entry {name:?}: {error}",
+                    session.name
+                )
+            })?;
+        }
     }
     Ok(())
 }

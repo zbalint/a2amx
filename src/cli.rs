@@ -57,6 +57,12 @@ pub enum Command {
         /// Claude only: deliver by typing into the terminal instead of through a channel.
         #[arg(long)]
         no_channel: bool,
+        /// Slash command sequence used by `a2amx reset`; repeatable and ordered.
+        #[arg(long)]
+        reset: Vec<String>,
+        /// Session names authorized to reset this session; repeatable and ordered.
+        #[arg(long)]
+        control_from: Vec<String>,
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },
@@ -80,6 +86,8 @@ pub enum Command {
     },
     /// Terminate a session.
     Kill { session: String },
+    /// Run the target session's configured reset sequence.
+    Reset { session: String },
     /// Print a session's visible screen without attaching.
     Screen {
         session: String,

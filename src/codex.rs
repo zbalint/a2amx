@@ -311,7 +311,12 @@ pub(crate) fn server_config(exe: &Path, authorize_peers: bool) -> Vec<String> {
         "mcp_servers.a2amx.args=[\"mcp\"]".to_owned(),
         "mcp_servers.a2amx.env_vars=[\"A2AMX_TOKEN\",\"A2AMX_ADDR\"]".to_owned(),
     ];
-    for tool in ["list_agents", "send_message", "message_status"] {
+    for tool in [
+        "list_agents",
+        "send_message",
+        "message_status",
+        "reset_session",
+    ] {
         config.push(format!(
             "mcp_servers.a2amx.tools.{tool}.approval_mode=\"approve\""
         ));

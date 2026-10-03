@@ -114,6 +114,8 @@ impl Case {
                         rows: 10,
                         cwd,
                         env,
+                        reset: vec![],
+                        control_from: vec![],
                         name: Some("agent-impl".into()),
                         harness: Harness::Codex,
                         deliver: None,
@@ -254,6 +256,8 @@ async fn codex_new_starts_a_private_app_server_and_attaches_the_tui_to_it() {
             "mcp_servers.a2amx.tools.send_message.approval_mode=\"approve\"",
             "-c",
             "mcp_servers.a2amx.tools.message_status.approval_mode=\"approve\"",
+            "-c",
+            "mcp_servers.a2amx.tools.reset_session.approval_mode=\"approve\"",
             "-c",
             &format!(
                 "developer_instructions={}",

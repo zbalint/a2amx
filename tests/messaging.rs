@@ -177,7 +177,7 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
     assert_eq!(argv[5], "--allowedTools");
     assert_eq!(
         argv[6],
-        "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status"
+        "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status,mcp__a2amx__reset_session"
     );
     assert_eq!(argv[7], "--append-system-prompt");
     assert_eq!(argv[8], harness::PEER_AUTHORIZATION_PROMPT);

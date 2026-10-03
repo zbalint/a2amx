@@ -319,6 +319,17 @@ clear it.
 Native in-harness delivery exists for Claude Code (channel), OMP (extension) and Codex
 (app-server).
 
+## Implemented: session reset
+
+`a2amx reset <id|name>` reuses the PTY delivery gate and bracketed-paste submission
+path to type each configured slash command, with `/clear` as the default. A reset
+holds queued message delivery for its target, rejects a human draft or non-ready
+composer, waits 1500 ms and then polls readiness every 100 ms after each Enter, and
+stops on the first failure or after 30 seconds measured from that Enter. It never
+sends Ctrl-C or retries a step. A session-token caller must appear in the target's
+`control_from`; the admin token is always allowed. Native OMP state additionally
+requires a connected, idle bridge with no draft or pending delivery.
+
 ## Implemented: Claude Code hook
 
 Built from [spec 2b](specs/spec-2b-hooks-receipts.md), extended by

@@ -344,10 +344,18 @@ machine; there is no central-versus-host split yet.
   a native channel (spec 2e) fed by an OMP extension through the `a2amx omp-bridge` relay,
   and the `codex` harness uses a native channel on a private `codex app-server` that the
   daemon starts for the session (`src/codex.rs`).
-- **MCP server.** `src/mcp.rs` owns `a2amx mcp`, a hand-written stdio JSON-RPC server with three
-  tools: `list_agents`, `send_message`, and `message_status`. It runs wherever the
-  harness runs and connects to the daemon over TCP. Status includes `hold_reason` and
-  `hold_explanation` plus `accepted_at` and `updated_at` Unix seconds. A successful
+- **Session reset.** `a2amx reset <id|name>` resolves names before sending
+  `Request::Reset`; the daemon types the configured sequence (or `/clear`) through
+  the same bracketed-paste PTY path. `control_from` names authorize session-token
+  callers; the CLI/admin token is always allowed. Reset holds message delivery,
+  rejects drafts and non-ready composers, waits 1.5 seconds plus readiness polling
+  after each Enter, and fails a step after 30 seconds.
+- **MCP server.** `src/mcp.rs` owns `a2amx mcp`, a hand-written stdio JSON-RPC server with four
+  tools: `list_agents`, `send_message`, `message_status`, and `reset_session`. It runs wherever
+  the harness runs and connects to the daemon over TCP. Reset requests use the target's
+  `control_from` consent.
+  Status includes `hold_reason` and `hold_explanation` plus `accepted_at` and `updated_at`
+  Unix seconds. A successful
   `send_message` may include `recipient_hold` when the recipient is held. A
   `send_message` whose connection is lost reports `unknown_outcome` and is never
   retried.

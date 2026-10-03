@@ -57,6 +57,8 @@ impl Case {
                     ("PASTE_LEN".into(), "222".into()),
                     ("MODE".into(), mode.into()),
                 ],
+                reset: vec![],
+                control_from: vec![],
                 name: Some("agent-review".into()),
                 harness: Harness::Claude,
                 deliver: Some(deliver),

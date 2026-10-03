@@ -588,7 +588,15 @@ async fn the_bridge_relays_the_three_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["list_agents", "send_message", "message_status"]);
+    assert_eq!(
+        names,
+        [
+            "list_agents",
+            "send_message",
+            "message_status",
+            "reset_session"
+        ]
+    );
     let agents = tool_result(
         process
             .mcp(json!({"jsonrpc":"2.0","id":2,"method":"tools/call",

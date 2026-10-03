@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use common::pty::PtyHarness;
 
+use a2amx::client::Client;
 use a2amx::team::{self, TeamSession};
-use a2amx::wire::SessionSummary;
+use a2amx::wire::{Request, Response, SessionSummary};
 
 fn summary(name: &str, id: &str, exit_code: Option<i32>) -> SessionSummary {
     SessionSummary {
@@ -72,13 +73,17 @@ cwd = "."
                 name: "architect".into(),
                 command: vec!["claude".into()],
                 cwd: None,
-                attach: true
+                attach: true,
+                reset: None,
+                control_from: Vec::new(),
             },
             TeamSession {
                 name: "developer".into(),
                 command: vec!["omp".into()],
                 cwd: Some(".".into()),
-                attach: false
+                attach: false,
+                reset: None,
+                control_from: Vec::new(),
             },
         ]
     );
@@ -124,13 +129,17 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 name: "architect".into(),
                 command: vec!["claude".into()],
                 cwd: None,
-                attach: true
+                attach: true,
+                reset: None,
+                control_from: Vec::new(),
             },
             TeamSession {
                 name: "developer".into(),
                 command: vec!["omp".into()],
                 cwd: None,
-                attach: false
+                attach: false,
+                reset: None,
+                control_from: Vec::new(),
             },
         ]
     );
@@ -496,4 +505,121 @@ attach = true
             .contains("already running developer s2")
     );
     Ok(())
+}
+
+#[test]
+fn configured_reset_and_controller_are_accepted_by_team_parser() {
+    let text = r#"
+[[session]]
+name = "worker"
+command = ["cat"]
+reset = ["/clear", "/prewalk restart"]
+control_from = ["architect"]
+"#;
+    let sessions = team::parse(text).expect("valid reset configuration");
+    assert_eq!(
+        sessions[0].reset,
+        Some(vec!["/clear".into(), "/prewalk restart".into()])
+    );
+    assert_eq!(sessions[0].control_from, ["architect"]);
+    assert!(team::parse(&format!("{text}\nunknown = true")).is_err());
+    let empty_reset =
+        team::parse("[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nreset = []")
+            .expect_err("empty reset must be rejected");
+    assert!(empty_reset.to_string().contains("reset"));
+    for reset in [
+        "reset = [\"clear\"]",
+        "reset = [\"/bad\\ncommand\"]",
+        &format!("reset = [\"/{}\"]", "x".repeat(200)),
+    ] {
+        let invalid = format!("[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n{reset}");
+        assert!(team::parse(&invalid).is_err(), "{reset}");
+    }
+    let invalid_control =
+        "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\ncontrol_from = [\"Bad_Name\"]";
+    assert!(team::parse(invalid_control).is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_forwards_reset_configuration_and_consent() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let controller_file = dir.path().join("controller.creds");
+    let other_file = dir.path().join("other.creds");
+    let composer = dir.path().join("team-composer.py");
+    std::fs::write(
+        &composer,
+        r#"import sys
+sys.stdout.write("\x1b[?2004h")
+sys.stdout.flush()
+for raw in sys.stdin.buffer:
+    line = raw.decode(errors="replace").replace("\x1b[200~", "").replace("\x1b[201~", "").rstrip("\r\n")
+    if line == "/clear":
+        print("marker:/clear", flush=True)
+"#,
+    )
+    .unwrap();
+    let config = format!(
+        r#"
+[[session]]
+name = "controller"
+command = ["sh", "-c", "printf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > '{controller}'; sleep 30"]
+
+[[session]]
+name = "other"
+command = ["sh", "-c", "printf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > '{other}'; sleep 30"]
+
+[[session]]
+name = "target"
+command = ["python3", "-u", "{composer}"]
+reset = ["/clear"]
+control_from = ["controller"]
+"#,
+        controller = controller_file.display(),
+        other = other_file.display(),
+        composer = composer.display(),
+    );
+    std::fs::write(dir.path().join("a2amx.toml"), config).unwrap();
+    let up = run_binary(dir.path(), &["team", "up", "--detach"]).unwrap();
+    assert!(
+        up.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let read_credentials = |path: std::path::PathBuf| async move {
+        common::eventually(|| async {
+            let text = std::fs::read_to_string(&path).ok()?;
+            let mut lines = text.lines();
+            let token = lines.next()?.to_owned();
+            let address = lines.next()?.parse::<std::net::SocketAddr>().ok()?;
+            (token.len() == 64).then_some((token, address))
+        })
+        .await
+    };
+    let (controller_token, controller_addr) = read_credentials(controller_file).await;
+    let (other_token, other_addr) = read_credentials(other_file).await;
+    let mut controller = Client::connect_addr(controller_addr, &controller_token)
+        .await
+        .unwrap();
+    let reset = controller
+        .request(Request::Reset {
+            session: "target".into(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(reset, Response::Reset { steps: 1 }), "{reset:?}");
+
+    let mut other = Client::connect_addr(other_addr, &other_token)
+        .await
+        .unwrap();
+    let denied = other
+        .request(Request::Reset {
+            session: "target".into(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        denied,
+        Response::Failed { code, .. } if code == "not_permitted"
+    ));
 }
