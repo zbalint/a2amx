@@ -13,7 +13,7 @@ use crate::wire::{
     BridgeDown, BridgeUp, ClientFrame, FrameDecoder, Request, Response, ServerFrame,
 };
 
-const UNREACHABLE: &str = "cannot reach the a2amx daemon: start it with `a2amx daemon`";
+pub const UNREACHABLE: &str = "cannot reach the a2amx daemon: start it with `a2amx daemon start`";
 
 fn validate_payload(payload: &[u8]) -> anyhow::Result<()> {
     if payload.len() > crate::wire::MAX_FRAME_LEN {

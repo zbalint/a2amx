@@ -12,7 +12,7 @@ use clap::Parser;
 use tokio::sync::mpsc;
 
 use a2amx::bridge;
-use a2amx::cli::{Cli, Command, TeamAction};
+use a2amx::cli::{Cli, Command, DaemonAction, TeamAction};
 use a2amx::client::{Attachment, Client};
 use a2amx::daemon::{self, Daemon, DaemonConfig};
 use a2amx::emulator::Scroll;
@@ -41,39 +41,50 @@ async fn main() -> std::process::ExitCode {
         .init();
     let result = match Cli::try_parse() {
         Ok(cli) => dispatch(cli).await,
-        Err(error) if !error.use_stderr() => write_stdout(error.to_string().into_bytes()).await,
+        Err(error) if !error.use_stderr() => write_stdout(error.to_string().into_bytes())
+            .await
+            .map(|_| std::process::ExitCode::SUCCESS),
         Err(error) => Err(error.into()),
     };
-    if let Err(error) = result {
-        let _ = write_stderr(format!("a2amx: {error:#}\n").into_bytes()).await;
-        return std::process::ExitCode::FAILURE;
+    match result {
+        Ok(code) => code,
+        Err(error) => {
+            let _ = write_stderr(format!("a2amx: {error:#}\n").into_bytes()).await;
+            std::process::ExitCode::FAILURE
+        }
     }
-    // Returning lets Tokio wait for blocking terminal cleanup, including unwind guards.
-    std::process::ExitCode::SUCCESS
 }
 
-async fn dispatch(cli: Cli) -> anyhow::Result<()> {
+async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
     let prefix = cli.prefix;
     let home_arg = cli.home;
     match &cli.command {
-        Command::Mcp { channel } => return mcp::run(*channel).await,
-        Command::Hook => return hook::run().await,
-        Command::OmpBridge => return bridge::run().await,
+        Command::Mcp { channel } => {
+            return mcp::run(*channel)
+                .await
+                .map(|_| std::process::ExitCode::SUCCESS);
+        }
+        Command::Hook => return hook::run().await.map(|_| std::process::ExitCode::SUCCESS),
+        Command::OmpBridge => return bridge::run().await.map(|_| std::process::ExitCode::SUCCESS),
         _ => {}
     }
     let home = resolve_home(home_arg)?;
-    match cli.command {
-        Command::Daemon {
-            listen,
-            host_name,
-            background,
-        } => {
-            if background {
-                run_daemon_background(home, listen, host_name).await
-            } else {
-                run_daemon(home, listen, host_name).await
+    let result = match cli.command {
+        Command::Daemon { action } => match action {
+            DaemonAction::Start {
+                listen,
+                host_name,
+                foreground,
+            } => {
+                if foreground {
+                    run_daemon(home, listen, host_name).await
+                } else {
+                    run_daemon_background(home, listen, host_name).await
+                }
             }
-        }
+            DaemonAction::Status => return run_daemon_status(home).await,
+            DaemonAction::Stop { yes } => run_stop(home, yes).await,
+        },
         options @ Command::New { .. } => run_new(home, prefix, options).await,
         Command::List { details } => run_list(home, details).await,
         Command::Team { action } => match action {
@@ -87,16 +98,16 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
         Command::Attach { session, force } => {
             run_attach_command(home, prefix, session, force).await
         }
-        Command::Kill { session } => run_kill(home, session).await,
+        Command::Kill { session, yes } => run_kill(home, session, yes).await,
         Command::Reset { session } => run_reset(home, session).await,
         Command::Screen { session, rows } => run_screen(home, session, rows).await,
-        Command::Stop { yes } => run_stop(home, yes).await,
+        Command::Messages { session, state } => run_messages(home, session, state).await,
+        Command::Cancel { message } => run_cancel(home, message).await,
         Command::Mcp { .. } | Command::Hook | Command::OmpBridge => {
             unreachable!("early dispatch returned before resolving home")
         }
-        Command::Messages { session, state } => run_messages(home, session, state).await,
-        Command::Cancel { message } => run_cancel(home, message).await,
-    }
+    };
+    result.map(|_| std::process::ExitCode::SUCCESS)
 }
 
 fn resolve_home(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
@@ -178,7 +189,10 @@ async fn run_daemon_background(
         .await??
     };
     let mut command = std::process::Command::new(exe);
-    command.arg("--home").arg(&home).arg("daemon");
+    command
+        .arg("--home")
+        .arg(&home)
+        .args(["daemon", "start", "--foreground"]);
     for addr in &listen {
         command.arg("--listen").arg(addr.to_string());
     }
@@ -229,6 +243,47 @@ async fn read_addrs(home: &Path) -> anyhow::Result<String> {
     Ok(tokio::task::spawn_blocking(move || std::fs::read_to_string(path)).await??)
 }
 
+async fn run_daemon_status(home: PathBuf) -> anyhow::Result<std::process::ExitCode> {
+    let mut client = match Client::connect(&home).await {
+        Ok(client) => client,
+        Err(error) if error.to_string() == a2amx::client::UNREACHABLE => {
+            write_stdout(b"not running\n".to_vec()).await?;
+            return Ok(std::process::ExitCode::from(1));
+        }
+        Err(error) => return Err(error),
+    };
+    let addrs = read_addrs(&home).await?;
+    let sessions = request_sessions(&mut client).await?;
+    let running = sessions
+        .iter()
+        .filter(|session| session.exit_code.is_none())
+        .count();
+    let exited = sessions.len() - running;
+    let mut output = String::from("running\n");
+    for addr in addrs.lines() {
+        output.push_str(&format!("listening on {addr}\n"));
+    }
+    output.push_str(&format!("sessions: {running} running, {exited} exited\n"));
+    write_stdout(output.into_bytes()).await?;
+    Ok(std::process::ExitCode::SUCCESS)
+}
+
+async fn confirm(prompt: &str, refusal: &str) -> anyhow::Result<bool> {
+    if !io::stdin().is_terminal() {
+        return Err(anyhow!(refusal.to_owned()));
+    }
+    write_stderr(prompt.as_bytes().to_vec()).await?;
+    let answer = tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        io::stdin().read_line(&mut line).map(|_| line)
+    })
+    .await??;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
 async fn run_stop(home: PathBuf, yes: bool) -> anyhow::Result<()> {
     let Ok(mut client) = Client::connect(&home).await else {
         return write_stdout(b"no daemon running\n".to_vec()).await;
@@ -240,22 +295,14 @@ async fn run_stop(home: PathBuf, yes: bool) -> anyhow::Result<()> {
     };
     let running = sessions.iter().filter(|s| s.exit_code.is_none()).count();
     if running > 0 && !yes {
-        if !io::stdin().is_terminal() {
-            return Err(anyhow!(
-                "refusing to stop: {running} running session(s); pass --yes to end them"
-            ));
-        }
-        write_stderr(
-            format!("Stopping the daemon ends {running} running session(s). Continue? [y/N] ")
-                .into_bytes(),
+        let prompt =
+            format!("Stopping the daemon ends {running} running session(s). Continue? [y/N] ");
+        if !confirm(
+            &prompt,
+            &format!("refusing to stop: {running} running session(s); pass --yes to end them"),
         )
-        .await?;
-        let answer = tokio::task::spawn_blocking(|| {
-            let mut line = String::new();
-            io::stdin().read_line(&mut line).map(|_| line)
-        })
-        .await??;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        .await?
+        {
             return write_stdout(b"not stopped\n".to_vec()).await;
         }
     }
@@ -569,11 +616,25 @@ async fn run_list(home: PathBuf, details: bool) -> anyhow::Result<()> {
     write_stdout(format_session_table(&sessions, details).into_bytes()).await
 }
 
-async fn run_kill(home: PathBuf, session: String) -> anyhow::Result<()> {
-    let session = resolve_session(&home, &session).await?;
+async fn run_kill(home: PathBuf, reference: String, yes: bool) -> anyhow::Result<()> {
     let mut client = Client::connect(&home).await?;
-    let response = client.request(Request::Kill { session }).await?;
-    match response {
+    let sessions = request_sessions(&mut client).await?;
+    let session = resolve_reference(&sessions, &reference);
+    let running = sessions
+        .iter()
+        .any(|summary| summary.id == session && summary.exit_code.is_none());
+    if running && !yes {
+        let prompt = format!("Killing {session} ends a running session. Continue? [y/N] ");
+        if !confirm(
+            &prompt,
+            &format!("refusing to kill: session {session} is running; pass --yes to end it"),
+        )
+        .await?
+        {
+            return write_stdout(b"not killed\n".to_vec()).await;
+        }
+    }
+    match client.request(Request::Kill { session }).await? {
         Response::Ok => Ok(()),
         Response::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),

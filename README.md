@@ -94,18 +94,18 @@ must pass, and the results recorded so far, are in the validation plan.
 ```sh
 cargo build
 cargo test
-a2amx daemon                        # prints "listening on <addr>"
-a2amx daemon --background           # detached; output goes to <state dir>/daemon.log
-a2amx stop [--yes]                  # ends the daemon and every session; asks first if any run
-a2amx new -- sh                     # start and attach; Ctrl-B d detaches
+a2amx daemon start [--foreground]  # start the daemon; detached by default
+a2amx daemon status               # show daemon state and session counts
+a2amx daemon stop [--yes]         # end the daemon and every session; asks first if any run
+a2amx new -- sh                   # start and attach; Ctrl-B d detaches
 a2amx list [--details]
 a2amx attach <id|name> [--force]
-a2amx kill <id|name>
-a2amx reset <id|name>                 # type the configured reset sequence
-a2amx screen <id|name> [--rows N]       # read visible screen text without attaching
+a2amx kill <id|name> [--yes]
+a2amx reset <id|name>               # type the configured reset sequence
+a2amx screen <id|name> [--rows N]   # read visible screen text without attaching
 a2amx team up [--file F] [--detach] [NAME=EXE ...]   # a2amx.toml or bare executables
 a2amx team down [--file F] [NAME ...]
-a2amx daemon --host-name host-a     # names this host in addresses (name@host-a)
+a2amx daemon start --host-name host-a  # names this host in addresses (name@host-a)
 # --harness is inferred from the command name when omitted (claude, codex, omp)
 a2amx new --name agent-plan --harness claude -- claude
 a2amx new --name agent-review --harness omp -- omp

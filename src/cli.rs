@@ -30,16 +30,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run the host daemon (in the foreground unless --background).
+    /// Manage the host daemon: start, status, stop.
     Daemon {
-        /// Listen address; repeatable. Defaults to loopback with an OS-chosen port.
-        #[arg(long)]
-        listen: Vec<std::net::SocketAddr>,
-        #[arg(long)]
-        host_name: Option<String>,
-        /// Start detached from the terminal and print the listen address. Output goes to <state dir>/daemon.log.
-        #[arg(long)]
-        background: bool,
+        #[command(subcommand)]
+        action: DaemonAction,
     },
     /// Start a session running COMMAND and attach to it.
     New {
@@ -85,7 +79,12 @@ pub enum Command {
         force: bool,
     },
     /// Terminate a session.
-    Kill { session: String },
+    Kill {
+        session: String,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Run the target session's configured reset sequence.
     Reset { session: String },
     /// Print a session's visible screen without attaching.
@@ -94,12 +93,6 @@ pub enum Command {
         /// Keep only the last N visible lines.
         #[arg(long)]
         rows: Option<usize>,
-    },
-    /// Stop the daemon. This ends every session.
-    Stop {
-        /// Do not ask for confirmation.
-        #[arg(long)]
-        yes: bool,
     },
     /// List messages.
     Messages {
@@ -131,6 +124,28 @@ pub enum Command {
     Hook,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum DaemonAction {
+    /// Start the host daemon.
+    Start {
+        /// Listen address; repeatable. Defaults to loopback with an OS-chosen port.
+        #[arg(long)]
+        listen: Vec<std::net::SocketAddr>,
+        #[arg(long)]
+        host_name: Option<String>,
+        /// Keep the daemon in the foreground.
+        #[arg(long)]
+        foreground: bool,
+    },
+    /// Show daemon state and sessions.
+    Status,
+    /// Stop the daemon. This ends every session.
+    Stop {
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+}
 #[derive(Debug, Subcommand)]
 pub enum TeamAction {
     /// Start the sessions that are not running.

@@ -21,7 +21,15 @@ impl DaemonChild {
         command
             .arg("--home")
             .arg(dir)
-            .args(["daemon", "--host-name", "host-a", "--listen", "127.0.0.1:0"])
+            .args([
+                "daemon",
+                "start",
+                "--foreground",
+                "--host-name",
+                "host-a",
+                "--listen",
+                "127.0.0.1:0",
+            ])
             .stdout(std::process::Stdio::null());
         if let Some(clock) = clock {
             command.env("LD_PRELOAD", clock);

@@ -512,7 +512,7 @@ async fn output_drains_when_the_attached_client_never_reads() {
 #[tokio::test]
 async fn missing_or_refused_daemon_has_the_exact_start_hint() {
     let temp = tempfile::tempdir().unwrap();
-    let expected = "cannot reach the a2amx daemon: start it with `a2amx daemon`";
+    let expected = "cannot reach the a2amx daemon: start it with `a2amx daemon start`";
     assert_eq!(
         Client::connect(temp.path())
             .await

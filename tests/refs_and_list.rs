@@ -44,7 +44,7 @@ async fn kill_by_name_removes_the_named_session() -> anyhow::Result<()> {
     assert!(created.status.success());
     assert_eq!(created.stdout, b"s1\n");
 
-    let killed = run_binary(dir.path(), &["kill", "agent-plan"])?;
+    let killed = run_binary(dir.path(), &["kill", "agent-plan", "--yes"])?;
     assert!(
         killed.status.success(),
         "stderr: {}",
@@ -122,7 +122,7 @@ async fn messages_by_name_match_id_and_retained_messages_survive_kill() -> anyho
     assert!(String::from_utf8_lossy(&by_id.stdout).contains("Parser issue"));
     assert_eq!(by_name.stdout, by_id.stdout);
     assert!(
-        run_binary(dir.path(), &["kill", "agent-plan"])?
+        run_binary(dir.path(), &["kill", "agent-plan", "--yes"])?
             .status
             .success()
     );

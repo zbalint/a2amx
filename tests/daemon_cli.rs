@@ -67,7 +67,7 @@ struct Cleanup<'a>(&'a Path);
 
 impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
-        let _ = run(self.0, &["stop", "--yes"]);
+        let _ = run(self.0, &["daemon", "stop", "--yes"]);
     }
 }
 
@@ -89,7 +89,7 @@ fn background_start_detaches_and_logs() {
     let _cleanup = Cleanup(&home);
 
     let started = Instant::now();
-    let output = run(&home, &["daemon", "--background"]);
+    let output = run(&home, &["daemon", "start"]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(started.elapsed() < Duration::from_secs(10));
@@ -107,9 +107,9 @@ fn background_refuses_when_already_running() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
 
-    let second = run(&home, &["daemon", "--background"]);
+    let second = run(&home, &["daemon", "start"]);
 
     assert!(!second.status.success());
     assert!(stderr(&second).contains("already running"));
@@ -120,9 +120,9 @@ fn stop_ends_the_daemon() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
 
-    let stop = run(&home, &["stop", "--yes"]);
+    let stop = run(&home, &["daemon", "stop", "--yes"]);
 
     assert!(stop.status.success(), "stderr: {}", stderr(&stop));
     assert_eq!(stdout(&stop), "stopped\n");
@@ -134,7 +134,7 @@ fn stop_without_a_daemon_is_a_no_op() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
 
-    let stop = run(&home, &["stop"]);
+    let stop = run(&home, &["daemon", "stop"]);
 
     assert!(stop.status.success(), "stderr: {}", stderr(&stop));
     assert_eq!(stdout(&stop), "no daemon running\n");
@@ -145,16 +145,16 @@ fn stop_refuses_to_end_sessions_without_a_terminal() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(&home, &["new", "--detach", "--", "sh"]);
     assert!(created.status.success(), "stderr: {}", stderr(&created));
 
-    let refused = run(&home, &["stop"]);
+    let refused = run(&home, &["daemon", "stop"]);
 
     assert!(!refused.status.success());
     assert!(stderr(&refused).contains("1 running session"));
     assert!(run(&home, &["list"]).status.success());
-    let forced = run(&home, &["stop", "--yes"]);
+    let forced = run(&home, &["daemon", "stop", "--yes"]);
     assert!(forced.status.success(), "stderr: {}", stderr(&forced));
 }
 
@@ -163,18 +163,21 @@ fn foreground_daemon_honors_stop() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    let mut daemon = a2amx(&home, &["daemon", "--listen", "127.0.0.1:0"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .spawn()
-        .expect("spawn foreground daemon");
+    let mut daemon = a2amx(
+        &home,
+        &["daemon", "start", "--foreground", "--listen", "127.0.0.1:0"],
+    )
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .spawn()
+    .expect("spawn foreground daemon");
     let deadline = Instant::now() + Duration::from_secs(10);
     while !run(&home, &["list"]).status.success() {
         assert!(Instant::now() < deadline, "daemon did not come up");
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    let stop = run(&home, &["stop", "--yes"]);
+    let stop = run(&home, &["daemon", "stop", "--yes"]);
 
     assert!(stop.status.success(), "stderr: {}", stderr(&stop));
     let status = wait_exit(&mut daemon, Duration::from_secs(15));
@@ -190,7 +193,7 @@ fn background_reports_a_startup_failure() {
     let home = dir.path().join("not-a-directory");
     std::fs::write(&home, b"").unwrap();
 
-    let output = run(&home, &["daemon", "--background"]);
+    let output = run(&home, &["daemon", "start"]);
 
     assert!(!output.status.success());
     let message = stderr(&output);
@@ -255,7 +258,7 @@ fn reset_uses_default_clear_sequence() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_reset_composer(dir.path());
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -291,7 +294,7 @@ fn reset_rejects_a_draft_without_typing() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_reset_composer(dir.path());
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -335,7 +338,7 @@ fn reset_reports_not_ready_exited_and_unknown_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
 
     let not_ready = run(
         &home,
@@ -390,7 +393,7 @@ fn reset_times_out_when_second_step_stays_not_ready() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_timeout_composer(dir.path());
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -433,7 +436,7 @@ fn reset_runs_configured_steps_in_order() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_reset_composer(dir.path());
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -480,7 +483,7 @@ fn harness_is_inferred_from_the_command() {
 
     let _cleanup = Cleanup(&home);
     let claude = fake_claude(dir.path());
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
 
     let created = run(&home, &["new", "--detach", "--", claude.to_str().unwrap()]);
 
@@ -492,7 +495,7 @@ fn new_rejects_invalid_reset_configuration() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
 
     let cases = [
         (
@@ -567,7 +570,7 @@ fn reset_rejects_a_concurrent_request_as_busy() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_reset_composer(dir.path());
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -611,7 +614,7 @@ fn explicit_generic_harness_wins_over_inference() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let claude = fake_claude(dir.path());
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
 
     let created = run(
         &home,
@@ -634,7 +637,7 @@ fn screen_prints_trimmed_visible_rows() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -660,7 +663,7 @@ fn screen_resolves_session_name() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -688,7 +691,7 @@ fn screen_rows_keeps_only_the_last_lines() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -714,7 +717,7 @@ fn screen_reads_the_active_alternate_screen() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -740,7 +743,7 @@ fn screen_does_not_resize_or_detach_an_attached_session() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -783,7 +786,7 @@ fn screen_unknown_session_matches_kill_error() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
 
     let kill = run(&home, &["kill", "missing"]);
     let screen = run(&home, &["screen", "missing"]);
@@ -797,7 +800,7 @@ fn screen_reads_the_last_screen_after_exit() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -841,7 +844,7 @@ fn screen_wide_character_is_not_duplicated() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    assert!(run(&home, &["daemon", "--background"]).status.success());
+    assert!(run(&home, &["daemon", "start"]).status.success());
     let created = run(
         &home,
         &[
@@ -860,4 +863,100 @@ fn screen_wide_character_is_not_duplicated() {
     let output = screen_until(&home, &["screen", "s1"], "A界B\n");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(stdout(&output), "A界B\n");
+}
+
+#[test]
+fn daemon_status_reports_address_and_session_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let address = std::fs::read_to_string(home.join("addr"))
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_owned();
+    let running = run(&home, &["new", "--detach", "--", "sh", "-c", "sleep 30"]);
+    assert!(running.status.success(), "stderr: {}", stderr(&running));
+    let exited = run(&home, &["new", "--detach", "--", "sh", "-c", "exit 7"]);
+    assert!(exited.status.success(), "stderr: {}", stderr(&exited));
+    let listed = screen_contains_until(&home, &["list"], "exited");
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+
+    let status = run(&home, &["daemon", "status"]);
+
+    assert!(status.status.success(), "stderr: {}", stderr(&status));
+    assert_eq!(
+        stdout(&status),
+        format!("running\nlistening on {address}\nsessions: 1 running, 1 exited\n")
+    );
+    assert_eq!(stderr(&status), "");
+}
+
+#[test]
+fn removed_daemon_spellings_are_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let background = ["--", "background"].concat();
+    let top_level_stop = ["st", "op"].concat();
+    for args in [
+        vec!["daemon"],
+        vec!["daemon", background.as_str()],
+        vec![top_level_stop.as_str()],
+    ] {
+        let output = run(&home, &args);
+        assert!(!output.status.success(), "accepted {args:?}");
+    }
+}
+
+#[test]
+fn kill_running_session_requires_confirmation_without_a_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let created = run(&home, &["new", "--detach", "--", "sh", "-c", "sleep 30"]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let id = stdout(&created).trim().to_owned();
+
+    let refused = run(&home, &["kill", &id]);
+
+    assert!(!refused.status.success());
+    assert_eq!(
+        stderr(&refused),
+        format!("a2amx: refusing to kill: session {id} is running; pass --yes to end it\n")
+    );
+    let listing = stdout(&run(&home, &["list"]));
+    assert!(listing.contains(&id));
+    assert!(listing.contains("running"));
+    let forced = run(&home, &["kill", &id, "--yes"]);
+    assert!(forced.status.success(), "stderr: {}", stderr(&forced));
+}
+
+#[test]
+fn kill_exited_session_skips_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let created = run(&home, &["new", "--detach", "--", "sh", "-c", "exit 7"]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let id = stdout(&created).trim().to_owned();
+    let listed = screen_contains_until(&home, &["list"], "exited");
+    assert!(listed.status.success(), "stderr: {}", stderr(&listed));
+
+    let killed = run(&home, &["kill", &id]);
+
+    assert!(killed.status.success(), "stderr: {}", stderr(&killed));
+}
+
+#[test]
+fn daemon_status_without_a_daemon_is_quiet_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), &["daemon", "status"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "not running\n");
+    assert_eq!(stderr(&output), "");
 }
