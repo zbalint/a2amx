@@ -246,6 +246,9 @@ section is the summary.
 - The attach client redraws from the emulator, like tmux: one full render, then
   damage-based updates. The daemon never forwards raw PTY bytes. No graphics,
   hyperlinks, clipboard writes, application titles, or bell reach the client.
+  Attach registers for output before checking pending damage, so output received
+  while a snapshot is backpressured is rendered even if delivery consumed the
+  shared notification. Historical viewports remain static until returning live.
 - Query replies come only from the emulator and are written to the PTY, so they are
   answered while detached. `TERM=xterm-256color`, `COLORTERM=truecolor`, kitty
   keyboard protocol off.

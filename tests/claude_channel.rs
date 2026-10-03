@@ -543,6 +543,7 @@ async fn development_dialog_gets_exactly_one_enter_only_for_channel_sessions() {
                     .await
                     .ok()?
                     .ok()
+                    .filter(|text| !text.is_empty())
             })
             .await;
             assert_eq!(text, "\n");

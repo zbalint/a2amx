@@ -730,8 +730,15 @@ async fn status_line_toggles_and_shows_the_session_address() -> anyhow::Result<(
     );
     attached.resize(40, 10)?;
     attached.wait_for_text("9 40", WAIT)?;
+    let after_toggle = attached.raw_output().len();
     attached.send(&[2, b's'])?;
-    attached.wait_for_text("10 40", WAIT)?;
+    if let Err(error) = attached.wait_for_text("10 40", WAIT) {
+        eprintln!(
+            "post-toggle outer PTY bytes: {:?}",
+            String::from_utf8_lossy(&attached.raw_output()[after_toggle..]),
+        );
+        return Err(error);
+    }
     assert!(
         !attached
             .screen_text()
@@ -756,4 +763,123 @@ async fn status_line_toggles_and_shows_the_session_address() -> anyhow::Result<(
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
     Ok(())
+}
+
+#[tokio::test]
+async fn output_during_backpressured_snapshot_reaches_live_attachment_without_redraw()
+-> anyhow::Result<()> {
+    use a2amx::wire::{ClientFrame, ServerFrame, encode_frame};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    tokio::time::timeout(WAIT, async {
+        let (dir, daemon) = common::start_daemon().await;
+        let gate_path = dir.path().join("output-gate");
+        let listener = tokio::net::UnixListener::bind(&gate_path)?;
+        let script = r#"
+import os, socket, sys, tty
+tty.setraw(0)
+gate = socket.socket(socket.AF_UNIX)
+gate.connect(sys.argv[1])
+def synced_write(data):
+    sys.stdout.buffer.write(data + b'\x1b[6n')
+    sys.stdout.buffer.flush()
+    while os.read(0, 1) != b'R':
+        pass
+pair = b'\x1b[38;2;1;2;3mX\x1b[38;2;4;5;6mX'
+synced_write(pair * 131072)
+gate.sendall(b'ready')
+gate.recv(1)
+synced_write(b'\x1b[1;1H\x1b[0mOUTPUT-AFTER-SNAPSHOT')
+gate.sendall(b'printed')
+gate.recv(1)
+"#;
+        let mut control = Client::connect(dir.path()).await?;
+        let Response::Created { session } = control
+            .request(Request::NewSession {
+                argv: vec![
+                    "python3".into(),
+                    "-c".into(),
+                    script.into(),
+                    gate_path.to_string_lossy().into_owned(),
+                ],
+                cols: 512,
+                rows: 512,
+                cwd: None,
+                env: vec![],
+                name: Some("render-regression".into()),
+                harness: Harness::Generic,
+                deliver: Some(Deliver::Hold),
+            })
+            .await?
+        else {
+            panic!("session creation");
+        };
+        let (mut gate, _) = listener.accept().await?;
+        let mut ready = [0; 5];
+        gate.read_exact(&mut ready).await?;
+        assert_eq!(&ready, b"ready");
+
+        // Alternating RGB cells make the snapshot exceed Linux's TCP send buffer.
+        // A small receive window leaves the daemon sending it while the child writes.
+        let socket = tokio::net::TcpSocket::new_v4()?;
+        socket.set_recv_buffer_size(16384)?;
+        let mut attachment = socket.connect(daemon.addrs()[0]).await?;
+        let token = std::fs::read_to_string(dir.path().join("admin.token"))?;
+        for (request, expected) in [
+            (Request::Hello { token }, Response::Ok),
+            (
+                Request::Attach {
+                    session,
+                    force: false,
+                    cols: 512,
+                    rows: 512,
+                    status: false,
+                },
+                Response::Attached,
+            ),
+        ] {
+            attachment
+                .write_all(&encode_frame(&serde_json::to_vec(&request)?)?)
+                .await?;
+            let length = attachment.read_u32().await?;
+            let mut payload = vec![0; length as usize];
+            attachment.read_exact(&mut payload).await?;
+            assert_eq!(serde_json::from_slice::<Response>(&payload)?, expected);
+        }
+        gate.write_all(b"p").await?;
+        let mut printed = [0; 7];
+        gate.read_exact(&mut printed).await?;
+        assert_eq!(&printed, b"printed");
+        // Let the already-woken delivery observer consume the shared notification.
+        assert!(matches!(
+            control.request(Request::List).await?,
+            Response::Sessions { .. }
+        ));
+        tokio::task::yield_now().await;
+        tokio::time::timeout(WAIT, async {
+            loop {
+                let length = attachment.read_u32().await?;
+                let mut payload = vec![0; length as usize];
+                attachment.read_exact(&mut payload).await?;
+                let ServerFrame::Data(data) = ServerFrame::decode(&payload)? else {
+                    panic!("child remains live");
+                };
+                if data
+                    .windows(b"OUTPUT-AFTER-SNAPSHOT".len())
+                    .any(|window| window == b"OUTPUT-AFTER-SNAPSHOT")
+                {
+                    break;
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        attachment
+            .write_all(&encode_frame(&ClientFrame::Detach.encode())?)
+            .await?;
+        gate.write_all(b"x").await?;
+        daemon.shutdown().await?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await?
 }

@@ -1431,6 +1431,16 @@ async fn attach(
             connection.stream.shutdown().await?;
             return Ok(true);
         }
+        // Delivery shares this notifier and can consume its stored permit while
+        // a snapshot is being sent. Register before checking pending render state.
+        let output = session.notify().notified();
+        tokio::pin!(output);
+        output.as_mut().enable();
+        let output_pending = {
+            let state = session.lock();
+            (state.dirty && !state.emulator.is_scrolled())
+                || (state.exit_code.is_some() && !state.dirty)
+        };
         tokio::select! {
             _ = taken_over.changed() => {},
             // shortcut: one-second poll per attachment; push from the store's write path if latency
@@ -1444,7 +1454,7 @@ async fn attach(
                     }
                 }
             },
-            _ = session.notify().notified() => {
+            _ = async { if !output_pending { output.await; } } => {
                 let (bytes, exited) = {
                     let mut state = session.lock();
                     let bytes = state.emulator.render_update();
