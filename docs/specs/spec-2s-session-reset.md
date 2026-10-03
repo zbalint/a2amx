@@ -12,6 +12,11 @@ command), plus the architect's design, grounded by a probe of real claude, codex
 "error codes only" while D3 and section 4.2 put `validate_reset_steps` there; the scope now
 allows both. No other text changes.
 
+**Amendment 2** (2026-10-03, developer BLOCKED, causal review by the architect): D11 now uses a
+`resetting` flag that makes `Session::deliver()` return `Hold`, so no delivery runs during a reset
+without touching `src/delivery.rs` or `src/codex.rs`; test 9 gains a no-interleave case. Scope
+unchanged.
+
 **Baseline:** develop at the commit that adds this spec (on top of `9771c4f`). **Location and
 branch:** main checkout `/home/zbalint/workspace/a2amx`, branch `develop`. Shared task
 `context_id`: `a2amx-session-reset`. Public test seams: the `a2amx` CLI against a real daemon with
@@ -110,9 +115,23 @@ mid-turn), so the feature is a small, gated control action and not a general "ty
   (use the daemon's existing logging path) with the sender (`admin` or the sending session's
   address), the target address, the outcome code and the failed step if any. The command text is
   not logged; no tokens anywhere.
-- **D11.** One reset per session at a time: a second request while one runs fails with `busy`
-  (an `AtomicBool` or equivalent in `Session`, cleared on every exit path). While a reset runs,
-  delivery to that session cannot interleave because `begin_delivery` holds the input gate.
+- **D11.** (Amendment 2 replaces the original text, which assumed `begin_delivery` holds the input
+  gate for the whole reset; `Delivery::submit` consumes the gate, so it covers one step only, and
+  the OMP and Codex channels never take it.) One reset per session at a time, and no message
+  delivery while it runs, through one flag: `Session` gets a `resetting: AtomicBool`. The reset
+  sets it first, with `compare_exchange`, before any D5 gate is read; a second request while it is
+  set fails with `busy`. The flag is cleared on every exit path (success, any failed gate, write
+  failure, timeout, panic or cancellation) by a guard that also calls `message_notify().notify_one()`.
+  `Session::deliver()` returns `Deliver::Hold` while the flag is set, whatever the configured
+  value. The shared delivery loop (`src/delivery.rs`, `run`) already skips every channel (PTY, OMP,
+  Codex) when `deliver()` is `Hold`, before it calls `begin`, so no change to `src/delivery.rs` or
+  `src/codex.rs` is needed and queued messages are neither lost nor reordered: they flow after the
+  reset. Known and accepted: for the seconds of a reset, `send_message` and `message_status` report
+  `deliver_hold` for that recipient (`src/daemon.rs` reads `deliver()`); and a native delivery whose
+  `begin` returned a ticket just before the flag was set can still complete during the first step
+  (OMP is covered by the D5 `in_flight` gate; Codex has no in-flight flag).
+  `// shortcut:` comment at the flag: Codex in-flight not gated, add a Codex in-flight flag to
+  `Session` if a message is ever seen landing inside a reset.
 
 ## 3. Probe findings (2026-10-03, throwaway sessions of an isolated daemon)
 
@@ -189,7 +208,10 @@ marker line, on any other line prints `got:<line>`; a second fixture variant tha
 8. Authorization (broker path, session tokens): a sender listed in `control_from` can reset; an
    unlisted sender, an unnamed sender and the session itself get `not_permitted` and the target
    shows no new screen output; the sender cannot be forged by an argument.
-9. `busy`: a second reset while one runs fails with `busy`.
+9. `busy`: a second reset while one runs fails with `busy`. No interleave (D11): a message sent to
+   the target while a multi-step reset runs is not typed until the reset ends, then arrives
+   (PTY fixture; read with `a2amx screen`), and `Session::deliver()` is `Hold` only during the
+   reset (the flag is cleared after a failed reset too).
 10. Wire literals (D8) and the MCP `reset_session` exact-keys validation and result.
 11. Team file: `reset` and `control_from` parse, are forwarded by `team up`, and an unknown field
     is still rejected.
