@@ -265,7 +265,14 @@ async fn modal_after_paste_holds_without_cr_until_explicit_release() {
     common::eventually(|| async { case.out.with_extension("gap_ms").exists().then_some(()) }).await;
     assert_eq!(std::fs::read(case.out.with_extension("cr")).unwrap(), b"");
     attachment.send(ClientFrame::Release).await.unwrap();
-    Case::round_trip(&mut attachment).await;
+    // Output frames can predate Release; observe its state change instead.
+    tokio::time::timeout(WAIT, async {
+        while case.recipient_summary().await.held {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert!(!case.recipient_summary().await.held);
     assert_eq!(
         case.status(&second).await.hold_reason.as_deref(),
