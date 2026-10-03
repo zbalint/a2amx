@@ -270,6 +270,11 @@ section is the summary.
 - The client has a prefix state machine (bracketed-paste aware), a scroll mode, and
   a session picker.
 
+The client owns the outer terminal's mouse while the session's mouse reporting is
+off: wheel reports become three-line scroll-mode steps and other reports are dropped.
+It learns the session's mouse state from mode sequences in `Data` frames and leaves the
+mouse to the session when reporting is on.
+
 `team up` and `team down` are client-side commands; the daemon and wire are
 unchanged. The pure `team` module parses files and flags and plans launches.
 Before spawning, the CLI rejects all exited-name conflicts and skips running

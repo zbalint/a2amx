@@ -398,7 +398,7 @@ pub fn sanitize_draft(text: &str) -> String {
         .collect()
 }
 
-fn sgr_mouse_report_len(bytes: &[u8], start: usize) -> Option<usize> {
+pub fn sgr_mouse_report_len(bytes: &[u8], start: usize) -> Option<usize> {
     let mut index = start + 3;
     let first = index;
     while index < bytes.len() && bytes[index].is_ascii_digit() {
