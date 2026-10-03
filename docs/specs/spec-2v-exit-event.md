@@ -56,7 +56,8 @@ This covers exits and crashes only. A peer that loops forever is the heartbeat's
   session name (next to the existing `s[0-9]+` rule, message `reserved for the daemon`), so no
   session can impersonate it; this covers `new --name`, `team up` and `create_session`, all of
   which already call `validate_name`.
-- **D4. (architect)** Subject `peer exited: <name>`. Body, one line per fact, plain text:
+- **D4. (architect)** Subject `peer exited: <name> (code <N>)`, so `a2amx messages` (which prints FROM, TO, STATE and
+  SUBJECT but not the body) shows the exit code. Body, one line per fact, plain text:
   `<name> (<address>) exited with code <N>.` where `<N>` is `Session`'s exit code (128 plus the
   signal for a signal death, as stored), then `Run a2amx screen <name> to see its last screen.`
   Nothing else (no screen content, no cwd, no argv).
@@ -116,7 +117,7 @@ everything through `a2amx messages` and `a2amx list`. Fixtures are Generic `sh -
 
 1. `new --watch peer` on a watcher; `peer` is `sh -c "exit 3"`. Within a bounded wait,
    `a2amx messages --session <watcher>` lists one message from `a2amx-daemon@<host>` with
-   subject `peer exited: peer` and a body containing `exited with code 3`. A session that does
+   subject `peer exited: peer (code 3)`. A session that does
    not watch `peer` has no such message.
 2. Two watchers of the same peer each get exactly one message.
 3. `a2amx kill peer --yes` (and `team down`) produces no message (D5); a peer that exits by
