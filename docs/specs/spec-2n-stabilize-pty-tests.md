@@ -83,3 +83,48 @@ The word `FAIL` must not appear in the first three loops' output. If a test that
 reproduced still fails after the fix, the report says which, with the failure text, and the
 work is not done. The final report names, per failing test, the cause found, the evidence
 that showed it, and why the fix removes it.
+
+## Amendment 1 (architect, after the first REPORT)
+
+**Evidence.** The developer's final loops reported `status_line_toggles_and_shows_the_session_address`
+30/30 with the polling-child observer. The architect's fresh runs of the same command, same
+tree, gave 5 failures in 100 runs (1 in 30, then 0 in 60, then 4 in 70), every one with the
+original text `timed out waiting for "10 40"; screen was "24 80\n23 80\n9 40\n\n\n\n\n\n\n"`.
+The child now prints every size change by polling `stty size`, so a missing `10 40` is not
+a lost signal. Either the PTY was not resized, or the daemon's bytes for it did not reach or
+did not update the attach client's screen model. The developer's diagnostics already showed the
+daemon reporting 40x10 and the child's `stty size` reporting `10 40` in a failing run, which
+points at the output path, not the resize. The delivery loop is clean: the architect ran
+`cargo test --test delivery` 25 times, 0 failures.
+
+**Decisions.**
+- **A1.1.** The `tests/delivery.rs` change is accepted as the final part-A deliverable.
+- **A1.2.** The `tests/attach_cli.rs` observer change is withdrawn: restore that file to its
+  committed state (`git checkout tests/attach_cli.rs`). It does not remove the failure, and
+  it adds a 100 Hz process spawn to a load-sensitive suite.
+- **A1.3.** The status failure moves to part B below, which runs after spec 2o, not now. Part A
+  is complete when A1.2 is done and the architect has committed A1.1.
+
+### Part B: root-cause the status-line failure (starts only after the architect's GO)
+
+Scope for part B: `tests/attach_cli.rs`, `tests/common/` and, only for a cause demonstrated
+by the evidence below, `src/daemon.rs`, `src/emulator.rs`, `src/main.rs` and `src/session.rs`.
+Everything else in section 0's "does not touch" list still applies.
+
+1. In a failing run, capture what reached the client: the raw `ServerFrame::Data` bytes the
+   attach client received after the toggle (a retained byte log in the test harness that is
+   printed on failure; the `PtyHarness` screen model lives in `tests/common`). Decide from it
+   which of these holds: (a) the daemon never sent the `10 40` line; (b) it sent it and the
+   harness's screen model dropped or overwrote it; (c) it sent it before a full redraw that
+   discarded it.
+2. Read the Resize arm of the attach loop (`src/daemon.rs`, the `ClientFrame::Resize` match
+   arm that calls `resize_locked`, sets `state.dirty = false` and sends `render_full`) against
+   the `notify` arm that sends `render_update`: check whether output the child wrote around
+   the resize can be dropped or never rendered to the client.
+3. Fix the confirmed cause. For a product cause, write a deterministic failing test first
+   (the race should be forced with the real daemon, not with sleeps). For a test-harness cause,
+   fix the harness. State the cause and the evidence in the REPORT.
+4. Acceptance, after the fix: `status_line_toggles_and_shows_the_session_address` run 100
+   times with 0 failures, the 25 `delivery` runs and 5 full runs with 0 failures, then clippy and
+   fmt, all with `env -u A2AMX_BIN`. 100 runs because the failure rate is about 5%: 30 runs
+   pass by chance about one time in five.
