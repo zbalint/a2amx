@@ -239,6 +239,10 @@ section is the summary.
 - One `a2amx daemon` process owns sessions; clients are thin. Sessions live as long
   as the daemon (no persistence across restarts). Each session is one PTY, its
   child, and an `Emulator` (the only user of `alacritty_terminal`'s terminal types).
+- `a2amx daemon --background` re-executes the binary in its own session with output
+  appended to `<state dir>/daemon.log`, and waits until it answers. `a2amx stop` sends
+  the admin-only `Shutdown` request; the daemon answers, then shuts down as it does on
+  SIGTERM. No pid is stored.
 - The attach client redraws from the emulator, like tmux: one full render, then
   damage-based updates. The daemon never forwards raw PTY bytes. No graphics,
   hyperlinks, clipboard writes, application titles, or bell reach the client.

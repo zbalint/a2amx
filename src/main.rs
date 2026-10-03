@@ -1,5 +1,7 @@
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsFd;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
 use std::thread;
@@ -12,7 +14,7 @@ use tokio::sync::mpsc;
 use a2amx::bridge;
 use a2amx::cli::{Cli, Command};
 use a2amx::client::{Attachment, Client};
-use a2amx::daemon::{Daemon, DaemonConfig};
+use a2amx::daemon::{self, Daemon, DaemonConfig};
 use a2amx::emulator::Scroll;
 use a2amx::harness::Harness;
 use a2amx::hook;
@@ -58,13 +60,24 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
     }
     let home = resolve_home(home_arg)?;
     match cli.command {
-        Command::Daemon { listen, host_name } => run_daemon(home, listen, host_name).await,
+        Command::Daemon {
+            listen,
+            host_name,
+            background,
+        } => {
+            if background {
+                run_daemon_background(home, listen, host_name).await
+            } else {
+                run_daemon(home, listen, host_name).await
+            }
+        }
         options @ Command::New { .. } => run_new(home, prefix, options).await,
         Command::List => run_list(home).await,
         Command::Attach { session, force } => {
             run_attach_command(home, prefix, session, force).await
         }
         Command::Kill { session } => run_kill(home, session).await,
+        Command::Stop { yes } => run_stop(home, yes).await,
         Command::Mcp { .. } | Command::Hook | Command::OmpBridge => {
             unreachable!("early dispatch returned before resolving home")
         }
@@ -118,8 +131,134 @@ async fn run_daemon(
     tokio::select! {
         result = tokio::signal::ctrl_c() => { result?; },
         _ = sigterm.recv() => {},
+        _ = daemon.stop_requested() => {},
     }
     daemon.shutdown().await
+}
+
+async fn run_daemon_background(
+    home: PathBuf,
+    listen: Vec<std::net::SocketAddr>,
+    host_name: Option<String>,
+) -> anyhow::Result<()> {
+    if Client::connect(&home).await.is_ok() {
+        let running = read_addrs(&home).await.unwrap_or_default();
+        return Err(anyhow!(
+            "a2amx daemon is already running (listening on {})",
+            running.lines().next().unwrap_or("unknown address")
+        ));
+    }
+    let log_path = home.join("daemon.log");
+    let (log, exe) = {
+        let home = home.clone();
+        let log_path = log_path.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            daemon::ensure_state_dir(&home)?;
+            let log = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .open(&log_path)
+                .context("cannot open daemon.log")?;
+            Ok((log, daemon::current_exe()?))
+        })
+        .await??
+    };
+    let mut command = std::process::Command::new(exe);
+    command.arg("--home").arg(&home).arg("daemon");
+    for addr in &listen {
+        command.arg("--listen").arg(addr.to_string());
+    }
+    if let Some(name) = &host_name {
+        command.arg("--host-name").arg(name);
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    // SAFETY: the closure only calls `setsid`, which is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            rustix::process::setsid()
+                .map(|_| ())
+                .map_err(io::Error::from)
+        });
+    }
+    let mut child = command.spawn().context("cannot start the daemon")?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Err(anyhow!(
+                "daemon exited during startup ({status}); see {}",
+                log_path.display()
+            ));
+        }
+        if Client::connect(&home).await.is_ok() {
+            for addr in read_addrs(&home).await?.lines() {
+                write_stdout(format!("listening on {addr}\n").into_bytes()).await?;
+            }
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            // shortcut: a slow start is reported, not reaped; add a kill
+            // if a half-started daemon ever lingers.
+            return Err(anyhow!(
+                "daemon did not become ready within 10s; see {}",
+                log_path.display()
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn read_addrs(home: &Path) -> anyhow::Result<String> {
+    let path = home.join("addr");
+    Ok(tokio::task::spawn_blocking(move || std::fs::read_to_string(path)).await??)
+}
+
+async fn run_stop(home: PathBuf, yes: bool) -> anyhow::Result<()> {
+    let Ok(mut client) = Client::connect(&home).await else {
+        return write_stdout(b"no daemon running\n".to_vec()).await;
+    };
+    let sessions = match client.request(Request::List).await? {
+        Response::Sessions { sessions } => sessions,
+        Response::Error { message } => return Err(anyhow!(message)),
+        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+    };
+    let running = sessions.iter().filter(|s| s.exit_code.is_none()).count();
+    if running > 0 && !yes {
+        if !io::stdin().is_terminal() {
+            return Err(anyhow!(
+                "refusing to stop: {running} running session(s); pass --yes to end them"
+            ));
+        }
+        write_stderr(
+            format!("Stopping the daemon ends {running} running session(s). Continue? [y/N] ")
+                .into_bytes(),
+        )
+        .await?;
+        let answer = tokio::task::spawn_blocking(|| {
+            let mut line = String::new();
+            io::stdin().read_line(&mut line).map(|_| line)
+        })
+        .await??;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            return write_stdout(b"not stopped\n".to_vec()).await;
+        }
+    }
+    match client.request(Request::Shutdown).await? {
+        Response::Ok => {}
+        Response::Error { message } => return Err(anyhow!(message)),
+        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while Client::connect(&home).await.is_ok() {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(anyhow!("daemon did not stop within 15s"));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    write_stdout(b"stopped\n".to_vec()).await
 }
 
 async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<()> {

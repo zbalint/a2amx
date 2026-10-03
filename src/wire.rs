@@ -138,6 +138,8 @@ pub enum Request {
     Kill {
         session: String,
     },
+    /// Admin only: ask the daemon to shut down.
+    Shutdown,
     SendMessage {
         to: String,
         subject: String,

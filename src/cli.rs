@@ -30,13 +30,16 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run the host daemon in the foreground.
+    /// Run the host daemon (in the foreground unless --background).
     Daemon {
         /// Listen address; repeatable. Defaults to loopback with an OS-chosen port.
         #[arg(long)]
         listen: Vec<std::net::SocketAddr>,
         #[arg(long)]
         host_name: Option<String>,
+        /// Start detached from the terminal and print the listen address. Output goes to <state dir>/daemon.log.
+        #[arg(long)]
+        background: bool,
     },
     /// Start a session running COMMAND and attach to it.
     New {
@@ -68,6 +71,12 @@ pub enum Command {
     },
     /// Terminate a session.
     Kill { session: String },
+    /// Stop the daemon. This ends every session.
+    Stop {
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
     /// List messages.
     Messages {
         #[arg(long)]

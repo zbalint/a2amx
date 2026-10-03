@@ -88,6 +88,8 @@ must pass, and the results recorded so far, are in the validation plan.
 cargo build
 cargo test
 a2amx daemon                        # prints "listening on <addr>"
+a2amx daemon --background           # detached; output goes to <state dir>/daemon.log
+a2amx stop [--yes]                  # ends the daemon and every session; asks first if any run
 a2amx new -- sh                     # start and attach; Ctrl-B d detaches
 a2amx list
 a2amx attach <id> [--force]

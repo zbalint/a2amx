@@ -62,6 +62,7 @@ struct Runtime {
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     new_session_gate: tokio::sync::Mutex<()>,
     deliveries: Mutex<Vec<JoinHandle<()>>>,
+    stop_requested: tokio::sync::Notify,
 }
 
 enum Role {
@@ -577,49 +578,57 @@ async fn accept_channel_dialog(session: Arc<Session>) {
     }
 }
 
+/// The running executable's path, without the suffix Linux appends once the
+/// file has been replaced on disk.
+pub fn current_exe() -> std::io::Result<PathBuf> {
+    let mut exe = std::env::current_exe()?;
+    if let Some(path) = exe.to_string_lossy().strip_suffix(" (deleted)") {
+        exe = PathBuf::from(path);
+    }
+    Ok(exe)
+}
+
+/// Create the state directory (and missing parents) owner-only.
+pub fn ensure_state_dir(path: &Path) -> anyhow::Result<()> {
+    let mut missing = Vec::new();
+    let mut ancestor = path;
+    loop {
+        match std::fs::metadata(ancestor) {
+            Ok(metadata) if metadata.is_dir() => break,
+            Ok(_) => return Err(anyhow::anyhow!("state path is not a directory")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        missing.push(ancestor.to_owned());
+        ancestor = ancestor
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+    }
+    for directory in missing.iter().rev() {
+        match std::fs::DirBuilder::new().mode(0o700).create(directory) {
+            Ok(()) => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists && directory.is_dir() => {}
+            Err(error) => return Err(error.into()),
+        }
+        // A restrictive umask must not prevent creation of the next child.
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
+    }
+    if missing.is_empty() {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 impl Daemon {
     /// Bind every listen address, write the chosen addresses to a file in the
     /// state dir, write the admin token file (mode 0600), and start serving.
     pub async fn start(config: DaemonConfig) -> anyhow::Result<Self> {
-        let exe = tokio::task::spawn_blocking(|| -> std::io::Result<PathBuf> {
-            let mut exe = std::env::current_exe()?;
-            if let Some(path) = exe.to_string_lossy().strip_suffix(" (deleted)") {
-                exe = PathBuf::from(path);
-            }
-            Ok(exe)
-        })
-        .await??;
+        let exe = tokio::task::spawn_blocking(current_exe).await??;
         let path = config.state_dir.clone();
         let lock = tokio::task::spawn_blocking(move || -> anyhow::Result<File> {
-            let mut missing = Vec::new();
-            let mut ancestor = path.as_path();
-            loop {
-                match std::fs::metadata(ancestor) {
-                    Ok(metadata) if metadata.is_dir() => break,
-                    Ok(_) => return Err(anyhow::anyhow!("state path is not a directory")),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
-                }
-                missing.push(ancestor.to_owned());
-                ancestor = ancestor
-                    .parent()
-                    .filter(|path| !path.as_os_str().is_empty())
-                    .unwrap_or_else(|| Path::new("."));
-            }
-            for directory in missing.iter().rev() {
-                match std::fs::DirBuilder::new().mode(0o700).create(directory) {
-                    Ok(()) => {}
-                    Err(error)
-                        if error.kind() == std::io::ErrorKind::AlreadyExists
-                            && directory.is_dir() => {}
-                    Err(error) => return Err(error.into()),
-                }
-                // A restrictive umask must not prevent creation of the next child.
-                std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
-            }
-            if missing.is_empty() {
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
-            }
+            ensure_state_dir(&path)?;
             let lock = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -701,6 +710,7 @@ impl Daemon {
             rate: tokio::sync::Mutex::new(HashMap::new()),
             new_session_gate: tokio::sync::Mutex::new(()),
             deliveries: Mutex::new(Vec::new()),
+            stop_requested: tokio::sync::Notify::new(),
         });
         let purge = {
             let store = runtime.store.clone();
@@ -776,6 +786,11 @@ impl Daemon {
 
     pub fn host_name(&self) -> &str {
         &self.runtime.host_name
+    }
+
+    /// Completes when an admin client asked the daemon to shut down.
+    pub async fn stop_requested(&self) {
+        self.runtime.stop_requested.notified().await;
     }
 
     pub async fn shutdown(mut self) -> anyhow::Result<()> {
@@ -1007,6 +1022,13 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 Response::Sessions { sessions }
             }
             request @ Request::NewSession { .. } => runtime.create_session(request).await?,
+            Request::Shutdown => {
+                // Answer first: shutdown closes every connection, this one included.
+                let sent = response(&mut connection, Response::Ok).await;
+                runtime.stop_requested.notify_one();
+                sent?;
+                continue;
+            }
             Request::Kill { session: id } => match lookup(&runtime, &id) {
                 Some((number, session)) => match session.kill().await {
                     Ok(()) => {
