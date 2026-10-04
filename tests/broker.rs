@@ -651,6 +651,245 @@ async fn pending_limit_and_content_errors() {
 }
 
 #[tokio::test]
+async fn limit_edge_exact_body_is_delivered_and_submitted() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_, _, mut sender) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let output = dir.path().join("recipient.input");
+    let response = admin
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                // Raw input avoids the terminal's canonical line-length limit.
+                "stty raw -echo; printf '\\033[?2004h'; cat > \"$OUT\"".into(),
+            ],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![("OUT".into(), output.to_string_lossy().into_owned())],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("recipient".into()),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Auto),
+            heartbeat: None,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(response, Response::Created { .. }));
+    let body = format!("0123456789ABCDEF{}FEDCBA9876543210", "x".repeat(32768 - 32));
+    assert!(matches!(
+        send(&mut sender, "recipient@host-a", "size boundary", &body).await,
+        Response::Accepted { id, .. } if id == "m_1"
+    ));
+    let message = wait_status(&mut sender, "m_1", |message| message.state == "submitted").await;
+    assert_eq!(message.state, "submitted");
+    let received = common::eventually(|| async {
+        let bytes = std::fs::read(&output).ok()?;
+        bytes.ends_with(b"\r").then_some(bytes)
+    })
+    .await;
+    let received = std::str::from_utf8(&received).unwrap();
+    let (_, received_body) = received.split_once("\n\n").expect("envelope body");
+    let received_body = received_body
+        .strip_suffix("\n</a2amx-message>\x1b[201~\r")
+        .expect("envelope terminator, paste end and submit");
+    assert_eq!(received_body.len(), 32768);
+    assert_eq!(&received_body[..16], "0123456789ABCDEF");
+    assert_eq!(
+        &received_body[received_body.len() - 16..],
+        "FEDCBA9876543210"
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn limit_edge_oversized_body_is_refused_without_queueing() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_, _, mut sender) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (recipient_id, _, _recipient) = session(
+        &mut admin,
+        dir.path(),
+        Some("recipient"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    assert_eq!(
+        failed_code(
+            send(
+                &mut sender,
+                "recipient@host-a",
+                "oversized body",
+                &"m".repeat(32769),
+            )
+            .await,
+        ),
+        "too_large"
+    );
+    let messages = match admin
+        .request(Request::ListMessages {
+            session: Some(recipient_id),
+            state: Some("pending".into()),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Messages { messages } => messages,
+        response => panic!("unexpected response: {response:?}"),
+    };
+    assert!(messages.is_empty());
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn limit_edge_default_queue_accepts_fifty_open_messages() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_, _, mut sender_a) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender-a"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (_, _, mut sender_b) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender-b"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (_, _, mut sender_c) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender-c"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (recipient_id, _, _recipient) = session(
+        &mut admin,
+        dir.path(),
+        Some("recipient"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+
+    // Three senders keep each per-sender burst below 20, so queue_full is the first limit.
+    for index in 0..50 {
+        let sender = match index % 3 {
+            0 => &mut sender_a,
+            1 => &mut sender_b,
+            _ => &mut sender_c,
+        };
+        assert!(matches!(
+            send(sender, "recipient@host-a", "queued", "body").await,
+            Response::Accepted { .. }
+        ));
+    }
+    assert_eq!(
+        failed_code(send(&mut sender_a, "recipient@host-a", "overflow", "body").await),
+        "queue_full"
+    );
+    let messages = match admin
+        .request(Request::ListMessages {
+            session: Some(recipient_id),
+            state: Some("pending".into()),
+        })
+        .await
+        .unwrap()
+    {
+        Response::Messages { messages } => messages,
+        response => panic!("unexpected response: {response:?}"),
+    };
+    assert_eq!(messages.len(), 50);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn limit_edge_default_rate_accepts_twenty_sends() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_, _, mut sender) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (recipient_a_id, _, _recipient_a) = session(
+        &mut admin,
+        dir.path(),
+        Some("recipient-a"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (recipient_b_id, _, _recipient_b) = session(
+        &mut admin,
+        dir.path(),
+        Some("recipient-b"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+
+    // Two recipients keep each queue at 10, so queue_full cannot fire before rate_limited.
+    for index in 0..20 {
+        let recipient = if index % 2 == 0 {
+            "recipient-a@host-a"
+        } else {
+            "recipient-b@host-a"
+        };
+        assert!(matches!(
+            send(&mut sender, recipient, "burst", "body").await,
+            Response::Accepted { .. }
+        ));
+    }
+    assert_eq!(
+        failed_code(send(&mut sender, "recipient-a@host-a", "overflow", "body").await),
+        "rate_limited"
+    );
+    for recipient_id in [recipient_a_id, recipient_b_id] {
+        let messages = match admin
+            .request(Request::ListMessages {
+                session: Some(recipient_id),
+                state: Some("pending".into()),
+            })
+            .await
+            .unwrap()
+        {
+            Response::Messages { messages } => messages,
+            response => panic!("unexpected response: {response:?}"),
+        };
+        assert_eq!(messages.len(), 10);
+    }
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn stored_limit_and_rate_limit_are_independent() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = common::start_daemon_in(

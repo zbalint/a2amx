@@ -33,7 +33,6 @@ lag the code.
 | U1 | `developer_instructions` taking effect in Codex, separate from the model acting on a peer request anyway | code |
 | U2 | Two simultaneous Codex sessions; `/new` thread switching (the poller takes the most recently updated loaded thread) | code |
 | U4 | Real-Codex smoke test as an ignored test, like the OMP ones | docs |
-| U5 | Limits at the edges: 50 open messages per recipient, 20 sends per minute per sender, bodies near 32 KiB, recipient exiting with an open message, daemon restart with open messages | docs |
 | U6 | A human typing exactly inside the paste-to-Enter window to force a real corrupted submission | docs |
 | U7 | Block behavior on Codex in the validation plan's recorded results | docs |
 
@@ -66,4 +65,5 @@ lag the code.
 | I1 | Exited sessions keep their name until `a2amx kill`, so a new session cannot reuse it | spec 2z |
 | I2 | OMP install and extension cleanup/error handling nits | spec 3a |
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited` | spec 2z |
+| U5 | Limits at the edges: 50 open messages per recipient, 20 sends per minute per sender, bodies near 32 KiB, recipient exiting with an open message, daemon restart with open messages | spec 3b |
 | C7 | Attach rendering no longer erases a glyph written in the terminal's last column | spec 3c |
