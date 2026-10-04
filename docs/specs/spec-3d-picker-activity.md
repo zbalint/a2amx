@@ -58,10 +58,8 @@ In `tests/attach_cli.rs`:
 - Extend that test or add one: with a running session, the opened picker shows a row containing an
   activity literal (`idle`, `working` or `busy`) in the ACTIVITY column, and an exited session
   shows `-` there. Use literals, no recomputation with the code under test.
-- `picker_clips_long_cwd_to_narrow_terminal` (90x10) must still pass unchanged: ACTIVITY stays
-  visible, every line is at most 90 columns, and the CWD tail is still left-shortened. If the extra
-  column leaves the CWD too little room for the existing literal `…-picker-path (current)`, report
-  it; do not weaken the assertion silently. A narrower literal needs architect approval.
+- `picker_clips_long_cwd_to_narrow_terminal`: see Amendment 1. The terminal becomes 100x10; the
+  literal `…-picker-path (current)` and every other assertion stay as they are.
 
 ## 5. Out of scope
 
@@ -85,3 +83,21 @@ picker header text appears in tests only at `tests/attach_cli.rs:339`; `rg "\[9\
 `src/main.rs` shows the `session_rows` uses listed in section 3; README and architecture do not
 describe picker columns. The old-text search for `ACTIVITY` in tests shows only `list` output
 assertions (lines 475, 488, 637), unaffected.
+
+## Amendment 1 (2026-10-04, after developer BLOCKED m_376)
+
+Evidence, verified against `src/main.rs:2065-2093` and `tests/attach_cli.rs:377-428`: at a 90x10
+terminal the attached session reports size `90x9`, so the ten fixed widths are
+`[2,4,7,7,8,8,7,4,5,4]` (sum 56) plus 20 separator columns = 76. CWD room is
+`90 - (1 marker + 76 + 10 for " (current)")` = 3, below the existing 4-cell minimum, so CWD is
+omitted and the literal cannot appear. This contradicted section 4's old "must still pass
+unchanged" at 90 columns. It does not contradict D3: CWD is the column that yields.
+
+Decision: in `picker_clips_long_cwd_to_narrow_terminal`, change the terminal from 90x10 to 100x10.
+That is, `resize(90, 10)` becomes `resize(100, 10)`, the waited text `"9 90"` becomes `"9 100"`,
+and the line-width bound `<= 90` becomes `<= 100`. At 100 columns CWD room is 13, the same as the
+test had before this spec, so `…-picker-path (current)` still appears verbatim. No other assertion
+changes, and the production code is unchanged by this amendment. The test's own 80x24 start
+(`"23 80"`) is untouched.
+
+Gate: `rg -n "90" tests/attach_cli.rs` in the test's range shows only those three uses.
