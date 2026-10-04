@@ -1535,6 +1535,10 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                         .into(),
                         attached: session.attached(),
                         quota: session_quota(session),
+                        harness: session.harness(),
+                        cwd: session
+                            .cwd()
+                            .map(|path| path.to_string_lossy().into_owned()),
                     })
                     .collect();
                 Response::Agents { agents }

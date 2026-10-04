@@ -288,8 +288,8 @@ async fn mcp_initialize_tools_and_message_calls() {
         "params": {"name": "list_agents", "arguments": {}}
     })));
     assert_eq!(agents, json!({"agents":[
-        {"address":"agent-plan@host-a","state":"running","attached":false},
-        {"address":"agent-review@host-a","state":"running","attached":false}
+        {"address":"agent-plan@host-a","state":"running","attached":false,"harness":"generic"},
+        {"address":"agent-review@host-a","state":"running","attached":false,"harness":"generic"}
     ]}));
 
     let accepted = tool_result(&mcp.send(json!({
@@ -826,7 +826,7 @@ async fn mcp_prewrite_failure_does_not_claim_an_unknown_outcome() {
         assert_eq!(
             tool_result(&response),
             json!({"agents":[
-                {"address":"agent-plan@host-a","state":"running","attached":false}
+                {"address":"agent-plan@host-a","state":"running","attached":false,"harness":"generic"}
             ]})
         );
     })

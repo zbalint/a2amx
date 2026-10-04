@@ -332,10 +332,18 @@ async fn naming_addresses_and_role_expires_after_exit() {
         response => panic!("unexpected response: {response:?}"),
     };
     assert!(agents.iter().any(|agent| {
-        agent.address == "agent-plan@host-a" && agent.state == "running" && !agent.attached
+        agent.address == "agent-plan@host-a"
+            && agent.state == "running"
+            && !agent.attached
+            && agent.harness == Harness::Generic
+            && agent.cwd.is_none()
     }));
     assert!(agents.iter().any(|agent| {
-        agent.address == "s2@host-a" && agent.state == "running" && !agent.attached
+        agent.address == "s2@host-a"
+            && agent.state == "running"
+            && !agent.attached
+            && agent.harness == Harness::Generic
+            && agent.cwd.is_none()
     }));
 
     for name in ["s12", "Agent", &"a".repeat(64)] {
@@ -454,6 +462,40 @@ async fn naming_addresses_and_role_expires_after_exit() {
         .await
         .unwrap();
     assert!(error_message(duplicate_after_natural).contains("already in use"));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_agents_reports_harness_and_spawn_directory() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let response = admin
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), "cd / && sleep 30".into()],
+            cols: 40,
+            rows: 10,
+            cwd: Some("/tmp".into()),
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("agent-omp".into()),
+            harness: Harness::Omp,
+            deliver: Some(Deliver::Auto),
+            heartbeat: None,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(response, Response::Created { .. }));
+    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+        panic!("list_agents failed");
+    };
+    let agent = agents
+        .iter()
+        .find(|agent| agent.address == "agent-omp@host-a")
+        .expect("OMP agent listed");
+    assert_eq!(agent.harness, Harness::Omp);
+    assert_eq!(agent.cwd.as_deref(), Some("/tmp"));
     daemon.shutdown().await.unwrap();
 }
 

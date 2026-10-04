@@ -345,6 +345,8 @@ async fn list_and_list_agents_report_an_omp_limit() {
         .find(|a| a.address.starts_with("agent-omp@"))
         .unwrap();
     assert_eq!(agent.quota, Some(quota));
+    assert_eq!(agent.harness, Harness::Omp);
+    assert_eq!(agent.cwd, None);
     assert_eq!(summary(&mut admin, &generic).await.quota, None);
     daemon.shutdown().await.unwrap();
 }

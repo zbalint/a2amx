@@ -55,7 +55,6 @@ lag the code.
 | F3 | Scoping of `list_agents` (exchanges or workspaces) instead of every session seeing every session | docs |
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited`. Today an exited session keeps its name until `a2amx kill NAME`, and `team down` clears only the team file's names. Needs its own spec | reported |
 | F5 | Delete `scripts/screen-probe.py` after the owner confirms `a2amx screen` works in real use | spec 2r |
-| F10 | `list_agents` (MCP) also returns each agent's `harness` (`claude`, `omp`, `codex`, `generic`) and its spawn `cwd`, both optional and omitted when unknown, named as in `a2amx list`. Owner idea 2026-10-04, queued as spec 2x after 2w. Touches the exact tool-shape assertions in `tests/mcp.rs` and `tests/bridge.rs` | reported |
 
 ## Closed
 

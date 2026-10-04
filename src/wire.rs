@@ -326,6 +326,11 @@ pub struct AgentSummary {
     pub attached: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota: Option<QuotaInfo>,
+    #[serde(default)]
+    pub harness: Harness,
+    /// Session spawn directory, not the process's current directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

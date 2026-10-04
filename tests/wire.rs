@@ -364,6 +364,8 @@ fn messaging_control_variants_round_trip() {
                 state: "running".into(),
                 attached: false,
                 quota: None,
+                harness: Default::default(),
+                cwd: None,
             }],
         },
         Response::Status {
@@ -376,7 +378,7 @@ fn messaging_control_variants_round_trip() {
     let response_json = [
         serde_json::json!({"type":"accepted","id":"m_1"}),
         serde_json::json!({"type":"failed","code":"queue_full","message":"recipient queue is full"}),
-        serde_json::json!({"type":"agents","agents":[{"address":"agent-plan@host-a","state":"running","attached":false}]}),
+        serde_json::json!({"type":"agents","agents":[{"address":"agent-plan@host-a","state":"running","attached":false,"harness":"generic"}]}),
         serde_json::json!({"type":"status","message":{"id":"m_1","from":"agent-plan@host-a","to":"agent-review@host-a","subject":"Parser issue","state":"pending","detail":null,"hold_reason":"human_draft"}}),
         serde_json::json!({"type":"messages","messages":[{"id":"m_1","from":"agent-plan@host-a","to":"agent-review@host-a","subject":"Parser issue","state":"pending","detail":null,"hold_reason":"human_draft"}]}),
     ];
@@ -388,6 +390,36 @@ fn messaging_control_variants_round_trip() {
             response
         );
     }
+    use a2amx::harness::Harness;
+    let with_cwd = Response::Agents {
+        agents: vec![AgentSummary {
+            address: "agent-omp@host-a".into(),
+            state: "running".into(),
+            attached: false,
+            quota: None,
+            harness: Harness::Omp,
+            cwd: Some("/tmp/agent".into()),
+        }],
+    };
+    let with_cwd_json = serde_json::json!({"type":"agents","agents":[{"address":"agent-omp@host-a","state":"running","attached":false,"harness":"omp","cwd":"/tmp/agent"}]});
+    assert_eq!(serde_json::to_value(&with_cwd).unwrap(), with_cwd_json);
+    assert_eq!(
+        serde_json::from_value::<Response>(with_cwd_json).unwrap(),
+        with_cwd
+    );
+    let old_agents = serde_json::json!({
+        "type": "agents",
+        "agents": [{
+            "address": "agent-plan@host-a",
+            "state": "running",
+            "attached": false,
+        }],
+    });
+    let Response::Agents { agents } = serde_json::from_value(old_agents).unwrap() else {
+        panic!("old agents payload did not deserialize");
+    };
+    assert_eq!(agents[0].harness, Harness::Generic);
+    assert_eq!(agents[0].cwd, None);
 }
 
 #[test]

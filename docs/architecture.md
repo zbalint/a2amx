@@ -132,6 +132,10 @@ send_message(to, subject, message)
 message_status(id)
 ```
 
+Each `list_agents()` entry includes `address`, `state`, `attached`, optional
+`quota`, always-present `harness` (`claude`, `omp`, `codex`, or `generic`), and
+optional spawn directory `cwd`; `cwd` is not the process's live current directory.
+
 The directory returns authorized recipients and their availability. A successful
 send returns a durable message identifier and acceptance status, not a promise of
 model processing. An optional acceptance-idempotency key remains under review.
