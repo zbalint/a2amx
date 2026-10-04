@@ -83,3 +83,19 @@ Gate notes at lock time: `Command::Kill` is defined at `src/cli.rs:88` with fiel
 that `kill NAME` removes an exited session without a prompt is taken from backlog item I1 and the
 `run_kill` code (the prompt is only for `running` sessions); the developer confirms it with a first
 failing test before relying on it.
+
+## Amendment 1 (2026-10-04): the baseline confirmation is a passing test, not a failing one
+
+The developer reported `BLOCKED` (m_348): section 6 says the developer confirms with "a first
+failing test" that `kill NAME` removes an exited session without a prompt, but that behavior
+exists already and is covered by `tests/daemon_cli.rs:938` to `952`
+(`kill_exited_session_skips_confirmation`, 1 passed at the baseline). A test of existing behavior
+cannot be red. The claim is verified: `run_kill` prompts only when the session is running
+(`src/main.rs:658` to `680`).
+
+Decision (architect): the section 6 sentence is replaced by this rule. The existing
+`kill_exited_session_skips_confirmation` is the baseline confirmation of D3 and D5; the developer
+runs it first and reports its result. No new test of the existing named behavior is required. The
+first new test, and the first red, is the `kill --exited` test of section 4, written before any
+production edit. Section 0 scope and D1 to D5 are unchanged, and extending `tests/refs_and_list.rs`
+(which already drives the CLI against a real daemon) is allowed as section 0 says.
