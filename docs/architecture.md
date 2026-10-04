@@ -310,9 +310,11 @@ only the requested names.
 ### Status line
 
 The attach client reserves the terminal's last row for a status line by default and
-sizes the PTY one row shorter. Prefix then `s` toggles it for the attach process,
-including across picker switches; terminals below three rows hide it and use all rows.
-Scroll mode draws its own row, and the session picker owns the screen while open.
+sizes the PTY two rows shorter when the terminal has at least four rows (one row shorter
+at exactly three); terminals below three rows hide it and use all rows. Prefix then `s`
+toggles it for the attach process, including across picker switches, and each bar draw
+also draws the separator rule above it. Scroll mode draws its own row, and the session
+picker owns the screen while open.
 The client opts in with `Request::Attach.status`; the daemon sends a status frame
 (tag `0x04`) after the initial snapshot and polls once a second, sending only changes.
 Attachments that do not opt in receive no status frames, preserving older clients;

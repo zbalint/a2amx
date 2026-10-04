@@ -141,7 +141,18 @@ pub fn render(
     let hold = render_span(&Span::styled(ALERT_OPEN, hold, ""), hold_limit);
     let padding = " ".repeat(width - left_limit - char_len(&pending) - hold_limit);
 
-    let mut bytes = format!("\x1b7\x1b[{rows};1H\x1b[0m{BAR_BACKGROUND}").into_bytes();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"\x1b7");
+    if rows >= 4 {
+        bytes.extend_from_slice(
+            format!("\x1b[{};1H\x1b[0m\x1b[2K{SEPARATOR_OPEN}", rows - 1).as_bytes(),
+        );
+        for _ in 0..width {
+            bytes.extend_from_slice("─".as_bytes());
+        }
+        bytes.extend_from_slice(b"\x1b[0m");
+    }
+    bytes.extend_from_slice(format!("\x1b[{rows};1H\x1b[0m{BAR_BACKGROUND}").as_bytes());
     bytes.extend_from_slice(left.as_bytes());
     bytes.extend_from_slice(padding.as_bytes());
     bytes.extend_from_slice(pending.as_bytes());

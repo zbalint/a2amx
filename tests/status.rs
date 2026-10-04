@@ -2,7 +2,8 @@ use a2amx::harness::Harness;
 use a2amx::status;
 use a2amx::wire::{Activity, QuotaInfo, StatusInfo};
 
-const PRE: &str = "\x1b7\x1b[24;1H\x1b[0m\x1b[38;5;252;48;5;236m";
+const PRE: &str = "\x1b7\x1b[23;1H\x1b[0m\x1b[2K\x1b[38;5;240m";
+const BAR: &str = "\x1b[0m\x1b[24;1H\x1b[0m\x1b[38;5;252;48;5;236m";
 const POST: &str = "\x1b[0m\x1b8";
 
 fn info(address: &str) -> StatusInfo {
@@ -17,6 +18,11 @@ fn info(address: &str) -> StatusInfo {
 }
 
 fn visible(bytes: &[u8]) -> String {
+    let bar = b"\x1b[24;1H";
+    let Some(start) = bytes.windows(bar.len()).position(|window| window == bar) else {
+        panic!("bar must draw on row 24");
+    };
+    let bytes = &bytes[start..];
     let mut bytes = bytes.iter().copied();
     let mut text = Vec::new();
     while let Some(byte) = bytes.next() {
@@ -122,7 +128,11 @@ fn held_alert_keeps_priority_and_only_hints_releasable_holds() {
     );
     assert_eq!(
         status::render("s1", Some(&info), 2, 20, 24),
-        format!("{PRE} \x1b[0m\x1b[1;37;41m HELD human_draft {POST}").as_bytes()
+        format!(
+            "{PRE}{}{BAR} \x1b[0m\x1b[1;37;41m HELD human_draft {POST}",
+            "─".repeat(19)
+        )
+        .as_bytes()
     );
     assert_eq!(
         visible(&status::render("s1", Some(&info), 2, 8, 24)),
@@ -130,7 +140,11 @@ fn held_alert_keeps_priority_and_only_hints_releasable_holds() {
     );
     assert_eq!(
         status::render("s1", Some(&info), 2, 8, 24),
-        format!("{PRE}\x1b[0m\x1b[1;37;41m HELD h{POST}").as_bytes()
+        format!(
+            "{PRE}{}{BAR}\x1b[0m\x1b[1;37;41m HELD h{POST}",
+            "─".repeat(7)
+        )
+        .as_bytes()
     );
     // E12: a future hold not released by r gets no hint.
     info.hold = Some("channel_down".into());
@@ -192,17 +206,23 @@ fn styled_bar_bytes_restore_cursor_and_foreground() {
     // B1-B3.
     assert_eq!(
         status::render("s1", None, 2, 40, 24),
-        format!("{PRE} \x1b[1ms1\x1b[22m {}{POST}", " ".repeat(35)).as_bytes()
+        format!(
+            "{PRE}{}{BAR} \x1b[1ms1\x1b[22m {}{POST}",
+            "─".repeat(39),
+            " ".repeat(35)
+        )
+        .as_bytes()
     );
     let mut info = info("a");
     info.activity = Some(Activity::Working);
-    assert_eq!(status::render("s1", Some(&info), 2, 40, 24), format!("{PRE} \x1b[1ma\x1b[22m \x1b[38;5;240m│\x1b[38;5;252m \x1b[38;5;221m●\x1b[38;5;252m working {}{POST}", " ".repeat(24)).as_bytes());
+    assert_eq!(status::render("s1", Some(&info), 2, 40, 24), format!("{PRE}{}{BAR} \x1b[1ma\x1b[22m \x1b[38;5;240m│\x1b[38;5;252m \x1b[38;5;221m●\x1b[38;5;252m working {}{POST}", "─".repeat(39), " ".repeat(24)).as_bytes());
     info.activity = None;
     info.hold = Some("channel_down".into());
     assert_eq!(
         status::render("s1", Some(&info), 2, 40, 24),
         format!(
-            "{PRE} \x1b[1ma\x1b[22m {}\x1b[0m\x1b[1;37;41m HELD channel_down {POST}",
+            "{PRE}{}{BAR} \x1b[1ma\x1b[22m {}\x1b[0m\x1b[1;37;41m HELD channel_down {POST}",
+            "─".repeat(39),
             " ".repeat(17)
         )
         .as_bytes()
@@ -264,7 +284,7 @@ fn release_hint_respects_prefix_range_and_each_releasable_reason() {
 fn partial_name_clipping_preserves_style_and_character_boundaries() {
     assert_eq!(
         status::render("éabc", None, 2, 5, 24),
-        format!("{PRE} \x1b[1méab\x1b[22m{POST}").as_bytes()
+        format!("{PRE}{}{BAR} \x1b[1méab\x1b[22m{POST}", "─".repeat(4)).as_bytes()
     );
 }
 
@@ -273,17 +293,26 @@ fn daemon_text_controls_are_replaced_before_layout() {
     let mut info = info("a\x1bb");
     assert_eq!(
         status::render("s1", Some(&info), 2, 40, 24),
-        format!("{PRE} \x1b[1ma?b\x1b[22m {}{POST}", " ".repeat(34)).as_bytes()
+        format!(
+            "{PRE}{}{BAR} \x1b[1ma?b\x1b[22m {}{POST}",
+            "─".repeat(39),
+            " ".repeat(34)
+        )
+        .as_bytes()
     );
     assert_eq!(
         status::render("a\nb", None, 2, 6, 24),
-        format!("{PRE} \x1b[1ma?b\x1b[22m {POST}").as_bytes()
+        format!("{PRE}{}{BAR} \x1b[1ma?b\x1b[22m {POST}", "─".repeat(5)).as_bytes()
     );
     info.address = "a".into();
     info.hold = Some("x\n".into());
     assert_eq!(
         status::render("s1", Some(&info), 2, 10, 24),
-        format!("{PRE}\x1b[0m\x1b[1;37;41m HELD x? {POST}").as_bytes()
+        format!(
+            "{PRE}{}{BAR}\x1b[0m\x1b[1;37;41m HELD x? {POST}",
+            "─".repeat(9)
+        )
+        .as_bytes()
     );
 }
 
@@ -292,4 +321,17 @@ fn tiny_terminals_do_not_draw_a_bar() {
     assert_eq!(status::render("s1", None, 2, 40, 2), Vec::<u8>::new());
     assert_eq!(status::render("s1", None, 2, 1, 24), Vec::<u8>::new());
     assert_eq!(status::render("s1", None, 2, 0, 0), Vec::<u8>::new());
+}
+
+#[test]
+fn separator_reserves_a_row_only_above_three_rows() {
+    assert_eq!(
+        status::render("s1", None, 2, 4, 4),
+        "\x1b7\x1b[3;1H\x1b[0m\x1b[2K\x1b[38;5;240m───\x1b[0m\x1b[4;1H\x1b[0m\x1b[38;5;252;48;5;236m \x1b[1ms1\x1b[22m\x1b[0m\x1b8".as_bytes()
+    );
+    assert_eq!(
+        status::render("s1", None, 2, 4, 3),
+        "\x1b7\x1b[3;1H\x1b[0m\x1b[38;5;252;48;5;236m \x1b[1ms1\x1b[22m\x1b[0m\x1b8".as_bytes()
+    );
+    assert_eq!(status::render("s1", None, 2, 4, 2), Vec::<u8>::new());
 }

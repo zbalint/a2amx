@@ -145,7 +145,7 @@ async fn mouse_wheel_scrolls_three_lines_and_q_returns_to_live() -> anyhow::Resu
     );
     assert!(!attached.screen_text().contains("line-076"));
     attached.send(b"\x1b[<64;10;5M")?;
-    attached.wait_for_text("line-076", WAIT)?;
+    attached.wait_for_text("line-077", WAIT)?;
     attached.wait_for_text("[scroll: q to exit]", WAIT)?;
     assert!(!attached.screen_text().contains("line-100"));
     attached.send(b"\x1b[<65;10;5M")?;
@@ -437,9 +437,9 @@ async fn picker_clips_long_cwd_to_narrow_terminal() -> anyhow::Result<()> {
     };
 
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", &session]), dir.path())?;
-    attached.wait_for_text("23 80", WAIT)?;
+    attached.wait_for_text("22 80", WAIT)?;
     attached.resize(101, 10)?;
-    attached.wait_for_text("9 101", WAIT)?;
+    attached.wait_for_text("8 101", WAIT)?;
     attached.send(&[2, b'w'])?;
     attached.wait_for_text("a2amx sessions:", WAIT)?;
     attached.wait_for_text("CWD", WAIT)?;
@@ -534,9 +534,9 @@ async fn custom_prefix_and_sigwinch_resize_reach_attached_session() -> anyhow::R
         dir.path(),
         &[("A2AMX_PREFIX", "C-a")],
     )?;
-    attached.wait_for_text("23 80", WAIT)?;
+    attached.wait_for_text("22 80", WAIT)?;
     attached.resize(40, 10)?;
-    attached.wait_for_text("9 40", WAIT)?;
+    attached.wait_for_text("8 40", WAIT)?;
     attached.send(&[1, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
@@ -790,7 +790,7 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
     assert!(listing.contains(&format!(
-        "s1  -     generic  running  busy      yes       0        human_draft  -      80x23  {}  sh -c stty raw -echo; cat\n",
+        "s1  -     generic  running  busy      yes       0        human_draft  -      80x22  {}  sh -c stty raw -echo; cat\n",
         std::env::current_dir()?.display(),
     )));
 
@@ -982,7 +982,7 @@ async fn status_line_toggles_and_shows_the_session_address() -> anyhow::Result<(
     )?;
     assert_eq!(code, 0);
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
-    attached.wait_for_text("23 80", WAIT)?;
+    attached.wait_for_text("22 80", WAIT)?;
     attached.wait_for_text("agent-plan@", WAIT)?;
     assert!(
         attached
@@ -993,7 +993,7 @@ async fn status_line_toggles_and_shows_the_session_address() -> anyhow::Result<(
             .contains("agent-plan@")
     );
     attached.resize(40, 10)?;
-    attached.wait_for_text("9 40", WAIT)?;
+    attached.wait_for_text("8 40", WAIT)?;
     let after_toggle = attached.raw_output().len();
     attached.send(&[2, b's'])?;
     if let Err(error) = attached.wait_for_text("10 40", WAIT) {
@@ -1014,7 +1014,7 @@ async fn status_line_toggles_and_shows_the_session_address() -> anyhow::Result<(
     attached.resize(50, 12)?;
     attached.wait_for_text("12 50", WAIT)?;
     attached.send(&[2, b's'])?;
-    attached.wait_for_text("11 50", WAIT)?;
+    attached.wait_for_text("10 50", WAIT)?;
     assert!(
         attached
             .screen_text()
@@ -1023,6 +1023,53 @@ async fn status_line_toggles_and_shows_the_session_address() -> anyhow::Result<(
             .unwrap_or("")
             .contains("agent-plan@")
     );
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_separator_keeps_session_output_above_the_bar() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let script = "read trigger; set -- $(stty size); i=1; while [ $i -le $1 ]; do printf '\\033[%s;1Hsession-row-%02d' \"$i\" \"$i\"; i=$((i+1)); done; sleep 30";
+    let (_, code) = run_cli(dir.path(), &["new", "--detach", "--", "sh", "-c", script])?;
+    assert_eq!(code, 0);
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("s1@", WAIT)?;
+    attached.send(b"draw\n")?;
+    attached.wait_for_text("session-row-22", WAIT)?;
+    let screen = attached.screen_text();
+    let rows: Vec<_> = screen.lines().collect();
+    assert_eq!(rows.len(), 24, "screen: {screen:?}");
+    assert!(rows[23].contains("s1@"), "screen: {screen:?}");
+    assert_eq!(rows[22], "─".repeat(79), "screen: {screen:?}");
+    for (row, marker) in rows[..22].iter().zip([
+        "session-row-01",
+        "session-row-02",
+        "session-row-03",
+        "session-row-04",
+        "session-row-05",
+        "session-row-06",
+        "session-row-07",
+        "session-row-08",
+        "session-row-09",
+        "session-row-10",
+        "session-row-11",
+        "session-row-12",
+        "session-row-13",
+        "session-row-14",
+        "session-row-15",
+        "session-row-16",
+        "session-row-17",
+        "session-row-18",
+        "session-row-19",
+        "session-row-20",
+        "session-row-21",
+        "session-row-22",
+    ]) {
+        assert_eq!(*row, marker, "screen: {screen:?}");
+    }
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);

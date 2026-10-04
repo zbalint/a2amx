@@ -850,7 +850,13 @@ async fn run_attachment(
 }
 
 fn pty_rows(rows: u16, visible: bool) -> u16 {
-    if visible && rows >= 3 { rows - 1 } else { rows }
+    if visible && rows >= 4 {
+        rows - 2
+    } else if visible && rows == 3 {
+        rows - 1
+    } else {
+        rows
+    }
 }
 
 struct AttachOutcome {

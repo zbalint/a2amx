@@ -69,3 +69,4 @@ lag the code.
 | I5 | Claude readiness during the Press Ctrl-D again footer | not needed, 2026-10-04: spec 2u sends both keys without a gate and graceful exit works; reopen only if a gate is added |
 | F5 | Delete `scripts/screen-probe.py` | `a2amx screen` confirmed working on a live OMP session, 2026-10-04; script removed |
 | C9 | Richer attach status bar | spec 3e |
+| C10 | Separator row above the attach status bar | spec 3f |
