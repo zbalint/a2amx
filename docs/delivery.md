@@ -617,7 +617,8 @@ with that `clientId` and exactly the envelope text upgrades evidence to
 that never appears stops blocking the queue after 120 s.
 
 Self-clearing waiting reasons, in precedence order: `app_server_down` (no connection;
-the daemon never restarts the process), `no_thread` (nothing loaded, for example while
+the daemon never restarts the process, and the Codex screen exits when its app-server dies, so
+the session ends rather than staying held), `no_thread` (nothing loaded, for example while
 the TUI shows a startup dialog such as an update prompt or a trust question),
 `waiting_on_approval` (any active flag: an approval or user-input dialog is open),
 `thread_error`, and `in_flight` (an earlier message has not shown up in the thread).

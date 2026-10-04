@@ -19,12 +19,8 @@ lag the code.
 
 | ID | Item | Evidence |
 | --- | --- | --- |
-| G1 | Agent-initiated launch (an agent starting another session) | docs |
-| G2 | Prompt-submit hook safety net for Codex and OMP. Receipts already come from the native channels, so first decide whether it is needed | docs |
-| G3 | Cross-host support: central broker, remote launch, cross-host delivery | docs |
-| G4 | Codex: restart a dead app-server (`app_server_down` is permanent for that session) | docs |
-| G5 | Codex: resume a conversation by re-attaching to an existing thread | docs |
-| G6 | Codex: delivery through the PTY channel (deliberately absent today) | docs |
+| G1 | Agent-initiated launch (an agent starting another session). Out of scope for now (owner, 2026-10-04); revisit later | docs |
+| G3 | Cross-host support: central broker, remote launch, cross-host delivery. Deferred until the owner says it is needed | docs |
 
 ## Untested or unverified
 
@@ -41,16 +37,14 @@ lag the code.
 | ID | Item | Evidence |
 | --- | --- | --- |
 | I3 | A split escape sequence can hold a session; the paste-then-`CR` gap is one fixed constant; an unreadable PTY can hold the writer gate; message bodies are stored as plaintext | docs |
-| I4 | The Codex "Update available" startup dialog leaves no thread loaded, so messages wait with `no_thread` until a person presses Esc | manual |
-| I5 | Claude readiness during the Press Ctrl-D again footer is unprobed (spec 2u sends both keys without a gate between them) | spec 2u |
+| I4 | The Codex "Update available" startup dialog leaves no thread loaded, so messages wait with `no_thread` until a person presses Esc. Known limitation: a2amx will not press keys for a person | manual |
 
 ## Ideas and possible features
 
 | ID | Item | Evidence |
 | --- | --- | --- |
-| F2 | Named launch templates in an operator config file, launch ownership (a launcher may kill only what it launched), trusted working directory so the Claude trust dialog cannot block unattended delivery | docs |
-| F3 | Scoping of `list_agents` (exchanges or workspaces) instead of every session seeing every session | docs |
-| F5 | Delete `scripts/screen-probe.py` after the owner confirms `a2amx screen` works in real use | spec 2r |
+| F2 | Named launch templates in an operator config file, launch ownership (a launcher may kill only what it launched), trusted working directory so the Claude trust dialog cannot block unattended delivery. Out of scope for now with G1 (owner, 2026-10-04) | docs |
+| F3 | Scoping of `list_agents` (exchanges or workspaces) instead of every session seeing every session. Accepted as is for now; revisit if it causes trouble (owner, 2026-10-04) | docs |
 
 ## Closed
 
@@ -68,3 +62,9 @@ lag the code.
 | U5 | Limits at the edges: 50 open messages per recipient, 20 sends per minute per sender, bodies near 32 KiB, recipient exiting with an open message, daemon restart with open messages | spec 3b |
 | C7 | Attach rendering no longer erases a glyph written in the terminal's last column | spec 3c |
 | C8 | ACTIVITY column in the Ctrl-b w session picker, including running/exited cells and CWD clipping coverage | spec 3d |
+| G2 | Prompt-submit hook safety net for Codex and OMP | dropped by the owner, 2026-10-04: receipts already come from the native channels |
+| G4 | Codex: restart a dead app-server | by design, 2026-10-04: a session whose app-server dies is crashed, and probing showed the Codex screen exits and the session ends with `exited(1)` |
+| G5 | Codex: resume a conversation by re-attaching to an existing thread | not needed, 2026-10-04: sessions start fresh and SALTMDB carries the memory across them |
+| G6 | Codex: delivery through the PTY channel | won't do while native delivery works well (owner, 2026-10-04); reopen if a problem shows up |
+| I5 | Claude readiness during the Press Ctrl-D again footer | not needed, 2026-10-04: spec 2u sends both keys without a gate and graceful exit works; reopen only if a gate is added |
+| F5 | Delete `scripts/screen-probe.py` | `a2amx screen` confirmed working on a live OMP session, 2026-10-04; script removed |
