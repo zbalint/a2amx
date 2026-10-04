@@ -1611,3 +1611,267 @@ fn team_down_peer_does_not_trigger_an_exit_message() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+#[test]
+fn idle_watcher_receives_heartbeat_for_busy_peer() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let watcher = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "arch",
+            "--harness",
+            "generic",
+            "--watch",
+            "dev",
+            "--heartbeat",
+            "2s",
+            "--",
+            "sh",
+            "-c",
+            "printf '\\033[?2004h'; sleep 60",
+        ],
+    );
+    assert!(watcher.status.success(), "stderr: {}", stderr(&watcher));
+    let peer = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "dev",
+            "--harness",
+            "generic",
+            "--",
+            "sh",
+            "-c",
+            "sleep 60",
+        ],
+    );
+    assert!(peer.status.success(), "stderr: {}", stderr(&peer));
+    let messages = screen_contains_until(&home, &["messages", "--session", "arch"], "heartbeat");
+    assert!(messages.status.success(), "stderr: {}", stderr(&messages));
+    assert!(
+        stdout(&messages).contains("a2amx-daemon@"),
+        "{}",
+        stdout(&messages)
+    );
+}
+
+#[test]
+fn idle_watcher_skips_heartbeat_for_ready_peer() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let watcher = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "arch",
+            "--harness",
+            "generic",
+            "--watch",
+            "dev",
+            "--heartbeat",
+            "2s",
+            "--",
+            "sh",
+            "-c",
+            "printf '\\033[?2004h'; sleep 60",
+        ],
+    );
+    assert!(watcher.status.success(), "stderr: {}", stderr(&watcher));
+    let peer = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "dev",
+            "--harness",
+            "generic",
+            "--",
+            "sh",
+            "-c",
+            "printf '\\033[?2004h'; sleep 60",
+        ],
+    );
+    assert!(peer.status.success(), "stderr: {}", stderr(&peer));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let messages = run(&home, &["messages", "--session", "arch"]);
+        assert!(
+            !stdout(&messages).contains("heartbeat"),
+            "{}",
+            stdout(&messages)
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn held_delivery_keeps_at_most_one_heartbeat_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let watcher = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "arch",
+            "--harness",
+            "generic",
+            "--deliver",
+            "hold",
+            "--watch",
+            "dev",
+            "--heartbeat",
+            "2s",
+            "--",
+            "sh",
+            "-c",
+            "printf '\\033[?2004h'; sleep 60",
+        ],
+    );
+    assert!(watcher.status.success(), "stderr: {}", stderr(&watcher));
+    let peer = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "dev",
+            "--harness",
+            "generic",
+            "--",
+            "sh",
+            "-c",
+            "sleep 60",
+        ],
+    );
+    assert!(peer.status.success(), "stderr: {}", stderr(&peer));
+    let messages = screen_contains_until(&home, &["messages", "--session", "arch"], "heartbeat");
+    assert!(messages.status.success(), "stderr: {}", stderr(&messages));
+    std::thread::sleep(Duration::from_secs(5));
+    let messages = run(&home, &["messages", "--session", "arch"]);
+    let count = stdout(&messages)
+        .lines()
+        .filter(|line| line.contains("heartbeat"))
+        .count();
+    assert_eq!(count, 1, "{}", stdout(&messages));
+}
+
+#[test]
+fn new_heartbeat_validates_interval_and_requires_watch() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let missing_watch = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--harness",
+            "generic",
+            "--heartbeat",
+            "30m",
+            "--",
+            "sleep",
+            "60",
+        ],
+    );
+    assert!(!missing_watch.status.success());
+    assert!(
+        stderr(&missing_watch).contains("heartbeat needs a non-empty watch"),
+        "{}",
+        stderr(&missing_watch)
+    );
+    for value in ["0s", "25h"] {
+        let invalid = run(
+            &home,
+            &[
+                "new",
+                "--detach",
+                "--harness",
+                "generic",
+                "--heartbeat",
+                value,
+                "--watch",
+                "dev",
+                "--",
+                "sleep",
+                "60",
+            ],
+        );
+        assert!(!invalid.status.success());
+        assert!(
+            stderr(&invalid).contains("invalid heartbeat"),
+            "{value}: {}",
+            stderr(&invalid)
+        );
+    }
+}
+
+#[test]
+fn not_ready_watcher_does_not_receive_heartbeat() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let watcher = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "arch",
+            "--harness",
+            "generic",
+            "--watch",
+            "dev",
+            "--heartbeat",
+            "2s",
+            "--",
+            "sh",
+            "-c",
+            "sleep 60",
+        ],
+    );
+    assert!(watcher.status.success(), "stderr: {}", stderr(&watcher));
+    let peer = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "dev",
+            "--harness",
+            "generic",
+            "--",
+            "sh",
+            "-c",
+            "sleep 60",
+        ],
+    );
+    assert!(peer.status.success(), "stderr: {}", stderr(&peer));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let messages = run(&home, &["messages", "--session", "arch"]);
+        assert!(
+            !stdout(&messages).contains("heartbeat"),
+            "{}",
+            stdout(&messages)
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}

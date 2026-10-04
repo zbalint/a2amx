@@ -217,6 +217,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             name: Some("override".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
+            heartbeat: None,
         })
         .await
         .unwrap();
@@ -250,6 +251,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             name: None,
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
+            heartbeat: None,
         },
         Request::Attach {
             session: sender_id.clone(),
@@ -350,6 +352,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
                 name: Some(name.to_owned()),
                 harness: Harness::Generic,
                 deliver: Some(Deliver::Hold),
+                heartbeat: None,
             })
             .await
             .unwrap();
@@ -368,6 +371,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
             name: Some("agent-plan".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
+            heartbeat: None,
         })
         .await
         .unwrap();
@@ -411,6 +415,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
             name: Some("natural".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
+            heartbeat: None,
         })
         .await
         .unwrap();
@@ -444,6 +449,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
             name: Some("natural".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
+            heartbeat: None,
         })
         .await
         .unwrap();
@@ -752,6 +758,7 @@ async fn recipient_exit_cancelling_and_filtering() {
             name: Some("recipient".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
+            heartbeat: None,
         })
         .await
         .unwrap();
@@ -909,6 +916,7 @@ async fn reset_authorizes_controller_and_rejects_unlisted_or_self() {
             name: Some("target".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
+            heartbeat: None,
         })
         .await
         .unwrap()
@@ -1116,6 +1124,7 @@ async fn reset_holds_message_delivery_until_sequence_finishes() {
             name: Some("target".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Auto),
+            heartbeat: None,
         })
         .await
         .unwrap()
@@ -1224,6 +1233,7 @@ async fn reset_rejects_an_in_flight_native_delivery_as_busy() {
             name: Some("target".into()),
             harness: Harness::Omp,
             deliver: Some(Deliver::Auto),
+            heartbeat: None,
         })
         .await
         .unwrap()

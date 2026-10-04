@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, bail};
 use serde::Deserialize;
 
-use crate::messaging::{validate_name, validate_reset_steps};
+use crate::messaging::{parse_interval, validate_name, validate_reset_steps};
 use crate::wire::SessionSummary;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -23,6 +23,8 @@ pub struct TeamSession {
     pub control_from: Vec<String>,
     #[serde(default)]
     pub watch: Vec<String>,
+    #[serde(default)]
+    pub heartbeat: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +81,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             reset: None,
             control_from: Vec::new(),
             watch: Vec::new(),
+            heartbeat: None,
         });
     }
     validate_sessions(&sessions)?;
@@ -163,6 +166,16 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
             if name == &session.name {
                 bail!("session {} watches itself", session.name);
             }
+        }
+        if let Some(value) = &session.heartbeat {
+            if session.watch.is_empty() {
+                bail!(
+                    "session {}: heartbeat needs a non-empty watch",
+                    session.name
+                );
+            }
+            parse_interval(value)
+                .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
         }
     }
     Ok(())

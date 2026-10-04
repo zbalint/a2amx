@@ -55,7 +55,6 @@ lag the code.
 | F3 | Scoping of `list_agents` (exchanges or workspaces) instead of every session seeing every session | docs |
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited`. Today an exited session keeps its name until `a2amx kill NAME`, and `team down` clears only the team file's names. Needs its own spec | reported |
 | F5 | Delete `scripts/screen-probe.py` after the owner confirms `a2amx screen` works in real use | spec 2r |
-| F9 | Heartbeat for chosen team sessions (team file, for example `heartbeat = "30m"`): an idle orchestrator or architect only wakes on messages, so it cannot notice a stuck peer. The daemon sends a message from a system sender when the session has been idle for the interval (any activity resets the timer), through the normal delivery gates, at most one undelivered at a time. The body is a digest of the watched peers: time in the current turn, time since the last message to or from the peer, time since the screen last changed, holds, and a hint to run `a2amx screen <peer>`. Skipped when every watched peer is idle with an empty queue; no quota handling. The daemon cannot tell long work from a loop, so the recipient judges. After the exit event | reported |
 | F10 | `list_agents` (MCP) also returns each agent's `harness` (`claude`, `omp`, `codex`, `generic`) and its spawn `cwd`, both optional and omitted when unknown, named as in `a2amx list`. Owner idea 2026-10-04, queued as spec 2x after 2w. Touches the exact tool-shape assertions in `tests/mcp.rs` and `tests/bridge.rs` | reported |
 
 ## Closed

@@ -60,6 +60,9 @@ pub enum Command {
         /// Session names whose exit this session is told about.
         #[arg(long)]
         watch: Vec<String>,
+        /// Send this session a digest of its watched peers when it has been idle this long, for example 30m.
+        #[arg(long)]
+        heartbeat: Option<String>,
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },

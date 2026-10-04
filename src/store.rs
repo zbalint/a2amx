@@ -301,6 +301,20 @@ impl Store {
             .await
     }
 
+    pub(crate) async fn open_system_heartbeat(&self, boot: &str, session: &str) -> Result<bool> {
+        let boot = boot.to_owned();
+        let session = session.to_owned();
+        self.run(move |connection, _| open_system_heartbeat(connection, &boot, &session))
+            .await
+    }
+
+    pub(crate) async fn last_message_age(&self, boot: &str, session: &str) -> Result<Option<u64>> {
+        let boot = boot.to_owned();
+        let session = session.to_owned();
+        self.run(move |connection, _| last_message_age(connection, &boot, &session))
+            .await
+    }
+
     pub(crate) async fn has_earlier_open(
         &self,
         boot: &str,
@@ -794,6 +808,36 @@ fn open_counts(connection: &mut Connection, boot: &str) -> Result<HashMap<String
         counts.insert(session, count);
     }
     Ok(counts)
+}
+
+fn open_system_heartbeat(connection: &mut Connection, boot: &str, session: &str) -> Result<bool> {
+    let open = connection.query_row(
+        "SELECT EXISTS (
+            SELECT 1
+              FROM messages
+             WHERE boot = ?1
+               AND sender_session = 'daemon'
+               AND recipient_session = ?2
+               AND subject = ?3
+               AND state IN ('pending', 'delivering')
+        )",
+        params![boot, session, crate::messaging::HEARTBEAT_SUBJECT],
+        |row| row.get(0),
+    )?;
+    Ok(open)
+}
+
+fn last_message_age(connection: &mut Connection, boot: &str, session: &str) -> Result<Option<u64>> {
+    let updated_at: Option<i64> = connection.query_row(
+        "SELECT MAX(updated_at)
+           FROM messages
+          WHERE boot = ?1
+            AND (sender_session = ?2 OR recipient_session = ?2)",
+        params![boot, session],
+        |row| row.get(0),
+    )?;
+    Ok(updated_at
+        .map(|timestamp| now().saturating_sub(u64::try_from(timestamp).unwrap_or_default())))
 }
 
 fn has_earlier_open(

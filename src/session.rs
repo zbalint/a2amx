@@ -42,6 +42,7 @@ pub struct SessionSpec {
     pub reset: Vec<String>,
     pub control_from: Vec<String>,
     pub watch: Vec<String>,
+    pub heartbeat: Option<Duration>,
     pub token: String,
     pub(crate) codex: Option<Arc<crate::codex::Link>>,
 }
@@ -57,6 +58,7 @@ pub struct Session {
     reset: Vec<String>,
     control_from: Vec<String>,
     watch: Vec<String>,
+    heartbeat: Option<Duration>,
     token: String,
     codex: Option<Arc<crate::codex::Link>>,
     input_gate: tokio::sync::Mutex<()>,
@@ -85,6 +87,7 @@ pub(crate) struct State {
     pub generation: u64,
     pub pending_attachment: Option<u64>,
     pub dirty: bool,
+    pub last_change: Instant,
     pub hold: Option<Hold>,
     pub last_submit: Option<Instant>,
     pub restore: Option<String>,
@@ -187,6 +190,7 @@ impl Session {
                 generation: 0,
                 pending_attachment: None,
                 dirty: true,
+                last_change: Instant::now(),
                 hold: None,
                 last_submit: None,
                 restore: None,
@@ -223,6 +227,7 @@ impl Session {
                     let mut state = reader_state.state.lock().unwrap_or_else(|e| e.into_inner());
                     let response = state.emulator.feed(&bytes[..count]);
                     state.dirty = true;
+                    state.last_change = Instant::now();
                     response
                 };
                 if !response.is_empty() && replies.blocking_send(Some(response)).is_err() {
@@ -291,6 +296,7 @@ impl Session {
             reset: spec.reset,
             control_from: spec.control_from,
             watch: spec.watch,
+            heartbeat: spec.heartbeat,
             token: spec.token,
             codex: spec.codex,
             input_gate: tokio::sync::Mutex::new(()),
@@ -343,6 +349,17 @@ impl Session {
     }
     pub(crate) fn watch(&self) -> &[String] {
         &self.watch
+    }
+    pub(crate) fn heartbeat(&self) -> Option<Duration> {
+        self.heartbeat
+    }
+
+    pub(crate) fn last_change(&self) -> Instant {
+        self.lock().last_change
+    }
+
+    pub(crate) fn resetting(&self) -> bool {
+        self.resetting.load(Ordering::Acquire)
     }
     pub(crate) fn daemon_ended(&self) -> bool {
         self.daemon_ended.load(Ordering::Acquire)

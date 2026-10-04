@@ -94,6 +94,7 @@ pub async fn new_agent(
             name: name.map(str::to_owned),
             harness,
             deliver: Some(deliver),
+            heartbeat: None,
         })
         .await
         .expect("create credential session");

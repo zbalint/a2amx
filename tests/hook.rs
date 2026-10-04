@@ -71,6 +71,7 @@ impl HookCase {
                 name: Some("agent-review".into()),
                 harness: Harness::Claude,
                 deliver: Some(Deliver::Auto),
+                heartbeat: None,
             })
             .await
             .unwrap();

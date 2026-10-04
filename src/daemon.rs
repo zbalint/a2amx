@@ -29,6 +29,7 @@ use crate::wire::{
     AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo, QuotaInfo,
     Request, Response, ServerFrame, SessionSummary, StatusInfo,
 };
+const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
 
 pub struct DaemonConfig {
     /// State directory (`A2AMX_HOME` or `--home`).
@@ -65,6 +66,59 @@ struct Runtime {
     deliveries: Mutex<Vec<JoinHandle<()>>>,
     stop_requested: tokio::sync::Notify,
     stop_now: AtomicBool,
+}
+
+struct HeartbeatPeer {
+    name: String,
+    address: String,
+    busy_for: Option<Duration>,
+    unchanged_for: Option<Duration>,
+    hold: Option<String>,
+    last_message_age: Option<Duration>,
+    queued: u32,
+}
+
+fn heartbeat_body(interval: Duration, peers: &[HeartbeatPeer]) -> String {
+    let mut body = format!(
+        "Heartbeat: you have been idle for {}. Watched peers:\n",
+        display_duration(interval)
+    );
+    for peer in peers {
+        body.push_str(&format!("- {} ({}): ", peer.name, peer.address));
+        if let Some(busy_for) = peer.busy_for {
+            body.push_str(&format!("busy for {}", display_duration(busy_for)));
+        } else {
+            body.push_str("ready");
+        }
+        if let Some(unchanged_for) = peer.unchanged_for.filter(|age| age.as_secs() >= 60) {
+            body.push_str(&format!(
+                ", screen unchanged for {}",
+                display_duration(unchanged_for)
+            ));
+        }
+        if let Some(hold) = peer.hold.as_deref() {
+            body.push_str(&format!(", held: {hold}"));
+        }
+        if let Some(age) = peer.last_message_age {
+            body.push_str(&format!(", last message {} ago", display_duration(age)));
+        } else {
+            body.push_str(", last message none");
+        }
+        body.push_str(&format!(", {} queued\n", peer.queued));
+    }
+    body.push_str("Run a2amx screen <peer> to look before messaging a busy peer.");
+    body
+}
+
+fn display_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds >= 60 * 60 {
+        format!("{}h", seconds / (60 * 60))
+    } else if seconds >= 60 {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{}s", seconds.max(1))
+    }
 }
 
 enum Role {
@@ -152,6 +206,7 @@ impl Runtime {
             reset,
             control_from,
             watch,
+            heartbeat,
             name,
             harness,
             deliver,
@@ -187,6 +242,25 @@ impl Runtime {
                     message: format!("session {watcher} watches itself"),
                 });
             }
+        }
+        let heartbeat = match heartbeat
+            .map(|seconds| messaging::parse_interval(&format!("{seconds}s")))
+            .transpose()
+        {
+            Ok(heartbeat) => heartbeat,
+            Err(error) => {
+                return Ok(Response::Error {
+                    message: error.to_string(),
+                });
+            }
+        };
+        if heartbeat.is_some() && watch.is_empty() {
+            return Ok(Response::Error {
+                message: format!(
+                    "session {}: heartbeat needs a non-empty watch",
+                    name.as_deref().unwrap_or("unnamed")
+                ),
+            });
         }
         let _gate = self.new_session_gate.lock().await;
         if let Some(name) = &name {
@@ -271,6 +345,7 @@ impl Runtime {
                     reset,
                     control_from,
                     watch,
+                    heartbeat,
                     token,
                     codex,
                 },
@@ -293,6 +368,11 @@ impl Runtime {
                     boot.clone(),
                 ))];
                 tasks.push(tokio::spawn(self.clone().observe_exit(session.clone())));
+                if let Some(interval) = session.heartbeat() {
+                    tasks.push(tokio::spawn(
+                        self.clone().heartbeat(session.clone(), interval),
+                    ));
+                }
                 if channel {
                     tasks.push(tokio::spawn(accept_channel_dialog(session.clone())));
                 }
@@ -364,6 +444,169 @@ impl Runtime {
                 }
                 Err(InsertError::Internal(error)) => {
                     tracing::error!(%error, recipient = %watcher.id().0, "exit event message acceptance failed");
+                }
+            }
+        }
+    }
+    async fn heartbeat(self: Arc<Self>, session: Arc<Session>, interval: Duration) {
+        // shortcut: poll resolution is one second; peers busy before this task starts are bounded from the first sight, not an exact ready-since clock.
+        let mut ticker = tokio::time::interval(HEARTBEAT_POLL);
+        let mut busy_since = HashMap::<String, Instant>::new();
+        loop {
+            ticker.tick().await;
+            if session.exit_code().is_some() {
+                return;
+            }
+            let now = Instant::now();
+            let watched = session.watch().to_vec();
+            let live_peers = {
+                let sessions = self
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                watched
+                    .iter()
+                    .filter_map(|name| {
+                        sessions
+                            .values()
+                            .find(|peer| {
+                                peer.exit_code().is_none() && peer.name() == Some(name.as_str())
+                            })
+                            .cloned()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let mut observed = Vec::with_capacity(live_peers.len());
+            for peer in live_peers {
+                let (ready, unchanged_for) = {
+                    let state = peer.lock();
+                    (
+                        harness::ready(
+                            peer.harness(),
+                            &state.emulator.screen(),
+                            state.emulator.is_scrolled(),
+                        ),
+                        now.saturating_duration_since(state.last_change),
+                    )
+                };
+                let hold = AnyChannel::for_session(peer.clone())
+                    .hold_reason()
+                    .map(str::to_owned);
+                let id = peer.id().0.clone();
+                let busy_for = if ready {
+                    busy_since.remove(&id);
+                    None
+                } else {
+                    let since = *busy_since.entry(id).or_insert(now);
+                    Some(now.saturating_duration_since(since))
+                };
+                observed.push((peer, ready, busy_for, unchanged_for, hold));
+            }
+            let watcher_ready = {
+                let state = session.lock();
+                harness::ready(
+                    session.harness(),
+                    &state.emulator.screen(),
+                    state.emulator.is_scrolled(),
+                )
+            };
+            if !watcher_ready
+                || session.resetting()
+                || AnyChannel::for_session(session.clone())
+                    .hold_reason()
+                    .is_some()
+                || now.saturating_duration_since(session.last_change()) < interval
+            {
+                continue;
+            }
+            let open = match self
+                .store
+                .open_system_heartbeat(&self.boot, &session.id().0)
+                .await
+            {
+                Ok(open) => open,
+                Err(error) => {
+                    tracing::error!(%error, recipient = %session.id().0, "heartbeat state lookup failed");
+                    continue;
+                }
+            };
+            if open {
+                continue;
+            }
+            let counts = match self.store.open_counts(&self.boot).await {
+                Ok(counts) => counts,
+                Err(error) => {
+                    tracing::error!(%error, "heartbeat queue lookup failed");
+                    continue;
+                }
+            };
+            let mut digest_peers = Vec::with_capacity(observed.len());
+            let mut has_busy_peer = false;
+            for (peer, ready, busy_for, unchanged_for, hold) in observed {
+                let queued = counts.get(&peer.id().0).copied().unwrap_or_default();
+                if !ready || hold.is_some() || queued > 0 {
+                    has_busy_peer = true;
+                }
+                let last_message_age =
+                    match self.store.last_message_age(&self.boot, &peer.id().0).await {
+                        Ok(age) => age.map(Duration::from_secs),
+                        Err(error) => {
+                            tracing::error!(
+                                %error,
+                                peer = %peer.id().0,
+                                "heartbeat message age lookup failed"
+                            );
+                            None
+                        }
+                    };
+                digest_peers.push(HeartbeatPeer {
+                    name: peer.name().unwrap_or(&peer.id().0).to_owned(),
+                    address: messaging::address(peer.name(), &peer.id().0, &self.host_name),
+                    busy_for,
+                    unchanged_for: Some(unchanged_for),
+                    hold,
+                    last_message_age,
+                    queued,
+                });
+            }
+            if !has_busy_peer || digest_peers.is_empty() {
+                continue;
+            }
+            if session.exit_code().is_some() {
+                return;
+            }
+            let body = heartbeat_body(interval, &digest_peers);
+            let message = NewMessage {
+                boot: self.boot.clone(),
+                sender_session: "daemon".into(),
+                sender_address: messaging::address(
+                    Some(messaging::SYSTEM_SENDER),
+                    messaging::SYSTEM_SENDER,
+                    &self.host_name,
+                ),
+                recipient_session: session.id().0.clone(),
+                recipient_address: messaging::address(
+                    session.name(),
+                    &session.id().0,
+                    &self.host_name,
+                ),
+                subject: messaging::HEARTBEAT_SUBJECT.into(),
+                body,
+            };
+            match self.store.insert_message(message).await {
+                Ok(_) => session.message_notify().notify_one(),
+                Err(InsertError::QueueFull) => {
+                    tracing::warn!(
+                        recipient = %session.id().0,
+                        "heartbeat message queue is full"
+                    );
+                }
+                Err(InsertError::Internal(error)) => {
+                    tracing::error!(
+                        %error,
+                        recipient = %session.id().0,
+                        "heartbeat message acceptance failed"
+                    );
                 }
             }
         }
@@ -1700,4 +1943,44 @@ async fn send_data(connection: &mut Framed, bytes: &[u8]) -> anyhow::Result<()> 
         connection.send_tagged(0x01, chunk).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HeartbeatPeer, heartbeat_body};
+    use std::time::Duration;
+
+    #[test]
+    fn heartbeat_body_matches_digest_example() {
+        let body = heartbeat_body(
+            Duration::from_secs(30 * 60),
+            &[
+                HeartbeatPeer {
+                    name: "developer".into(),
+                    address: "developer@host-a".into(),
+                    busy_for: Some(Duration::from_secs(12 * 60)),
+                    unchanged_for: Some(Duration::from_secs(11 * 60)),
+                    hold: None,
+                    last_message_age: Some(Duration::from_secs(18 * 60)),
+                    queued: 0,
+                },
+                HeartbeatPeer {
+                    name: "tester".into(),
+                    address: "tester@host-a".into(),
+                    busy_for: None,
+                    unchanged_for: Some(Duration::from_secs(45)),
+                    hold: Some("human_draft".into()),
+                    last_message_age: None,
+                    queued: 2,
+                },
+            ],
+        );
+        assert_eq!(
+            body,
+            "Heartbeat: you have been idle for 30m. Watched peers:\n\
+- developer (developer@host-a): busy for 12m, screen unchanged for 11m, last message 18m ago, 0 queued\n\
+- tester (tester@host-a): ready, held: human_draft, last message none, 2 queued\n\
+Run a2amx screen <peer> to look before messaging a busy peer."
+        );
+    }
 }

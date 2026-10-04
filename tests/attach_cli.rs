@@ -401,6 +401,7 @@ async fn picker_clips_long_cwd_to_narrow_terminal() -> anyhow::Result<()> {
             name: None,
             harness: Harness::Generic,
             deliver: None,
+            heartbeat: None,
         })
         .await?;
     let Response::Created { session } = response else {
@@ -1045,6 +1046,7 @@ gate.recv(1)
                 name: Some("render-regression".into()),
                 harness: Harness::Generic,
                 deliver: Some(Deliver::Hold),
+                heartbeat: None,
             })
             .await?
         else {

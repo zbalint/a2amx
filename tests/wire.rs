@@ -82,6 +82,7 @@ fn request_json_uses_exact_tagged_shapes() {
         name: None,
         harness: a2amx::harness::Harness::Generic,
         deliver: None,
+        heartbeat: None,
     };
     let json = serde_json::to_string(&request).unwrap_or_default();
     assert_eq!(
@@ -318,6 +319,7 @@ fn messaging_control_variants_round_trip() {
             name: Some("agent-review".into()),
             harness: a2amx::harness::Harness::Claude,
             deliver: Some(a2amx::harness::Deliver::Auto),
+            heartbeat: None,
         },
     ];
     let request_json = [

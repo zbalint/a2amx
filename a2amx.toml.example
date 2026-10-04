@@ -8,6 +8,7 @@ attach = true
 # reset = ["/clear"]
 # control_from = ["myproject-developer"]
 # watch = ["myproject-developer"] # notify this session when the peer exits naturally
+# heartbeat = "30m" # digest watched peers after 30 minutes of idle time
 
 [[session]]
 name = "myproject-developer"

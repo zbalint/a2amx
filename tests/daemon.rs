@@ -44,6 +44,7 @@ async fn create(client: &mut Client, argv: &[&str], env: Vec<(String, String)>) 
             name: None,
             harness: a2amx::harness::Harness::Generic,
             deliver: None,
+            heartbeat: None,
         })
         .await
         .unwrap()
@@ -207,6 +208,7 @@ async fn failed_spawns_and_zero_sizes_leave_no_sessions() {
                     name: None,
                     harness: a2amx::harness::Harness::Generic,
                     deliver: None,
+                    heartbeat: None,
                 })
                 .await
                 .unwrap(),
@@ -703,6 +705,7 @@ async fn cwd_environment_and_argument_boundaries_reach_the_child() {
             name: None,
             harness: a2amx::harness::Harness::Generic,
             deliver: None,
+            heartbeat: None,
         })
         .await
         .unwrap();
@@ -1006,6 +1009,7 @@ async fn large_final_snapshot_is_split_at_the_data_limit_and_precedes_exit() {
             name: None,
             harness: a2amx::harness::Harness::Generic,
             deliver: None,
+            heartbeat: None,
         })
         .await
         .unwrap()
@@ -1114,6 +1118,7 @@ async fn opted_in_attachments_receive_initial_and_changed_status_only() {
             name: Some("agent-review".into()),
             harness: Harness::Generic,
             deliver: Some(Deliver::Auto),
+            heartbeat: None,
         })
         .await
         .unwrap()

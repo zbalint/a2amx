@@ -125,6 +125,8 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         watch: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        heartbeat: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(default, skip_serializing_if = "is_default")]
         harness: Harness,

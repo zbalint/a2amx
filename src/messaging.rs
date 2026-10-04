@@ -8,7 +8,9 @@ use anyhow::bail;
 
 pub const MAX_SUBJECT_BYTES: usize = 200;
 pub const SYSTEM_SENDER: &str = "a2amx-daemon";
+pub const HEARTBEAT_SUBJECT: &str = "heartbeat";
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
+pub const HEARTBEAT_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 // shortcut: delivery uses one fixed 400 ms paste gap; the threshold was not bisected below 300 ms.
 pub const PASTE_GAP: Duration = Duration::from_millis(400);
 pub const COOLDOWN: Duration = Duration::from_secs(1);
@@ -262,6 +264,32 @@ pub fn local_part<'a>(to: &'a str, host: &str) -> Option<&'a str> {
     (target_host == host).then_some(local)
 }
 
+pub fn parse_interval(value: &str) -> anyhow::Result<Duration> {
+    let invalid = || {
+        anyhow::anyhow!(
+            "invalid heartbeat {value:?}: expected a number followed by s, m or h, from 1s to 24h"
+        )
+    };
+    let (number, multiplier) = if let Some(number) = value.strip_suffix('s') {
+        (number, 1)
+    } else if let Some(number) = value.strip_suffix('m') {
+        (number, 60)
+    } else if let Some(number) = value.strip_suffix('h') {
+        (number, 60 * 60)
+    } else {
+        return Err(invalid());
+    };
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    let number = number.parse::<u64>().map_err(|_| invalid())?;
+    let seconds = number.checked_mul(multiplier).ok_or_else(invalid)?;
+    if !(1..=HEARTBEAT_MAX.as_secs()).contains(&seconds) {
+        return Err(invalid());
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
 fn invalid(code: &'static str, message: impl Into<String>) -> MessageError {
     MessageError::new(code, message)
 }
@@ -486,4 +514,36 @@ pub fn input_is_typing(bytes: &[u8]) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_interval_accepts_units_and_rejects_invalid_ranges() {
+        for (value, seconds) in [("90s", 90), ("30m", 1800), ("2h", 7200), ("24h", 86400)] {
+            assert_eq!(parse_interval(value).unwrap(), Duration::from_secs(seconds));
+        }
+        for value in [
+            "0s",
+            "25h",
+            "30",
+            "m",
+            "1d",
+            "-5m",
+            "+1s",
+            "1.5s",
+            " 1s",
+            "18446744073709551615h",
+            "18446744073709551616s",
+        ] {
+            assert_eq!(
+                parse_interval(value).unwrap_err().to_string(),
+                format!(
+                    "invalid heartbeat {value:?}: expected a number followed by s, m or h, from 1s to 24h"
+                )
+            );
+        }
+    }
 }

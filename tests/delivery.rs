@@ -63,6 +63,7 @@ impl Case {
                 name: Some("agent-review".into()),
                 harness: Harness::Claude,
                 deliver: Some(deliver),
+                heartbeat: None,
             })
             .await
             .unwrap();

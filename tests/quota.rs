@@ -242,6 +242,7 @@ async fn status_line_session_sized(
             name: Some(name.to_owned()),
             harness,
             deliver: Some(Deliver::Hold),
+            heartbeat: None,
         })
         .await
         .unwrap();

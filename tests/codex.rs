@@ -120,6 +120,7 @@ impl Case {
                         name: Some("agent-impl".into()),
                         harness: Harness::Codex,
                         deliver: None,
+                        heartbeat: None,
                     })
                     .await
                     .unwrap()

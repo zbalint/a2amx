@@ -77,6 +77,7 @@ cwd = "."
                 reset: None,
                 control_from: Vec::new(),
                 watch: Vec::new(),
+                heartbeat: None,
             },
             TeamSession {
                 name: "developer".into(),
@@ -86,6 +87,7 @@ cwd = "."
                 reset: None,
                 control_from: Vec::new(),
                 watch: Vec::new(),
+                heartbeat: None,
             },
         ]
     );
@@ -168,6 +170,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 reset: None,
                 control_from: Vec::new(),
                 watch: Vec::new(),
+                heartbeat: None,
             },
             TeamSession {
                 name: "developer".into(),
@@ -177,6 +180,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 reset: None,
                 control_from: Vec::new(),
                 watch: Vec::new(),
+                heartbeat: None,
             },
         ]
     );
@@ -659,4 +663,41 @@ control_from = ["controller"]
         denied,
         Response::Failed { code, .. } if code == "not_permitted"
     ));
+}
+
+#[test]
+fn heartbeat_team_entry_requires_watch_and_validates_interval() {
+    let parsed = team::parse(
+        r#"
+[[session]]
+name = "architect"
+command = ["sh"]
+watch = ["developer"]
+heartbeat = "30m"
+"#,
+    )
+    .unwrap();
+    assert_eq!(parsed[0].heartbeat.as_deref(), Some("30m"));
+
+    let no_watch = team::parse(
+        r#"
+[[session]]
+name = "architect"
+command = ["sh"]
+heartbeat = "30m"
+"#,
+    )
+    .unwrap_err();
+    assert!(format!("{no_watch:#}").contains("heartbeat needs a non-empty watch"));
+
+    for value in ["0s", "25h", "30", "m", "1d", "-5m"] {
+        let error = team::parse(&format!(
+            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"developer\"]\nheartbeat = {value:?}"
+        ))
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("invalid heartbeat"),
+            "{value}: {error:#}"
+        );
+    }
 }

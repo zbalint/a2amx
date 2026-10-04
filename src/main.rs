@@ -333,11 +333,20 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         reset,
         control_from,
         watch,
+        heartbeat,
         command,
     } = options
     else {
         return Err(anyhow!("expected new session options"));
     };
+    let heartbeat = heartbeat
+        .as_deref()
+        .map(a2amx::messaging::parse_interval)
+        .transpose()?
+        .map(|duration| duration.as_secs());
+    if heartbeat.is_some() && watch.is_empty() {
+        return Err(anyhow!("heartbeat needs a non-empty watch"));
+    }
     let mut client = Client::connect(&home).await?;
     let (cols, rows) = terminal_size_with_default()?;
     let session = create_session(
@@ -352,6 +361,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             reset,
             control_from,
             watch,
+            heartbeat,
             command,
             cwd: std::env::current_dir()?,
             cols,
@@ -378,6 +388,7 @@ struct NewOptions {
     reset: Vec<String>,
     control_from: Vec<String>,
     watch: Vec<String>,
+    heartbeat: Option<u64>,
     command: Vec<String>,
     cwd: PathBuf,
     cols: u16,
@@ -398,6 +409,7 @@ async fn create_session(
         reset,
         control_from,
         watch,
+        heartbeat,
         command,
         cwd,
         cols,
@@ -409,6 +421,12 @@ async fn create_session(
     }
     for name in &watch {
         a2amx::messaging::validate_name(name)?;
+    }
+    if let Some(seconds) = heartbeat {
+        if watch.is_empty() {
+            return Err(anyhow!("heartbeat needs a non-empty watch"));
+        }
+        a2amx::messaging::parse_interval(&format!("{seconds}s"))?;
     }
     let harness = harness.unwrap_or_else(|| Harness::infer(&command));
     let command = match harness {
@@ -460,6 +478,7 @@ async fn create_session(
             name,
             harness,
             deliver,
+            heartbeat,
         })
         .await?;
     match response {
@@ -526,6 +545,12 @@ async fn run_team_up(
                 (name, id)
             }
             team::Action::Start(session) => {
+                let heartbeat = session
+                    .heartbeat
+                    .as_deref()
+                    .map(a2amx::messaging::parse_interval)
+                    .transpose()?
+                    .map(|duration| duration.as_secs());
                 let name = session.name;
                 let result = create_session(
                     &home,
@@ -539,6 +564,7 @@ async fn run_team_up(
                         reset: session.reset.unwrap_or_default(),
                         control_from: session.control_from,
                         watch: session.watch,
+                        heartbeat,
                         command: session.command,
                         cwd: session
                             .cwd

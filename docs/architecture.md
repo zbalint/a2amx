@@ -357,6 +357,16 @@ machine; there is no central-versus-host split yet.
   `a2amx-daemon@<host>`; names equal to `a2amx-daemon` are reserved. Sessions ended by
   the daemon (`kill`, `team down`, or shutdown) set a flag before signaling and do not
   produce an exit event. Observer tasks are aborted before shutdown kills children.
+- **Heartbeat digests.** A session may add `--heartbeat 30m` or `heartbeat = "30m"`
+  together with a non-empty `watch` list. The daemon starts one one-second polling task
+  for that session. Its single `last_change` clock is initialized at creation and
+  refreshed by PTY output; a digest is eligible only when the watcher is ready, unheld,
+  not resetting, and unchanged for the configured interval. The task remembers when
+  each watched peer was last seen busy, and skips the digest when every live watched
+  peer is ready, unheld, and has no pending or delivering messages. Missing or exited
+  peers do not make a watcher busy. The task inserts one message from the system sender
+  (`a2amx-daemon@<host>`) through the ordinary queue and delivery gates, with at most
+  one pending or delivering heartbeat; shutdown aborts heartbeat tasks before children.
 - **Session reset.** `a2amx reset <id|name>` resolves names before sending
   `Request::Reset`; the daemon types the configured sequence (or `/clear`) through
   the same bracketed-paste PTY path. `control_from` names authorize session-token

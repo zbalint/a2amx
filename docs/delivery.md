@@ -330,6 +330,15 @@ same queue, delivery, hold, and receipt gates as any other message. Queue-full e
 are dropped rather than retried. Sessions ended by daemon control do not generate an
 event, and shutdown aborts observers before killing children.
 
+**Heartbeat digests.** A configured `--heartbeat` or team-file `heartbeat` is a
+daemon-sent message from the same synthetic sender after the receiving session has
+been ready, unheld, not resetting, and inactive for its interval. It is inserted
+through the normal queue and all ordinary delivery gates; `--deliver hold` therefore
+leaves it pending. The daemon checks for an existing `pending` or `delivering`
+heartbeat before inserting another, and drops a `QueueFull` result. Delivery output
+resets the receiving session's activity clock, so a heartbeat does not create a
+feedback loop. Heartbeats never send input to or otherwise act on a watched peer.
+
 **Not implemented.** Hooks for harnesses other than Claude Code and cross-host routing.
 Native in-harness delivery exists for Claude Code (channel), OMP (extension) and Codex
 (app-server).
