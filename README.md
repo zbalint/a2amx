@@ -148,8 +148,9 @@ then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
 scroll mode, `s` toggles the status line, `r` releases the session's message hold, and the prefix twice sends a
 literal prefix. While a session has not turned on mouse reporting, the mouse wheel scrolls it (three lines a step) and
 enters scroll mode; hold Shift to select text with the mouse. Scrollback in the real terminal after you detach is not
-kept. The status line takes the terminal's last row and shows the session address,
-pending-message count, and a HELD alert with the hold reason. In `a2amx list`, ATTACHED means a human client is attached, not that
+kept. The status line takes the terminal's last row and shows the session address, optional activity,
+low-quota and harness details, pending-message count, and a HELD alert with the hold reason and (for
+releasable holds) a prefix-key hint for `r`. In `a2amx list`, ATTACHED means a human client is attached, not that
 the session is reachable: a detached session still receives messages. ACTIVITY is `idle`, `working`, or `busy` for running sessions, and `-` for exited sessions. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with
 an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or

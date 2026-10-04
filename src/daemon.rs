@@ -1791,6 +1791,9 @@ async fn attachment_status(
         hold: AnyChannel::for_session(session.clone())
             .hold_reason()
             .map(str::to_owned),
+        harness: Some(session.harness()),
+        activity: session_activity(session),
+        quota: session_quota(session),
     })
 }
 

@@ -609,16 +609,34 @@ fn additive_visibility_fields_round_trip() {
 
 #[test]
 fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
-    use a2amx::wire::StatusInfo;
+    use a2amx::harness::Harness;
+    use a2amx::wire::{QuotaInfo, StatusInfo};
     let info = StatusInfo {
         address: "agent-plan@host-a".into(),
         pending: 2,
         hold: Some("human_draft".into()),
+        harness: Some(Harness::Claude),
+        activity: Some(Activity::Working),
+        quota: Some(QuotaInfo {
+            five_hour: Some(15),
+            weekly: None,
+            limit_reached: false,
+        }),
     };
     let frame = ServerFrame::Status(info);
     let encoded = frame.encode();
     assert_eq!(encoded[0], 0x04);
     assert_eq!(ServerFrame::decode(&encoded).unwrap(), frame);
+    let old_payload = [vec![0x04], br#"{"address":"a","pending":0}"#.to_vec()].concat();
+    let ServerFrame::Status(old_info) = ServerFrame::decode(&old_payload).unwrap() else {
+        panic!("old status payload");
+    };
+    assert_eq!(old_info.address, "a");
+    assert_eq!(old_info.pending, 0);
+    assert_eq!(old_info.hold, None);
+    assert_eq!(old_info.harness, None);
+    assert_eq!(old_info.activity, None);
+    assert_eq!(old_info.quota, None);
     assert!(ServerFrame::decode(&[0x04, b'x']).is_err());
     assert!(
         ServerFrame::decode(

@@ -33,6 +33,24 @@ pub fn read(screen: &Screen, harness: Harness) -> Option<QuotaInfo> {
     }
 }
 
+/// Formats quota information as the compact list/status cell.
+pub fn cell(quota: Option<QuotaInfo>) -> String {
+    let Some(quota) = quota else {
+        return "-".to_owned();
+    };
+    let windows = [("5h", quota.five_hour), ("wk", quota.weekly)];
+    let cell = windows
+        .into_iter()
+        .filter_map(|(label, percent)| percent.map(|percent| format!("{label} {percent}%")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if cell.is_empty() && quota.limit_reached {
+        "limit".to_owned()
+    } else {
+        cell
+    }
+}
+
 fn read_windows(screen: &Screen) -> Option<QuotaInfo> {
     let rows = usize::from(screen.size.rows);
     let mut info = QuotaInfo::default();

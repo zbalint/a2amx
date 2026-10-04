@@ -318,6 +318,10 @@ The client opts in with `Request::Attach.status`; the daemon sends a status fram
 Attachments that do not opt in receive no status frames, preserving older clients;
 older daemons ignore the additive request field.
 
+The status payload also carries the optional activity, low-quota, harness, and hold details rendered
+by the bar; these additive fields preserve old payload decoding, and the daemon still sends frames
+only when the complete status changes.
+
 ## Implemented: messaging core
 
 Built from [spec 2](specs/spec-2-messaging.md); the spec is the contract, this

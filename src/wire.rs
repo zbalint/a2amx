@@ -381,6 +381,12 @@ pub struct StatusInfo {
     pub pending: u32,
     #[serde(default)]
     pub hold: Option<String>,
+    #[serde(default)]
+    pub harness: Option<Harness>,
+    #[serde(default)]
+    pub activity: Option<Activity>,
+    #[serde(default)]
+    pub quota: Option<QuotaInfo>,
 }
 
 /// Server-to-client stream frame.
@@ -418,8 +424,8 @@ impl ServerFrame {
                 payload
             }
             Self::Status(info) => {
-                // StatusInfo contains only strings, a u32 and an Option: JSON serialization
-                // to a Vec cannot fail for these types.
+                // StatusInfo's fields are all serde infallible types; JSON serialization to a Vec
+                // cannot fail.
                 let body = serde_json::to_vec(info)
                     .unwrap_or_else(|error| unreachable!("StatusInfo serialization: {error}"));
                 let mut payload = Vec::with_capacity(1 + body.len());

@@ -1141,7 +1141,6 @@ async fn takeover_waits_for_received_input_to_enqueue_under_backpressure() {
 #[tokio::test]
 async fn opted_in_attachments_receive_initial_and_changed_status_only() {
     use a2amx::harness::{Deliver, Harness};
-    use a2amx::wire::StatusInfo;
     let (dir, daemon) = common::start_daemon().await;
     let mut admin = Client::connect(dir.path()).await.unwrap();
     let Response::Created { session: id } = admin
@@ -1177,14 +1176,16 @@ async fn opted_in_attachments_receive_initial_and_changed_status_only() {
         .await
         .unwrap();
     assert!(matches!(next(&mut attachment).await, ServerFrame::Data(_)));
-    assert_eq!(
-        next(&mut attachment).await,
-        ServerFrame::Status(StatusInfo {
-            address: address.clone(),
-            pending: 0,
-            hold: None,
-        })
-    );
+    let info = next(&mut attachment).await;
+    let ServerFrame::Status(info) = info else {
+        panic!("initial status frame");
+    };
+    assert_eq!(info.address, address);
+    assert_eq!(info.pending, 0);
+    assert_eq!(info.hold, None);
+    assert_eq!(info.harness, Some(Harness::Generic));
+    assert!(info.activity.is_some());
+    assert_eq!(info.quota, None);
     attachment
         .send(ClientFrame::Input(b"x".to_vec()))
         .await
@@ -1219,14 +1220,12 @@ async fn opted_in_attachments_receive_initial_and_changed_status_only() {
         loop {
             if let Some(ServerFrame::Status(info)) = attachment.recv().await.unwrap() {
                 if info.pending == 1 {
-                    assert_eq!(
-                        info,
-                        StatusInfo {
-                            address: address.clone(),
-                            pending: 1,
-                            hold: Some("human_draft".into())
-                        }
-                    );
+                    assert_eq!(info.address, address);
+                    assert_eq!(info.pending, 1);
+                    assert_eq!(info.hold, Some("human_draft".into()));
+                    assert_eq!(info.harness, Some(Harness::Generic));
+                    assert!(info.activity.is_some());
+                    assert_eq!(info.quota, None);
                     break;
                 }
             }
