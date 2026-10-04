@@ -261,6 +261,23 @@ pub enum Response {
         reason: Option<String>,
     },
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Activity {
+    Idle,
+    Working,
+    Busy,
+}
+
+impl Activity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::Busy => "busy",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
@@ -287,6 +304,9 @@ pub struct SessionSummary {
     pub harness: Harness,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// `None` for an exited session; `None` is unknown or exited, never idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<Activity>,
 }
 
 /// Percent left per quota window, as the harness's status line last showed it.
@@ -331,6 +351,9 @@ pub struct AgentSummary {
     /// Session spawn directory, not the process's current directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// `None` for an exited session; `None` is unknown or exited, never idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<Activity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

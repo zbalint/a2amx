@@ -766,7 +766,7 @@ fn screen_does_not_resize_or_detach_an_attached_session() {
         .unwrap();
     let before = stdout(&run(&home, &["list"]));
     let before_row = before.lines().find(|line| line.starts_with("s1 ")).unwrap();
-    let before_size = before_row.split_whitespace().nth(8).unwrap().to_owned();
+    let before_size = before_row.split_whitespace().nth(9).unwrap().to_owned();
 
     let output = screen_until(&home, &["screen", "s1"], "attached\n");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
@@ -774,9 +774,9 @@ fn screen_does_not_resize_or_detach_an_attached_session() {
 
     let after = stdout(&run(&home, &["list"]));
     let after_row = after.lines().find(|line| line.starts_with("s1 ")).unwrap();
-    assert_eq!(after_row.split_whitespace().nth(4), Some("yes"));
+    assert_eq!(after_row.split_whitespace().nth(5), Some("yes"));
     assert_eq!(
-        after_row.split_whitespace().nth(8),
+        after_row.split_whitespace().nth(9),
         Some(before_size.as_str())
     );
 }
@@ -1650,7 +1650,7 @@ fn idle_watcher_receives_heartbeat_for_busy_peer() {
             "--",
             "sh",
             "-c",
-            "sleep 60",
+            "printf '\\033[?2004h'; while :; do printf 'peer output\\n'; sleep 1; done",
         ],
     );
     assert!(peer.status.success(), "stderr: {}", stderr(&peer));
@@ -1669,6 +1669,23 @@ fn idle_watcher_skips_heartbeat_for_ready_peer() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     assert!(run(&home, &["daemon", "start"]).status.success());
+    let peer = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "dev",
+            "--harness",
+            "generic",
+            "--",
+            "sh",
+            "-c",
+            "printf '\\033[?2004h'; sleep 60",
+        ],
+    );
+    assert!(peer.status.success(), "stderr: {}", stderr(&peer));
+    std::thread::sleep(Duration::from_millis(10_500));
     let watcher = run(
         &home,
         &[
@@ -1689,23 +1706,7 @@ fn idle_watcher_skips_heartbeat_for_ready_peer() {
         ],
     );
     assert!(watcher.status.success(), "stderr: {}", stderr(&watcher));
-    let peer = run(
-        &home,
-        &[
-            "new",
-            "--detach",
-            "--name",
-            "dev",
-            "--harness",
-            "generic",
-            "--",
-            "sh",
-            "-c",
-            "printf '\\033[?2004h'; sleep 60",
-        ],
-    );
-    assert!(peer.status.success(), "stderr: {}", stderr(&peer));
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         let messages = run(&home, &["messages", "--session", "arch"]);
         assert!(

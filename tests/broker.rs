@@ -439,7 +439,10 @@ async fn naming_addresses_and_role_expires_after_exit() {
         response => panic!("unexpected response: {response:?}"),
     };
     assert!(role_agents.iter().any(|agent| {
-        agent.address == "natural@host-a" && agent.state == "exited" && !agent.attached
+        agent.address == "natural@host-a"
+            && agent.state == "exited"
+            && !agent.attached
+            && agent.activity.is_none()
     }));
     assert!(role_agents.iter().any(|agent| {
         agent.address == "s2@host-a" && agent.state == "running" && !agent.attached

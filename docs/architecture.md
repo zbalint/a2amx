@@ -132,7 +132,7 @@ send_message(to, subject, message)
 message_status(id)
 ```
 
-Each `list_agents()` entry includes `address`, `state`, `attached`, optional
+Each `list_agents()` entry includes `address`, `state`, `activity`, `attached`, optional
 `quota`, always-present `harness` (`claude`, `omp`, `codex`, or `generic`), and
 optional spawn directory `cwd`; `cwd` is not the process's live current directory.
 
@@ -364,10 +364,11 @@ machine; there is no central-versus-host split yet.
 - **Heartbeat digests.** A session may add `--heartbeat 30m` or `heartbeat = "30m"`
   together with a non-empty `watch` list. The daemon starts one one-second polling task
   for that session. Its single `last_change` clock is initialized at creation and
-  refreshed by PTY output; a digest is eligible only when the watcher is ready, unheld,
-  not resetting, and unchanged for the configured interval. The task remembers when
-  each watched peer was last seen busy, and skips the digest when every live watched
-  peer is ready, unheld, and has no pending or delivering messages. Missing or exited
+  refreshed by PTY output; activity is `busy` while held or resetting, `working` while
+  not ready or changed within ten seconds, and `idle` otherwise. A digest is eligible only
+  when the watcher is ready, unheld, not resetting, and unchanged for the configured interval.
+  The task remembers when each watched peer was last seen non-idle, and skips the digest when
+  every live watched peer is idle with no pending or delivering messages. Missing or exited
   peers do not make a watcher busy. The task inserts one message from the system sender
   (`a2amx-daemon@<host>`) through the ordinary queue and delivery gates, with at most
   one pending or delivering heartbeat; shutdown aborts heartbeat tasks before children.
@@ -413,8 +414,9 @@ machine; there is no central-versus-host split yet.
   `unmatchable_submission`. Each rejection still counts toward the session's
   three-in-row `corrupted_submissions` hold. See
   [delivery](delivery.md#implemented-claude-code-hook).
-- **Human controls.** `a2amx list` gains NAME, HARNESS, PENDING, and HELD columns;
-  `--details` appends CWD and COMMAND. The CLI resolves session names to ids before
+- **Human controls.** `a2amx list` gains NAME, HARNESS, STATE, ACTIVITY, PENDING, and HELD columns;
+  `--details` appends CWD and COMMAND. The activity column reports `idle`, `working`, or `busy`
+  for running sessions and `-` for exited sessions. The CLI resolves session names to ids before
   attach, kill, and messages; the daemon still receives ids only. HELD
   shows the hold reason (or `-` when clear); `a2amx messages [--session S]
   [--state ...]` lists messages; `a2amx cancel <id>` cancels a pending one; the

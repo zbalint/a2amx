@@ -606,8 +606,8 @@ async fn the_bridge_relays_the_three_tools() {
     assert_eq!(
         agents,
         json!({"agents":[
-            {"address":"agent-plan@host-a","state":"running","attached":false,"harness":"generic"},
-            {"address":"agent-review@host-a","state":"running","attached":false,"harness":"omp"}
+            {"address":"agent-plan@host-a","state":"running","activity":"working","attached":false,"harness":"generic"},
+            {"address":"agent-review@host-a","state":"running","activity":"working","attached":false,"harness":"omp"}
         ]})
     );
     let mut admin = Client::connect(case.dir.path()).await.unwrap();

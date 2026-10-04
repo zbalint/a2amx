@@ -24,7 +24,8 @@ use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::status;
 use a2amx::team::{self, TeamSession};
 use a2amx::wire::{
-    ClientFrame, MessageInfo, QuotaInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo,
+    Activity, ClientFrame, MessageInfo, QuotaInfo, Request, Response, ServerFrame, SessionSummary,
+    StatusInfo,
 };
 
 const DEFAULT_COLS: u16 = 80;
@@ -1355,19 +1356,19 @@ fn terminal_size_with_default() -> anyhow::Result<(u16, u16)> {
     ))
 }
 
-const SESSION_HEADERS: [&str; 9] = [
-    "ID", "NAME", "HARNESS", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
+const SESSION_HEADERS: [&str; 10] = [
+    "ID", "NAME", "HARNESS", "STATE", "ACTIVITY", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
 ];
-const DETAIL_HEADERS: [&str; 11] = [
-    "ID", "NAME", "HARNESS", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE", "CWD",
-    "COMMAND",
+const DETAIL_HEADERS: [&str; 12] = [
+    "ID", "NAME", "HARNESS", "STATE", "ACTIVITY", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
+    "CWD", "COMMAND",
 ];
 const PICKER_HEADERS: [&str; 10] = [
     "ID", "NAME", "HARNESS", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE", "CWD",
 ];
 const MESSAGE_HEADERS: [&str; 6] = ["ID", "FROM", "TO", "STATE", "DETAIL", "SUBJECT"];
 
-fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 9]> {
+fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 10]> {
     sessions
         .iter()
         .map(|session| {
@@ -1379,6 +1380,7 @@ fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 9]> {
                     Some(code) => format!("exited({code})"),
                     None => "running".to_owned(),
                 },
+                session.activity.map_or("-", Activity::as_str).to_owned(),
                 if session.attached {
                     "yes".to_owned()
                 } else {
@@ -1423,6 +1425,7 @@ fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 10]> {
                 name,
                 harness,
                 state,
+                _activity,
                 attached,
                 pending,
                 held,
@@ -1496,7 +1499,7 @@ fn format_table<const N: usize>(headers: &[&str; N], rows: &[[String; N]]) -> St
 fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
     let rows = session_value_rows(sessions);
     if details {
-        let rows: Vec<[String; 11]> = rows
+        let rows: Vec<[String; 12]> = rows
             .into_iter()
             .zip(sessions)
             .map(|(row, session)| {
@@ -1505,6 +1508,7 @@ fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
                     name,
                     harness,
                     state,
+                    activity,
                     attached,
                     pending,
                     held,
@@ -1516,6 +1520,7 @@ fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
                     name,
                     harness,
                     state,
+                    activity,
                     attached,
                     pending,
                     held,

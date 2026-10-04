@@ -471,19 +471,22 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     let listed = run_binary(first_dir.path(), &["list"], &environment)?;
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
+    assert!(listing.starts_with(
+        "ID  NAME  HARNESS  STATE    ACTIVITY  ATTACHED  PENDING  HELD  QUOTA  SIZE\n"
+    ));
     assert!(
-        listing.starts_with("ID  NAME  HARNESS  STATE    ATTACHED  PENDING  HELD  QUOTA  SIZE\n")
-    );
-    assert!(
-        listing.contains("s1  -     generic  running  no        0        -     -      80x24\n")
+        listing.contains(
+            "s1  -     generic  running  working   no        0        -     -      80x24\n"
+        )
     );
 
     let explicit = run_binary(second_dir.path(), &["list"], &environment)?;
     assert_eq!(explicit.status.code(), Some(0));
     let explicit_listing = String::from_utf8(explicit.stdout)?;
     assert!(
-        explicit_listing
-            .starts_with("ID  NAME  HARNESS  STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\n")
+        explicit_listing.starts_with(
+            "ID  NAME  HARNESS  STATE  ACTIVITY  ATTACHED  PENDING  HELD  QUOTA  SIZE\n"
+        )
     );
     assert!(!explicit_listing.contains("s1"));
     Ok(())
@@ -630,15 +633,12 @@ async fn named_session_appears_in_the_list_table() -> anyhow::Result<()> {
     let output = run_binary(dir.path(), &["list"], &[])?;
     assert!(output.status.success());
     let listing = String::from_utf8(output.stdout)?;
-    assert!(
-        listing.starts_with(
-            "ID  NAME        HARNESS  STATE    ATTACHED  PENDING  HELD  QUOTA  SIZE\n"
-        )
-    );
-    assert!(
-        listing
-            .contains("s1  agent-plan  generic  running  no        0        -     -      80x24\n")
-    );
+    assert!(listing.starts_with(
+        "ID  NAME        HARNESS  STATE    ACTIVITY  ATTACHED  PENDING  HELD  QUOTA  SIZE\n"
+    ));
+    assert!(listing.contains(
+        "s1  agent-plan  generic  running  working   no        0        -     -      80x24\n"
+    ));
     Ok(())
 }
 
@@ -760,7 +760,7 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
     assert!(listing.contains(&format!(
-        "s1  -     generic  running  yes       0        human_draft  -      80x23  {}  sh -c stty raw -echo; cat\n",
+        "s1  -     generic  running  busy      yes       0        human_draft  -      80x23  {}  sh -c stty raw -echo; cat\n",
         std::env::current_dir()?.display(),
     )));
 
@@ -768,7 +768,7 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     wait_for_held(dir.path(), "s1", false).await;
     let (listing, code) = run_cli(dir.path(), &["list"])?;
     assert_eq!(code, 0);
-    assert!(listing.contains("s1  -     generic  running  yes       0        -"));
+    assert!(listing.contains("s1  -     generic  running  working   yes       0        -"));
 
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;

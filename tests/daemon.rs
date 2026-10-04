@@ -77,6 +77,45 @@ async fn eventually_sessions(
     .await
     .expect("session condition within deadline")
 }
+#[tokio::test]
+async fn list_activity_reports_working_then_idle_and_non_ready_working() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut client = Client::connect(dir.path()).await.unwrap();
+    let prompt_id = create(
+        &mut client,
+        &["sh", "-i", "-c", "printf '\\033[?2004h'; read x"],
+        vec![],
+    )
+    .await;
+    let sleeping_id = create(&mut client, &["sleep", "30"], vec![]).await;
+
+    let sessions = list(&mut client).await;
+    assert_eq!(
+        sessions
+            .iter()
+            .find(|session| session.id == prompt_id)
+            .and_then(|session| session.activity),
+        Some(a2amx::wire::Activity::Working)
+    );
+    assert_eq!(
+        sessions
+            .iter()
+            .find(|session| session.id == sleeping_id)
+            .and_then(|session| session.activity),
+        Some(a2amx::wire::Activity::Working)
+    );
+
+    tokio::time::sleep(Duration::from_millis(10_200)).await;
+    let sessions = list(&mut client).await;
+    assert_eq!(
+        sessions
+            .iter()
+            .find(|session| session.id == prompt_id)
+            .and_then(|session| session.activity),
+        Some(a2amx::wire::Activity::Idle)
+    );
+    daemon.shutdown().await.unwrap();
+}
 
 fn text(emulator: &Emulator) -> String {
     emulator.screen().cells.iter().map(|cell| cell.ch).collect()

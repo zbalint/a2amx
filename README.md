@@ -55,7 +55,7 @@ A2AMX is intended to provide:
 - PTY ownership, terminal state, and human session switching across Linux hosts.
 - Durable messages, routing, session identity, and submission receipts.
 - Serialized input with explicit protection for human composition.
-- A small per-agent MCP interface: `list_agents` (address, state, attached,
+- A small per-agent MCP interface: `list_agents` (address, state, activity, attached,
   quota, harness, and spawn `cwd`), `send_message`, and `message_status`.
 - Hosting of arbitrary interactive commands, with tested delivery profiles for
   supported harnesses. The target harnesses are Claude Code, Codex, and OMP,

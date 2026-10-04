@@ -1,8 +1,45 @@
 use a2amx::emulator::Scroll;
 use a2amx::wire::{
-    ClientFrame, FrameDecoder, MAX_FRAME_LEN, MessageInfo, Request, Response, ServerFrame,
-    SessionSummary, encode_frame,
+    Activity, ClientFrame, FrameDecoder, MAX_FRAME_LEN, MessageInfo, Request, Response,
+    ServerFrame, SessionSummary, encode_frame,
 };
+
+#[test]
+fn summary_activity_serializes_literals_and_old_payloads_remain_unknown() {
+    let activities = [
+        (Activity::Idle, "idle"),
+        (Activity::Working, "working"),
+        (Activity::Busy, "busy"),
+    ];
+    for (activity, expected) in activities {
+        assert_eq!(serde_json::to_value(activity).unwrap(), expected);
+    }
+    let session_json = serde_json::json!({
+        "id": "s1", "argv": ["sh"], "cols": 80, "rows": 24,
+        "exit_code": null, "attached": false,
+    });
+    let agent_json = serde_json::json!({
+        "address": "agent-plan@host-a", "state": "running",
+        "attached": false, "harness": "generic",
+    });
+    for old in [session_json, agent_json] {
+        for activity in [None, Some("idle"), Some("working"), Some("busy")] {
+            let mut payload = old.clone();
+            if let Some(activity) = activity {
+                payload["activity"] = activity.into();
+            }
+            let encoded = if payload.get("id").is_some() {
+                let summary: SessionSummary = serde_json::from_value(payload.clone()).unwrap();
+                serde_json::to_value(summary).unwrap()
+            } else {
+                let summary: a2amx::wire::AgentSummary =
+                    serde_json::from_value(payload.clone()).unwrap();
+                serde_json::to_value(summary).unwrap()
+            };
+            assert_eq!(encoded, payload);
+        }
+    }
+}
 
 #[test]
 fn length_prefixed_frame_round_trips() {
@@ -151,6 +188,7 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             quota: None,
             harness: Default::default(),
             cwd: None,
+            activity: None,
         }],
     };
     let json = serde_json::to_string(&response).unwrap_or_default();
@@ -366,6 +404,7 @@ fn messaging_control_variants_round_trip() {
                 quota: None,
                 harness: Default::default(),
                 cwd: None,
+                activity: None,
             }],
         },
         Response::Status {
@@ -399,6 +438,7 @@ fn messaging_control_variants_round_trip() {
             quota: None,
             harness: Harness::Omp,
             cwd: Some("/tmp/agent".into()),
+            activity: None,
         }],
     };
     let with_cwd_json = serde_json::json!({"type":"agents","agents":[{"address":"agent-omp@host-a","state":"running","attached":false,"harness":"omp","cwd":"/tmp/agent"}]});
@@ -502,6 +542,7 @@ fn additive_visibility_fields_round_trip() {
             quota: None,
             harness: Default::default(),
             cwd: None,
+            activity: None,
         }],
     };
     let sessions_json = serde_json::json!({

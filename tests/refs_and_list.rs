@@ -166,11 +166,11 @@ async fn default_list_is_lean_and_details_show_cwd_and_command() -> anyhow::Resu
     let plain = String::from_utf8(plain.stdout)?;
     assert_eq!(
         plain.lines().next(),
-        Some("ID  NAME        HARNESS  STATE    ATTACHED  PENDING  HELD  QUOTA  SIZE"),
+        Some("ID  NAME        HARNESS  STATE    ACTIVITY  ATTACHED  PENDING  HELD  QUOTA  SIZE"),
     );
-    assert!(
-        plain.contains("s1  agent-plan  generic  running  no        0        -     -      80x24\n")
-    );
+    assert!(plain.contains(
+        "s1  agent-plan  generic  running  working   no        0        -     -      80x24\n"
+    ));
     assert!(!plain.contains("sleep 30"));
     assert!(!plain.contains(&dir.path().to_string_lossy().into_owned()));
     let details = run_binary(dir.path(), &["list", "--details"])?;

@@ -28,6 +28,7 @@ fn summary(name: &str, id: &str, exit_code: Option<i32>) -> SessionSummary {
         quota: None,
         harness: Default::default(),
         cwd: None,
+        activity: None,
     }
 }
 
@@ -265,8 +266,8 @@ async fn up_starts_in_order_and_skips_running_sessions_without_attachment() {
     );
     let listed = run_binary(dir.path(), &["list"]).unwrap();
     let listed = String::from_utf8(listed.stdout).unwrap();
-    assert!(listed.contains("s1  architect  generic  running  no"));
-    assert!(listed.contains("s2  developer  generic  running  no"));
+    assert!(listed.contains("s1  architect  generic  running  working   no"));
+    assert!(listed.contains("s2  developer  generic  running  working   no"));
     let second = run_binary(dir.path(), &["team", "up", "--file", "team.toml"]).unwrap();
     assert!(second.status.success());
     assert_eq!(

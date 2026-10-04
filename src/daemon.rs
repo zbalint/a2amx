@@ -26,11 +26,14 @@ use crate::quota;
 use crate::session::{AttachmentSlot, NativeGuard, Session, SessionId, SessionSpec};
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
-    AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo, QuotaInfo,
-    Request, Response, ServerFrame, SessionSummary, StatusInfo,
+    Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo,
+    QuotaInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo,
 };
-const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
 
+const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
+const ACTIVITY_QUIET: Duration = Duration::from_secs(10);
+// shortcut: output-free tool calls over the quiet window read as idle; use a per-session or
+// harness-specific working marker if that misleads in practice.
 pub struct DaemonConfig {
     /// State directory (`A2AMX_HOME` or `--home`).
     pub state_dir: PathBuf,
@@ -478,14 +481,11 @@ impl Runtime {
             };
             let mut observed = Vec::with_capacity(live_peers.len());
             for peer in live_peers {
-                let (ready, unchanged_for) = {
+                let activity = session_activity(&peer);
+                let (idle, unchanged_for) = {
                     let state = peer.lock();
                     (
-                        harness::ready(
-                            peer.harness(),
-                            &state.emulator.screen(),
-                            state.emulator.is_scrolled(),
-                        ),
+                        !activity.is_some_and(|value| value != Activity::Idle),
                         now.saturating_duration_since(state.last_change),
                     )
                 };
@@ -493,14 +493,14 @@ impl Runtime {
                     .hold_reason()
                     .map(str::to_owned);
                 let id = peer.id().0.clone();
-                let busy_for = if ready {
-                    busy_since.remove(&id);
-                    None
-                } else {
+                let busy_for = if activity.is_some_and(|value| value != Activity::Idle) {
                     let since = *busy_since.entry(id).or_insert(now);
                     Some(now.saturating_duration_since(since))
+                } else {
+                    busy_since.remove(&id);
+                    None
                 };
-                observed.push((peer, ready, busy_for, unchanged_for, hold));
+                observed.push((peer, idle, busy_for, unchanged_for, hold));
             }
             let watcher_ready = {
                 let state = session.lock();
@@ -542,9 +542,9 @@ impl Runtime {
             };
             let mut digest_peers = Vec::with_capacity(observed.len());
             let mut has_busy_peer = false;
-            for (peer, ready, busy_for, unchanged_for, hold) in observed {
+            for (peer, idle, busy_for, unchanged_for, hold) in observed {
                 let queued = counts.get(&peer.id().0).copied().unwrap_or_default();
-                if !ready || hold.is_some() || queued > 0 {
+                if !idle || queued > 0 {
                     has_busy_peer = true;
                 }
                 let last_message_age =
@@ -1414,6 +1414,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     .unwrap_or_else(|e| e.into_inner())
                     .values()
                     .map(|session| {
+                        let activity = session_activity(session);
                         let hold_reason = AnyChannel::for_session(session.clone()).hold_reason();
                         let quota = session_quota(session);
                         let state = session.lock();
@@ -1438,6 +1439,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                             cwd: session
                                 .cwd()
                                 .map(|path| path.to_string_lossy().into_owned()),
+                            activity,
                         }
                     })
                     .collect();
@@ -1521,24 +1523,28 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .values()
-                    .map(|session| AgentSummary {
-                        address: messaging::address(
-                            session.name(),
-                            &session.id().0,
-                            &runtime.host_name,
-                        ),
-                        state: if session.exit_code().is_some() {
-                            "exited"
-                        } else {
-                            "running"
+                    .map(|session| {
+                        let activity = session_activity(session);
+                        AgentSummary {
+                            address: messaging::address(
+                                session.name(),
+                                &session.id().0,
+                                &runtime.host_name,
+                            ),
+                            state: if session.exit_code().is_some() {
+                                "exited"
+                            } else {
+                                "running"
+                            }
+                            .into(),
+                            attached: session.attached(),
+                            quota: session_quota(session),
+                            harness: session.harness(),
+                            cwd: session
+                                .cwd()
+                                .map(|path| path.to_string_lossy().into_owned()),
+                            activity,
                         }
-                        .into(),
-                        attached: session.attached(),
-                        quota: session_quota(session),
-                        harness: session.harness(),
-                        cwd: session
-                            .cwd()
-                            .map(|path| path.to_string_lossy().into_owned()),
                     })
                     .collect();
                 Response::Agents { agents }
@@ -1709,6 +1715,35 @@ fn session_quota(session: &Session) -> Option<QuotaInfo> {
         return None;
     }
     quota::read(&session.lock().emulator.screen(), session.harness())
+}
+
+fn session_activity(session: &Arc<Session>) -> Option<Activity> {
+    if session.exit_code().is_some() {
+        return None;
+    }
+    let now = Instant::now();
+    let (ready, last_change) = {
+        let state = session.lock();
+        (
+            harness::ready(
+                session.harness(),
+                &state.emulator.screen(),
+                state.emulator.is_scrolled(),
+            ),
+            state.last_change,
+        )
+    };
+    if AnyChannel::for_session(session.clone())
+        .hold_reason()
+        .is_some()
+        || session.resetting()
+    {
+        Some(Activity::Busy)
+    } else if !ready || now.saturating_duration_since(last_change) < ACTIVITY_QUIET {
+        Some(Activity::Working)
+    } else {
+        Some(Activity::Idle)
+    }
 }
 
 fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {

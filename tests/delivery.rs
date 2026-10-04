@@ -9,7 +9,9 @@ use a2amx::client::{Attachment, Client};
 use a2amx::daemon::Daemon;
 use a2amx::emulator::{Emulator, Size};
 use a2amx::harness::{Deliver, Harness};
-use a2amx::wire::{ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary};
+use a2amx::wire::{
+    Activity, ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary,
+};
 use tempfile::TempDir;
 
 const BODY: &str = "I found the regression in parser.py.";
@@ -307,6 +309,10 @@ async fn human_draft_survives_detach_and_release_resumes_delivery() {
     assert_eq!(
         case.recipient_summary().await.hold_reason.as_deref(),
         Some("human_draft")
+    );
+    assert_eq!(
+        case.recipient_summary().await.activity,
+        Some(Activity::Busy)
     );
     assert!(!case.out.with_extension("cr").exists());
     attachment.send(ClientFrame::Detach).await.unwrap();
