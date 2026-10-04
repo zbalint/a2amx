@@ -66,3 +66,4 @@ lag the code.
 | I1 | Exited sessions keep their name until `a2amx kill`, so a new session cannot reuse it | spec 2z |
 | I2 | OMP install and extension cleanup/error handling nits | spec 3a |
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited` | spec 2z |
+| C7 | Attach rendering no longer erases a glyph written in the terminal's last column | spec 3c |

@@ -38,6 +38,51 @@ fn full_render_never_switches_the_client_alternate_screen() {
 }
 
 #[test]
+fn full_render_preserves_the_last_column_without_erasing_it() {
+    let mut emulator = Emulator::new(Size { cols: 10, rows: 3 });
+    emulator.feed(b"abcdefghij");
+
+    let render = emulator.render_full();
+
+    assert!(
+        contains_escape(&render, b"\x1b[1;1H\x1b[0mabcdefghij\x1b[0m\x1b[2;1H"),
+        "rendered bytes: {:?}",
+        String::from_utf8_lossy(&render)
+    );
+}
+
+#[test]
+fn full_render_keeps_clearing_after_a_short_row() {
+    let mut emulator = Emulator::new(Size { cols: 10, rows: 3 });
+    emulator.feed(b"abcdefghi");
+
+    let render = emulator.render_full();
+
+    assert!(
+        contains_escape(&render, b"\x1b[1;1H\x1b[0mabcdefghi\x1b[0m\x1b[K"),
+        "rendered bytes: {:?}",
+        String::from_utf8_lossy(&render)
+    );
+}
+
+#[test]
+fn full_render_preserves_the_last_column_after_a_wide_glyph() {
+    let mut emulator = Emulator::new(Size { cols: 10, rows: 3 });
+    emulator.feed("abcdefgh漢".as_bytes());
+
+    let render = emulator.render_full();
+
+    assert!(
+        contains_escape(
+            &render,
+            "\x1b[1;1H\x1b[0mabcdefgh漢\x1b[0m\x1b[2;1H".as_bytes()
+        ),
+        "rendered bytes: {:?}",
+        String::from_utf8_lossy(&render)
+    );
+}
+
+#[test]
 fn incremental_render_mirrors_content_cursor_modes_and_buffer_switches() {
     let mut source = Emulator::new(SIZE);
     let mut mirror = Emulator::new(SIZE);

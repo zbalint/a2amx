@@ -525,7 +525,10 @@ impl Emulator {
                 col + 1
             };
         }
-        render.extend_from_slice(b"\x1b[0m\x1b[K");
+        render.extend_from_slice(b"\x1b[0m");
+        if output_col < cols {
+            render.extend_from_slice(b"\x1b[K");
+        }
     }
 }
 
