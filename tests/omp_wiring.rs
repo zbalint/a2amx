@@ -115,7 +115,7 @@ fn install_writes_owner_only_files_and_repairs_edits() {
     assert_eq!(mode(&installed.overlay), 0o600);
     assert_eq!(
         std::fs::read_to_string(&installed.extension).unwrap(),
-        a2amx::omp::render_extension()
+        a2amx::omp::render_extension().unwrap()
     );
     assert_eq!(
         std::fs::read_to_string(&installed.overlay).unwrap(),
@@ -129,7 +129,7 @@ fn install_writes_owner_only_files_and_repairs_edits() {
     assert_eq!(repaired.overlay, installed.overlay);
     assert_eq!(
         std::fs::read_to_string(&repaired.extension).unwrap(),
-        a2amx::omp::render_extension()
+        a2amx::omp::render_extension().unwrap()
     );
     assert_eq!(
         std::fs::read_to_string(&repaired.overlay).unwrap(),
@@ -141,7 +141,7 @@ fn install_writes_owner_only_files_and_repairs_edits() {
 
 #[test]
 fn the_rendered_extension_embeds_the_tool_schemas_and_the_protocol() {
-    let rendered = a2amx::omp::render_extension();
+    let rendered = a2amx::omp::render_extension().unwrap();
     for name in ["\"list_agents\"", "\"send_message\"", "\"message_status\""] {
         assert!(rendered.contains(name));
     }

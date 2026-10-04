@@ -377,7 +377,11 @@ export default function (pi) {
     late.length = 0;
     stopPoll();
     rejectPendingCalls();
-    state.child.kill();
+    try {
+      state.child.kill();
+    } catch (error) {
+      lastStderrLine = String(error?.message ?? error).slice(-2048);
+    }
   }
 
   function finishBridge(state, code, signal) {
@@ -516,10 +520,18 @@ export default function (pi) {
     const state = bridge;
     bridgeReady = false;
     if (!state || state.finished) return;
-    state.child.stdin.end();
+    try {
+      state.child.stdin.end();
+    } catch (error) {
+      lastStderrLine = String(error?.message ?? error).slice(-2048);
+    }
     setTimeout(() => {
       if (!state.finished) {
-        state.child.kill();
+        try {
+          state.child.kill();
+        } catch (error) {
+          lastStderrLine = String(error?.message ?? error).slice(-2048);
+        }
       }
     }, 1000);
   }

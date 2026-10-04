@@ -12,12 +12,9 @@ pub struct Installed {
 }
 
 /// The embedded extension with the tool schemas rendered in.
-pub fn render_extension() -> String {
-    let schemas = match serde_json::to_string(&crate::mcp::tool_schemas()) {
-        Ok(schemas) => schemas,
-        Err(error) => unreachable!("JSON tool schemas cannot fail serialization: {error}"),
-    };
-    include_str!("../extension/omp.ts").replace("[/* a2amx:tools */]", &schemas)
+pub fn render_extension() -> anyhow::Result<String> {
+    let schemas = serde_json::to_string(&crate::mcp::tool_schemas())?;
+    Ok(include_str!("../extension/omp.ts").replace("[/* a2amx:tools */]", &schemas))
 }
 
 /// The per-session overlay: native tools for this session only.
@@ -35,7 +32,7 @@ pub fn install(home: &Path) -> anyhow::Result<Installed> {
         extension: dir.join(concat!("extension-", env!("CARGO_PKG_VERSION"), ".ts")),
         overlay: dir.join("overlay.yml"),
     };
-    write_if_changed(&installed.extension, render_extension().as_bytes())?;
+    write_if_changed(&installed.extension, render_extension()?.as_bytes())?;
     write_if_changed(&installed.overlay, overlay().as_bytes())?;
     Ok(installed)
 }
@@ -69,7 +66,8 @@ fn write_if_changed(path: &Path, content: &[u8]) -> anyhow::Result<()> {
             .write_all(content)
             .and_then(|()| fs::rename(&temp, path));
         if let Err(error) = result {
-            fs::remove_file(&temp)?;
+            // Preserve the write error: it is the one the operator needs.
+            let _ = fs::remove_file(&temp);
             return Err(error.into());
         }
     }

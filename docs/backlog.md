@@ -41,7 +41,6 @@ lag the code.
 
 | ID | Item | Evidence |
 | --- | --- | --- |
-| I2 | Spec 2f review nits: `child.kill` and `stdin.end` in the OMP extension shutdown may be unguarded; `unreachable!` in `src/omp.rs` `render_extension`; install cleanup can mask the original error | code |
 | I3 | A split escape sequence can hold a session; the paste-then-`CR` gap is one fixed constant; an unreadable PTY can hold the writer gate; message bodies are stored as plaintext | docs |
 | I4 | The Codex "Update available" startup dialog leaves no thread loaded, so messages wait with `no_thread` until a person presses Esc | manual |
 | I5 | Claude readiness during the Press Ctrl-D again footer is unprobed (spec 2u sends both keys without a gate between them) | spec 2u |
@@ -65,4 +64,5 @@ lag the code.
 | C5 | Configured session reset with consent, guarded PTY submission, CLI and MCP surfaces; completion markers remain per-harness work and Claude SessionStart after `/clear` is unverified | spec 2s |
 | C6 | Agent activity (`idle`, `working`, `busy`) in `list` and `list_agents`, and activity-aware heartbeat busy detection | spec 2y |
 | I1 | Exited sessions keep their name until `a2amx kill`, so a new session cannot reuse it | spec 2z |
+| I2 | OMP install and extension cleanup/error handling nits | spec 3a |
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited` | spec 2z |
