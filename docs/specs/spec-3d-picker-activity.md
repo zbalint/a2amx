@@ -123,3 +123,21 @@ header coverage. No production change from this amendment, no other test change.
 
 Gate: `rg -n "CWD" tests` hits `tests/attach_cli.rs` (the two tests above) and
 `tests/refs_and_list.rs:313` only.
+
+## Amendment 3 (2026-10-04, after developer BLOCKED m_383)
+
+Causal review: Amendment 1 computed CWD room at 100 columns as 13 by reusing the 4 character
+SIZE cell of a `90x9` session. At 100 columns the SIZE cell is `100x9` (5 characters), so the fixed
+widths are `[2,4,7,7,8,8,7,4,5,5]` = 57, plus 20 separators = 77, and CWD room is
+`100 - (1 + 77 + 10)` = 12, giving `…picker-path`, not `…-picker-path`. The developer's observed
+screen (`100x9  …picker-path (current)`) confirms the 12.
+
+Decision: the test terminal becomes 101x10, not 100x10. The waited text is `"9 101"`, the line
+bound is `<= 101`, and everything else stays as in Amendments 1 and 2. At 101 columns the SIZE cell
+is `101x9` (still 5 characters), so CWD room is `101 - 88` = 13 and the literal
+`…-picker-path (current)` appears verbatim. The CWD header (needs 81 columns) still fits. The
+literal stays unchanged. No production change.
+
+The room depends on the SIZE cell width, which depends on the column count; a width of 100 to 109
+columns all give `NNNx9` (5 characters) and 101 is the one that yields 13.
+
