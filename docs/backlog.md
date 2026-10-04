@@ -26,8 +26,6 @@ lag the code.
 
 | ID | Item | Evidence |
 | --- | --- | --- |
-| U1 | `developer_instructions` taking effect in Codex, separate from the model acting on a peer request anyway | code |
-| U2 | Two simultaneous Codex sessions; `/new` thread switching (the poller takes the most recently updated loaded thread) | code |
 | U4 | Real-Codex smoke test as an ignored test, like the OMP ones | docs |
 | U6 | A human typing exactly inside the paste-to-Enter window to force a real corrupted submission | docs |
 | U7 | Block behavior on Codex in the validation plan's recorded results | docs |
@@ -70,3 +68,5 @@ lag the code.
 | F5 | Delete `scripts/screen-probe.py` | `a2amx screen` confirmed working on a live OMP session, 2026-10-04; script removed |
 | C9 | Richer attach status bar | spec 3e |
 | C10 | Separator row above the attach status bar | spec 3f |
+| U1 | `developer_instructions` taking effect in Codex | verified by the tester on an isolated daemon, 2026-10-04: the default session's model states the peer-authorization instruction and a `--no-authorize-peers` session reports none (Codex 0.160.0, one model; not a version matrix) |
+| U2 | Two simultaneous Codex sessions; `/new` thread switching | verified by the tester, 2026-10-04: a message reached only the receiver's own thread with a native receipt, and after `/new` the next message landed in the new thread only |
