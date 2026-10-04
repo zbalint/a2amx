@@ -31,9 +31,9 @@ delivers messages from other agents through each harness's native channel where 
 exists (Claude Code, OMP, Codex), and by typing into the terminal otherwise.
 
 Each agent has an MCP server for sending messages. Claude Code also has a hook for
-observing prompt submission; OMP and Codex report receipts through their channels. A central daemon routes and persists messages across hosts. Each host
-runs a launcher; the proposed architecture adds a persistent host supervisor to
-own local PTYs and keep sessions running when a client disconnects.
+observing prompt submission; OMP and Codex report receipts through their channels. The local daemon routes and persists messages on one host and
+owns local PTYs, keeping sessions running when a client disconnects. Routing across
+hosts is proposed, not implemented.
 
 For example, a planning agent on `host-a` could message a reviewing agent on
 `host-b`. The recipient's host would queue the message until delivery is permitted,
@@ -56,7 +56,7 @@ A2AMX is intended to provide:
 - Durable messages, routing, session identity, and submission receipts.
 - Serialized input with explicit protection for human composition.
 - A small per-agent MCP interface: `list_agents` (address, state, activity, attached,
-  quota, harness, and spawn `cwd`), `send_message`, and `message_status`.
+  quota, harness, and spawn `cwd`), `send_message`, `message_status`, and `reset_session`.
 - Hosting of arbitrary interactive commands, with tested delivery profiles for
   supported harnesses. The target harnesses are Claude Code, Codex, and OMP,
   including harnesses running inside containers.
@@ -125,7 +125,7 @@ reference, `--yes`, or `--now`.
 Commands that take a session accept its name or its id.
 
 `--harness claude` wires the MCP server and the prompt-submit hook into Claude Code
-and delivers messages automatically; `--harness generic` (the default) holds them, and
+and delivers messages automatically; `--harness generic` (inferred for unrecognised commands) holds them, and
 `--deliver auto` opts a generic session in to blind delivery. `a2amx mcp` is the stdio
 MCP server that harnesses start; it reads `A2AMX_ADDR` and `A2AMX_TOKEN` from its
 environment. `a2amx hook` is the Claude Code `UserPromptSubmit` hook, installed through
@@ -150,11 +150,11 @@ literal prefix. While a session has not turned on mouse reporting, the mouse whe
 enters scroll mode; hold Shift to select text with the mouse. Scrollback in the real terminal after you detach is not
 kept. The status line takes the terminal's last row and shows the session address,
 pending-message count, and a HELD alert with the hold reason. In `a2amx list`, ATTACHED means a human client is attached, not that
-the session is reachable: a detached session still receives messages. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
+the session is reachable: a detached session still receives messages. ACTIVITY is `idle`, `working`, or `busy` for running sessions, and `-` for exited sessions. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with
 an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or
 Codex status line last said about remaining quota (5h and weekly percent left); for OMP it shows
-`limit` when the session's last conversation rows show a Codex usage-limit error. It can be stale
+`limit` when the session's last conversation rows contain a `usage_limit_reached` error. It can be stale
 and is empty when no quota signal is recognised.
 
 `a2amx reset <id|name>` types `/clear` by default, or the ordered `--reset` sequence
@@ -192,7 +192,7 @@ whose natural exit sends this session one daemon message. A `heartbeat` such as
 `"30m"` sends an additional digest after that session is ready, unheld, not resetting,
 and unchanged for the interval; it requires a non-empty `watch` list and accepts
 positive `s`, `m`, or `h` values from 1 second through 24 hours. The digest is skipped
-when every live watched peer is ready, unheld, and has an empty queue. A daemon-ended
+when every live watched peer has `idle` activity and an empty queue. A daemon-ended
 session (for example through `kill`, `team down`, or `daemon stop`) sends no exit event.
 
 A copy to start from is in `a2amx.toml.example`; your own `a2amx.toml` is gitignored.

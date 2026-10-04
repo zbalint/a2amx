@@ -123,7 +123,7 @@ empty composer, so a dirty session stays held across detach and network reconnec
 The operator is responsible for not leaving unsent text behind.
 
 Graceful termination reuses the reset gate and delivery hold: `kill`, `team down`,
-and daemon shutdown type raw Ctrl-D only when the session is alive, ready, idle, and
+and daemon shutdown type raw Ctrl-D only when the session is alive, ready, and
 not held or drafting. Claude receives a second raw Ctrl-D after 300 ms; the other
 known harnesses receive one. The bytes are never a paste and never followed by CR.
 `--now`, Generic sessions, and gate refusals use the existing HUP, three-second wait,
@@ -206,17 +206,16 @@ generation without tools may produce no boundary. Whether a subagent's boundarie
 reach the parent's hooks is open. The adapter declares which channels it supports,
 and the broker shows the wait reason for a pending message.
 
-Proposal for the MVP: implement only the PTY channel, since it is the one path that
-works for any harness, including one running in a container (delivery needs only the
-PTY; a container needs a route to the host supervisor only for sending and for
-receipts). Keep the delivery channel an adapter concept so native channels can be
-added later without a redesign. Submission receipts are optional per harness
-profile: with a hook or extension the message reaches "submission observed", and
-without one it stays "write complete, outcome unknown". Native channels, such as an
-extension pushing messages into a live OMP session (its extension API appears to
-allow this; source read, not run), are post-MVP optimizations that remove PTY risk
-for that harness. The channel is now a trait (`Channel` in `src/delivery.rs`, spec 2d);
-the PTY channel serves every harness and the native channel serves `omp` (spec 2e).
+The PTY channel works for any harness, including one running in a container
+(delivery needs only the PTY; a container needs a route to the host supervisor only
+for sending and for receipts). Keep the delivery channel an adapter concept so native
+channels can be added without a redesign. Submission receipts are optional per harness profile:
+with a hook or extension the message reaches "submission observed", and without one
+it stays "write complete, outcome unknown". Native channels remove PTY risk for their
+harness; the implementation includes the Claude channel, OMP extension, and Codex
+app-server. The channel is a trait (`Channel` in `src/delivery.rs`, spec 2d);
+the PTY channel serves generic sessions and opted-out Claude sessions, while native
+channels serve channel-enabled Claude, OMP (spec 2e), and Codex (app-server).
 
 Evidence differs by channel. A native-channel handoff shows the harness asked for and
 received the text, not that it was submitted through the composer or processed.
@@ -281,8 +280,8 @@ when no hold applies, runs this on the PTY writer with the input gate held:
 3. Wait a fixed 400 ms. A paste followed by `CR` in one write does not submit in
    Claude Code; a `CR` sent separately 300 ms or more later does, including
    mid-turn, where Claude Code queues the message.
-4. Check readiness again. If a human typed or the screen changed, set a hold, send no
-   `CR`, and record `unsubmitted` with the reason (`human_input` or
+4. Check readiness again. If a human hold is present or readiness failed, set a hold,
+   send no `CR`, and record `unsubmitted` with the reason (`human_input` or
    `screen_not_ready`). Otherwise send `CR` as its own write and record `submitted`.
 
 Human keystrokes wait behind the transaction on the bounded input queue and are never
@@ -335,9 +334,9 @@ daemon-sent message from the same synthetic sender after the receiving session h
 been ready, unheld, not resetting, and inactive for its interval. It is inserted
 through the normal queue and all ordinary delivery gates; `--deliver hold` therefore
 leaves it pending. The daemon checks for an existing `pending` or `delivering`
-heartbeat before inserting another, and drops a `QueueFull` result. Delivery output
-resets the receiving session's activity clock, so a heartbeat does not create a
-feedback loop. Heartbeats never send input to or otherwise act on a watched peer.
+heartbeat before inserting another, and drops a `QueueFull` result. PTY delivery
+output refreshes the receiving session's activity clock; native delivery does not
+write to that clock. Heartbeats never send input to or otherwise act on a watched peer.
 
 **Not implemented.** Hooks for harnesses other than Claude Code and cross-host routing.
 Native in-harness delivery exists for Claude Code (channel), OMP (extension) and Codex
@@ -558,10 +557,8 @@ pass `--no-extensions` or change the user's OMP settings.
 The launcher adds `A2AMX_BIN` to the session environment; the daemon supplies
 `A2AMX_TOKEN` and `A2AMX_ADDR`. The extension starts `a2amx omp-bridge` with those
 inherited environment values, never credentials in argv or installed files.
-The overlay sets `tools.xdev: false` so `list_agents`, `send_message` and
-`message_status` are native tools: OMP 18.4.8 exposes extension tools only as
-`xd://` devices otherwise. The extension strips OMP's added `i` intent argument
-before relaying a tool call.
+The overlay sets `tools.xdev: false` so `list_agents`, `send_message`,
+`message_status`, and `reset_session` are native tools: OMP 18.4.8 exposes extension tools only as `xd://` devices otherwise. The extension strips OMP's added `i` intent argument before relaying a tool call.
 
 Only the main agent registers tools, starts a bridge or delivers messages.
 Delivery uses agent attribution, omits `deliverAs` when idle and uses `aside`

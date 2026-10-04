@@ -66,12 +66,20 @@ cargo fmt --check
 | `session` | One PTY, its child, its emulator |
 | `daemon` / `client` | TCP server and the client API |
 | `bridge` | The `omp-bridge` relay between an OMP extension and the daemon |
-| `mcp` | The stdio MCP server and its authenticated agent tools |
 | `channel` | The `a2amx mcp --channel` process that relays daemon deliveries to Claude Code as channel events |
+| `delivery` | Ordered delivery attempts and the PTY, native, and Codex delivery channels |
+| `harness` | Harness profiles, command wiring, readiness, and peer authorization |
+| `hook` | The Claude Code `UserPromptSubmit` hook adapter |
+| `messaging` | Message envelopes, validation, limits, states, and rendering |
+| `mcp` | The stdio MCP server and its authenticated agent tools |
 | `omp` | The embedded OMP extension and its launch files |
+| `quota` | Harness quota extraction from screen and conversation state |
+| `status` | Attach status-line formatting and status frames |
+| `store` | SQLite message and delivery-attempt persistence |
 | `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
 | `cli` | Command-line shape |
 | `team` | The team file and flag formats and the up-plan (pure; the commands live in `main`) |
+| `main` | CLI dispatch and daemon/session/team command execution |
 
 ## Public repository rules
 

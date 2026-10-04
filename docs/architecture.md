@@ -124,12 +124,13 @@ Proposal: enroll a host by pairing. The host daemon prints a one-time code carry
 its public key, and the operator enters the code at the central daemon to authorize
 that host. The central daemon then issues a long-lived credential.
 
-Proposed agent-facing tools:
+Agent-facing tools:
 
 ```text
 list_agents()
 send_message(to, subject, message)
 message_status(id)
+reset_session(to)
 ```
 
 Each `list_agents()` entry includes `address`, `state`, `activity`, `attached`, optional
@@ -253,8 +254,10 @@ section is the summary.
   team-down, and daemon-stop paths take the reset gate and type Ctrl-D for a ready
   Claude, Codex, or OMP session (`--now` skips this graceful step), waiting up to
   10 seconds for the child to exit. Claude receives two Ctrl-D bytes 300 ms apart.
-  No Ctrl-D is sent to Generic, held, drafting, busy, not-ready, or reset-running
-  sessions. No Ctrl-C is sent.
+  No Ctrl-D is sent to Generic, held, drafting, not-ready, or reset-running sessions.
+  OMP also requires its native bridge to be connected and idle with no draft or queued
+  delivery; Claude and Codex use screen readiness without a separate busy-turn check.
+  No Ctrl-C is sent.
 - The attach client redraws from the emulator, like tmux: one full render, then
   damage-based updates. The daemon never forwards raw PTY bytes. No graphics,
   hyperlinks, clipboard writes, application titles, or bell reach the client.
@@ -336,8 +339,9 @@ machine; there is no central-versus-host split yet.
 - **Identity from the token.** Each session gets a random 64-hex token at spawn, passed
   as `A2AMX_TOKEN` with `A2AMX_ADDR` in the child's environment (never argv). A
   connection that presents a session token has only session powers (`list_agents`,
-  `send_message`, `message_status` for its own messages, and `report_prompt` for the
-  hook); the sender is always that session. The admin token keeps the human's powers and cannot send.
+  `send_message`, `message_status` for its own messages, `reset_session` when the
+  target grants `control_from`, and `report_prompt` for the hook); the sender is
+  always that session. The admin token keeps the human's powers and cannot send.
 - **Addresses.** A session is `<name>@<host>` (`a2amx new --name`, daemon
   `--host-name`) or `<id>@<host>` when unnamed. Names match `[a-z0-9][a-z0-9-]{0,62}`,
   may not look like a session id (`s12`), and are unique among all sessions still in
