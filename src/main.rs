@@ -1405,8 +1405,9 @@ const DETAIL_HEADERS: [&str; 12] = [
     "ID", "NAME", "HARNESS", "STATE", "ACTIVITY", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
     "CWD", "COMMAND",
 ];
-const PICKER_HEADERS: [&str; 10] = [
-    "ID", "NAME", "HARNESS", "STATE", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE", "CWD",
+const PICKER_HEADERS: [&str; 11] = [
+    "ID", "NAME", "HARNESS", "STATE", "ACTIVITY", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
+    "CWD",
 ];
 const MESSAGE_HEADERS: [&str; 6] = ["ID", "FROM", "TO", "STATE", "DETAIL", "SUBJECT"];
 
@@ -1457,7 +1458,7 @@ fn quota_cell(quota: Option<QuotaInfo>) -> String {
     }
 }
 
-fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 10]> {
+fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 11]> {
     session_value_rows(sessions)
         .into_iter()
         .zip(sessions)
@@ -1467,7 +1468,7 @@ fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 10]> {
                 name,
                 harness,
                 state,
-                _activity,
+                activity,
                 attached,
                 pending,
                 held,
@@ -1479,6 +1480,7 @@ fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 10]> {
                 name,
                 harness,
                 state,
+                activity,
                 attached,
                 pending,
                 held,
@@ -2062,14 +2064,14 @@ fn session_rows(
 ) -> (String, Vec<String>) {
     let rows = picker_value_rows(sessions);
     let widths = column_widths(&PICKER_HEADERS, &rows);
-    let fixed_prefix_width = widths[..9].iter().sum::<usize>() + 2 * 9;
-    let header_has_cwd = usize::from(cols) >= 1 + fixed_prefix_width + PICKER_HEADERS[9].len();
+    let fixed_prefix_width = widths[..10].iter().sum::<usize>() + 2 * 10;
+    let header_has_cwd = usize::from(cols) >= 1 + fixed_prefix_width + PICKER_HEADERS[10].len();
     let mut header = String::new();
     header.push(' ');
     if header_has_cwd {
         header.push_str(&format_row(&PICKER_HEADERS, &widths));
     } else {
-        header.push_str(&format_row(&PICKER_HEADERS[..9], &widths[..9]));
+        header.push_str(&format_row(&PICKER_HEADERS[..10], &widths[..10]));
     }
     let lines = rows
         .iter()
@@ -2086,10 +2088,10 @@ fn session_rows(
             let available = usize::from(cols).saturating_sub(1 + fixed_prefix_width + suffix.len());
             if available >= 4 {
                 let mut row = row.clone();
-                row[9] = shorten_left(&row[9], available);
+                row[10] = shorten_left(&row[10], available);
                 line.push_str(&format_row(&row, &widths));
             } else {
-                line.push_str(&format_row(&row[..9], &widths[..9]));
+                line.push_str(&format_row(&row[..10], &widths[..10]));
             }
             line.push_str(suffix);
             line

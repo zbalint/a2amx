@@ -336,9 +336,20 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
     // Entering and selecting the current row cancels and redraws the live session.
     attached.send(&[2, b'w'])?;
     attached.wait_for_text("a2amx sessions:", WAIT)?;
-    for header in ["NAME", "HARNESS", "PENDING", "HELD", "QUOTA", "CWD"] {
+    for header in ["NAME", "HARNESS", "ACTIVITY", "PENDING", "HELD", "QUOTA"] {
         attached.wait_for_text(header, WAIT)?;
     }
+    let screen = attached.screen_text();
+    let running_row = screen
+        .lines()
+        .find(|line| line.starts_with(">s1 "))
+        .expect("current session missing from picker");
+    let cells: Vec<_> = running_row
+        .trim_start_matches('>')
+        .split_whitespace()
+        .collect();
+    assert_eq!(&cells[..4], &["s1", "-", "generic", "running"]);
+    assert!(matches!(cells[4], "idle" | "working" | "busy"));
     attached.send(b"\r")?;
     attached.wait_for_text("one", WAIT)?;
 
@@ -370,6 +381,23 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
             .windows(b"\x1b[?1049l".len())
             .any(|window| window == b"\x1b[?1049l")
     );
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("one", WAIT)?;
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("exited(7)", WAIT)?;
+    let screen = attached.screen_text();
+    let exited_row = screen
+        .lines()
+        .find(|line| line.trim_start().starts_with("s3 "))
+        .expect("exited session missing from picker");
+    let cells: Vec<_> = exited_row.split_whitespace().collect();
+    assert_eq!(&cells[..5], &["s3", "-", "generic", "exited(7)", "-"]);
+    attached.send(b"\r")?;
+    attached.wait_for_text("one", WAIT)?;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
     Ok(())
 }
 
@@ -410,14 +438,16 @@ async fn picker_clips_long_cwd_to_narrow_terminal() -> anyhow::Result<()> {
 
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", &session]), dir.path())?;
     attached.wait_for_text("23 80", WAIT)?;
-    attached.resize(90, 10)?;
-    attached.wait_for_text("9 90", WAIT)?;
+    attached.resize(101, 10)?;
+    attached.wait_for_text("9 101", WAIT)?;
     attached.send(&[2, b'w'])?;
     attached.wait_for_text("a2amx sessions:", WAIT)?;
+    attached.wait_for_text("CWD", WAIT)?;
     let screen = attached.screen_text();
+    assert!(screen.lines().any(|line| line.contains("CWD")));
     for line in screen.lines() {
         assert!(
-            line.chars().count() <= 90,
+            line.chars().count() <= 101,
             "picker screen line exceeded width: {line:?}"
         );
     }

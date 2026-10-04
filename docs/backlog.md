@@ -67,3 +67,4 @@ lag the code.
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited` | spec 2z |
 | U5 | Limits at the edges: 50 open messages per recipient, 20 sends per minute per sender, bodies near 32 KiB, recipient exiting with an open message, daemon restart with open messages | spec 3b |
 | C7 | Attach rendering no longer erases a glyph written in the terminal's last column | spec 3c |
+| C8 | ACTIVITY column in the Ctrl-b w session picker, including running/exited cells and CWD clipping coverage | spec 3d |
