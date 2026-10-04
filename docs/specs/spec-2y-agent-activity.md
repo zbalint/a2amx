@@ -171,3 +171,21 @@ header assertions are at `tests/refs_and_list.rs:169` and `tests/attach_cli.rs` 
 those return. `Hold::HumanDraft` maps to hold reason `human_draft` (`src/delivery.rs:394`), so D2
 step 1 covers a human draft where the channel reports it. `git status` was clean at lock time.
 The acceptance commands require the new code and run after implementation.
+
+## Amendment 1 (2026-10-04): test scope widened for the `list_agents` JSON
+
+The developer reported `BLOCKED` (m_340): the section 7 gate searches missed `tests/mcp.rs` and
+`tests/bridge.rs`, which assert the exact `list_agents` JSON (section 0 and D6 already name them as
+public seams), so three tests fail only because their expected JSON lacks `activity`
+(`mcp_initialize_tools_and_message_calls`, `mcp_prewrite_failure_does_not_claim_an_unknown_outcome`,
+`the_bridge_relays_the_three_tools`). The gate note searched `heartbeat`, the summary literals and
+the list header, not the `list_agents` JSON.
+
+Decision (architect): section 0 test scope also includes `tests/mcp.rs` and `tests/bridge.rs`, and
+any other file under `tests/` returned by `rg -l list_agents tests` whose test fails solely because
+the expected `list_agents` or `list` output now contains `activity`. Those edits are mechanical
+expected-value updates with literals (`"activity":"working"` or the value the test's session really
+has; read the real output first and check each against how the test starts the session). The
+section 7 "edit only files those searches return" sentence is replaced by this rule. No production
+file is added to scope, and D2 to D7 are unchanged; the only files in `tests/` that may not be edited
+are ones whose failure has another cause, which is a new `BLOCKED` report.
