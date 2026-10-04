@@ -101,6 +101,7 @@ a2amx new --watch developer --heartbeat 30m -- sh # digest watched peers after i
 a2amx list [--details]
 a2amx attach <id|name> [--force]
 a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
+a2amx kill --exited              # remove every exited session without prompting
 a2amx reset <id|name>               # type the configured reset sequence
 a2amx screen <id|name> [--rows N]   # read visible screen text without attaching
 a2amx team up [--file F] [--detach] [NAME=EXE ...]   # a2amx.toml or bare executables
@@ -115,6 +116,11 @@ a2amx cancel <message-id>
 
 `kill`, `team down`, and `daemon stop` use graceful Ctrl-D by default; pass `--now`
 to skip it and use the immediate HUP/KILL path.
+
+`a2amx kill --exited` removes every exited session and never prompts; running sessions are
+untouched. It prints `removed NAME-or-ID` for each removed session, or `no exited sessions`
+when there is nothing to remove. The `--exited` form cannot be combined with a session
+reference, `--yes`, or `--now`.
 
 Commands that take a session accept its name or its id.
 

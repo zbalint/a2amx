@@ -290,6 +290,12 @@ off: wheel reports become three-line scroll-mode steps and other reports are dro
 It learns the session's mouse state from mode sequences in `Data` frames and leaves the
 mouse to the session when reporting is on.
 
+`a2amx kill <id|name>` resolves names client-side and keeps the existing confirmation
+for running sessions; exited sessions are removed without prompting. `a2amx kill --exited`
+uses the same session list to send one kill request per exited session, leaves running
+sessions untouched, and reports each removed name or ID. An empty selection prints
+`no exited sessions`.
+
 `team up` and `team down` are client-side commands; `team down` sends the same
 graceful `Request::Kill` path as `kill` by default, or `now: true` for `--now`.
 The pure `team` module parses files and flags and plans launches. Before spawning,

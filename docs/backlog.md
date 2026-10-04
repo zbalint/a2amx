@@ -41,7 +41,6 @@ lag the code.
 
 | ID | Item | Evidence |
 | --- | --- | --- |
-| I1 | Exited sessions keep their name until `a2amx kill`, so a new session cannot reuse it | docs |
 | I2 | Spec 2f review nits: `child.kill` and `stdin.end` in the OMP extension shutdown may be unguarded; `unreachable!` in `src/omp.rs` `render_extension`; install cleanup can mask the original error | code |
 | I3 | A split escape sequence can hold a session; the paste-then-`CR` gap is one fixed constant; an unreadable PTY can hold the writer gate; message bodies are stored as plaintext | docs |
 | I4 | The Codex "Update available" startup dialog leaves no thread loaded, so messages wait with `no_thread` until a person presses Esc | manual |
@@ -53,7 +52,6 @@ lag the code.
 | --- | --- | --- |
 | F2 | Named launch templates in an operator config file, launch ownership (a launcher may kill only what it launched), trusted working directory so the Claude trust dialog cannot block unattended delivery | docs |
 | F3 | Scoping of `list_agents` (exchanges or workspaces) instead of every session seeing every session | docs |
-| F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited`. Today an exited session keeps its name until `a2amx kill NAME`, and `team down` clears only the team file's names. Needs its own spec | reported |
 | F5 | Delete `scripts/screen-probe.py` after the owner confirms `a2amx screen` works in real use | spec 2r |
 
 ## Closed
@@ -66,3 +64,5 @@ lag the code.
 | C4 | Mid-turn message receiving on OMP (`aside`) and on Codex, with real harnesses | reported: tested by the owner |
 | C5 | Configured session reset with consent, guarded PTY submission, CLI and MCP surfaces; completion markers remain per-harness work and Claude SessionStart after `/clear` is unverified | spec 2s |
 | C6 | Agent activity (`idle`, `working`, `busy`) in `list` and `list_agents`, and activity-aware heartbeat busy detection | spec 2y |
+| I1 | Exited sessions keep their name until `a2amx kill`, so a new session cannot reuse it | spec 2z |
+| F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited` | spec 2z |

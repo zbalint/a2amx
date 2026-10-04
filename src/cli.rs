@@ -86,7 +86,11 @@ pub enum Command {
     },
     /// Terminate a session.
     Kill {
-        session: String,
+        #[arg(required_unless_present = "exited")]
+        session: Option<String>,
+        /// Remove every exited session without prompting.
+        #[arg(long, conflicts_with_all = ["session", "now", "yes"])]
+        exited: bool,
         /// Do not ask for confirmation.
         #[arg(long)]
         yes: bool,

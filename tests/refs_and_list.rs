@@ -57,6 +57,136 @@ async fn kill_by_name_removes_the_named_session() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kill_exited_removes_only_exited_sessions_and_frees_names() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    for (name, command) in [
+        ("agent-plan", "exit 0"),
+        ("agent-review", "exit 7"),
+        ("agent-live", "sleep 30"),
+    ] {
+        let created = run_binary(
+            dir.path(),
+            &["new", "--detach", "--name", name, "--", "sh", "-c", command],
+        )?;
+        assert!(
+            created.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&created.stderr)
+        );
+    }
+    common::eventually(|| async {
+        let listed = run_binary(dir.path(), &["list"]).ok()?;
+        let listing = String::from_utf8(listed.stdout).ok()?;
+        (listing
+            .lines()
+            .filter(|line| line.contains("exited("))
+            .count()
+            == 2)
+            .then_some(())
+    })
+    .await;
+
+    let removed = run_binary(dir.path(), &["kill", "--exited"])?;
+    assert!(
+        removed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert!(removed.stderr.is_empty());
+    let output = String::from_utf8(removed.stdout)?;
+    let mut lines: Vec<_> = output.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(lines, ["removed agent-plan", "removed agent-review"]);
+
+    let listed = run_binary(dir.path(), &["list"])?;
+    assert!(listed.status.success());
+    let listing = String::from_utf8(listed.stdout)?;
+    let rows: Vec<Vec<_>> = listing
+        .lines()
+        .skip(1)
+        .map(|line| line.split_whitespace().take(4).collect())
+        .collect();
+    assert_eq!(rows, [["s3", "agent-live", "generic", "running"]]);
+    let reused = run_binary(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "agent-plan",
+            "--",
+            "sh",
+            "-c",
+            "sleep 30",
+        ],
+    )?;
+    assert!(
+        reused.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&reused.stderr)
+    );
+    assert_eq!(reused.stdout, b"s4\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kill_exited_reports_ids_and_handles_empty_selection() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let created = run_binary(dir.path(), &["new", "--detach", "--", "sh", "-c", "exit 0"])?;
+    assert!(created.status.success());
+    assert_eq!(created.stdout, b"s1\n");
+    common::eventually(|| async {
+        let listed = run_binary(dir.path(), &["list"]).ok()?;
+        let listing = String::from_utf8(listed.stdout).ok()?;
+        listing
+            .lines()
+            .any(|line| line.starts_with("s1") && line.contains("exited(0)"))
+            .then_some(())
+    })
+    .await;
+
+    let removed = run_binary(dir.path(), &["kill", "--exited"])?;
+    assert!(removed.status.success());
+    assert_eq!(removed.stdout, b"removed s1\n");
+    assert!(removed.stderr.is_empty());
+
+    let running = run_binary(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "agent-live",
+            "--",
+            "sh",
+            "-c",
+            "sleep 30",
+        ],
+    )?;
+    assert!(running.status.success());
+    let empty = run_binary(dir.path(), &["kill", "--exited"])?;
+    assert!(empty.status.success());
+    assert_eq!(empty.stdout, b"no exited sessions\n");
+    assert!(empty.stderr.is_empty());
+    Ok(())
+}
+
+#[test]
+fn kill_exited_selector_validation() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    for args in [
+        &["kill"][..],
+        &["kill", "agent-plan", "--exited"][..],
+        &["kill", "--exited", "--yes"][..],
+        &["kill", "--exited", "--now"][..],
+    ] {
+        let output = run_binary(dir.path(), args)?;
+        assert!(!output.status.success(), "accepted invalid args: {args:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn attach_by_name_uses_the_session_id_for_detachment() -> anyhow::Result<()> {
     let (dir, _daemon) = common::start_daemon().await;
     let created = run_binary(

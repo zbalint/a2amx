@@ -100,7 +100,12 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         Command::Attach { session, force } => {
             run_attach_command(home, prefix, session, force).await
         }
-        Command::Kill { session, yes, now } => run_kill(home, session, yes, now).await,
+        Command::Kill {
+            session,
+            exited,
+            yes,
+            now,
+        } => run_kill(home, session, exited, yes, now).await,
         Command::Reset { session } => run_reset(home, session).await,
         Command::Screen { session, rows } => run_screen(home, session, rows).await,
         Command::Messages { session, state } => run_messages(home, session, state).await,
@@ -655,9 +660,42 @@ async fn run_list(home: PathBuf, details: bool) -> anyhow::Result<()> {
     write_stdout(format_session_table(&sessions, details).into_bytes()).await
 }
 
-async fn run_kill(home: PathBuf, reference: String, yes: bool, now: bool) -> anyhow::Result<()> {
+async fn run_kill(
+    home: PathBuf,
+    reference: Option<String>,
+    exited: bool,
+    yes: bool,
+    now: bool,
+) -> anyhow::Result<()> {
     let mut client = Client::connect(&home).await?;
     let sessions = request_sessions(&mut client).await?;
+    if exited {
+        let mut found = false;
+        let mut failed = false;
+        for summary in sessions
+            .iter()
+            .filter(|summary| summary.exit_code.is_some())
+        {
+            found = true;
+            let label = summary.name.as_deref().unwrap_or(&summary.id);
+            match kill_session(&mut client, summary.id.clone(), false).await {
+                Ok(()) => write_stdout(format!("removed {label}\n").into_bytes()).await?,
+                Err(error) => {
+                    write_stderr(format!("{label}: {error}\n").into_bytes()).await?;
+                    failed = true;
+                }
+            }
+        }
+        if !found {
+            return write_stdout(b"no exited sessions\n".to_vec()).await;
+        }
+        if failed {
+            return Err(anyhow!("one or more exited sessions could not be removed"));
+        }
+        return Ok(());
+    }
+
+    let reference = reference.ok_or_else(|| anyhow!("kill requires a session or --exited"))?;
     let session = resolve_reference(&sessions, &reference);
     let running = sessions
         .iter()
@@ -673,6 +711,10 @@ async fn run_kill(home: PathBuf, reference: String, yes: bool, now: bool) -> any
             return write_stdout(b"not killed\n".to_vec()).await;
         }
     }
+    kill_session(&mut client, session, now).await
+}
+
+async fn kill_session(client: &mut Client, session: String, now: bool) -> anyhow::Result<()> {
     match client.request(Request::Kill { session, now }).await? {
         Response::Ok => Ok(()),
         Response::Error { message } => Err(anyhow!(message)),
