@@ -54,7 +54,7 @@ cells as `list` (minus none) plus CWD, so the fix is to stop dropping the cell.
 In `tests/attach_cli.rs`:
 
 - `picker_switches_sessions_and_exit_status_is_reported`: add `"ACTIVITY"` to the header list
-  waited for (line 339).
+  waited for (line 339) and, per Amendment 2, remove `"CWD"` from that list.
 - Extend that test or add one: with a running session, the opened picker shows a row containing an
   activity literal (`idle`, `working` or `busy`) in the ACTIVITY column, and an exited session
   shows `-` there. Use literals, no recomputation with the code under test.
@@ -101,3 +101,25 @@ changes, and the production code is unchanged by this amendment. The test's own 
 (`"23 80"`) is untouched.
 
 Gate: `rg -n "90" tests/attach_cli.rs` in the test's range shows only those three uses.
+
+## Amendment 2 (2026-10-04, after developer BLOCKED m_378)
+
+Causal review: Amendment 1 was found by checking the one test with its own width; the gate did not
+enumerate every test that opens the picker at the PTY default of 80 columns (`tests/common/pty.rs`
+`COLS`). Enumerated now: the picker is opened in `tests/attach_cli.rs` at lines 290, 337, 356,
+386 and 440. Only line 339 (inside the test opened at 337) waits for the CWD header; the others
+wait for `a2amx sessions:` only, and `tests/refs_and_list.rs:313` tests `list --details`, which
+this spec does not touch.
+
+Evidence (developer, verified against the code): at 80 columns the ten fixed widths sum to 57,
+plus 20 separators is 77, so the CWD header needs `1 + 77 + 3 = 81` columns and is omitted. This
+is D3 working as specified, not a defect.
+
+Decision: in `picker_switches_sessions_and_exit_status_is_reported` the header list waited for
+becomes `["NAME", "HARNESS", "ACTIVITY", "PENDING", "HELD", "QUOTA"]` (no `"CWD"`). In
+`picker_clips_long_cwd_to_narrow_terminal` (100x10 after Amendment 1) add one assertion: some
+screen line contains the header `CWD`. At 100 columns the header fits (81 <= 100), so this keeps
+header coverage. No production change from this amendment, no other test change.
+
+Gate: `rg -n "CWD" tests` hits `tests/attach_cli.rs` (the two tests above) and
+`tests/refs_and_list.rs:313` only.
