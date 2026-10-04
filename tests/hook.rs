@@ -67,6 +67,7 @@ impl HookCase {
                 ],
                 reset: vec![],
                 control_from: vec![],
+                watch: vec![],
                 name: Some("agent-review".into()),
                 harness: Harness::Claude,
                 deliver: Some(Deliver::Auto),

@@ -57,6 +57,9 @@ pub enum Command {
         /// Session names authorized to reset this session; repeatable and ordered.
         #[arg(long)]
         control_from: Vec<String>,
+        /// Session names whose exit this session is told about.
+        #[arg(long)]
+        watch: Vec<String>,
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },

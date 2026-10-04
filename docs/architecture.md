@@ -350,6 +350,13 @@ machine; there is no central-versus-host split yet.
   a native channel (spec 2e) fed by an OMP extension through the `a2amx omp-bridge` relay,
   and the `codex` harness uses a native channel on a private `codex app-server` that the
   daemon starts for the session (`src/codex.rs`).
+- **Exit events.** A named session may declare `--watch NAME` (repeatable) or
+  `watch = ["NAME"]` in its team entry. After a named peer exits naturally, the daemon
+  observer queues one `peer exited: NAME (code N)` message per live watcher through the
+  ordinary delivery task and hold gates. Its fixed sender is `daemon` /
+  `a2amx-daemon@<host>`; names equal to `a2amx-daemon` are reserved. Sessions ended by
+  the daemon (`kill`, `team down`, or shutdown) set a flag before signaling and do not
+  produce an exit event. Observer tasks are aborted before shutdown kills children.
 - **Session reset.** `a2amx reset <id|name>` resolves names before sending
   `Request::Reset`; the daemon types the configured sequence (or `/clear`) through
   the same bracketed-paste PTY path. `control_from` names authorize session-token

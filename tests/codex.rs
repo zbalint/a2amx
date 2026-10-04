@@ -116,6 +116,7 @@ impl Case {
                         env,
                         reset: vec![],
                         control_from: vec![],
+                        watch: vec![],
                         name: Some("agent-impl".into()),
                         harness: Harness::Codex,
                         deliver: None,

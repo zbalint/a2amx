@@ -142,7 +142,7 @@ impl Runtime {
         role
     }
 
-    async fn create_session(&self, request: Request) -> anyhow::Result<Response> {
+    async fn create_session(self: &Arc<Self>, request: Request) -> anyhow::Result<Response> {
         let Request::NewSession {
             argv,
             cols,
@@ -151,6 +151,7 @@ impl Runtime {
             mut env,
             reset,
             control_from,
+            watch,
             name,
             harness,
             deliver,
@@ -172,6 +173,18 @@ impl Runtime {
             if let Err(error) = messaging::validate_name(controller) {
                 return Ok(Response::Error {
                     message: format!("control_from entry {controller:?}: {error}"),
+                });
+            }
+        }
+        for watcher in &watch {
+            if let Err(error) = messaging::validate_name(watcher) {
+                return Ok(Response::Error {
+                    message: format!("watch entry {watcher:?}: {error}"),
+                });
+            }
+            if name.as_deref() == Some(watcher.as_str()) {
+                return Ok(Response::Error {
+                    message: format!("session {watcher} watches itself"),
                 });
             }
         }
@@ -257,6 +270,7 @@ impl Runtime {
                     deliver: deliver.unwrap_or_else(|| harness.default_deliver()),
                     reset,
                     control_from,
+                    watch,
                     token,
                     codex,
                 },
@@ -278,6 +292,7 @@ impl Runtime {
                     store.clone(),
                     boot.clone(),
                 ))];
+                tasks.push(tokio::spawn(self.clone().observe_exit(session.clone())));
                 if channel {
                     tasks.push(tokio::spawn(accept_channel_dialog(session.clone())));
                 }
@@ -293,6 +308,64 @@ impl Runtime {
             Err(error) => Ok(Response::Error {
                 message: error.to_string(),
             }),
+        }
+    }
+
+    async fn observe_exit(self: Arc<Self>, session: Arc<Session>) {
+        session.wait_exit().await;
+        if session.daemon_ended() {
+            return;
+        }
+        let Some(name) = session.name() else {
+            return;
+        };
+        let Some(code) = session.exit_code() else {
+            return;
+        };
+        let watchers = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .filter(|watcher| {
+                watcher.exit_code().is_none()
+                    && watcher.watch().iter().any(|watched| watched == name)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let peer_address = messaging::address(session.name(), &session.id().0, &self.host_name);
+        let sender_address = messaging::address(
+            Some(messaging::SYSTEM_SENDER),
+            messaging::SYSTEM_SENDER,
+            &self.host_name,
+        );
+        let subject = format!("peer exited: {name} (code {code})");
+        let body = format!(
+            "{name} ({peer_address}) exited with code {code}.\nRun a2amx screen {name} to see its last screen."
+        );
+        for watcher in watchers {
+            let message = NewMessage {
+                boot: self.boot.clone(),
+                sender_session: "daemon".into(),
+                sender_address: sender_address.clone(),
+                recipient_session: watcher.id().0.clone(),
+                recipient_address: messaging::address(
+                    watcher.name(),
+                    &watcher.id().0,
+                    &self.host_name,
+                ),
+                subject: subject.clone(),
+                body: body.clone(),
+            };
+            match self.store.insert_message(message).await {
+                Ok(_) => watcher.message_notify().notify_one(),
+                Err(InsertError::QueueFull) => {
+                    tracing::warn!(recipient = %watcher.id().0, "exit event message queue is full");
+                }
+                Err(InsertError::Internal(error)) => {
+                    tracing::error!(%error, recipient = %watcher.id().0, "exit event message acceptance failed");
+                }
+            }
         }
     }
 

@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::bail;
 
 pub const MAX_SUBJECT_BYTES: usize = 200;
+pub const SYSTEM_SENDER: &str = "a2amx-daemon";
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 // shortcut: delivery uses one fixed 400 ms paste gap; the threshold was not bisected below 300 ms.
 pub const PASTE_GAP: Duration = Duration::from_millis(400);
@@ -181,6 +182,9 @@ pub fn validate_name(name: &str) -> anyhow::Result<()> {
     let reserved_session_id = name.starts_with('s')
         && name.len() > 1
         && name.as_bytes()[1..].iter().all(u8::is_ascii_digit);
+    if name == SYSTEM_SENDER {
+        bail!("invalid name {name:?}: reserved for the daemon");
+    }
     if reserved_session_id {
         bail!("invalid name {name:?}: reserved for session ids (s[0-9]+)");
     }

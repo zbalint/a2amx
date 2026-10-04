@@ -332,6 +332,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         no_channel,
         reset,
         control_from,
+        watch,
         command,
     } = options
     else {
@@ -350,6 +351,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             no_channel,
             reset,
             control_from,
+            watch,
             command,
             cwd: std::env::current_dir()?,
             cols,
@@ -375,6 +377,7 @@ struct NewOptions {
     no_channel: bool,
     reset: Vec<String>,
     control_from: Vec<String>,
+    watch: Vec<String>,
     command: Vec<String>,
     cwd: PathBuf,
     cols: u16,
@@ -394,6 +397,7 @@ async fn create_session(
         no_channel,
         reset,
         control_from,
+        watch,
         command,
         cwd,
         cols,
@@ -402,6 +406,9 @@ async fn create_session(
     a2amx::messaging::validate_reset_steps(&reset)?;
     for controller in &control_from {
         a2amx::messaging::validate_name(controller)?;
+    }
+    for name in &watch {
+        a2amx::messaging::validate_name(name)?;
     }
     let harness = harness.unwrap_or_else(|| Harness::infer(&command));
     let command = match harness {
@@ -449,6 +456,7 @@ async fn create_session(
             env,
             reset,
             control_from,
+            watch,
             name,
             harness,
             deliver,
@@ -530,6 +538,7 @@ async fn run_team_up(
                         no_channel: false,
                         reset: session.reset.unwrap_or_default(),
                         control_from: session.control_from,
+                        watch: session.watch,
                         command: session.command,
                         cwd: session
                             .cwd

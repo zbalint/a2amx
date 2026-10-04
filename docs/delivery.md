@@ -323,6 +323,13 @@ not count. An explicit release clears it: the prefix then `r` while attached. Wh
 hook exists (Claude Code), a hook-observed human submit clears it too. Detach does not
 clear it.
 
+**System exit events.** A watcher declared with `--watch NAME` or the team-file
+`watch` field receives one daemon-sent message when that named peer exits naturally.
+The synthetic sender is `daemon` / `a2amx-daemon@<host>`, and the message enters the
+same queue, delivery, hold, and receipt gates as any other message. Queue-full events
+are dropped rather than retried. Sessions ended by daemon control do not generate an
+event, and shutdown aborts observers before killing children.
+
 **Not implemented.** Hooks for harnesses other than Claude Code and cross-host routing.
 Native in-harness delivery exists for Claude Code (channel), OMP (extension) and Codex
 (app-server).

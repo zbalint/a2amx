@@ -21,6 +21,8 @@ pub struct TeamSession {
     pub reset: Option<Vec<String>>,
     #[serde(default)]
     pub control_from: Vec<String>,
+    #[serde(default)]
+    pub watch: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -76,6 +78,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             attach: index == 0,
             reset: None,
             control_from: Vec::new(),
+            watch: Vec::new(),
         });
     }
     validate_sessions(&sessions)?;
@@ -152,6 +155,14 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
                     session.name
                 )
             })?;
+        }
+        for name in &session.watch {
+            validate_name(name).map_err(|error| {
+                anyhow::anyhow!("session {} watch entry {name:?}: {error}", session.name)
+            })?;
+            if name == &session.name {
+                bail!("session {} watches itself", session.name);
+            }
         }
     }
     Ok(())

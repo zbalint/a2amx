@@ -76,6 +76,7 @@ cwd = "."
                 attach: true,
                 reset: None,
                 control_from: Vec::new(),
+                watch: Vec::new(),
             },
             TeamSession {
                 name: "developer".into(),
@@ -84,6 +85,7 @@ cwd = "."
                 attach: false,
                 reset: None,
                 control_from: Vec::new(),
+                watch: Vec::new(),
             },
         ]
     );
@@ -121,6 +123,39 @@ fn parse_rejects_invalid_sessions_and_identifies_the_entry() {
 }
 
 #[test]
+fn parse_validates_watch_names_and_self_reference() {
+    let parsed = team::parse(
+        r#"
+[[session]]
+name = "architect"
+command = ["cat"]
+watch = ["developer"]
+"#,
+    )
+    .unwrap();
+    assert_eq!(parsed[0].watch, vec!["developer"]);
+    for (text, label) in [
+        (
+            "[[session]]\nname = \"self\"\ncommand = [\"cat\"]\nwatch = [\"self\"]",
+            "watches itself",
+        ),
+        (
+            "[[session]]\nname = \"self\"\ncommand = [\"cat\"]\nwatch = [\"Bad_Name\"]",
+            "watch entry",
+        ),
+    ] {
+        let error = team::parse(text).expect_err(text);
+        assert!(format!("{error:#}").contains(label), "{error:#}");
+    }
+}
+
+#[test]
+fn parse_rejects_the_daemon_sender_name() {
+    let error = team::parse("[[session]]\nname = \"a2amx-daemon\"\ncommand = [\"cat\"]")
+        .expect_err("daemon sender name");
+    assert!(error.to_string().contains("reserved for the daemon"));
+}
+#[test]
 fn flag_sessions_support_bare_executables_and_first_equals_only() {
     assert_eq!(
         team::flag_sessions(&["architect=claude".into(), "developer=omp".into()]).unwrap(),
@@ -132,6 +167,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 attach: true,
                 reset: None,
                 control_from: Vec::new(),
+                watch: Vec::new(),
             },
             TeamSession {
                 name: "developer".into(),
@@ -140,6 +176,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 attach: false,
                 reset: None,
                 control_from: Vec::new(),
+                watch: Vec::new(),
             },
         ]
     );

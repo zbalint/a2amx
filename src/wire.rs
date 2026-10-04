@@ -122,6 +122,8 @@ pub enum Request {
         reset: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         control_from: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        watch: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(default, skip_serializing_if = "is_default")]

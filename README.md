@@ -97,7 +97,7 @@ cargo test
 a2amx daemon start [--foreground]  # start the daemon; detached by default
 a2amx daemon status               # show daemon state and session counts
 a2amx daemon stop [--yes] [--now] # graceful by default; --now skips Ctrl-D
-a2amx new -- sh                   # start and attach; Ctrl-B d detaches
+a2amx new --watch developer -- sh   # tell this session when developer exits
 a2amx list [--details]
 a2amx attach <id|name> [--force]
 a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
@@ -169,6 +169,7 @@ command = ["claude"]
 attach = true
 reset = ["/clear", "/prewalk restart"]
 control_from = ["developer"]
+watch = ["developer"]
 
 [[session]]
 name = "developer"
@@ -179,7 +180,9 @@ cwd = "."
 `reset` is optional; omitting it uses `/clear`. If present it must contain one to
 eight slash commands, each at most 200 bytes and without control characters.
 `control_from` lists named sessions allowed to invoke this session's reset through
-the MCP tool; the CLI/admin token is always allowed.
+the MCP tool; the CLI/admin token is always allowed. `watch` lists named sessions
+whose natural exit sends this session one daemon message. A daemon-ended session
+(for example through `kill`, `team down`, or `daemon stop`) sends no exit event.
 
 A copy to start from is in `a2amx.toml.example`; your own `a2amx.toml` is gitignored.
 

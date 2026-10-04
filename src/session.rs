@@ -41,6 +41,7 @@ pub struct SessionSpec {
     pub deliver: Deliver,
     pub reset: Vec<String>,
     pub control_from: Vec<String>,
+    pub watch: Vec<String>,
     pub token: String,
     pub(crate) codex: Option<Arc<crate::codex::Link>>,
 }
@@ -55,6 +56,7 @@ pub struct Session {
     deliver: Deliver,
     reset: Vec<String>,
     control_from: Vec<String>,
+    watch: Vec<String>,
     token: String,
     codex: Option<Arc<crate::codex::Link>>,
     input_gate: tokio::sync::Mutex<()>,
@@ -65,6 +67,7 @@ pub struct Session {
     pid: Pid,
     drop_requested: Arc<AtomicBool>,
     child_done: Arc<AtomicBool>,
+    daemon_ended: AtomicBool,
     // shortcut: Codex in-flight delivery is not gated; add a Codex in-flight flag to Session if a message lands inside a reset.
     resetting: AtomicBool,
 }
@@ -287,6 +290,7 @@ impl Session {
             deliver: spec.deliver,
             reset: spec.reset,
             control_from: spec.control_from,
+            watch: spec.watch,
             token: spec.token,
             codex: spec.codex,
             input_gate: tokio::sync::Mutex::new(()),
@@ -297,6 +301,7 @@ impl Session {
             pid,
             drop_requested,
             child_done,
+            daemon_ended: AtomicBool::new(false),
             resetting: AtomicBool::new(false),
         })
     }
@@ -335,6 +340,12 @@ impl Session {
 
     pub(crate) fn control_from(&self) -> &[String] {
         &self.control_from
+    }
+    pub(crate) fn watch(&self) -> &[String] {
+        &self.watch
+    }
+    pub(crate) fn daemon_ended(&self) -> bool {
+        self.daemon_ended.load(Ordering::Acquire)
     }
 
     pub(crate) fn token(&self) -> &str {
@@ -775,6 +786,7 @@ impl Session {
     }
 
     pub(crate) async fn kill(&self, graceful: bool) -> anyhow::Result<()> {
+        self.daemon_ended.store(true, Ordering::Release);
         if self.exit_code().is_some() {
             return Ok(());
         }
@@ -880,7 +892,7 @@ impl Session {
         exited
     }
 
-    async fn wait_exit(&self) {
+    pub(crate) async fn wait_exit(&self) {
         loop {
             let notified = self.notify().notified();
             tokio::pin!(notified);
