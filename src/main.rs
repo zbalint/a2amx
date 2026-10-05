@@ -361,6 +361,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         NewOptions {
             name,
             harness,
+            role: None,
             deliver,
             no_authorize_peers,
             no_channel,
@@ -387,6 +388,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
 
 struct NewOptions {
     name: Option<String>,
+    role: Option<String>,
     harness: Option<Harness>,
     deliver: Option<Deliver>,
     no_authorize_peers: bool,
@@ -410,6 +412,7 @@ async fn create_session(
         name,
         harness,
         deliver,
+        role,
         no_authorize_peers,
         no_channel,
         reset,
@@ -439,9 +442,19 @@ async fn create_session(
         Harness::Claude => {
             let exe = std::env::current_exe()?;
             if no_channel {
-                a2amx::harness::wire_claude_argv(command, &exe, !no_authorize_peers)
+                a2amx::harness::wire_claude_argv(
+                    command,
+                    &exe,
+                    !no_authorize_peers,
+                    role.as_deref(),
+                )
             } else {
-                a2amx::harness::wire_claude_channel_argv(command, &exe, !no_authorize_peers)
+                a2amx::harness::wire_claude_channel_argv(
+                    command,
+                    &exe,
+                    !no_authorize_peers,
+                    role.as_deref(),
+                )
             }
         }
         Harness::Omp => {
@@ -453,12 +466,14 @@ async fn create_session(
                 &installed.extension,
                 &installed.overlay,
                 !no_authorize_peers,
+                role.as_deref(),
             )
         }
         Harness::Generic | Harness::Codex => command,
     };
     let cwd = cwd.to_string_lossy().into_owned();
     let mut env: Vec<(String, String)> = std::env::vars().collect();
+    env.retain(|(key, _)| key != a2amx::codex::ROLE_ENV);
     if harness == Harness::Omp {
         env.push((
             "A2AMX_BIN".to_owned(),
@@ -467,6 +482,11 @@ async fn create_session(
     }
     if harness == Harness::Codex && no_authorize_peers {
         env.push((a2amx::codex::NO_AUTHORIZE_ENV.to_owned(), "1".to_owned()));
+    }
+    if harness == Harness::Codex {
+        if let Some(role) = role {
+            env.push((a2amx::codex::ROLE_ENV.to_owned(), role));
+        }
     }
     if harness == Harness::Claude && !no_channel {
         env.push((a2amx::harness::CHANNEL_ENV.to_owned(), "1".to_owned()));
@@ -564,6 +584,7 @@ async fn run_team_up(
                     NewOptions {
                         name: Some(name.clone()),
                         harness: None,
+                        role: session.role,
                         deliver: None,
                         no_authorize_peers: false,
                         no_channel: false,

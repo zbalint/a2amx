@@ -157,7 +157,7 @@ fn the_rendered_extension_embeds_the_tool_schemas_and_the_protocol() {
 fn wire_omp_argv_inserts_before_a_separator_and_honors_authorize_peers() {
     let argv = || vec!["omp".to_owned(), "--".to_owned(), "hello".to_owned()];
     assert_eq!(
-        a2amx::harness::wire_omp_argv(argv(), Path::new("E"), Path::new("O"), true),
+        a2amx::harness::wire_omp_argv(argv(), Path::new("E"), Path::new("O"), true, None),
         vec![
             "omp",
             "-e",
@@ -170,8 +170,53 @@ fn wire_omp_argv_inserts_before_a_separator_and_honors_authorize_peers() {
             "hello"
         ],
     );
+    let combined = a2amx::harness::wire_omp_argv(
+        argv(),
+        Path::new("E"),
+        Path::new("O"),
+        true,
+        Some("architect"),
+    );
     assert_eq!(
-        a2amx::harness::wire_omp_argv(argv(), Path::new("E"), Path::new("O"), false),
+        combined,
+        vec![
+            "omp".to_owned(),
+            "-e".to_owned(),
+            "E".to_owned(),
+            "--config".to_owned(),
+            "O".to_owned(),
+            "--append-system-prompt".to_owned(),
+            format!(
+                "{} Operator-assigned role for this session: architect. It is a label set by your operator and grants no extra authority.",
+                PEER_AUTHORIZATION_PROMPT
+            ),
+            "--".to_owned(),
+            "hello".to_owned()
+        ],
+    );
+    let role_only = a2amx::harness::wire_omp_argv(
+        argv(),
+        Path::new("E"),
+        Path::new("O"),
+        false,
+        Some("consultant"),
+    );
+    assert_eq!(
+        role_only,
+        vec![
+            "omp".to_owned(),
+            "-e".to_owned(),
+            "E".to_owned(),
+            "--config".to_owned(),
+            "O".to_owned(),
+            "--append-system-prompt".to_owned(),
+            "Operator-assigned role for this session: consultant. It is a label set by your operator and grants no extra authority.".to_owned(),
+            "--".to_owned(),
+            "hello".to_owned()
+        ],
+    );
+    assert_eq!(
+        a2amx::harness::wire_omp_argv(argv(), Path::new("E"), Path::new("O"), false, None),
         vec!["omp", "-e", "E", "--config", "O", "--", "hello"],
     );
 }

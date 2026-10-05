@@ -175,6 +175,7 @@ prefix = "myproject"
 name = "architect"
 command = ["claude"]
 attach = true
+role = "architect"
 reset = ["/clear", "/prewalk restart"]
 control_from = ["developer"]
 watch = ["developer"]
@@ -184,6 +185,7 @@ heartbeat = "30m" # digest watched peers after 30 minutes of idle time
 name = "developer"
 command = ["omp"]
 cwd = "."
+role = "developer"
 ```
 
 The optional file-level `prefix` adds a dash to each session name (`architect`
@@ -204,6 +206,12 @@ and unchanged for the interval; it requires a non-empty `watch` list and accepts
 positive `s`, `m`, or `h` values from 1 second through 24 hours. The digest is skipped
 when every live watched peer has `idle` activity and an empty queue. A daemon-ended
 session (for example through `kill`, `team down`, or `daemon stop`) sends no exit event.
+
+`role` is an optional label of at most 64 characters, shown only to that session in
+its system prompt for Claude, OMP, and Codex. It grants no authority, is ignored for
+other commands, and is not visible to peers or in `list`. When set, it is appended
+to the same injected operator text as the peer-authorization line, including when
+`--no-authorize-peers` is used.
 
 A copy to start from is in `a2amx.toml.example`; your own `a2amx.toml` is gitignored.
 
@@ -231,8 +239,9 @@ are silent.
   came from. A line in your agent instructions saying that a peer message is a request
   from an authorized peer, not from you; that scoped, reversible work is fine; and that
   pushing, production access, deleting data, and secrets still need you, removes the
-  guesswork. `--harness claude` and `--harness omp` add an operator line that tells the
-  agent to act on peer messages; `--no-authorize-peers` leaves it out.
+  guesswork. `--harness claude` and `--harness omp` add an operator line that tells
+  the agent to act on peer messages; a team `role`, when set, is added to that same
+  injected operator text. `--no-authorize-peers` leaves the peer line out.
 - Keep credentials out of message bodies. A prompt hook, transcript, or memory tool
   attached to the harness sees the full message, and some keep it with no way to
   delete it.

@@ -550,9 +550,10 @@ the first.
 `<state dir>/omp/extension-<crate version>.ts` and `<state dir>/omp/overlay.yml`,
 rewriting either when its content differs. The directory is 0700 and both files
 are 0600, repaired even when their content is unchanged. Launch adds `-e` with
-the extension path, `--config` with the overlay path, and the shared operator line
-through `--append-system-prompt` unless `--no-authorize-peers` is set. It does not
-pass `--no-extensions` or change the user's OMP settings.
+the extension path, `--config` with the overlay path, and the combined operator
+text (the peer line plus an optional team role) through `--append-system-prompt`;
+the peer line is omitted when `--no-authorize-peers` is set, but the role remains.
+It does not pass `--no-extensions` or change the user's OMP settings.
 
 The launcher adds `A2AMX_BIN` to the session environment; the daemon supplies
 `A2AMX_TOKEN` and `A2AMX_ADDR`. The extension starts `a2amx omp-bridge` with those
@@ -602,8 +603,9 @@ unix://...`. The app-server is private to the session, so the TUI's conversation
 the only one it has loaded; the daemon stops it when the session exits. It runs with
 the session's environment plus `-c` overrides that register the `a2amx mcp` server
 (tool calls approved, token and address passed by environment variable, never argv)
-and, unless `--no-authorize-peers`, the shared operator line as
-`developer_instructions`. Delivery uses only this channel; there is no PTY fallback.
+and `developer_instructions` containing the combined operator text: the peer line
+is omitted with `--no-authorize-peers`, while an optional team role remains. Delivery
+uses only this channel; there is no PTY fallback.
 
 A poller connects to the app-server every 500 ms, never subscribes (so it never sees
 or answers an approval request), picks the most recently updated loaded thread, and

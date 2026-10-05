@@ -160,6 +160,7 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
         vec!["claude".into(), "--model".into(), "sonnet".into()],
         exe,
         true,
+        Some("architect"),
     );
     assert_eq!(argv[0], "claude");
     assert_eq!(argv[1], "--model");
@@ -180,7 +181,13 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
         "mcp__a2amx__list_agents,mcp__a2amx__send_message,mcp__a2amx__message_status,mcp__a2amx__reset_session"
     );
     assert_eq!(argv[7], "--append-system-prompt");
-    assert_eq!(argv[8], harness::PEER_AUTHORIZATION_PROMPT);
+    assert_eq!(
+        argv[8],
+        format!(
+            "{} Operator-assigned role for this session: architect. It is a label set by your operator and grants no extra authority.",
+            harness::PEER_AUTHORIZATION_PROMPT
+        )
+    );
     assert_eq!(argv[9], "--settings");
     let settings: serde_json::Value = serde_json::from_str(&argv[10]).expect("settings JSON");
     assert_eq!(
@@ -197,11 +204,76 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
             }
         })
     );
+    let peer_only = harness::wire_claude_argv(vec!["claude".into()], exe, true, None);
+    let peer_index = peer_only
+        .iter()
+        .position(|argument| argument == "--append-system-prompt")
+        .expect("peer prompt flag");
+    assert_eq!(
+        peer_only[peer_index + 1],
+        harness::PEER_AUTHORIZATION_PROMPT
+    );
+    assert_eq!(
+        peer_only
+            .iter()
+            .filter(|argument| argument.as_str() == "--append-system-prompt")
+            .count(),
+        1
+    );
+
+    let role_only =
+        harness::wire_claude_argv(vec!["claude".into()], exe, false, Some("consultant"));
+    let role_index = role_only
+        .iter()
+        .position(|argument| argument == "--append-system-prompt")
+        .expect("role prompt flag");
+    assert_eq!(
+        role_only[role_index + 1],
+        "Operator-assigned role for this session: consultant. It is a label set by your operator and grants no extra authority."
+    );
+    assert_eq!(
+        role_only
+            .iter()
+            .filter(|argument| argument.as_str() == "--append-system-prompt")
+            .count(),
+        1
+    );
+
+    let no_prompt = harness::wire_claude_argv(vec!["claude".into()], exe, false, None);
+    assert!(
+        !no_prompt
+            .iter()
+            .any(|argument| argument == "--append-system-prompt")
+    );
+    let channel_combined =
+        harness::wire_claude_channel_argv(vec!["claude".into()], exe, true, Some("architect"));
+    let channel_index = channel_combined
+        .iter()
+        .position(|argument| argument == "--append-system-prompt")
+        .expect("channel prompt flag");
+    assert_eq!(
+        channel_combined[channel_index + 1],
+        format!(
+            "{} Operator-assigned role for this session: architect. It is a label set by your operator and grants no extra authority.",
+            harness::PEER_AUTHORIZATION_PROMPT
+        )
+    );
+    let channel_role_only =
+        harness::wire_claude_channel_argv(vec!["claude".into()], exe, false, Some("consultant"));
+    let channel_role_index = channel_role_only
+        .iter()
+        .position(|argument| argument == "--append-system-prompt")
+        .expect("channel role prompt flag");
+    assert_eq!(
+        channel_role_only[channel_role_index + 1],
+        "Operator-assigned role for this session: consultant. It is a label set by your operator and grants no extra authority."
+    );
 
     let before_separator = harness::wire_claude_argv(
         vec!["claude".into(), "--".into(), "positional".into()],
         exe,
         false,
+        None,
     );
     assert_eq!(before_separator[0], "claude");
     assert_eq!(before_separator[1], "--mcp-config");
@@ -223,8 +295,12 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
 
 #[test]
 fn claude_argv_shell_quotes_apostrophe_paths_exactly() {
-    let argv =
-        harness::wire_claude_argv(vec!["claude".into()], Path::new("/tmp/it's/a2amx"), false);
+    let argv = harness::wire_claude_argv(
+        vec!["claude".into()],
+        Path::new("/tmp/it's/a2amx"),
+        false,
+        None,
+    );
     assert_eq!(argv[1], "--mcp-config");
     assert_eq!(argv[3], "--allowedTools");
     assert_eq!(argv[5], "--settings");

@@ -196,6 +196,9 @@ would have asked their user first. The line carries no per-peer or per-task limi
 any peer holding a session token can direct an agent started with it. Narrowing that
 belongs to the envelope and authorization design, which is unresolved.
 
+A team `role`, when set, is appended to the same injected operator text for Claude,
+OMP, and Codex; it is shown only to that session, not to peers or in `list`.
+
 Open: exact exchange/workspace visibility rules and management permissions.
 Agents should only discover and message recipients authorized for their scope.
 
@@ -414,10 +417,11 @@ machine; there is no central-versus-host split yet.
   without touching PTY holds; unmatched channel prompts always proceed.
 - **Claude Code wiring.** `a2amx new --harness claude` appends `--mcp-config`,
   `--dangerously-load-development-channels server:a2amx`, `--allowedTools`, and
-  (unless `--no-authorize-peers`) an `--append-system-prompt`
-  that authorizes peer messages, because Claude Code otherwise declines to act on a
-  peer envelope. `--no-channel` omits the development-channel flags and uses plain MCP
-  with terminal delivery. The wording is provisional.
+  (unless `--no-authorize-peers`) an `--append-system-prompt` that authorizes peer
+  messages, because Claude Code otherwise declines to act on a peer envelope. When a
+  team role is set, its operator label is appended to that same injected text,
+  including with `--no-authorize-peers`. `--no-channel` omits the development-channel
+  flags and uses plain MCP with terminal delivery. The wording is provisional.
 - **Claude Code hook.** The same launch also appends an inline `--settings` argument
   holding one `UserPromptSubmit` command hook that runs `a2amx hook`. The hook reads
   the harness payload on stdin, sends the prompt to the daemon with the session token

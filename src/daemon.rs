@@ -301,13 +301,21 @@ impl Runtime {
                 .any(|(key, value)| key == harness::CHANNEL_ENV && value == "1");
         env.retain(|(key, _)| key != harness::CHANNEL_ENV);
         if harness == Harness::Codex {
-            // shortcut: the client signals --no-authorize-peers through the request
-            // environment; give the wire request a field if more flags need this.
+            // shortcut: the client signals --no-authorize-peers and the role through
+            // the request environment; a wire field is deferred until a third
+            // value needs this or the env path causes trouble. A field now would
+            // force edits to the 29 Request::NewSession literals in tests plus
+            // src/main.rs, which have no Default.
             let authorize = !env
                 .iter()
                 .any(|(key, value)| key == codex::NO_AUTHORIZE_ENV && value == "1");
             env.retain(|(key, _)| key != codex::NO_AUTHORIZE_ENV);
             let exe = self.exe.clone();
+            let role = env
+                .iter()
+                .rev()
+                .find_map(|(key, value)| (key == codex::ROLE_ENV).then(|| value.clone()));
+            env.retain(|(key, _)| key != codex::ROLE_ENV);
             if let Some(message) =
                 tokio::task::spawn_blocking(move || codex::executable_error(&exe)).await?
             {
@@ -319,7 +327,7 @@ impl Runtime {
                 &id.0,
                 cwd.as_deref().map(Path::new),
                 &env,
-                codex::server_config(&self.exe, authorize),
+                codex::server_config(&self.exe, authorize, role.as_deref()),
             )
             .await;
             let link = match started {

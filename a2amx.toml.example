@@ -6,6 +6,7 @@ prefix = "myproject"
 name = "architect"
 command = ["claude"]
 attach = true
+# role = "architect" # optional label shown only to this session
 # reset = ["/clear"]
 # control_from = ["developer"]
 # watch = ["developer"] # notify this session when the peer exits naturally
@@ -14,4 +15,5 @@ attach = true
 [[session]]
 name = "developer"
 command = ["omp"]
+role = "developer"
 cwd = "."

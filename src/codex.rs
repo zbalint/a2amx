@@ -11,12 +11,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 
-use crate::harness::PEER_AUTHORIZATION_PROMPT;
+use crate::harness::system_prompt;
 use crate::session::Session;
 use crate::store::Store;
 
 /// Request-environment marker for `--no-authorize-peers`, consumed by the daemon.
 pub const NO_AUTHORIZE_ENV: &str = "A2AMX_NO_AUTHORIZE_PEERS";
+/// Request-environment carrier for a team role, consumed by the daemon.
+pub const ROLE_ENV: &str = "A2AMX_ROLE";
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(500);
 // shortcut: a message that never shows up in the thread's items stops blocking the
@@ -305,7 +307,7 @@ pub fn executable_error(exe: &Path) -> Option<String> {
 
 /// Config the app-server needs so its threads can message peers. The token reaches the
 /// MCP server through the inherited environment, never argv.
-pub(crate) fn server_config(exe: &Path, authorize_peers: bool) -> Vec<String> {
+pub(crate) fn server_config(exe: &Path, authorize_peers: bool, role: Option<&str>) -> Vec<String> {
     let mut config = vec![
         format!("mcp_servers.a2amx.command={}", json!(exe.to_string_lossy())),
         "mcp_servers.a2amx.args=[\"mcp\"]".to_owned(),
@@ -321,11 +323,8 @@ pub(crate) fn server_config(exe: &Path, authorize_peers: bool) -> Vec<String> {
             "mcp_servers.a2amx.tools.{tool}.approval_mode=\"approve\""
         ));
     }
-    if authorize_peers {
-        config.push(format!(
-            "developer_instructions={}",
-            json!(PEER_AUTHORIZATION_PROMPT)
-        ));
+    if let Some(prompt) = system_prompt(authorize_peers, role) {
+        config.push(format!("developer_instructions={}", json!(prompt)));
     }
     config
         .into_iter()

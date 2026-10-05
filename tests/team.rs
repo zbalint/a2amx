@@ -58,6 +58,7 @@ fn parse_preserves_commands_cwd_order_and_attach_selection() {
 [[session]]
 name = "architect"
 command = ["claude"]
+role = "architect"
 attach = true
 
 [[session]]
@@ -79,6 +80,7 @@ cwd = "."
                 control_from: Vec::new(),
                 watch: Vec::new(),
                 heartbeat: None,
+                role: Some("architect".into()),
             },
             TeamSession {
                 name: "developer".into(),
@@ -88,10 +90,59 @@ cwd = "."
                 reset: None,
                 control_from: Vec::new(),
                 watch: Vec::new(),
+                role: None,
                 heartbeat: None,
             },
         ]
     );
+}
+
+#[test]
+fn parse_accepts_and_validates_roles() {
+    let valid = team::parse(
+        r#"
+[[session]]
+name = "worker"
+command = ["cat"]
+role = "architect"
+[[session]]
+name = "plain"
+command = ["cat"]
+"#,
+    )
+    .expect("valid roles");
+    assert_eq!(valid[0].role.as_deref(), Some("architect"));
+    assert_eq!(valid[1].role, None);
+
+    for text in [
+        "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nrole = \"\"",
+        &format!(
+            "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nrole = \"{}\"",
+            "a".repeat(65)
+        ),
+        "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nrole = \"a\\nb\"",
+        "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nrole = \" architect\"",
+        "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nrole = \"architect \"",
+        "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nrole = 5",
+    ] {
+        let error = team::parse(text).expect_err(text);
+        assert!(format!("{error:#}").contains("role"), "{error:#}");
+    }
+}
+
+#[test]
+fn prefixed_role_errors_name_the_final_session() {
+    let error = team::parse(
+        r#"
+prefix = "team"
+[[session]]
+name = "worker"
+command = ["cat"]
+role = ""
+"#,
+    )
+    .expect_err("empty role");
+    assert!(error.to_string().contains("session team-worker"));
 }
 
 #[test]
@@ -295,6 +346,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 control_from: Vec::new(),
                 watch: Vec::new(),
                 heartbeat: None,
+                role: None,
             },
             TeamSession {
                 name: "developer".into(),
@@ -305,6 +357,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 control_from: Vec::new(),
                 watch: Vec::new(),
                 heartbeat: None,
+                role: None,
             },
         ]
     );

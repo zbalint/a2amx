@@ -25,6 +25,8 @@ pub struct TeamSession {
     pub watch: Vec<String>,
     #[serde(default)]
     pub heartbeat: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -109,6 +111,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             control_from: Vec::new(),
             watch: Vec::new(),
             heartbeat: None,
+            role: None,
         });
     }
     validate_sessions(&sessions)?;
@@ -210,6 +213,29 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
             }
             parse_interval(value)
                 .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
+        }
+        if let Some(role) = &session.role {
+            if role.is_empty() {
+                bail!("session {}: role must not be empty", session.name);
+            }
+            if role.chars().count() > 64 {
+                bail!(
+                    "session {}: role must be at most 64 characters",
+                    session.name
+                );
+            }
+            if role.chars().any(char::is_control) {
+                bail!(
+                    "session {}: role must not contain control characters",
+                    session.name
+                );
+            }
+            if role.trim() != role {
+                bail!(
+                    "session {}: role must not have leading or trailing whitespace",
+                    session.name
+                );
+            }
         }
     }
     Ok(())

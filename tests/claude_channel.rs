@@ -416,6 +416,7 @@ fn channel_launch_adds_development_flags_and_preserves_plain_launch() {
             vec!["claude".into(), "--".into(), "prompt".into()],
             Path::new("/usr/bin/a2amx"),
             authorize,
+            None,
         );
         assert_eq!(argv.len() - 3, count);
         assert_eq!(argv[0], "claude");
@@ -442,7 +443,12 @@ fn channel_launch_adds_development_flags_and_preserves_plain_launch() {
         );
         assert_eq!(&argv[argv.len() - 2..], ["--", "prompt"]);
     }
-    let plain = wire_claude_argv(vec!["claude".into()], Path::new("/usr/bin/a2amx"), false);
+    let plain = wire_claude_argv(
+        vec!["claude".into()],
+        Path::new("/usr/bin/a2amx"),
+        false,
+        None,
+    );
     assert_eq!(plain.len(), 7);
     assert_eq!(plain[1], "--mcp-config");
     assert_eq!(
