@@ -207,3 +207,28 @@ bare `cargo test` result with its disposition if the `A2AMX_BIN` contamination f
 `generic_sessions_get_no_a2amx_bin`, and a manual transcript on an isolated daemon (temp state dir):
 `a2amx new --detach --name demo -- sh -c "sleep 30"`, `a2amx list` twice a few seconds apart showing
 `UPTIME` and `IN-STATE` growing, `a2amx kill demo --yes`, and `a2amx list` showing `-` in both cells.
+
+## Amendment 1 (2026-10-05): exited rows come from a natural exit, not from `Kill`
+
+The developer reported BLOCKED (`m_429`): section 7 (the `tests/daemon.rs` case) and section 11 (the
+manual transcript) say to kill a running session and then read its exited row, but
+`Request::Kill` on a running session removes it from the registry (`src/daemon.rs`, the `Kill` arm,
+about lines 1465 to 1473), so `List` has no row to show, and `tests/daemon.rs`
+(`kill_removes_running_session_and_shutdown_disconnects_attachments`) and `tests/refs_and_list.rs`
+(`kill_by_name_removes_the_named_session`) require that removal. Verified real. **Ruling:** the
+`Kill` contract is unchanged; an exited row is observed after a natural exit.
+
+- Section 7, `tests/daemon.rs`: create the generic session as `sh -c "sleep 5"` (not `sleep 30`). The
+  assertions at about 0s and after the 2.2s sleep are unchanged (the session is still running at
+  2.2s, so `activity_secs` is `Some` and in `2..=5`). Replace "Kill the session, wait until
+  `exit_code` is set" by "wait (polling `Request::List`, at most 10 seconds) until the session's
+  `exit_code` is `Some`", then both fields are `None`.
+- Section 11, manual transcript: use `a2amx new --detach --name demo -- sh -c "sleep 12"`; `a2amx
+  list` twice a few seconds apart showing `UPTIME` and `IN-STATE` growing; after the session has
+  exited naturally, `a2amx list` shows `exited(0)` with `-` in both new cells; then `a2amx kill demo`
+  (an exited session is removed without prompting).
+- Nothing else changes: scope, decisions and the other tests are as in `5d21b2e`.
+
+Gate re-run for the amendment: `rg -n "kill|Kill" docs/specs/spec-3i-list-durations.md` shows no
+other place that expects an exited row from a kill; the 5-second sleep leaves 2.8 seconds between
+the last running assertion (2.2s) and the exit.
