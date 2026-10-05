@@ -35,7 +35,7 @@ lag the code.
 | ID | Item | Evidence |
 | --- | --- | --- |
 | I3 | A split escape sequence can hold a session; the paste-then-`CR` gap is one fixed constant; an unreadable PTY can hold the writer gate; message bodies are stored as plaintext | docs |
-| I4 | The Codex "Update available" startup dialog leaves no thread loaded, so messages wait with `no_thread` until a person presses Esc. Known limitation: a2amx will not press keys for a person | manual |
+| I4 | The Codex "Update available" startup dialog leaves no thread loaded, so messages wait with `no_thread` until a person presses Esc. Planned: show a needs-input warning in `list` and the attach status line while the dialog is on screen, instead of pressing Esc (the update dialog offers an install, so a blind key is riskier than the Claude dev-channels Enter) | manual |
 
 ## Ideas and possible features
 
