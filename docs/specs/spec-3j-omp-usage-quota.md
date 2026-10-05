@@ -206,3 +206,23 @@ and do not paste its output anywhere.
 - Rounding: `f64::round` of `0.005 * 100.0` is `1.0` (half away from zero), of `0.004 * 100.0` is `0.0`.
 - Contradicts nothing locked except spec 2p D6, which D1 supersedes explicitly.
 - Acceptance commands need the new code and run after implementation.
+
+## Amendment 1 (2026-10-05): `cell` is extended; section 4 names the last-attempt field
+
+The developer reported BLOCKED (`m_458`): section 3 says "`read` and `cell` do not change", while D8
+and test 10 require `quota::cell` to append ` limit` when windows and `limit_reached` coexist.
+Verified real: when D8 was added, the old sentence in section 3 was left behind. **Ruling:** D8 and
+test 10 govern; section 3's sentence reads "`read` does not change; `cell` is extended as D8 says;
+`read_omp_limit` stays as the screen detector." While re-reading the spec for the gate I also found
+that section 4 describes only the cache and not the last-attempt `Instant` that D4 and D5 require:
+section 4's first sentence reads "`Runtime` gains `omp_usage: Mutex<Option<(Instant, QuotaInfo)>>`,
+`omp_usage_attempt: Mutex<Option<Instant>>` (the last poll attempt, success or failure) and a method
+`fn omp_usage(&self) -> Option<QuotaInfo>` ...". The `session_quota` call sites are now at about lines
+693, 1433, 1562 and 1817 of `src/daemon.rs` (`rg -n session_quota src/daemon.rs`). Nothing else
+changes.
+
+Gate re-run for the amendment: `rg -n "do not change|does not change|unchanged" docs/specs/spec-3j-omp-usage-quota.md`
+leaves only D9 (delivery), section 7 (Claude and Codex reading) and test 10's "existing cell tests are
+unchanged" (the existing cases keep their results; only the new combined case differs), none of which
+conflicts with D8. A grep of "last attempt" and "attempt" finds D4, D5, test 8 and this amendment, all
+consistent.
