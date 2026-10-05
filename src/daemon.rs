@@ -6,13 +6,16 @@ use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use tokio::io::AsyncWriteExt;
+use rustix::process::{Pid, Signal, kill_process_group};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::process::Command;
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
@@ -33,6 +36,11 @@ use crate::wire::{
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
 const ACTIVITY_QUIET: Duration = Duration::from_secs(10);
 const ACTIVITY_POLL: Duration = Duration::from_secs(1);
+const OMP_USAGE_CHECK: Duration = Duration::from_secs(2);
+const OMP_USAGE_REFRESH: Duration = Duration::from_secs(300);
+const OMP_USAGE_STALE: Duration = Duration::from_secs(900);
+const OMP_USAGE_TIMEOUT: Duration = Duration::from_secs(20);
+const OMP_USAGE_MAX_OUTPUT: usize = 1024 * 1024;
 // shortcut: output-free tool calls over the quiet window read as idle; use a per-session or
 // harness-specific working marker if that misleads in practice.
 pub struct DaemonConfig {
@@ -50,6 +58,7 @@ pub struct Daemon {
     shutdown: watch::Sender<bool>,
     listeners: Vec<JoinHandle<()>>,
     purge: Option<JoinHandle<()>>,
+    omp_usage: Option<JoinHandle<()>>,
     state_dir: PathBuf,
     lock: Option<File>,
 }
@@ -65,6 +74,8 @@ struct Runtime {
     address: String,
     state_dir: PathBuf,
     exe: PathBuf,
+    omp_usage: Mutex<Option<(Instant, QuotaInfo)>>,
+    omp_usage_attempt: Mutex<Option<Instant>>,
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     new_session_gate: tokio::sync::Mutex<()>,
     deliveries: Mutex<Vec<JoinHandle<()>>>,
@@ -171,6 +182,60 @@ fn failed(code: &str, message: &str) -> Response {
 }
 
 impl Runtime {
+    fn omp_usage(&self) -> Option<QuotaInfo> {
+        let cache = self.omp_usage.lock().unwrap_or_else(|e| e.into_inner());
+        let (at, quota) = (*cache)?;
+        (at.elapsed() < OMP_USAGE_STALE).then_some(quota)
+    }
+
+    // shortcut: account-level minima apply to every OMP session; match providers per session
+    // through the OMP extension when it can report usage without spawning a command.
+
+    fn omp_usage_command(&self) -> Option<(String, Option<PathBuf>)> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .find_map(|session| {
+                if session.exit_code().is_some() || session.harness() != Harness::Omp {
+                    return None;
+                }
+                let argv0 = session.argv.first()?;
+                if Path::new(argv0).file_name().and_then(|name| name.to_str()) != Some("omp") {
+                    return None;
+                }
+                Some((argv0.clone(), session.cwd().map(Path::to_owned)))
+            })
+    }
+
+    async fn poll_omp_usage(&self, stopping: &mut watch::Receiver<bool>) -> bool {
+        let Some((argv0, cwd)) = self.omp_usage_command() else {
+            return false;
+        };
+        {
+            let mut attempt = self
+                .omp_usage_attempt
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if attempt.is_some_and(|at| at.elapsed() < OMP_USAGE_REFRESH) {
+                return false;
+            }
+            *attempt = Some(Instant::now());
+        }
+        match run_omp_usage(&argv0, cwd.as_deref(), stopping).await {
+            Ok(quota) => {
+                *self.omp_usage.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((Instant::now(), quota));
+                false
+            }
+            Err("shutdown") => true,
+            Err(failure) => {
+                tracing::debug!(failure, "omp usage poll failed");
+                false
+            }
+        }
+    }
+
     fn authenticate(&self, token: &str) -> Option<Role> {
         let mut role = constant_time_eq(token, &self.token).then_some(Role::Admin);
         for session in self
@@ -690,7 +755,7 @@ impl Runtime {
                             .hold_reason()
                             .map(str::to_owned)
                     },
-                    recipient_quota: session_quota(&recipient)
+                    recipient_quota: session_quota(&recipient, self.omp_usage())
                         .and_then(|quota| quota.exhausted())
                         .map(|window| format!("{window} quota exhausted")),
                 }
@@ -981,6 +1046,72 @@ impl Runtime {
     }
 }
 
+async fn run_omp_usage(
+    argv0: &str,
+    cwd: Option<&Path>,
+    stopping: &mut watch::Receiver<bool>,
+) -> Result<QuotaInfo, &'static str> {
+    let mut command = Command::new(argv0);
+    command
+        .args(["usage", "--json", "--no-extensions", "--redact"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env_remove("A2AMX_TOKEN")
+        .env_remove("A2AMX_ADDR")
+        .process_group(0)
+        .kill_on_drop(true);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let mut child = command.spawn().map_err(|_| "spawn")?;
+    let pid = child.id();
+    let stdout = child.stdout.take().ok_or("stdout")?;
+    let mut output = Vec::with_capacity(OMP_USAGE_MAX_OUTPUT + 1);
+    let result = tokio::select! {
+        _ = stopping.changed() => {
+            kill_omp_process_group(pid);
+            let _ = child.wait().await;
+            return Err("shutdown");
+        }
+        result = tokio::time::timeout(OMP_USAGE_TIMEOUT, async {
+            let mut limited = stdout.take((OMP_USAGE_MAX_OUTPUT + 1) as u64);
+            limited.read_to_end(&mut output).await.map_err(|_| "read")?;
+            if output.len() > OMP_USAGE_MAX_OUTPUT {
+                return Err("output");
+            }
+            child.wait().await.map_err(|_| "wait")
+        }) => result.map_err(|_| "timeout").and_then(|result| result),
+    };
+    let status = match result {
+        Ok(status) => status,
+        Err(failure) => {
+            kill_omp_process_group(pid);
+            let _ = child.wait().await;
+            return Err(failure);
+        }
+    };
+    if !status.success() {
+        return Err("exit");
+    }
+    let output = std::str::from_utf8(&output).map_err(|_| "parse")?;
+    quota::parse_omp_usage(output).ok_or("parse")
+}
+
+fn kill_omp_process_group(pid: Option<u32>) {
+    let Some(pid) = pid else {
+        return;
+    };
+    let Some(pid) = Pid::from_raw(pid as _) else {
+        return;
+    };
+    if let Err(error) = kill_process_group(pid, Signal::KILL)
+        && error != rustix::io::Errno::SRCH
+    {
+        tracing::debug!(%error, "omp usage process-group kill failed");
+    }
+}
+
 async fn accept_channel_dialog(session: Arc<Session>) {
     // shortcut: fixed 60 s window and one string match; re-probe the dialog text
     // when Claude Code changes it.
@@ -1129,6 +1260,8 @@ impl Daemon {
             address: addrs[0].to_string(),
             state_dir: config.state_dir.clone(),
             exe,
+            omp_usage: Mutex::new(None),
+            omp_usage_attempt: Mutex::new(None),
             // shortcut: accepted-send timestamps are memory-only; persist them if
             // rate limits must survive daemon restarts.
             rate: tokio::sync::Mutex::new(HashMap::new()),
@@ -1149,6 +1282,23 @@ impl Daemon {
                         _ = interval.tick() => {
                             if let Err(error) = store.purge(store::now()).await {
                                 tracing::error!(%error, "message purge failed");
+                            }
+                        }
+                    }
+                }
+            })
+        };
+        let omp_usage = {
+            let runtime = runtime.clone();
+            let mut stopping = shutdown.subscribe();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(OMP_USAGE_CHECK);
+                loop {
+                    tokio::select! {
+                        _ = stopping.changed() => break,
+                        _ = interval.tick() => {
+                            if runtime.poll_omp_usage(&mut stopping).await {
+                                break;
                             }
                         }
                     }
@@ -1199,6 +1349,7 @@ impl Daemon {
             shutdown,
             listeners,
             purge: Some(purge),
+            omp_usage: Some(omp_usage),
             state_dir: config.state_dir,
             lock: Some(lock),
         })
@@ -1225,6 +1376,9 @@ impl Daemon {
         }
         if let Some(purge) = self.purge.take() {
             purge.await?;
+        }
+        if let Some(omp_usage) = self.omp_usage.take() {
+            omp_usage.await?;
         }
         let mut failure = None;
         let deliveries = std::mem::take(
@@ -1419,6 +1573,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
             },
             Request::List => {
                 let counts = runtime.store.open_counts(&runtime.boot).await?;
+                let omp_usage = runtime.omp_usage();
                 let sessions = runtime
                     .sessions
                     .lock()
@@ -1430,7 +1585,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                             session.note_activity(current, Instant::now()).as_secs()
                         });
                         let hold_reason = AnyChannel::for_session(session.clone()).hold_reason();
-                        let quota = session_quota(session);
+                        let quota = session_quota(session, omp_usage);
                         let state = session.lock();
                         let (uptime_secs, activity_secs) = if state.exit_code.is_none() {
                             (Some(session.started().elapsed().as_secs()), activity_secs)
@@ -1539,6 +1694,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 }
             }
             Request::ListAgents => {
+                let omp_usage = runtime.omp_usage();
                 let agents = runtime
                     .sessions
                     .lock()
@@ -1559,7 +1715,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                             }
                             .into(),
                             attached: session.attached(),
-                            quota: session_quota(session),
+                            quota: session_quota(session, omp_usage),
                             harness: session.harness(),
                             cwd: session
                                 .cwd()
@@ -1726,16 +1882,30 @@ async fn bridge(
 }
 
 /// The quota a running Claude, Codex or OMP session reports.
-fn session_quota(session: &Session) -> Option<QuotaInfo> {
+fn session_quota(session: &Session, omp_usage: Option<QuotaInfo>) -> Option<QuotaInfo> {
+    let harness = session.harness();
     if session.exit_code().is_some()
-        || !matches!(
-            session.harness(),
-            Harness::Claude | Harness::Codex | Harness::Omp
-        )
+        || !matches!(harness, Harness::Claude | Harness::Codex | Harness::Omp)
     {
         return None;
     }
-    quota::read(&session.lock().emulator.screen(), session.harness())
+    let screen = quota::read(&session.lock().emulator.screen(), harness);
+    if harness != Harness::Omp {
+        return screen;
+    }
+    let limit_reached = screen.is_some_and(|quota| quota.limit_reached);
+    match (omp_usage, limit_reached) {
+        (Some(quota), true) => Some(QuotaInfo {
+            limit_reached: true,
+            ..quota
+        }),
+        (Some(quota), false) => Some(quota),
+        (None, true) => Some(QuotaInfo {
+            limit_reached: true,
+            ..Default::default()
+        }),
+        (None, false) => None,
+    }
 }
 
 fn session_activity(session: &Arc<Session>) -> Option<Activity> {
@@ -1814,7 +1984,7 @@ async fn attachment_status(
             .map(str::to_owned),
         harness: Some(session.harness()),
         activity: session_activity(session),
-        quota: session_quota(session),
+        quota: session_quota(session, runtime.omp_usage()),
     })
 }
 

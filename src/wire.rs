@@ -320,7 +320,7 @@ pub struct QuotaInfo {
     pub five_hour: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weekly: Option<u8>,
-    /// The harness reported a usage limit in the conversation, with no window named.
+    /// The harness screen reported a usage limit in the conversation, with no window named.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub limit_reached: bool,
 }

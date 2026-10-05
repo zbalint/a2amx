@@ -7,6 +7,12 @@ use a2amx::emulator::{Emulator, Size};
 use a2amx::harness::{Deliver, Harness};
 use a2amx::quota;
 use a2amx::wire::{QuotaInfo, Request, Response, SessionSummary};
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use tempfile::tempdir;
 
 fn screen_with(rows: u16, lines: &[(u16, &str)]) -> a2amx::emulator::Screen {
     let mut emulator = Emulator::new(Size { cols: 169, rows });
@@ -273,6 +279,49 @@ async fn quota_of(admin: &mut Client, id: &str) -> QuotaInfo {
     .expect("status line is read")
 }
 
+const OMP_USAGE_FIXTURE: &str = r#"{"reports":[{"limits":[
+    {"window":{"id":"5h"},"amount":{"remainingFraction":0.97}},
+    {"window":{"id":"7d"},"amount":{"remainingFraction":0.05}}
+]}]}"#;
+
+fn fake_executable(dir: &Path, name: &str, usage_body: &str) -> PathBuf {
+    let path = dir.join(name);
+    let script =
+        format!("#!/bin/sh\nif [ \"$1\" = usage ]; then\n{usage_body}\nelse\nsleep 60\nfi\n");
+    fs::write(&path, script).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    path
+}
+
+async fn direct_omp_session(
+    admin: &mut Client,
+    name: &str,
+    executable: &Path,
+    cwd: &Path,
+) -> String {
+    let response = admin
+        .request(Request::NewSession {
+            argv: vec![executable.to_string_lossy().into_owned()],
+            cols: 169,
+            rows: 51,
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            heartbeat: None,
+            name: Some(name.into()),
+            harness: Harness::Omp,
+            deliver: Some(Deliver::Hold),
+        })
+        .await
+        .unwrap();
+    let Response::Created { session } = response else {
+        panic!("session creation failed: {response:?}");
+    };
+    session
+}
+
 #[tokio::test]
 async fn list_and_list_agents_report_a_claude_session_quota() {
     let (dir, daemon) = common::start_daemon().await;
@@ -488,6 +537,273 @@ async fn send_message_reports_omp_limit_without_changing_delivery() {
     assert_eq!(
         summary(&mut admin, &exhausted).await.hold_reason,
         summary(&mut admin, &healthy).await.hold_reason
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[test]
+fn cell_preserves_screen_limit_with_windows() {
+    assert_eq!(
+        quota::cell(Some(QuotaInfo {
+            five_hour: Some(97),
+            weekly: Some(5),
+            limit_reached: true,
+        })),
+        "5h 97% wk 5% limit"
+    );
+    assert_eq!(
+        quota::cell(Some(QuotaInfo {
+            limit_reached: true,
+            ..Default::default()
+        })),
+        "limit"
+    );
+}
+
+#[test]
+fn parses_omp_usage_windows() {
+    assert_eq!(
+        quota::parse_omp_usage(
+            r#"{"reports":[{"limits":[
+                {"window":{"id":"5h"},"amount":{"remainingFraction":0.97}},
+                {"window":{"id":"7d"},"amount":{"remainingFraction":0.05}}
+            ]}]}"#
+        ),
+        info(Some(97), Some(5))
+    );
+}
+
+#[test]
+fn parses_the_most_pessimistic_omp_report() {
+    assert_eq!(
+        quota::parse_omp_usage(
+            r#"{"reports":[
+                {"limits":[
+                    {"window":{"id":"5h"},"amount":{"remainingFraction":0.97}},
+                    {"window":{"id":"7d"},"amount":{"remainingFraction":0.95}}
+                ]},
+                {"limits":[
+                    {"window":{"id":"5h"},"amount":{"remainingFraction":0.40}},
+                    {"window":{"id":"7d"},"amount":{"remainingFraction":0.50}}
+                ]}
+            ]}"#
+        ),
+        info(Some(40), Some(50))
+    );
+}
+
+#[test]
+fn rounds_and_clamps_omp_percentages() {
+    assert_eq!(
+        quota::parse_omp_usage(
+            r#"{"reports":[{"limits":[
+                {"window":{"id":"5h"},"amount":{"remainingFraction":0.004}},
+                {"window":{"id":"7d"},"amount":{"remainingFraction":0.005}},
+                {"window":{"id":"30d"},"amount":{"remainingFraction":1.5}},
+                {"window":{"id":"ignored"},"amount":{"remainingFraction":-0.2}}
+            ]}]}"#
+        ),
+        info(Some(0), Some(1))
+    );
+    assert_eq!(
+        quota::parse_omp_usage(
+            r#"{"reports":[{"limits":[
+                {"window":{"id":"5h"},"amount":{"remainingFraction":1.5}},
+                {"window":{"id":"7d"},"amount":{"remainingFraction":-0.2}}
+            ]}]}"#
+        ),
+        info(Some(100), Some(0))
+    );
+}
+
+#[test]
+fn omp_usage_may_report_one_window() {
+    assert_eq!(
+        quota::parse_omp_usage(
+            r#"{"reports":[{"limits":[
+                {"window":{"id":"5h"},"amount":{"remainingFraction":0.40}}
+            ]}]}"#
+        ),
+        info(Some(40), None)
+    );
+}
+
+#[test]
+fn omp_usage_without_supported_windows_is_none() {
+    for json in [
+        "",
+        "not json",
+        "{}",
+        r#"{"reports":[]}"#,
+        r#"{"reports":[{"limits":[{"window":{"id":"30d"},"amount":{"remainingFraction":0.5}}]}]}"#,
+    ] {
+        assert_eq!(quota::parse_omp_usage(json), None, "fixture: {json:?}");
+    }
+}
+
+#[test]
+fn omp_usage_ignores_identity_fields() {
+    assert_eq!(
+        quota::parse_omp_usage(
+            r#"{
+                "email":"fictional@example.invalid",
+                "accountId":"fictional-account",
+                "metadata":{"organisationId":"fictional-org"},
+                "reports":[{"provider":"fictional-provider","limits":[
+                    {"window":{"id":"5h"},"amount":{"remainingFraction":0.97}},
+                    {"window":{"id":"7d"},"amount":{"remainingFraction":0.05}}
+                ]}]
+            }"#
+        ),
+        info(Some(97), Some(5))
+    );
+}
+
+#[tokio::test]
+async fn list_and_list_agents_report_omp_usage_percentages() {
+    let fake_dir = tempdir().unwrap();
+    let usage_body = format!("printf '%s\\n' '{OMP_USAGE_FIXTURE}'; exit 0");
+    let executable = fake_executable(fake_dir.path(), "omp", &usage_body);
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = direct_omp_session(&mut admin, "agent-omp-usage", &executable, fake_dir.path()).await;
+
+    let quota = quota_of(&mut admin, &id).await;
+    assert_eq!(
+        quota,
+        QuotaInfo {
+            five_hour: Some(97),
+            weekly: Some(5),
+            ..Default::default()
+        }
+    );
+    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+        panic!("list_agents failed");
+    };
+    let agent = agents
+        .iter()
+        .find(|agent| agent.address.starts_with("agent-omp-usage@"))
+        .unwrap();
+    assert_eq!(agent.quota, Some(quota));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_omp_usage_poll_is_not_retried_every_check() {
+    let fake_dir = tempdir().unwrap();
+    let executable = fake_executable(
+        fake_dir.path(),
+        "omp",
+        "printf '%s\\n' attempt >> counter\nexit 7",
+    );
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = direct_omp_session(
+        &mut admin,
+        "agent-omp-failure",
+        &executable,
+        fake_dir.path(),
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(summary(&mut admin, &id).await.quota, None);
+    assert_eq!(
+        fs::read_to_string(fake_dir.path().join("counter"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert!(matches!(
+        admin.request(Request::List).await.unwrap(),
+        Response::Sessions { .. }
+    ));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn slow_omp_usage_poll_does_not_block_list() {
+    let fake_dir = tempdir().unwrap();
+    let executable = fake_executable(fake_dir.path(), "omp", "printf started > started\nsleep 60");
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = direct_omp_session(&mut admin, "agent-omp-slow", &executable, fake_dir.path()).await;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fake_dir.path().join("started").exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("usage poll started");
+    let response = tokio::time::timeout(Duration::from_secs(1), admin.request(Request::List))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(response, Response::Sessions { .. }));
+    assert_eq!(summary(&mut admin, &id).await.quota, None);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn omp_usage_timeout_kills_process_group() {
+    let fake_dir = tempdir().unwrap();
+    let executable = fake_executable(
+        fake_dir.path(),
+        "omp",
+        "(sleep 25; printf survived > grandchild_survived) &\nprintf started > started\nsleep 60",
+    );
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let _id = direct_omp_session(
+        &mut admin,
+        "agent-omp-timeout",
+        &executable,
+        fake_dir.path(),
+    )
+    .await;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fake_dir.path().join("started").exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("usage poll started");
+    tokio::time::sleep(Duration::from_secs(27)).await;
+    assert!(!fake_dir.path().join("grandchild_survived").exists());
+    daemon.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn omp_wrapper_named_bun_is_not_polled() {
+    let fake_dir = tempdir().unwrap();
+    let executable = fake_executable(
+        fake_dir.path(),
+        "bun",
+        "printf '%s\\n' attempt >> counter\nexit 0",
+    );
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = direct_omp_session(
+        &mut admin,
+        "agent-omp-wrapper",
+        &executable,
+        fake_dir.path(),
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(summary(&mut admin, &id).await.quota, None);
+    assert_eq!(
+        fs::read_to_string(fake_dir.path().join("counter")).unwrap_or_default(),
+        ""
     );
     daemon.shutdown().await.unwrap();
 }

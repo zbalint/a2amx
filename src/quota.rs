@@ -1,8 +1,42 @@
-//! Reads remaining quota from harness status lines and OMP conversation errors.
+//! Reads remaining quota from harness status lines and OMP conversation errors or command output.
+
+use serde::Deserialize;
 
 use crate::emulator::Screen;
 use crate::harness::Harness;
 use crate::wire::QuotaInfo;
+
+#[derive(Debug, Deserialize)]
+struct OmpUsage {
+    #[serde(default)]
+    reports: Vec<OmpReport>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OmpReport {
+    #[serde(default)]
+    limits: Vec<OmpLimit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OmpLimit {
+    #[serde(default)]
+    window: Option<OmpWindow>,
+    #[serde(default)]
+    amount: Option<OmpAmount>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OmpWindow {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OmpAmount {
+    #[serde(default, rename = "remainingFraction")]
+    remaining_fraction: Option<f64>,
+}
 
 /// Status lines sit on the last rows; text higher up is conversation.
 const SCANNED_ROWS: usize = 3;
@@ -33,6 +67,33 @@ pub fn read(screen: &Screen, harness: Harness) -> Option<QuotaInfo> {
     }
 }
 
+/// Parses OMP's redacted usage report for the remaining 5-hour and weekly windows.
+pub fn parse_omp_usage(json: &str) -> Option<QuotaInfo> {
+    let usage = serde_json::from_str::<OmpUsage>(json).ok()?;
+    let mut info = QuotaInfo::default();
+    for report in usage.reports {
+        for limit in report.limits {
+            let (Some(window), Some(amount)) = (limit.window, limit.amount) else {
+                continue;
+            };
+            let (Some(window_id), Some(fraction)) = (window.id, amount.remaining_fraction) else {
+                continue;
+            };
+            let slot = match window_id.as_str() {
+                "5h" => &mut info.five_hour,
+                "7d" => &mut info.weekly,
+                _ => continue,
+            };
+            let percent = (fraction * 100.0).round().clamp(0.0, 100.0) as u8;
+            match slot {
+                Some(current) => *current = (*current).min(percent),
+                None => *slot = Some(percent),
+            }
+        }
+    }
+    (info.five_hour.is_some() || info.weekly.is_some()).then_some(info)
+}
+
 /// Formats quota information as the compact list/status cell.
 pub fn cell(quota: Option<QuotaInfo>) -> String {
     let Some(quota) = quota else {
@@ -44,8 +105,14 @@ pub fn cell(quota: Option<QuotaInfo>) -> String {
         .filter_map(|(label, percent)| percent.map(|percent| format!("{label} {percent}%")))
         .collect::<Vec<_>>()
         .join(" ");
-    if cell.is_empty() && quota.limit_reached {
-        "limit".to_owned()
+    if cell.is_empty() {
+        if quota.limit_reached {
+            "limit".to_owned()
+        } else {
+            cell
+        }
+    } else if quota.limit_reached {
+        format!("{cell} limit")
     } else {
         cell
     }

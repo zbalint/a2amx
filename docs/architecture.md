@@ -450,9 +450,15 @@ machine; there is no central-versus-host split yet.
 **Quota.** The daemon reads the last three screen rows of running Claude and Codex
 sessions for `5h N% left`, `weekly N% left` and `7d N% left`. For running OMP sessions it
 looks in the last 12 rows for an `Error:` row naming `usage_limit_reached`, including wrapped
-errors, and reports it as `limit_reached`. It reports the result in `list`, in `list_agents`,
-and as `recipient_quota` on `send_message` when the recipient is exhausted. It never changes
-delivery because of it, and the value may be stale until the session prints again.
+errors, and reports it as `limit_reached`. A separate poller selects the lowest-id running OMP
+session whose `argv[0]` file name is `omp`, runs `usage --json --no-extensions --redact` from
+that session's working directory, and caches successful percentages; attempts
+are no more frequent than five minutes and values older than 15 minutes are ignored. The
+argument-vector command has null stdin/stderr, a 20-second timeout, a 1 MiB stdout cap, and its
+process group is killed on timeout or shutdown. Parsing reads only `reports[].limits[].window.id`
+and `amount.remainingFraction` for `5h` and `7d`; output is never logged. It reports the result
+in `list`, in `list_agents`, and as `recipient_quota` on `send_message` when the recipient is
+exhausted. It never changes delivery because of it.
 
 Known gaps kept as `// shortcut:` comments where the code lives: a split escape
 sequence can hold a session, the paste-then-`CR` gap is one fixed constant, an

@@ -154,9 +154,15 @@ releasable holds) a prefix-key hint for `r`; `s` hides both the status line and 
 the session is reachable: a detached session still receives messages. ACTIVITY is `idle`, `working`, or `busy` for running sessions, and `-` for exited sessions. UPTIME is how long the session has existed (`-` when exited), and IN-STATE is how long its current ACTIVITY has lasted (`-` when ACTIVITY is `-`). Both are floored and shown as `Ns`, `Nm` or `Nh`, at one-second sampling resolution, starting when the daemon starts. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with
 an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or
-Codex status line last said about remaining quota (5h and weekly percent left); for OMP it shows
-`limit` when the session's last conversation rows contain a `usage_limit_reached` error. It can be stale
-and is empty when no quota signal is recognised.
+Codex status line last said about remaining quota (5h and weekly percent left). For OMP it shows
+the 5-hour and weekly percentages left when `omp usage --json` works; the daemon polls about once
+every five minutes from the running session's own executable only when its file name is `omp`.
+Values older than 15 minutes are dropped. These account-level values use the smallest value across
+providers and accounts, so that is what is shown. The poll may refresh provider credentials as the
+interactive `omp usage` does; a bare `omp`
+uses the daemon's `PATH`, and an OMP session running nothing costs nothing because no OMP session
+means no poll. The screen's `usage_limit_reached` error appends `limit`. It is empty when no quota
+signal is recognised.
 
 `a2amx reset <id|name>` types `/clear` by default, or the ordered `--reset` sequence
 configured for the session. Each step is bracketed-pasted, submitted with one Enter,

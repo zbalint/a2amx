@@ -73,7 +73,7 @@ cargo fmt --check
 | `messaging` | Message envelopes, validation, limits, states, and rendering |
 | `mcp` | The stdio MCP server and its authenticated agent tools |
 | `omp` | The embedded OMP extension and its launch files |
-| `quota` | Harness quota extraction from screen and conversation state |
+| `quota` | Harness quota extraction from screen, conversation state, and `omp usage` command output |
 | `status` | Attach status-line formatting and status frames |
 | `store` | SQLite message and delivery-attempt persistence |
 | `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
