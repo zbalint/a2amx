@@ -204,3 +204,15 @@ All pass with no warnings. Known-flaky PTY tests (see spec 2n) are rerun once an
 hidden. Also report `git status --short` showing only the files in section 0's scope list, and the
 exact bare `cargo test` result with its disposition if the `A2AMX_BIN` contamination fails
 `generic_sessions_get_no_a2amx_bin`.
+
+## Amendment 1 (2026-10-05): the daemon reads the last `ROLE_ENV` pair
+
+The developer reported BLOCKED (`m_417`): D7 (line 72) says the daemon reads "the last `ROLE_ENV`
+pair" and section 4 (line 106) says "the first matching pair". Verified real: the edit that added
+the inheritance rule changed D7 and missed section 4. **Ruling:** the last pair wins, as D7 says.
+Section 4's phrase "(the first matching pair)" is replaced by "(the last matching pair)"; nothing
+else in section 4 changes (it still removes every `ROLE_ENV` pair with `env.retain`). Re-run of
+the gate against this amendment: `rg "first|last" docs/specs/spec-3h-role-label.md` finds no other
+statement about which pair is read, and the only test touching duplicates is test 6, which relies
+on `create_session` removing the inherited pair first, so it does not depend on first versus last.
+Scope, acceptance and every other decision are unchanged.
