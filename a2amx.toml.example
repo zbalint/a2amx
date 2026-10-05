@@ -1,19 +1,39 @@
 # Copy to a2amx.toml, then run: a2amx team up
+#
 # Session names are unique per daemon and shared by every project on the machine.
-# Set a file-level prefix once; the tool adds its dash to these unprefixed names.
+# The file-level prefix adds "<prefix>-" to every session name below, so "architect"
+# becomes "myproject-architect". It also applies to watch and control_from entries
+# that name a session in this file; other entries are used as written.
 prefix = "myproject"
+
+# Each element of command is one argument. Write ["claude", "--model", "sonnet"],
+# never ["claude --model sonnet"] (the whole string would be taken as the program name).
+#
+# role is an optional label shown only to that session (in its system prompt, for
+# Claude, OMP and Codex). It grants no authority and is not shown to peers or in list.
+# Your own agent instructions can say how a session should act on its role.
+
 [[session]]
 name = "architect"
-command = ["claude"]
-attach = true
-# role = "architect" # optional label shown only to this session
-# reset = ["/clear"]
-# control_from = ["developer"]
-# watch = ["developer"] # notify this session when the peer exits naturally
-# heartbeat = "30m" # digest watched peers after 30 minutes of idle time
+command = ["claude", "--model", "sonnet"]
+attach = true # at most one session; the one `team up` attaches to
+role = "architect"
+# reset = ["/clear"] # steps `a2amx reset` types, one to eight slash commands
+# control_from = ["developer"] # sessions allowed to reset this one through the MCP tool
+watch = ["developer", "consultant"] # notify this session when a watched peer exits naturally
+heartbeat = "30m" # digest watched peers after 30 minutes of idle time; needs watch
+
+# A read-only second opinion for design and spec review. Send it each draft spec
+# before locking it, and name the decision its answer feeds.
+[[session]]
+name = "consultant"
+command = ["claude", "--model", "opus"]
+role = "consultant"
 
 [[session]]
 name = "developer"
 command = ["omp"]
 role = "developer"
-cwd = "."
+cwd = "." # relative paths are relative to this file's directory
+reset = ["/clear"]
+control_from = ["architect"]
