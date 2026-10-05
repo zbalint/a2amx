@@ -603,6 +603,7 @@ async fn run_team_down(
     names: Vec<String>,
     now: bool,
 ) -> anyhow::Result<()> {
+    let explicit = !names.is_empty();
     let names = if names.is_empty() {
         let file =
             std::env::current_dir()?.join(file.unwrap_or_else(|| PathBuf::from("a2amx.toml")));
@@ -617,12 +618,16 @@ async fn run_team_down(
     let mut client = Client::connect(&home).await?;
     let sessions = request_sessions(&mut client).await?;
     let mut failed = false;
+    let mut missing_explicit = false;
     for name in names {
         let Some(session) = sessions
             .iter()
             .find(|session| session.name.as_deref() == Some(&name))
         else {
             write_stdout(format!("no session {name}\n").into_bytes()).await?;
+            if explicit {
+                missing_explicit = true;
+            }
             continue;
         };
         let result = client
@@ -642,6 +647,13 @@ async fn run_team_down(
         };
         write_stderr(format!("failed {name}: {error}\n").into_bytes()).await?;
         failed = true;
+    }
+    if missing_explicit {
+        write_stderr(
+            b"hint: names given to team down are full session names (with any team prefix); see a2amx list\n"
+                .to_vec(),
+        )
+        .await?;
     }
     if failed {
         return Err(anyhow!("one or more team sessions could not be killed"));

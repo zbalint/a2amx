@@ -95,6 +95,129 @@ cwd = "."
 }
 
 #[test]
+fn parse_prefixes_names_and_same_file_references() {
+    let sessions = team::parse(
+        r#"
+prefix = "a2amx"
+[[session]]
+name = "architect"
+command = ["claude"]
+watch = ["developer", "outsider"]
+control_from = ["developer"]
+[[session]]
+name = "developer"
+command = ["omp"]
+control_from = ["architect"]
+"#,
+    )
+    .unwrap();
+    assert_eq!(sessions[0].name, "a2amx-architect");
+    assert_eq!(sessions[1].name, "a2amx-developer");
+    assert_eq!(sessions[0].watch, ["a2amx-developer", "outsider"]);
+    assert_eq!(sessions[0].control_from, ["a2amx-developer"]);
+    assert_eq!(sessions[1].control_from, ["a2amx-architect"]);
+}
+
+#[test]
+fn parse_leaves_already_final_references_unchanged() {
+    let sessions = team::parse(
+        r#"
+prefix = "a2amx"
+[[session]]
+name = "architect"
+command = ["cat"]
+watch = ["a2amx-developer"]
+[[session]]
+name = "developer"
+command = ["cat"]
+"#,
+    )
+    .unwrap();
+    assert_eq!(sessions[0].watch, ["a2amx-developer"]);
+}
+
+#[test]
+fn parse_base_name_match_wins_over_already_final_spelling() {
+    let sessions = team::parse(
+        r#"
+prefix = "a2amx"
+[[session]]
+name = "architect"
+command = ["cat"]
+watch = ["a2amx-developer"]
+control_from = ["a2amx-developer"]
+[[session]]
+name = "developer"
+command = ["cat"]
+[[session]]
+name = "a2amx-developer"
+command = ["cat"]
+"#,
+    )
+    .unwrap();
+    assert_eq!(sessions[0].watch, ["a2amx-a2amx-developer"]);
+    assert_eq!(sessions[0].control_from, ["a2amx-a2amx-developer"]);
+    assert_eq!(sessions[2].name, "a2amx-a2amx-developer");
+}
+
+#[test]
+fn parse_rejects_empty_trailing_dash_and_non_string_prefixes() {
+    for prefix in [r#""""#, r#""a2amx-""#, "5"] {
+        let text =
+            format!("prefix = {prefix}\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]");
+        let error = team::parse(&text).expect_err(&text);
+        assert!(format!("{error:#}").contains("prefix"), "{error:#}");
+    }
+}
+
+#[test]
+fn parse_validates_prefixed_final_names() {
+    for (prefix, final_name) in [
+        ("Bad", "Bad-architect"),
+        (
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-architect",
+        ),
+    ] {
+        let text = format!(
+            "prefix = \"{prefix}\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]"
+        );
+        let error = team::parse(&text).expect_err(&text);
+        assert!(format!("{error:#}").contains(final_name), "{error:#}");
+    }
+}
+
+#[test]
+fn parse_rejects_prefixed_self_watch() {
+    let error = team::parse(
+        "prefix = \"a2amx\"\n[[session]]\nname = \"developer\"\ncommand = [\"cat\"]\nwatch = [\"developer\"]",
+    )
+    .expect_err("prefixed self watch");
+    assert!(error.to_string().contains("watches itself"), "{error:#}");
+}
+
+#[test]
+fn parse_rejects_whitespace_in_executable_and_preserves_argument_boundaries() {
+    for executable in ["claude --model opus", "/tmp/my executable", "cat\\t-n"] {
+        let text = format!(
+            "prefix = \"pfx\"\n[[session]]\nname = \"architect\"\ncommand = [\"{executable}\"]"
+        );
+        let error = team::parse(&text).expect_err(&text);
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("session pfx-architect: command[0]"),
+            "{error}"
+        );
+        assert!(error.contains("own array element"), "{error}");
+    }
+    let sessions = team::parse(
+        "[[session]]\nname = \"architect\"\ncommand = [\"claude\", \"--model\", \"opus\"]",
+    )
+    .unwrap();
+    assert_eq!(sessions[0].command, ["claude", "--model", "opus"]);
+}
+
+#[test]
 fn parse_rejects_invalid_sessions_and_identifies_the_entry() {
     for (text, label) in [
         ("[[session]]\ncommand = [\"cat\"]", "session 1"),
@@ -319,6 +442,58 @@ async fn down_kills_only_named_team_sessions_and_reports_missing_names() {
     let named = run_binary(dir.path(), &["team", "down", "unrelated", "missing"]).unwrap();
     assert!(named.status.success());
     assert_eq!(named.stdout, b"killed unrelated s3\nno session missing\n");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prefixed_team_down_uses_full_names_and_hints_only_for_explicit_missing_names() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("team.toml"),
+        format!("prefix = \"pfx\"\n{LIVE_TEAM}"),
+    )
+    .unwrap();
+    let up = run_binary(
+        dir.path(),
+        &["team", "up", "--detach", "--file", "team.toml"],
+    )
+    .unwrap();
+    assert!(
+        up.status.success(),
+        "{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert_eq!(
+        up.stdout,
+        b"started pfx-architect s1\nstarted pfx-developer s2\n"
+    );
+    let named = run_binary(dir.path(), &["team", "down", "architect", "developer"]).unwrap();
+    assert!(named.status.success());
+    assert_eq!(
+        named.stdout,
+        b"no session architect\nno session developer\n"
+    );
+    assert_eq!(
+        named.stderr,
+        b"hint: names given to team down are full session names (with any team prefix); see a2amx list\n"
+    );
+    let down = run_binary(dir.path(), &["team", "down", "--file", "team.toml"]).unwrap();
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    assert_eq!(
+        down.stdout,
+        b"killed pfx-architect s1\nkilled pfx-developer s2\n"
+    );
+    assert!(down.stderr.is_empty());
+    let repeated = run_binary(dir.path(), &["team", "down", "--file", "team.toml"]).unwrap();
+    assert!(repeated.status.success());
+    assert_eq!(
+        repeated.stdout,
+        b"no session pfx-architect\nno session pfx-developer\n"
+    );
+    assert!(repeated.stderr.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

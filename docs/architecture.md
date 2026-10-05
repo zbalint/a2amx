@@ -301,7 +301,9 @@ sessions untouched, and reports each removed name or ID. An empty selection prin
 
 `team up` and `team down` are client-side commands; `team down` sends the same
 graceful `Request::Kill` path as `kill` by default, or `now: true` for `--now`.
-The pure `team` module parses files and flags and plans launches. Before spawning,
+The pure `team` module parses files and flags and plans launches. An optional
+file-level `prefix` is applied in `parse` to names and same-file `watch` and
+`control_from` entries, so `plan` and `down` only see final names. Before spawning,
 the CLI rejects all exited-name conflicts and skips running sessions. Preflight and
 spawning are deliberately non-atomic: a concurrent name claim fails at spawn,
 leaving earlier starts intact. Launches reuse `new`'s harness wiring; down targets

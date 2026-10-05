@@ -170,6 +170,7 @@ timeout; one reset runs at a time. Session-token callers need the target's
 `a2amx team up` reads `a2amx.toml` in the current directory by default:
 
 ```toml
+prefix = "myproject"
 [[session]]
 name = "architect"
 command = ["claude"]
@@ -184,6 +185,14 @@ name = "developer"
 command = ["omp"]
 cwd = "."
 ```
+
+The optional file-level `prefix` adds a dash to each session name (`architect`
+becomes `myproject-architect`). It also prefixes `watch` and `control_from`
+entries that name a session in the same file; other entries are used as written,
+so a team file can refer to a session from another file. The flag form has no
+prefix. Each `command` element is one argument, so use `["claude", "--model",
+"opus"]`, not `["claude --model opus"]`; an executable path containing a space
+is not accepted.
 
 `reset` is optional; omitting it uses `/clear`. If present it must contain one to
 eight slash commands, each at most 200 bytes and without control characters.
@@ -205,13 +214,15 @@ before any spawn; remove it with `a2amx kill NAME` first. If a later spawn fails
 already-started sessions remain and no further session starts.
 
 Without a file, `a2amx team up architect=claude developer=omp` accepts bare
-executables only; commands with arguments need the file's argv arrays. The file
-may select one session to attach; the flag form attaches the first. `--detach`
-suppresses attachment, and nonterminal invocation never attaches.
+executables only and has no prefix; commands with arguments need the file's argv
+arrays. The file may select one session to attach; the flag form attaches the
+first. `--detach` suppresses attachment, and nonterminal invocation never attaches.
 `a2amx team down` kills the file's named sessions, running or exited; explicit
-names select sessions directly. It uses the same graceful Ctrl-D default as `kill`;
-pass `--now` to use the immediate HUP/KILL path. Missing names are reported without
-failing.
+names select full session names directly, including any team prefix. It uses the
+same graceful Ctrl-D default as `kill`; pass `--now` to use the immediate HUP/KILL
+path. Missing names are reported without failing; explicit missing names also print
+a stderr hint to use full names from `a2amx list`, while file-derived missing names
+are silent.
 `--file` cannot be combined with inline session items or names.
 
 ## Using it with agents

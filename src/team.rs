@@ -31,6 +31,8 @@ pub struct TeamSession {
 #[serde(deny_unknown_fields)]
 struct TeamFile {
     #[serde(default)]
+    prefix: Option<String>,
+    #[serde(default)]
     session: Vec<toml::Table>,
 }
 
@@ -48,8 +50,8 @@ pub struct Conflict {
 
 pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
     let file: TeamFile = toml::from_str(text).context("invalid team file")?;
-    let sessions: Vec<TeamSession> = file
-        .session
+    let TeamFile { prefix, session } = file;
+    let mut sessions: Vec<TeamSession> = session
         .into_iter()
         .enumerate()
         .map(|(index, table)| {
@@ -58,6 +60,31 @@ pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
                 .with_context(|| format!("session {}", index + 1))
         })
         .collect::<anyhow::Result<_>>()?;
+    if let Some(prefix) = prefix {
+        if prefix.is_empty() {
+            bail!("prefix must not be empty");
+        }
+        if prefix.ends_with('-') {
+            bail!("prefix {prefix:?} must not end in '-'; the dash is added for you");
+        }
+        let base_names: HashSet<String> = sessions
+            .iter()
+            .map(|session| session.name.clone())
+            .collect();
+        for session in &mut sessions {
+            session.name = format!("{prefix}-{}", session.name);
+            for name in &mut session.watch {
+                if base_names.contains(name.as_str()) {
+                    *name = format!("{prefix}-{name}");
+                }
+            }
+            for name in &mut session.control_from {
+                if base_names.contains(name.as_str()) {
+                    *name = format!("{prefix}-{name}");
+                }
+            }
+        }
+    }
     validate_sessions(&sessions)?;
     Ok(sessions)
 }
@@ -136,6 +163,13 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
         }
         if session.command.is_empty() {
             bail!("session {}: command must not be empty", session.name);
+        }
+        if session.command[0].chars().any(char::is_whitespace) {
+            bail!(
+                "session {}: command[0] {:?} contains whitespace; give each argument as its own array element",
+                session.name,
+                session.command[0]
+            );
         }
         if session.attach && attached {
             bail!("session {}: at most one session can attach", session.name);

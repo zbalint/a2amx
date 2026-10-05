@@ -1,16 +1,17 @@
 # Copy to a2amx.toml, then run: a2amx team up
-# Session names are unique per daemon and shared by every project on the machine,
-# so prefix them with the project name (here "myproject-") to avoid collisions.
+# Session names are unique per daemon and shared by every project on the machine.
+# Set a file-level prefix once; the tool adds its dash to these unprefixed names.
+prefix = "myproject"
 [[session]]
-name = "myproject-architect"
+name = "architect"
 command = ["claude"]
 attach = true
 # reset = ["/clear"]
-# control_from = ["myproject-developer"]
-# watch = ["myproject-developer"] # notify this session when the peer exits naturally
+# control_from = ["developer"]
+# watch = ["developer"] # notify this session when the peer exits naturally
 # heartbeat = "30m" # digest watched peers after 30 minutes of idle time
 
 [[session]]
-name = "myproject-developer"
+name = "developer"
 command = ["omp"]
 cwd = "."
