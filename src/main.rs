@@ -19,7 +19,7 @@ use a2amx::emulator::Scroll;
 use a2amx::harness::{Deliver, Harness};
 use a2amx::hook;
 use a2amx::mcp;
-use a2amx::messaging::sgr_mouse_report_len;
+use a2amx::messaging::{display_duration, sgr_mouse_report_len};
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::quota;
 use a2amx::status;
@@ -1438,12 +1438,13 @@ fn terminal_size_with_default() -> anyhow::Result<(u16, u16)> {
     ))
 }
 
-const SESSION_HEADERS: [&str; 10] = [
-    "ID", "NAME", "HARNESS", "STATE", "ACTIVITY", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
+const SESSION_HEADERS: [&str; 12] = [
+    "ID", "NAME", "HARNESS", "STATE", "UPTIME", "ACTIVITY", "IN-STATE", "ATTACHED", "PENDING",
+    "HELD", "QUOTA", "SIZE",
 ];
-const DETAIL_HEADERS: [&str; 12] = [
-    "ID", "NAME", "HARNESS", "STATE", "ACTIVITY", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
-    "CWD", "COMMAND",
+const DETAIL_HEADERS: [&str; 14] = [
+    "ID", "NAME", "HARNESS", "STATE", "UPTIME", "ACTIVITY", "IN-STATE", "ATTACHED", "PENDING",
+    "HELD", "QUOTA", "SIZE", "CWD", "COMMAND",
 ];
 const PICKER_HEADERS: [&str; 11] = [
     "ID", "NAME", "HARNESS", "STATE", "ACTIVITY", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
@@ -1564,9 +1565,46 @@ fn format_table<const N: usize>(headers: &[&str; N], rows: &[[String; N]]) -> St
 }
 
 fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
-    let rows = session_value_rows(sessions);
+    let rows: Vec<[String; 12]> = session_value_rows(sessions)
+        .into_iter()
+        .zip(sessions)
+        .map(|(row, session)| {
+            let [
+                id,
+                name,
+                harness,
+                state,
+                activity,
+                attached,
+                pending,
+                held,
+                quota,
+                size,
+            ] = row;
+            [
+                id,
+                name,
+                harness,
+                state,
+                session
+                    .uptime_secs
+                    .map(|seconds| display_duration(Duration::from_secs(seconds)))
+                    .unwrap_or_else(|| "-".to_owned()),
+                activity,
+                session
+                    .activity_secs
+                    .map(|seconds| display_duration(Duration::from_secs(seconds)))
+                    .unwrap_or_else(|| "-".to_owned()),
+                attached,
+                pending,
+                held,
+                quota,
+                size,
+            ]
+        })
+        .collect();
     if details {
-        let rows: Vec<[String; 12]> = rows
+        let rows: Vec<[String; 14]> = rows
             .into_iter()
             .zip(sessions)
             .map(|(row, session)| {
@@ -1575,7 +1613,9 @@ fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
                     name,
                     harness,
                     state,
+                    uptime,
                     activity,
+                    in_state,
                     attached,
                     pending,
                     held,
@@ -1587,7 +1627,9 @@ fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
                     name,
                     harness,
                     state,
+                    uptime,
                     activity,
+                    in_state,
                     attached,
                     pending,
                     held,

@@ -502,20 +502,29 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
     assert!(listing.starts_with(
-        "ID  NAME  HARNESS  STATE    ACTIVITY  ATTACHED  PENDING  HELD  QUOTA  SIZE\n"
+        "ID  NAME  HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\n",
     ));
-    assert!(
-        listing.contains(
-            "s1  -     generic  running  working   no        0        -     -      80x24\n"
-        )
-    );
+    let cells = common::list_cells(&listing, "s1");
+    assert_eq!(cells.len(), 12);
+    assert_eq!(&cells[..4], ["s1", "-", "generic", "running"]);
+    assert_eq!(cells[5], "working");
+    for index in [4, 6] {
+        let bytes = cells[index].as_bytes();
+        assert!(bytes.len() >= 2);
+        assert!(
+            bytes[..bytes.len() - 1]
+                .iter()
+                .all(|byte| byte.is_ascii_digit())
+        );
+        assert!(matches!(bytes.last(), Some(b's' | b'm' | b'h')));
+    }
 
     let explicit = run_binary(second_dir.path(), &["list"], &environment)?;
     assert_eq!(explicit.status.code(), Some(0));
     let explicit_listing = String::from_utf8(explicit.stdout)?;
     assert!(
         explicit_listing.starts_with(
-            "ID  NAME  HARNESS  STATE  ACTIVITY  ATTACHED  PENDING  HELD  QUOTA  SIZE\n"
+            "ID  NAME  HARNESS  STATE  UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\n",
         )
     );
     assert!(!explicit_listing.contains("s1"));
@@ -664,11 +673,22 @@ async fn named_session_appears_in_the_list_table() -> anyhow::Result<()> {
     assert!(output.status.success());
     let listing = String::from_utf8(output.stdout)?;
     assert!(listing.starts_with(
-        "ID  NAME        HARNESS  STATE    ACTIVITY  ATTACHED  PENDING  HELD  QUOTA  SIZE\n"
+        "ID  NAME        HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\n",
     ));
-    assert!(listing.contains(
-        "s1  agent-plan  generic  running  working   no        0        -     -      80x24\n"
-    ));
+    let cells = common::list_cells(&listing, "s1");
+    assert_eq!(cells.len(), 12);
+    assert_eq!(&cells[..4], ["s1", "agent-plan", "generic", "running"]);
+    assert_eq!(cells[5], "working");
+    for index in [4, 6] {
+        let bytes = cells[index].as_bytes();
+        assert!(bytes.len() >= 2);
+        assert!(
+            bytes[..bytes.len() - 1]
+                .iter()
+                .all(|byte| byte.is_ascii_digit())
+        );
+        assert!(matches!(bytes.last(), Some(b's' | b'm' | b'h')));
+    }
     Ok(())
 }
 
@@ -789,8 +809,26 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     let listed = run_binary(dir.path(), &["list", "--details"], &[])?;
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
+    let cells = common::list_cells(&listing, "s1");
+    assert_eq!(&cells[..4], ["s1", "-", "generic", "running"]);
+    assert_eq!(cells[5], "busy");
+    assert_eq!(cells[7], "yes");
+    assert_eq!(cells[8], "0");
+    assert_eq!(cells[9], "human_draft");
+    assert_eq!(cells[10], "-");
+    assert_eq!(cells[11], "80x22");
+    for index in [4, 6] {
+        let bytes = cells[index].as_bytes();
+        assert!(bytes.len() >= 2);
+        assert!(
+            bytes[..bytes.len() - 1]
+                .iter()
+                .all(|byte| byte.is_ascii_digit())
+        );
+        assert!(matches!(bytes.last(), Some(b's' | b'm' | b'h')));
+    }
     assert!(listing.contains(&format!(
-        "s1  -     generic  running  busy      yes       0        human_draft  -      80x22  {}  sh -c stty raw -echo; cat\n",
+        "80x22  {}  sh -c stty raw -echo; cat\n",
         std::env::current_dir()?.display(),
     )));
 
@@ -798,7 +836,12 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     wait_for_held(dir.path(), "s1", false).await;
     let (listing, code) = run_cli(dir.path(), &["list"])?;
     assert_eq!(code, 0);
-    assert!(listing.contains("s1  -     generic  running  working   yes       0        -"));
+    let cells = common::list_cells(&listing, "s1");
+    assert_eq!(&cells[..4], ["s1", "-", "generic", "running"]);
+    assert_eq!(cells[5], "working");
+    assert_eq!(cells[7], "yes");
+    assert_eq!(cells[8], "0");
+    assert_eq!(cells[9], "-");
 
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;

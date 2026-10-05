@@ -25,6 +25,15 @@ fn run_binary(home: &Path, command: &[&str]) -> anyhow::Result<Output> {
         .output()?)
 }
 
+fn is_duration_cell(cell: &str) -> bool {
+    let bytes = cell.as_bytes();
+    bytes.len() >= 2
+        && bytes[..bytes.len() - 1]
+            .iter()
+            .all(|byte| byte.is_ascii_digit())
+        && matches!(bytes.last(), Some(b's' | b'm' | b'h'))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_by_name_removes_the_named_session() -> anyhow::Result<()> {
     let (dir, _daemon) = common::start_daemon().await;
@@ -85,6 +94,13 @@ async fn kill_exited_removes_only_exited_sessions_and_frees_names() -> anyhow::R
             .then_some(())
     })
     .await;
+    let listing = String::from_utf8(run_binary(dir.path(), &["list"])?.stdout)?;
+    for id in ["s1", "s2"] {
+        let cells = common::list_cells(&listing, id);
+        assert!(cells[3].starts_with("exited("));
+        assert_eq!(cells[4], "-");
+        assert_eq!(cells[6], "-");
+    }
 
     let removed = run_binary(dir.path(), &["kill", "--exited"])?;
     assert!(
@@ -296,11 +312,16 @@ async fn default_list_is_lean_and_details_show_cwd_and_command() -> anyhow::Resu
     let plain = String::from_utf8(plain.stdout)?;
     assert_eq!(
         plain.lines().next(),
-        Some("ID  NAME        HARNESS  STATE    ACTIVITY  ATTACHED  PENDING  HELD  QUOTA  SIZE"),
+        Some(
+            "ID  NAME        HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE",
+        ),
     );
-    assert!(plain.contains(
-        "s1  agent-plan  generic  running  working   no        0        -     -      80x24\n"
-    ));
+    let cells = common::list_cells(&plain, "s1");
+    assert_eq!(cells.len(), 12);
+    assert_eq!(&cells[..4], ["s1", "agent-plan", "generic", "running"]);
+    assert_eq!(cells[5], "working");
+    assert!(is_duration_cell(cells[4]));
+    assert!(is_duration_cell(cells[6]));
     assert!(!plain.contains("sleep 30"));
     assert!(!plain.contains(&dir.path().to_string_lossy().into_owned()));
     let details = run_binary(dir.path(), &["list", "--details"])?;

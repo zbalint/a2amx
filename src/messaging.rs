@@ -20,6 +20,17 @@ pub const UNMATCHABLE_SUBMISSION_REASON: &str = "A2AMX blocked this prompt becau
 pub const MAX_RESTORE_BYTES: usize = 64 * 1024;
 pub const CORRUPTED_SUBMISSION_REASON: &str = "A2AMX blocked this prompt because it mixed your text with a peer message. The message will be delivered again.";
 
+pub fn display_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds >= 60 * 60 {
+        format!("{}h", seconds / (60 * 60))
+    } else if seconds >= 60 {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{}s", seconds.max(1))
+    }
+}
+
 pub fn hold_explanation(reason: &str) -> Option<&'static str> {
     match reason {
         "deliver_hold" => Some(

@@ -20,7 +20,7 @@ use tokio::sync::{Notify, mpsc, oneshot, watch};
 use crate::emulator::{Emulator, Size, window_size};
 use crate::harness::{self, Deliver, Harness};
 use crate::messaging;
-use crate::wire::BridgeDown;
+use crate::wire::{Activity, BridgeDown};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionId(pub String);
@@ -49,6 +49,7 @@ pub struct SessionSpec {
 
 pub struct Session {
     id: SessionId,
+    started: Instant,
     pub(crate) argv: Vec<String>,
     cwd: Option<std::path::PathBuf>,
     name: Option<String>,
@@ -88,6 +89,7 @@ pub(crate) struct State {
     pub pending_attachment: Option<u64>,
     pub dirty: bool,
     pub last_change: Instant,
+    pub activity_since: Option<(Activity, Instant)>,
     pub hold: Option<Hold>,
     pub last_submit: Option<Instant>,
     pub restore: Option<String>,
@@ -151,6 +153,20 @@ pub(crate) struct AttachmentSlot {
     pub closed: watch::Receiver<bool>,
 }
 
+pub fn observe_activity(
+    slot: &mut Option<(Activity, Instant)>,
+    current: Activity,
+    now: Instant,
+) -> Duration {
+    if let Some((activity, since)) = *slot {
+        if activity == current {
+            return now.saturating_duration_since(since);
+        }
+    }
+    *slot = Some((current, now));
+    Duration::ZERO
+}
+
 impl Session {
     pub fn spawn(id: SessionId, spec: SessionSpec) -> anyhow::Result<Self> {
         let Some(program) = spec.argv.first() else {
@@ -181,6 +197,7 @@ impl Session {
         let flags = rustix::fs::fcntl_getfl(&reader)?;
         rustix::fs::fcntl_setfl(&reader, flags & !rustix::fs::OFlags::NONBLOCK)?;
         let pid = Pid::from_raw(pty.child().id() as i32).context("invalid child pid")?;
+        let started = Instant::now();
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 emulator: Emulator::new(spec.size),
@@ -191,6 +208,7 @@ impl Session {
                 pending_attachment: None,
                 dirty: true,
                 last_change: Instant::now(),
+                activity_since: None,
                 hold: None,
                 last_submit: None,
                 restore: None,
@@ -287,6 +305,7 @@ impl Session {
         });
         Ok(Self {
             id,
+            started,
             argv: spec.argv,
             cwd,
             name: spec.name,
@@ -352,6 +371,15 @@ impl Session {
     }
     pub(crate) fn heartbeat(&self) -> Option<Duration> {
         self.heartbeat
+    }
+
+    pub(crate) fn note_activity(&self, current: Activity, now: Instant) -> Duration {
+        let mut state = self.lock();
+        observe_activity(&mut state.activity_since, current, now)
+    }
+
+    pub(crate) fn started(&self) -> Instant {
+        self.started
     }
 
     pub(crate) fn last_change(&self) -> Instant {

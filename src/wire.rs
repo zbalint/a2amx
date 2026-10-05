@@ -307,6 +307,10 @@ pub struct SessionSummary {
     /// `None` for an exited session; `None` is unknown or exited, never idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<Activity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_secs: Option<u64>,
 }
 
 /// Percent left per quota window, as the harness's status line last showed it.

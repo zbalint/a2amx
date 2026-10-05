@@ -765,20 +765,17 @@ fn screen_does_not_resize_or_detach_an_attached_session() {
         .wait_for_text("attached", Duration::from_secs(10))
         .unwrap();
     let before = stdout(&run(&home, &["list"]));
-    let before_row = before.lines().find(|line| line.starts_with("s1 ")).unwrap();
-    let before_size = before_row.split_whitespace().nth(9).unwrap().to_owned();
+    let before_cells = common::list_cells(&before, "s1");
+    let before_size = before_cells[11].to_owned();
 
     let output = screen_until(&home, &["screen", "s1"], "attached\n");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(stdout(&output), "attached\n");
 
     let after = stdout(&run(&home, &["list"]));
-    let after_row = after.lines().find(|line| line.starts_with("s1 ")).unwrap();
-    assert_eq!(after_row.split_whitespace().nth(5), Some("yes"));
-    assert_eq!(
-        after_row.split_whitespace().nth(9),
-        Some(before_size.as_str())
-    );
+    let after_cells = common::list_cells(&after, "s1");
+    assert_eq!(after_cells[7], "yes");
+    assert_eq!(after_cells[11], before_size);
 }
 
 #[test]

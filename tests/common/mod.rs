@@ -16,6 +16,15 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 
+pub fn list_cells<'a>(listing: &'a str, id: &str) -> Vec<&'a str> {
+    listing
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some(id))
+        .unwrap_or_else(|| panic!("session {id} not found in list"))
+        .split_whitespace()
+        .collect()
+}
+
 /// Start a daemon in a fresh temp state dir on an OS-chosen loopback port, so
 /// concurrent tests never collide. Keep the `TempDir` alive for the test's duration.
 pub async fn start_daemon() -> (TempDir, Daemon) {

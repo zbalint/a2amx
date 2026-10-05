@@ -189,6 +189,8 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             harness: Default::default(),
             cwd: None,
             activity: None,
+            uptime_secs: None,
+            activity_secs: None,
         }],
     };
     let json = serde_json::to_string(&response).unwrap_or_default();
@@ -196,6 +198,34 @@ fn response_and_session_summary_shapes_remain_unchanged() {
         json,
         r#"{"type":"sessions","sessions":[{"id":"s1","argv":["cat"],"cols":80,"rows":24,"exit_code":null,"attached":false}]}"#
     );
+    assert_eq!(serde_json::from_str::<Response>(&json).ok(), Some(response));
+}
+
+#[test]
+fn session_summary_durations_round_trip_when_present() {
+    let response = Response::Sessions {
+        sessions: vec![SessionSummary {
+            id: "s2".to_owned(),
+            argv: vec!["sh".to_owned()],
+            cols: 80,
+            rows: 24,
+            exit_code: None,
+            attached: false,
+            name: None,
+            address: String::new(),
+            pending: 0,
+            held: false,
+            hold_reason: None,
+            quota: None,
+            harness: Default::default(),
+            cwd: None,
+            activity: Some(Activity::Working),
+            uptime_secs: Some(5),
+            activity_secs: Some(3),
+        }],
+    };
+    let json = serde_json::to_string(&response).unwrap_or_default();
+    assert!(json.contains(r#""uptime_secs":5,"activity_secs":3"#));
     assert_eq!(serde_json::from_str::<Response>(&json).ok(), Some(response));
 }
 
@@ -543,6 +573,8 @@ fn additive_visibility_fields_round_trip() {
             harness: Default::default(),
             cwd: None,
             activity: None,
+            uptime_secs: None,
+            activity_secs: None,
         }],
     };
     let sessions_json = serde_json::json!({

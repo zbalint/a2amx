@@ -15,6 +15,53 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 #[test]
+fn activity_age_preserves_same_state_and_resets_on_transition() {
+    use a2amx::session::observe_activity;
+    use a2amx::wire::Activity::{Idle, Working};
+    use std::time::Instant;
+
+    let t0 = Instant::now();
+    let mut slot = None;
+    assert_eq!(observe_activity(&mut slot, Idle, t0), Duration::ZERO);
+    assert_eq!(slot, Some((Idle, t0)));
+    assert_eq!(
+        observe_activity(&mut slot, Idle, t0 + Duration::from_secs(5)),
+        Duration::from_secs(5)
+    );
+    assert_eq!(slot, Some((Idle, t0)));
+    let changed = t0 + Duration::from_secs(7);
+    assert_eq!(
+        observe_activity(&mut slot, Working, changed),
+        Duration::ZERO
+    );
+    assert_eq!(slot, Some((Working, changed)));
+    assert_eq!(
+        observe_activity(&mut slot, Working, t0 + Duration::from_secs(9)),
+        Duration::from_secs(2)
+    );
+    assert_eq!(observe_activity(&mut slot, Working, t0), Duration::ZERO);
+    assert_eq!(slot, Some((Working, changed)));
+}
+
+#[test]
+fn duration_display_floors_at_unit_boundaries() {
+    for (seconds, expected) in [
+        (0, "1s"),
+        (1, "1s"),
+        (59, "59s"),
+        (60, "1m"),
+        (3599, "59m"),
+        (3600, "1h"),
+        (90000, "25h"),
+    ] {
+        assert_eq!(
+            a2amx::messaging::display_duration(Duration::from_secs(seconds)),
+            expected
+        );
+    }
+}
+
+#[test]
 fn shutdown_wire_defaults_graceful_and_omits_false_now() {
     let kill: Request = serde_json::from_str(r#"{"type":"kill","session":"s1"}"#).unwrap();
     assert_eq!(
@@ -114,6 +161,44 @@ async fn list_activity_reports_working_then_idle_and_non_ready_working() {
             .and_then(|session| session.activity),
         Some(a2amx::wire::Activity::Idle)
     );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_reports_session_durations_until_natural_exit() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut client = Client::connect(dir.path()).await.unwrap();
+    let id = create(&mut client, &["sh", "-c", "sleep 5"], vec![]).await;
+
+    let sessions = list(&mut client).await;
+    let summary = sessions.iter().find(|session| session.id == id).unwrap();
+    assert!(summary.uptime_secs.is_some_and(|seconds| seconds <= 1));
+    assert!(summary.activity_secs.is_some_and(|seconds| seconds <= 1));
+
+    tokio::time::sleep(Duration::from_millis(2_200)).await;
+    let sessions = list(&mut client).await;
+    let summary = sessions.iter().find(|session| session.id == id).unwrap();
+    assert!(
+        summary
+            .uptime_secs
+            .is_some_and(|seconds| (2..=5).contains(&seconds))
+    );
+    assert!(
+        summary
+            .activity_secs
+            .is_some_and(|seconds| (2..=5).contains(&seconds))
+    );
+
+    let sessions = eventually_sessions(&mut client, |sessions| {
+        sessions
+            .iter()
+            .find(|session| session.id == id)
+            .is_some_and(|session| session.exit_code.is_some())
+    })
+    .await;
+    let summary = sessions.iter().find(|session| session.id == id).unwrap();
+    assert_eq!(summary.uptime_secs, None);
+    assert_eq!(summary.activity_secs, None);
     daemon.shutdown().await.unwrap();
 }
 

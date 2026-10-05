@@ -436,9 +436,11 @@ machine; there is no central-versus-host split yet.
   `unmatchable_submission`. Each rejection still counts toward the session's
   three-in-row `corrupted_submissions` hold. See
   [delivery](delivery.md#implemented-claude-code-hook).
-- **Human controls.** `a2amx list` gains NAME, HARNESS, STATE, ACTIVITY, PENDING, and HELD columns;
-  `--details` appends CWD and COMMAND. The activity column reports `idle`, `working`, or `busy`
-  for running sessions and `-` for exited sessions. The CLI resolves session names to ids before
+- **Human controls.** `a2amx list` gains NAME, HARNESS, STATE, UPTIME, ACTIVITY, IN-STATE, PENDING,
+  and HELD columns; `--details` appends CWD and COMMAND. UPTIME is the time since the session
+  started, and IN-STATE is the age of its current activity; the daemon samples activity once per
+  second and shows `-` for exited sessions. The activity column reports `idle`, `working`, or `busy` for
+  running sessions and `-` for exited sessions. The CLI resolves session names to ids before
   attach, kill, and messages; the daemon still receives ids only. HELD
   shows the hold reason (or `-` when clear); `a2amx messages [--session S]
   [--state ...]` lists messages; `a2amx cancel <id>` cancels a pending one; the

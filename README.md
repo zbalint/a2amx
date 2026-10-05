@@ -151,7 +151,7 @@ enters scroll mode; hold Shift to select text with the mouse. Scrollback in the 
 kept. The status line takes the terminal's last row, keeps a thin rule above it, and shows the session address, optional activity,
 low-quota and harness details, pending-message count, and a HELD alert with the hold reason and (for
 releasable holds) a prefix-key hint for `r`; `s` hides both the status line and separator. In `a2amx list`, ATTACHED means a human client is attached, not that
-the session is reachable: a detached session still receives messages. ACTIVITY is `idle`, `working`, or `busy` for running sessions, and `-` for exited sessions. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
+the session is reachable: a detached session still receives messages. ACTIVITY is `idle`, `working`, or `busy` for running sessions, and `-` for exited sessions. UPTIME is how long the session has existed (`-` when exited), and IN-STATE is how long its current ACTIVITY has lasted (`-` when ACTIVITY is `-`). Both are floored and shown as `Ns`, `Nm` or `Nh`, at one-second sampling resolution, starting when the daemon starts. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with
 an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or
 Codex status line last said about remaining quota (5h and weekly percent left); for OMP it shows

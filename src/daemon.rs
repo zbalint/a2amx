@@ -21,7 +21,7 @@ use crate::codex;
 use crate::delivery::{AnyChannel, Channel};
 use crate::emulator::Size;
 use crate::harness::{self, Deliver, Harness};
-use crate::messaging::{self, Limits, MessageState, code};
+use crate::messaging::{self, Limits, MessageState, code, display_duration};
 use crate::quota;
 use crate::session::{AttachmentSlot, NativeGuard, Session, SessionId, SessionSpec};
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
@@ -32,6 +32,7 @@ use crate::wire::{
 
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
 const ACTIVITY_QUIET: Duration = Duration::from_secs(10);
+const ACTIVITY_POLL: Duration = Duration::from_secs(1);
 // shortcut: output-free tool calls over the quiet window read as idle; use a per-session or
 // harness-specific working marker if that misleads in practice.
 pub struct DaemonConfig {
@@ -111,17 +112,6 @@ fn heartbeat_body(interval: Duration, peers: &[HeartbeatPeer]) -> String {
     }
     body.push_str("Run a2amx screen <peer> to look before messaging a busy peer.");
     body
-}
-
-fn display_duration(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    if seconds >= 60 * 60 {
-        format!("{}h", seconds / (60 * 60))
-    } else if seconds >= 60 {
-        format!("{}m", seconds / 60)
-    } else {
-        format!("{}s", seconds.max(1))
-    }
 }
 
 enum Role {
@@ -379,6 +369,7 @@ impl Runtime {
                     boot.clone(),
                 ))];
                 tasks.push(tokio::spawn(self.clone().observe_exit(session.clone())));
+                tasks.push(tokio::spawn(self.clone().sample_activity(session.clone())));
                 if let Some(interval) = session.heartbeat() {
                     tasks.push(tokio::spawn(
                         self.clone().heartbeat(session.clone(), interval),
@@ -457,6 +448,18 @@ impl Runtime {
                     tracing::error!(%error, recipient = %watcher.id().0, "exit event message acceptance failed");
                 }
             }
+        }
+    }
+    async fn sample_activity(self: Arc<Self>, session: Arc<Session>) {
+        // shortcut: sample once per second and read each session screen; use an output-path
+        // transition hook if the cost matters.
+        let mut ticker = tokio::time::interval(ACTIVITY_POLL);
+        loop {
+            ticker.tick().await;
+            let Some(activity) = session_activity(&session) else {
+                return;
+            };
+            session.note_activity(activity, Instant::now());
         }
     }
     async fn heartbeat(self: Arc<Self>, session: Arc<Session>, interval: Duration) {
@@ -1423,9 +1426,17 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     .values()
                     .map(|session| {
                         let activity = session_activity(session);
+                        let activity_secs = activity.map(|current| {
+                            session.note_activity(current, Instant::now()).as_secs()
+                        });
                         let hold_reason = AnyChannel::for_session(session.clone()).hold_reason();
                         let quota = session_quota(session);
                         let state = session.lock();
+                        let (uptime_secs, activity_secs) = if state.exit_code.is_none() {
+                            (Some(session.started().elapsed().as_secs()), activity_secs)
+                        } else {
+                            (None, None)
+                        };
                         SessionSummary {
                             id: session.id().0.clone(),
                             argv: session.argv.clone(),
@@ -1448,6 +1459,8 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                                 .cwd()
                                 .map(|path| path.to_string_lossy().into_owned()),
                             activity,
+                            uptime_secs,
+                            activity_secs,
                         }
                     })
                     .collect();

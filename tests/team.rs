@@ -29,6 +29,8 @@ fn summary(name: &str, id: &str, exit_code: Option<i32>) -> SessionSummary {
         harness: Default::default(),
         cwd: None,
         activity: None,
+        uptime_secs: None,
+        activity_secs: None,
     }
 }
 
@@ -442,8 +444,22 @@ async fn up_starts_in_order_and_skips_running_sessions_without_attachment() {
     );
     let listed = run_binary(dir.path(), &["list"]).unwrap();
     let listed = String::from_utf8(listed.stdout).unwrap();
-    assert!(listed.contains("s1  architect  generic  running  working   no"));
-    assert!(listed.contains("s2  developer  generic  running  working   no"));
+    for (id, name) in [("s1", "architect"), ("s2", "developer")] {
+        let cells = common::list_cells(&listed, id);
+        assert_eq!(&cells[..4], [id, name, "generic", "running"]);
+        assert_eq!(cells[5], "working");
+        assert_eq!(cells[7], "no");
+        for index in [4, 6] {
+            let bytes = cells[index].as_bytes();
+            assert!(bytes.len() >= 2);
+            assert!(
+                bytes[..bytes.len() - 1]
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit())
+            );
+            assert!(matches!(bytes.last(), Some(b's' | b'm' | b'h')));
+        }
+    }
     let second = run_binary(dir.path(), &["team", "up", "--file", "team.toml"]).unwrap();
     assert!(second.status.success());
     assert_eq!(
