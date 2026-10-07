@@ -361,8 +361,13 @@ rejection limit, sender visibility); the specs are the contract, this section is
 summary.
 
 **Install and failure.** `a2amx new --harness claude` appends `--settings <json>`
-holding one `UserPromptSubmit` command hook that runs `a2amx hook`. Nothing is written
-to disk, and the hook reaches the daemon with the session's `A2AMX_ADDR` and
+holding one `UserPromptSubmit` command hook that runs `a2amx hook`. A user
+`--settings` in the command is merged with that hook rather than replaced. A settings
+file is read relative to the session cwd and passed inline, so its contents, including
+any `env` secrets, appear in argv and `a2amx list --details`; an unreadable or invalid
+settings file fails the launch where Claude alone would ignore it. A user
+`disableAllHooks` is preserved and would disable the a2amx hook. Nothing is written to
+disk, and the hook reaches the daemon with the session's `A2AMX_ADDR` and
 `A2AMX_TOKEN`, which the harness passes to it. The hook fails open: an unreachable
 daemon, a bad payload, a prompt above 512 KiB, or a 4 second timeout all allow the
 prompt, exit 0, and write one line to stderr. Its stdout is empty unless it blocks,

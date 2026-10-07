@@ -441,20 +441,31 @@ async fn create_session(
     let command = match harness {
         Harness::Claude => {
             let exe = std::env::current_exe()?;
+            let wire_cwd = cwd.clone();
+            let wire_role = role.clone();
+            let authorize_peers = !no_authorize_peers;
             if no_channel {
-                a2amx::harness::wire_claude_argv(
-                    command,
-                    &exe,
-                    !no_authorize_peers,
-                    role.as_deref(),
-                )
+                tokio::task::spawn_blocking(move || {
+                    a2amx::harness::wire_claude_argv(
+                        command,
+                        &exe,
+                        &wire_cwd,
+                        authorize_peers,
+                        wire_role.as_deref(),
+                    )
+                })
+                .await??
             } else {
-                a2amx::harness::wire_claude_channel_argv(
-                    command,
-                    &exe,
-                    !no_authorize_peers,
-                    role.as_deref(),
-                )
+                tokio::task::spawn_blocking(move || {
+                    a2amx::harness::wire_claude_channel_argv(
+                        command,
+                        &exe,
+                        &wire_cwd,
+                        authorize_peers,
+                        wire_role.as_deref(),
+                    )
+                })
+                .await??
             }
         }
         Harness::Omp => {

@@ -415,9 +415,11 @@ fn channel_launch_adds_development_flags_and_preserves_plain_launch() {
         let argv = wire_claude_channel_argv(
             vec!["claude".into(), "--".into(), "prompt".into()],
             Path::new("/usr/bin/a2amx"),
+            Path::new("."),
             authorize,
             None,
-        );
+        )
+        .expect("Claude channel argv wiring");
         assert_eq!(argv.len() - 3, count);
         assert_eq!(argv[0], "claude");
         assert_eq!(argv[1], "--mcp-config");
@@ -446,9 +448,11 @@ fn channel_launch_adds_development_flags_and_preserves_plain_launch() {
     let plain = wire_claude_argv(
         vec!["claude".into()],
         Path::new("/usr/bin/a2amx"),
+        Path::new("."),
         false,
         None,
-    );
+    )
+    .expect("Claude argv wiring");
     assert_eq!(plain.len(), 7);
     assert_eq!(plain[1], "--mcp-config");
     assert_eq!(

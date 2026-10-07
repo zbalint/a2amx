@@ -129,8 +129,9 @@ and delivers messages automatically; `--harness generic` (inferred for unrecogni
 `--deliver auto` opts a generic session in to blind delivery. `a2amx mcp` is the stdio
 MCP server that harnesses start; it reads `A2AMX_ADDR` and `A2AMX_TOKEN` from its
 environment. `a2amx hook` is the Claude Code `UserPromptSubmit` hook, installed through
-an inline `--settings` argument; it reads the harness payload on stdin, always exits 0,
-and prints output only when it blocks a prompt.
+an inline `--settings` argument; a user `--settings` in the command is merged with this
+hook rather than replaced. It reads the harness payload on stdin, always exits 0, and
+prints output only when it blocks a prompt.
 
 Claude delivery uses a Claude Code channel by default, preserving any composer draft.
 `--harness claude --no-channel` keeps terminal delivery. Channel startup auto-accepts

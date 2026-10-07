@@ -29,6 +29,7 @@ lag the code.
 | U4 | Real-Codex smoke test as an ignored test, like the OMP ones | docs |
 | U6 | A human typing exactly inside the paste-to-Enter window to force a real corrupted submission | docs |
 | U7 | Block behavior on Codex in the validation plan's recorded results | docs |
+| U8 | User-supplied `--mcp-config`, `--allowedTools`, and `--append-system-prompt` duplicate-flag behavior is unprobed (`--append-system-prompt` probably last-wins) | code |
 
 ## Known issues
 
@@ -72,5 +73,6 @@ lag the code.
 | C12 | Optional role label shown to the session itself | spec 3h |
 | C13 | UPTIME and IN-STATE columns in `a2amx list` | spec 3i |
 | C14 | OMP quota percentages from `omp usage --json` | spec 3j |
+| C15 | User `--settings` is merged into the Claude launch instead of overriding it | spec 3k |
 | U1 | `developer_instructions` taking effect in Codex | verified by the tester on an isolated daemon, 2026-10-04: the default session's model states the peer-authorization instruction and a `--no-authorize-peers` session reports none (Codex 0.160.0, one model; not a version matrix) |
 | U2 | Two simultaneous Codex sessions; `/new` thread switching | verified by the tester, 2026-10-04: a message reached only the receiver's own thread with a native receipt, and after `/new` the next message landed in the new thread only |

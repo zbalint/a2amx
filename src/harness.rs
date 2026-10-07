@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+use anyhow::{Context, anyhow};
+
 use crate::emulator::Screen;
 
 #[derive(
@@ -241,28 +243,32 @@ pub fn paste_view(harness: Harness, text: &str) -> String {
 pub fn wire_claude_argv(
     argv: Vec<String>,
     exe: &Path,
+    cwd: &Path,
     authorize_peers: bool,
     role: Option<&str>,
-) -> Vec<String> {
-    claude_argv(argv, exe, authorize_peers, role, false)
+) -> anyhow::Result<Vec<String>> {
+    claude_argv(argv, exe, cwd, authorize_peers, role, false)
 }
 
 pub fn wire_claude_channel_argv(
     argv: Vec<String>,
     exe: &Path,
+    cwd: &Path,
     authorize_peers: bool,
     role: Option<&str>,
-) -> Vec<String> {
-    claude_argv(argv, exe, authorize_peers, role, true)
+) -> anyhow::Result<Vec<String>> {
+    claude_argv(argv, exe, cwd, authorize_peers, role, true)
 }
 
 fn claude_argv(
     argv: Vec<String>,
     exe: &Path,
+    cwd: &Path,
     authorize_peers: bool,
     role: Option<&str>,
     channel: bool,
-) -> Vec<String> {
+) -> anyhow::Result<Vec<String>> {
+    let (argv, user_settings) = take_user_settings(argv, cwd)?;
     let config = serde_json::json!({
         "mcpServers": {
             "a2amx": {
@@ -282,6 +288,10 @@ fn claude_argv(
             }]
         }
     });
+    let settings = match user_settings {
+        Some(user_settings) => merge_settings(user_settings, settings)?,
+        None => settings,
+    };
     let mut extras =
         Vec::with_capacity(6 + usize::from(authorize_peers) * 2 + usize::from(channel) * 2);
     extras.push("--mcp-config".to_owned());
@@ -299,7 +309,109 @@ fn claude_argv(
     extras.push("--settings".to_owned());
     extras.push(settings.to_string());
 
-    insert_extras(argv, extras)
+    Ok(insert_extras(argv, extras))
+}
+
+fn take_user_settings(
+    mut argv: Vec<String>,
+    cwd: &Path,
+) -> anyhow::Result<(Vec<String>, Option<serde_json::Value>)> {
+    let scan_end = argv
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(argv.len());
+    let mut value = None;
+    let mut index = 0;
+    while index < scan_end {
+        if argv[index] == "--settings" {
+            if index + 1 >= scan_end {
+                return Err(anyhow!("--settings is missing its value"));
+            }
+            value = Some(argv[index + 1].clone());
+            index += 2;
+        } else if let Some(settings) = argv[index].strip_prefix("--settings=") {
+            if settings.is_empty() {
+                return Err(anyhow!("--settings= needs a non-empty value"));
+            }
+            value = Some(settings.to_owned());
+            index += 1;
+        } else {
+            index += 1;
+        }
+    }
+    let Some(value) = value else {
+        return Ok((argv, None));
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(anyhow!("--settings needs a non-empty value"));
+    }
+    let text = if value.starts_with('{') && value.ends_with('}') {
+        value.to_owned()
+    } else {
+        std::fs::read_to_string(cwd.join(value))
+            .with_context(|| format!("cannot read --settings file {value}"))?
+    };
+    let settings: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| "--settings contains invalid JSON")?;
+    if !settings.is_object() {
+        return Err(anyhow!("--settings JSON must be an object"));
+    }
+
+    let mut filtered = Vec::with_capacity(argv.len());
+    let mut index = 0;
+    while index < argv.len() {
+        if index >= scan_end {
+            filtered.extend(argv.drain(index..));
+            break;
+        }
+        if argv[index] == "--settings" {
+            index += 2;
+        } else if argv[index].starts_with("--settings=") {
+            index += 1;
+        } else {
+            filtered.push(argv[index].clone());
+            index += 1;
+        }
+    }
+    Ok((filtered, Some(settings)))
+}
+
+fn merge_settings(
+    mut user_settings: serde_json::Value,
+    a2amx_settings: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let a2amx_entry = a2amx_settings["hooks"]["UserPromptSubmit"][0].clone();
+    let user_object = user_settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("--settings JSON must be an object"))?;
+    match user_object.get_mut("hooks") {
+        None => {
+            user_object.insert("hooks".to_owned(), a2amx_settings["hooks"].clone());
+        }
+        Some(hooks) => {
+            let hooks_object = hooks
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("--settings hooks must be an object"))?;
+            match hooks_object.get_mut("UserPromptSubmit") {
+                None => {
+                    hooks_object.insert(
+                        "UserPromptSubmit".to_owned(),
+                        serde_json::json!([a2amx_entry]),
+                    );
+                }
+                Some(entries) => {
+                    entries
+                        .as_array_mut()
+                        .ok_or_else(|| {
+                            anyhow!("--settings hooks.UserPromptSubmit must be an array")
+                        })?
+                        .push(a2amx_entry);
+                }
+            }
+        }
+    }
+    Ok(user_settings)
 }
 
 pub fn wire_omp_argv(

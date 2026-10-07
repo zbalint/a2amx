@@ -423,8 +423,9 @@ machine; there is no central-versus-host split yet.
   including with `--no-authorize-peers`. `--no-channel` omits the development-channel
   flags and uses plain MCP with terminal delivery. The wording is provisional.
 - **Claude Code hook.** The same launch also appends an inline `--settings` argument
-  holding one `UserPromptSubmit` command hook that runs `a2amx hook`. The hook reads
-  the harness payload on stdin, sends the prompt to the daemon with the session token
+  holding one `UserPromptSubmit` command hook that runs `a2amx hook`; a user
+  `--settings` in the command is merged with this hook rather than replaced. The hook
+  reads the harness payload on stdin, sends the prompt to the daemon with the session token
   (`ReportPrompt`), and prints a block decision or nothing; it fails open on every
   error and always exits 0. For channel events the daemon matches the exact channel
   wrapper and transformed envelope, recording a native receipt when they match and
