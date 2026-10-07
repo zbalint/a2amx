@@ -120,6 +120,8 @@ fn request_json_uses_exact_tagged_shapes() {
         harness: a2amx::harness::Harness::Generic,
         deliver: None,
         heartbeat: None,
+        team: None,
+        role: None,
     };
     let json = serde_json::to_string(&request).unwrap_or_default();
     assert_eq!(
@@ -187,6 +189,7 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             hold_reason: None,
             quota: None,
             harness: Default::default(),
+            team: None,
             cwd: None,
             activity: None,
             uptime_secs: None,
@@ -218,6 +221,7 @@ fn session_summary_durations_round_trip_when_present() {
             hold_reason: None,
             quota: None,
             harness: Default::default(),
+            team: None,
             cwd: None,
             activity: Some(Activity::Working),
             uptime_secs: Some(5),
@@ -388,6 +392,8 @@ fn messaging_control_variants_round_trip() {
             harness: a2amx::harness::Harness::Claude,
             deliver: Some(a2amx::harness::Deliver::Auto),
             heartbeat: None,
+            team: None,
+            role: None,
         },
     ];
     let request_json = [
@@ -431,6 +437,8 @@ fn messaging_control_variants_round_trip() {
                 address: "agent-plan@host-a".into(),
                 state: "running".into(),
                 attached: false,
+                team: None,
+                you: false,
                 quota: None,
                 harness: Default::default(),
                 cwd: None,
@@ -465,6 +473,8 @@ fn messaging_control_variants_round_trip() {
             address: "agent-omp@host-a".into(),
             state: "running".into(),
             attached: false,
+            team: None,
+            you: false,
             quota: None,
             harness: Harness::Omp,
             cwd: Some("/tmp/agent".into()),
@@ -571,6 +581,7 @@ fn additive_visibility_fields_round_trip() {
             hold_reason: Some("human_draft".into()),
             quota: None,
             harness: Default::default(),
+            team: None,
             cwd: None,
             activity: None,
             uptime_secs: None,
@@ -654,6 +665,8 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
             weekly: None,
             limit_reached: false,
         }),
+        team: None,
+        role: None,
     };
     let frame = ServerFrame::Status(info);
     let encoded = frame.encode();
@@ -700,4 +713,49 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
             status: false
         }
     );
+}
+
+#[test]
+fn team_fields_round_trip_and_old_new_session_defaults_are_compatible() {
+    use a2amx::messaging::TeamScope;
+    let request = Request::NewSession {
+        argv: vec!["sh".into()],
+        cols: 40,
+        rows: 10,
+        cwd: None,
+        env: Vec::new(),
+        reset: Vec::new(),
+        control_from: Vec::new(),
+        watch: Vec::new(),
+        name: Some("demo-worker".into()),
+        harness: a2amx::harness::Harness::Generic,
+        deliver: None,
+        heartbeat: None,
+        team: Some(TeamScope {
+            name: "demo".into(),
+            private: true,
+            allow: vec!["other".into()],
+        }),
+        role: Some("worker".into()),
+    };
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["team"]["name"], "demo");
+    assert_eq!(value["team"]["private"], true);
+    assert_eq!(value["role"], "worker");
+    assert_eq!(serde_json::from_value::<Request>(value).unwrap(), request);
+    let old = serde_json::json!({
+        "type": "new_session",
+        "argv": ["sh"],
+        "cols": 40,
+        "rows": 10,
+        "cwd": null,
+        "env": [],
+        "name": "worker",
+        "harness": "generic"
+    });
+    let Request::NewSession { team, role, .. } = serde_json::from_value(old).unwrap() else {
+        panic!("old request tag");
+    };
+    assert_eq!(team, None);
+    assert_eq!(role, None);
 }

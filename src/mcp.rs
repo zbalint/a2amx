@@ -465,7 +465,7 @@ pub(crate) fn tool_schemas() -> Value {
     json!([
         {
             "name": "list_agents",
-            "description": "List the agent sessions you can message. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages.",
+            "description": "List the agent sessions you can message. Sessions outside the caller's visibility are not listed. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages. Each entry's \"team\" is its team name when it has one, and \"you\" marks the caller.",
             "inputSchema": {
                 "type": "object",
                 "properties": {},

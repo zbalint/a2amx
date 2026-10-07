@@ -5,7 +5,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, bail};
 use serde::Deserialize;
 
-use crate::messaging::{parse_interval, validate_name, validate_reset_steps};
+use crate::messaging::{
+    TeamScope, parse_interval, validate_name, validate_reset_steps, validate_role,
+};
 use crate::wire::SessionSummary;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -27,32 +29,95 @@ pub struct TeamSession {
     pub heartbeat: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
+    #[serde(skip)]
+    pub team: Option<TeamScope>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TeamFile {
     #[serde(default)]
-    prefix: Option<String>,
+    team: Option<String>,
+    #[serde(default)]
+    private: Option<bool>,
+    #[serde(default)]
+    allow: Option<Vec<String>>,
+    #[serde(default)]
+    prefix: Option<toml::Value>,
     #[serde(default)]
     session: Vec<toml::Table>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    Start(TeamSession),
+    Start(Box<TeamSession>),
     AlreadyRunning { name: String, id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConflictReason {
+    Exited,
+    TeamMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conflict {
     pub name: String,
     pub id: String,
+    pub reason: ConflictReason,
 }
 
 pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
     let file: TeamFile = toml::from_str(text).context("invalid team file")?;
-    let TeamFile { prefix, session } = file;
+    let TeamFile {
+        team,
+        private,
+        allow,
+        prefix,
+        session,
+    } = file;
+    let allow_given = allow.is_some();
+    let allow = allow.unwrap_or_default();
+    if prefix.is_some() {
+        bail!("prefix was renamed to team; see the README");
+    }
+    if team.is_none() && private.is_some() {
+        bail!("private requires team");
+    }
+    if team.is_none() && allow_given {
+        bail!("allow requires team");
+    }
+    let scope = if let Some(name) = team {
+        if name.is_empty() {
+            bail!("team must not be empty");
+        }
+        validate_name(&name).map_err(|error| anyhow::anyhow!("team {name:?}: {error}"))?;
+        if name.ends_with('-') {
+            bail!("team {name:?} must not end in '-'; the dash is added for you");
+        }
+        let private = private.unwrap_or(true);
+        if !private && allow_given {
+            bail!("allow needs a private team");
+        }
+        let mut seen = HashSet::with_capacity(allow.len());
+        for entry in &allow {
+            validate_name(entry)
+                .map_err(|error| anyhow::anyhow!("allow entry {entry:?}: {error}"))?;
+            if entry == &name {
+                bail!("allow entry must not be the team itself");
+            }
+            if !seen.insert(entry) {
+                bail!("allow entry {entry:?} is repeated");
+            }
+        }
+        Some(TeamScope {
+            name,
+            private,
+            allow,
+        })
+    } else {
+        None
+    };
     let mut sessions: Vec<TeamSession> = session
         .into_iter()
         .enumerate()
@@ -62,33 +127,75 @@ pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
                 .with_context(|| format!("session {}", index + 1))
         })
         .collect::<anyhow::Result<_>>()?;
-    if let Some(prefix) = prefix {
-        if prefix.is_empty() {
-            bail!("prefix must not be empty");
+    let base_names: HashSet<String> = sessions
+        .iter()
+        .map(|session| session.name.clone())
+        .collect();
+    for session in &mut sessions {
+        session.team = scope.clone();
+    }
+    for session in &mut sessions {
+        let original_name = session.name.clone();
+        if let Some(scope) = &scope {
+            session.name = format!("{}-{original_name}", scope.name);
         }
-        if prefix.ends_with('-') {
-            bail!("prefix {prefix:?} must not end in '-'; the dash is added for you");
-        }
-        let base_names: HashSet<String> = sessions
-            .iter()
-            .map(|session| session.name.clone())
-            .collect();
-        for session in &mut sessions {
-            session.name = format!("{prefix}-{}", session.name);
-            for name in &mut session.watch {
-                if base_names.contains(name.as_str()) {
-                    *name = format!("{prefix}-{name}");
-                }
-            }
-            for name in &mut session.control_from {
-                if base_names.contains(name.as_str()) {
-                    *name = format!("{prefix}-{name}");
-                }
-            }
-        }
+        resolve_references(
+            &mut session.watch,
+            &base_names,
+            scope.as_ref(),
+            &session.name,
+            "watch",
+        )?;
+        resolve_references(
+            &mut session.control_from,
+            &base_names,
+            scope.as_ref(),
+            &session.name,
+            "control_from",
+        )?;
     }
     validate_sessions(&sessions)?;
     Ok(sessions)
+}
+
+fn resolve_references(
+    references: &mut [String],
+    base_names: &HashSet<String>,
+    scope: Option<&TeamScope>,
+    session_name: &str,
+    kind: &str,
+) -> anyhow::Result<()> {
+    for reference in references {
+        let explicit = reference.starts_with('/') || reference.contains('/');
+        let resolved = if let Some(name) = reference.strip_prefix('/') {
+            if name.is_empty() || name.contains('/') {
+                bail!("invalid {kind} reference {reference:?} in {session_name}");
+            }
+            validate_name(name)?;
+            name.to_owned()
+        } else if let Some((team, name)) = reference.split_once('/') {
+            if team.is_empty() || name.is_empty() || name.contains('/') {
+                bail!("invalid {kind} reference {reference:?} in {session_name}");
+            }
+            validate_name(team)?;
+            validate_name(name)?;
+            format!("{team}-{name}")
+        } else if let Some(scope) = scope {
+            if !base_names.contains(reference) {
+                bail!("unknown session {reference} in {kind} of {session_name}");
+            }
+            format!("{}-{reference}", scope.name)
+        } else {
+            reference.clone()
+        };
+        if explicit {
+            validate_name(&resolved).map_err(|error| {
+                anyhow::anyhow!("session {session_name} {kind} entry {reference:?}: {error}")
+            })?;
+        }
+        *reference = resolved;
+    }
+    Ok(())
 }
 
 pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
@@ -112,6 +219,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             watch: Vec::new(),
             heartbeat: None,
             role: None,
+            team: None,
         });
     }
     validate_sessions(&sessions)?;
@@ -130,9 +238,17 @@ pub fn plan(
         .iter()
         .filter_map(|session| {
             let existing = by_name.get(session.name.as_str())?;
-            existing.exit_code.map(|_| Conflict {
+            let reason = if existing.exit_code.is_some() {
+                Some(ConflictReason::Exited)
+            } else if existing.team.as_ref() != session.team.as_ref() {
+                Some(ConflictReason::TeamMismatch)
+            } else {
+                None
+            };
+            reason.map(|reason| Conflict {
                 name: session.name.clone(),
                 id: existing.id.clone(),
+                reason,
             })
         })
         .collect();
@@ -146,7 +262,7 @@ pub fn plan(
                 name: session.name.clone(),
                 id: existing.id.clone(),
             },
-            None => Action::Start(session.clone()),
+            None => Action::Start(Box::new(session.clone())),
         })
         .collect())
 }
@@ -215,27 +331,8 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
                 .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
         }
         if let Some(role) = &session.role {
-            if role.is_empty() {
-                bail!("session {}: role must not be empty", session.name);
-            }
-            if role.chars().count() > 64 {
-                bail!(
-                    "session {}: role must be at most 64 characters",
-                    session.name
-                );
-            }
-            if role.chars().any(char::is_control) {
-                bail!(
-                    "session {}: role must not contain control characters",
-                    session.name
-                );
-            }
-            if role.trim() != role {
-                bail!(
-                    "session {}: role must not have leading or trailing whitespace",
-                    session.name
-                );
-            }
+            validate_role(role)
+                .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
         }
     }
     Ok(())

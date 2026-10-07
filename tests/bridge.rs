@@ -607,7 +607,7 @@ async fn the_bridge_relays_the_three_tools() {
         agents,
         json!({"agents":[
             {"address":"agent-plan@host-a","state":"running","activity":"working","attached":false,"harness":"generic"},
-            {"address":"agent-review@host-a","state":"running","activity":"working","attached":false,"harness":"omp"}
+            {"address":"agent-review@host-a","state":"running","activity":"working","attached":false,"harness":"omp","you":true}
         ]})
     );
     let mut admin = Client::connect(case.dir.path()).await.unwrap();

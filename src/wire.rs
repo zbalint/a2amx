@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::emulator::Scroll;
 use crate::harness::{Deliver, Harness};
+use crate::messaging::TeamScope;
 
 /// Largest accepted frame payload. Decoding rejects longer frames.
 pub const MAX_FRAME_LEN: usize = 1 << 20;
@@ -132,6 +133,10 @@ pub enum Request {
         harness: Harness,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         deliver: Option<Deliver>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        team: Option<TeamScope>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
     },
     List,
     /// Followed by a switch of this connection to stream frames.
@@ -290,6 +295,8 @@ pub struct SessionSummary {
     pub attached: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<TeamScope>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub address: String,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -349,6 +356,10 @@ pub struct AgentSummary {
     pub state: String,
     pub attached: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub you: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota: Option<QuotaInfo>,
     #[serde(default)]
     pub harness: Harness,
@@ -391,6 +402,10 @@ pub struct StatusInfo {
     pub activity: Option<Activity>,
     #[serde(default)]
     pub quota: Option<QuotaInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<TeamScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 /// Server-to-client stream frame.

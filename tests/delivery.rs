@@ -66,6 +66,8 @@ impl Case {
                 harness: Harness::Claude,
                 deliver: Some(deliver),
                 heartbeat: None,
+                team: None,
+                role: None,
             })
             .await
             .unwrap();

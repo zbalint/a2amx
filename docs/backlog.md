@@ -43,7 +43,6 @@ lag the code.
 | ID | Item | Evidence |
 | --- | --- | --- |
 | F2 | Named launch templates in an operator config file, launch ownership (a launcher may kill only what it launched), trusted working directory so the Claude trust dialog cannot block unattended delivery. Out of scope for now with G1 (owner, 2026-10-04) | docs |
-| F3 | Scoping of `list_agents` (exchanges or workspaces) instead of every session seeing every session. Accepted as is for now; revisit if it causes trouble (owner, 2026-10-04) | docs |
 
 ## Closed
 
@@ -76,3 +75,4 @@ lag the code.
 | C15 | User `--settings` is merged into the Claude launch instead of overriding it | spec 3k |
 | U1 | `developer_instructions` taking effect in Codex | verified by the tester on an isolated daemon, 2026-10-04: the default session's model states the peer-authorization instruction and a `--no-authorize-peers` session reports none (Codex 0.160.0, one model; not a version matrix) |
 | U2 | Two simultaneous Codex sessions; `/new` thread switching | verified by the tester, 2026-10-04: a message reached only the receiver's own thread with a native receipt, and after `/new` the next message landed in the new thread only |
+| C16 | Private teams, visibility-aware `list_agents`, team-aware list/picker/status, and `list --team`/`--as` filters | spec 3l |

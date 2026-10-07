@@ -123,6 +123,8 @@ impl Case {
                         harness: Harness::Codex,
                         deliver: None,
                         heartbeat: None,
+                        team: None,
+                        role: None,
                     })
                     .await
                     .unwrap()

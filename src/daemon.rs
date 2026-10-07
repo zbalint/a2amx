@@ -1,6 +1,6 @@
 //! The host daemon: owns session runtimes and serves the local TCP protocol.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
@@ -268,6 +268,8 @@ impl Runtime {
             name,
             harness,
             deliver,
+            team,
+            role,
         } = request
         else {
             anyhow::bail!("expected new_session");
@@ -320,7 +322,73 @@ impl Runtime {
                 ),
             });
         }
+
+        if let Some(scope) = &team {
+            if let Err(error) = messaging::validate_name(&scope.name) {
+                return Ok(Response::Error {
+                    message: format!("team: {error}"),
+                });
+            }
+            if scope.name.ends_with('-') {
+                return Ok(Response::Error {
+                    message: "team must not end in '-'".into(),
+                });
+            }
+            if !scope.private && !scope.allow.is_empty() {
+                return Ok(Response::Error {
+                    message: "allow needs a private team".into(),
+                });
+            }
+            let mut seen = HashSet::with_capacity(scope.allow.len());
+            for entry in &scope.allow {
+                if let Err(error) = messaging::validate_name(entry) {
+                    return Ok(Response::Error {
+                        message: format!("team allow entry {entry:?}: {error}"),
+                    });
+                }
+                if entry == &scope.name {
+                    return Ok(Response::Error {
+                        message: "team allow entry must not be the team itself".into(),
+                    });
+                }
+                if !seen.insert(entry) {
+                    return Ok(Response::Error {
+                        message: format!("team allow entry {entry:?} is repeated"),
+                    });
+                }
+            }
+        }
+        if let Some(role) = &role {
+            if let Err(error) = messaging::validate_role(role) {
+                return Ok(Response::Error {
+                    message: error.to_string(),
+                });
+            }
+        }
         let _gate = self.new_session_gate.lock().await;
+        if let Some(scope) = &team {
+            let differs = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .values()
+                .any(|session| {
+                    session.exit_code().is_none()
+                        && session.team().is_some_and(|existing| {
+                            existing.name == scope.name
+                                && (existing.private != scope.private
+                                    || existing.allow != scope.allow)
+                        })
+                });
+            if differs {
+                return Ok(Response::Error {
+                    message: format!(
+                        "team {} is already running with different settings",
+                        scope.name
+                    ),
+                });
+            }
+        }
         if let Some(name) = &name {
             if let Err(error) = messaging::validate_name(name) {
                 return Ok(Response::Error {
@@ -361,12 +429,13 @@ impl Runtime {
             // value needs this or the env path causes trouble. A field now would
             // force edits to the 29 Request::NewSession literals in tests plus
             // src/main.rs, which have no Default.
+            // The role also travels in the additive wire field for display only.
             let authorize = !env
                 .iter()
                 .any(|(key, value)| key == codex::NO_AUTHORIZE_ENV && value == "1");
             env.retain(|(key, _)| key != codex::NO_AUTHORIZE_ENV);
             let exe = self.exe.clone();
-            let role = env
+            let codex_role = env
                 .iter()
                 .rev()
                 .find_map(|(key, value)| (key == codex::ROLE_ENV).then(|| value.clone()));
@@ -382,7 +451,7 @@ impl Runtime {
                 &id.0,
                 cwd.as_deref().map(Path::new),
                 &env,
-                codex::server_config(&self.exe, authorize, role.as_deref()),
+                codex::server_config(&self.exe, authorize, codex_role.as_deref()),
             )
             .await;
             let link = match started {
@@ -412,6 +481,8 @@ impl Runtime {
                     control_from,
                     watch,
                     heartbeat,
+                    team,
+                    role,
                     token,
                     codex,
                 },
@@ -477,6 +548,7 @@ impl Runtime {
             .filter(|watcher| {
                 watcher.exit_code().is_none()
                     && watcher.watch().iter().any(|watched| watched == name)
+                    && messaging::visible(watcher.team(), session.team())
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -549,7 +621,9 @@ impl Runtime {
                         sessions
                             .values()
                             .find(|peer| {
-                                peer.exit_code().is_none() && peer.name() == Some(name.as_str())
+                                peer.exit_code().is_none()
+                                    && peer.name() == Some(name.as_str())
+                                    && messaging::visible(session.team(), peer.team())
                             })
                             .cloned()
                     })
@@ -709,15 +783,18 @@ impl Runtime {
         let Some(recipient) = recipient else {
             return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
         };
+        let Some((_, sender)) = lookup(self, sender_id) else {
+            return failed(code::INTERNAL, "sender session is unavailable");
+        };
+        if !messaging::visible(sender.team(), recipient.team()) {
+            return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
+        }
         if recipient.id().0 == sender_id {
             return failed(code::UNKNOWN_RECIPIENT, "a session cannot message itself");
         }
         if recipient.exit_code().is_some() {
             return failed(code::RECIPIENT_EXITED, "recipient has exited");
         }
-        let Some((_, sender)) = lookup(self, sender_id) else {
-            return failed(code::INTERNAL, "sender session is unavailable");
-        };
         let mut rate = self.rate.lock().await;
         let timestamps = rate.entry(sender_id.into()).or_default();
         while timestamps
@@ -806,6 +883,23 @@ impl Runtime {
             self.reset_audit(&sender, &reference, messaging::code::UNKNOWN_SESSION, None);
             return failed(messaging::code::UNKNOWN_SESSION, "unknown session");
         };
+        if let Role::Session(sender_id) = role {
+            let Some((_, sender_session)) = lookup(self, sender_id) else {
+                self.reset_audit(&sender, &reference, messaging::code::UNKNOWN_SESSION, None);
+                return failed(messaging::code::UNKNOWN_SESSION, "unknown session");
+            };
+            if !messaging::visible(sender_session.team(), target.team()) {
+                let target_address =
+                    messaging::address(target.name(), &target.id().0, &self.host_name);
+                self.reset_audit(
+                    &sender,
+                    &target_address,
+                    messaging::code::UNKNOWN_SESSION,
+                    None,
+                );
+                return failed(messaging::code::UNKNOWN_SESSION, "unknown session");
+            }
+        }
         let target_address = messaging::address(target.name(), &target.id().0, &self.host_name);
         let permitted = match role {
             Role::Admin => true,
@@ -1600,6 +1694,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                             attached: state.attachment.is_some(),
                             exit_code: state.exit_code,
                             name: session.name().map(str::to_owned),
+                            team: session.team().cloned(),
                             address: messaging::address(
                                 session.name(),
                                 &session.id().0,
@@ -1694,37 +1789,63 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 }
             }
             Request::ListAgents => {
-                let omp_usage = runtime.omp_usage();
-                let agents = runtime
-                    .sessions
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .values()
-                    .map(|session| {
-                        let activity = session_activity(session);
-                        AgentSummary {
-                            address: messaging::address(
-                                session.name(),
-                                &session.id().0,
-                                &runtime.host_name,
-                            ),
-                            state: if session.exit_code().is_some() {
-                                "exited"
-                            } else {
-                                "running"
+                let admin = matches!(role, Role::Admin);
+                let viewer_id = match &role {
+                    Role::Admin => None,
+                    Role::Session(id) => Some(id.as_str()),
+                };
+                let sessions = runtime.sessions.lock().unwrap_or_else(|e| e.into_inner());
+                let viewer = viewer_id.and_then(|id| {
+                    sessions
+                        .values()
+                        .find(|session| session.id().0 == id)
+                        .cloned()
+                });
+                if !admin && viewer.is_none() {
+                    Response::Error {
+                        message: "sender session is unavailable".into(),
+                    }
+                } else {
+                    let omp_usage = runtime.omp_usage();
+                    let agents = sessions
+                        .values()
+                        .filter(|session| {
+                            admin
+                                || viewer.as_ref().is_some_and(|viewer| {
+                                    session.id() == viewer.id()
+                                        || messaging::visible(viewer.team(), session.team())
+                                })
+                        })
+                        .map(|session| {
+                            let activity = session_activity(session);
+                            AgentSummary {
+                                address: messaging::address(
+                                    session.name(),
+                                    &session.id().0,
+                                    &runtime.host_name,
+                                ),
+                                state: if session.exit_code().is_some() {
+                                    "exited"
+                                } else {
+                                    "running"
+                                }
+                                .into(),
+                                attached: session.attached(),
+                                team: session.team().map(|scope| scope.name.clone()),
+                                you: viewer
+                                    .as_ref()
+                                    .is_some_and(|viewer| session.id() == viewer.id()),
+                                quota: session_quota(session, omp_usage),
+                                harness: session.harness(),
+                                cwd: session
+                                    .cwd()
+                                    .map(|path| path.to_string_lossy().into_owned()),
+                                activity,
                             }
-                            .into(),
-                            attached: session.attached(),
-                            quota: session_quota(session, omp_usage),
-                            harness: session.harness(),
-                            cwd: session
-                                .cwd()
-                                .map(|path| path.to_string_lossy().into_owned()),
-                            activity,
-                        }
-                    })
-                    .collect();
-                Response::Agents { agents }
+                        })
+                        .collect();
+                    Response::Agents { agents }
+                }
             }
             Request::SendMessage {
                 to,
@@ -1985,6 +2106,8 @@ async fn attachment_status(
         harness: Some(session.harness()),
         activity: session_activity(session),
         quota: session_quota(session, runtime.omp_usage()),
+        team: session.team().cloned(),
+        role: session.role().map(str::to_owned),
     })
 }
 

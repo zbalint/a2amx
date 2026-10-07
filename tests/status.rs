@@ -14,9 +14,10 @@ fn info(address: &str) -> StatusInfo {
         harness: None,
         activity: None,
         quota: None,
+        team: None,
+        role: None,
     }
 }
-
 fn visible(bytes: &[u8]) -> String {
     let bar = b"\x1b[24;1H";
     let Some(start) = bytes.windows(bar.len()).position(|window| window == bar) else {
@@ -37,6 +38,28 @@ fn visible(bytes: &[u8]) -> String {
         }
     }
     String::from_utf8_lossy(&text).into_owned()
+}
+
+#[test]
+fn status_shows_sanitized_role_and_private_team_before_harness() {
+    let mut status = info("agent-plan@host-a");
+    status.role = Some("architect\nunsafe".into());
+    status.team = Some(a2amx::messaging::TeamScope {
+        name: "demo\r\nteam".into(),
+        private: true,
+        allow: Vec::new(),
+    });
+    status.harness = Some(Harness::Claude);
+    let text = visible(&status::render(
+        "agent-plan@host-a",
+        Some(&status),
+        2,
+        160,
+        24,
+    ));
+    assert!(text.contains("role architect?unsafe"));
+    assert!(text.contains("team demo??team (private)"));
+    assert!(text.contains("role architect?unsafe │ team demo??team (private) │ claude"));
 }
 
 #[test]

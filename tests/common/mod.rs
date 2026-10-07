@@ -9,7 +9,7 @@ pub mod pty;
 use a2amx::client::Client;
 use a2amx::daemon::{Daemon, DaemonConfig};
 use a2amx::harness::{Deliver, Harness};
-use a2amx::messaging::Limits;
+use a2amx::messaging::{Limits, TeamScope};
 use a2amx::wire::{Request, Response};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -85,6 +85,19 @@ pub async fn new_agent(
     harness: Harness,
     deliver: Deliver,
 ) -> (String, String, SocketAddr) {
+    new_team_agent(admin, dir, name, harness, deliver, None, &[], &[]).await
+}
+#[allow(clippy::too_many_arguments)] // Locked spec requires this public integration-test seam.
+pub async fn new_team_agent(
+    admin: &mut Client,
+    dir: &Path,
+    name: Option<&str>,
+    harness: Harness,
+    deliver: Deliver,
+    team: Option<TeamScope>,
+    watch: &[&str],
+    control_from: &[&str],
+) -> (String, String, SocketAddr) {
     let output = tempfile::NamedTempFile::new_in(dir).expect("credential capture path");
     let response = admin
         .request(Request::NewSession {
@@ -98,11 +111,13 @@ pub async fn new_agent(
             cwd: None,
             env: vec![("OUT".into(), output.path().to_string_lossy().into_owned())],
             reset: vec![],
-            control_from: vec![],
-            watch: vec![],
+            control_from: control_from.iter().map(|name| (*name).to_owned()).collect(),
+            watch: watch.iter().map(|name| (*name).to_owned()).collect(),
             name: name.map(str::to_owned),
             harness,
             deliver: Some(deliver),
+            team,
+            role: None,
             heartbeat: None,
         })
         .await

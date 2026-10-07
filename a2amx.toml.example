@@ -1,11 +1,11 @@
 # Copy to a2amx.toml, then run: a2amx team up
 #
 # Session names are unique per daemon and shared by every project on the machine.
-# The file-level prefix adds "<prefix>-" to every session name below, so "architect"
-# becomes "myproject-architect". It also applies to watch and control_from entries
-# that name a session in this file; other entries are used as written.
-prefix = "myproject"
-
+# The file-level team prefixes every session name below, so "architect" becomes
+# "myproject-architect".
+team = "myproject"
+# private = false # teams are private by default
+# allow = ["other-team"] # mutual private-team consent
 # Each element of command is one argument. Write ["claude", "--model", "sonnet"],
 # never ["claude --model sonnet"] (the whole string would be taken as the program name).
 #
@@ -22,6 +22,7 @@ role = "architect"
 # control_from = ["developer"] # sessions allowed to reset this one through the MCP tool
 watch = ["developer", "consultant"] # notify this session when a watched peer exits naturally
 heartbeat = "30m" # digest watched peers after 30 minutes of idle time; needs watch
+# Reference forms: bare local "developer", explicit "other-team/architect", global "/hand".
 
 # A read-only second opinion for design and spec review. Send it each draft spec
 # before locking it, and name the decision its answer feeds.

@@ -430,6 +430,8 @@ async fn picker_clips_long_cwd_to_narrow_terminal() -> anyhow::Result<()> {
             harness: Harness::Generic,
             deliver: None,
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await?;
     let Response::Created { session } = response else {
@@ -1167,6 +1169,8 @@ gate.recv(1)
                 harness: Harness::Generic,
                 deliver: Some(Deliver::Hold),
                 heartbeat: None,
+                team: None,
+                role: None,
             })
             .await?
         else {
@@ -1240,4 +1244,49 @@ gate.recv(1)
         Ok::<_, anyhow::Error>(())
     })
     .await?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn picker_shows_team_column_when_a_team_session_exists() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let (created, code) = run_cli(
+        dir.path(),
+        &[
+            "new", "--detach", "--name", "plain", "--", "sh", "-c", "sleep 30",
+        ],
+    )?;
+    assert_eq!(code, 0);
+    assert!(created.contains("s1"));
+    std::fs::write(
+        dir.path().join("team.toml"),
+        "team = \"demo\"\n[[session]]\nname = \"worker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\n",
+    )?;
+    let team_file = dir.path().join("team.toml");
+    let team_file = team_file.to_string_lossy().into_owned();
+    let started = run_binary(
+        dir.path(),
+        &["team", "up", "--detach", "--file", &team_file],
+        &[],
+    )?;
+    assert!(
+        started.status.success(),
+        "team up output: {}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("a2amx sessions:", WAIT)?;
+    attached.wait_for_text("NAME", WAIT)?;
+    attached.wait_for_text("TEAM", WAIT)?;
+    attached.wait_for_text("demo (private)", WAIT)?;
+    let screen = attached.screen_text();
+    assert!(screen.contains(" - "));
+    assert!(screen.find("NAME").unwrap_or(usize::MAX) < screen.find("TEAM").unwrap_or(0));
+    attached.send(b"q")?;
+    attached.wait_for_text("a2amx sessions:", WAIT)?;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
 }

@@ -134,8 +134,10 @@ reset_session(to)
 ```
 
 Each `list_agents()` entry includes `address`, `state`, `activity`, `attached`, optional
-`quota`, always-present `harness` (`claude`, `omp`, `codex`, or `generic`), and
-optional spawn directory `cwd`; `cwd` is not the process's live current directory.
+`quota`, always-present `harness` (`claude`, `omp`, `codex`, or `generic`), optional
+`team` (the team name only), `you` for the caller's own entry, and optional spawn directory
+`cwd`; `cwd` is not the process's live current directory. Sessions outside the caller's
+private-team visibility are not listed.
 
 The directory returns authorized recipients and their availability. A successful
 send returns a durable message identifier and acceptance status, not a promise of
@@ -197,7 +199,10 @@ any peer holding a session token can direct an agent started with it. Narrowing 
 belongs to the envelope and authorization design, which is unresolved.
 
 A team `role`, when set, is appended to the same injected operator text for Claude,
-OMP, and Codex; it is shown only to that session, not to peers or in `list`.
+OMP, and Codex; it is shown to that session and in its attach status line, not to peers
+or in `list`/`list_agents`. A team is private by default; ungrouped sessions and public
+teams are visible to everyone, while private teams require mutual team-level `allow`.
+The daemon applies that visibility to list, message, reset, exit-event, and heartbeat paths.
 
 Open: exact exchange/workspace visibility rules and management permissions.
 Agents should only discover and message recipients authorized for their scope.
@@ -304,13 +309,13 @@ sessions untouched, and reports each removed name or ID. An empty selection prin
 
 `team up` and `team down` are client-side commands; `team down` sends the same
 graceful `Request::Kill` path as `kill` by default, or `now: true` for `--now`.
-The pure `team` module parses files and flags and plans launches. An optional
-file-level `prefix` is applied in `parse` to names and same-file `watch` and
-`control_from` entries, so `plan` and `down` only see final names. Before spawning,
-the CLI rejects all exited-name conflicts and skips running sessions. Preflight and
-spawning are deliberately non-atomic: a concurrent name claim fails at spawn,
-leaving earlier starts intact. Launches reuse `new`'s harness wiring; down targets
-only the requested names.
+The pure `team` module parses files and flags and plans launches. A file-level `team` is
+applied in `parse` to names and same-file `watch` and `control_from` entries using local,
+explicit-team, or global references, so `plan` and `down` only see final names. Teams are
+private unless `private = false`; `allow` is mutual consent between team names. Before spawning,
+the CLI rejects all exited-name and team-setting conflicts and skips running sessions. Preflight
+and spawning are deliberately non-atomic: a concurrent name claim fails at spawn, leaving
+earlier starts intact. Launches reuse `new`'s harness wiring; down targets only the requested names.
 
 ### Status line
 
@@ -325,9 +330,9 @@ The client opts in with `Request::Attach.status`; the daemon sends a status fram
 Attachments that do not opt in receive no status frames, preserving older clients;
 older daemons ignore the additive request field.
 
-The status payload also carries the optional activity, low-quota, harness, and hold details rendered
-by the bar; these additive fields preserve old payload decoding, and the daemon still sends frames
-only when the complete status changes.
+The status payload also carries the optional activity, low-quota, harness, team, role, and hold details
+rendered by the bar; these additive fields preserve old payload decoding, and the daemon still sends
+frames only when the complete status changes.
 
 ## Implemented: messaging core
 
@@ -437,7 +442,7 @@ machine; there is no central-versus-host split yet.
   `unmatchable_submission`. Each rejection still counts toward the session's
   three-in-row `corrupted_submissions` hold. See
   [delivery](delivery.md#implemented-claude-code-hook).
-- **Human controls.** `a2amx list` gains NAME, HARNESS, STATE, UPTIME, ACTIVITY, IN-STATE, PENDING,
+- **Human controls.** `a2amx list` gains NAME, optional TEAM, HARNESS, STATE, UPTIME, ACTIVITY, IN-STATE, PENDING,
   and HELD columns; `--details` appends CWD and COMMAND. UPTIME is the time since the session
   started, and IN-STATE is the age of its current activity; the daemon samples activity once per
   second and shows `-` for exited sessions. The activity column reports `idle`, `working`, or `busy` for
@@ -447,6 +452,9 @@ machine; there is no central-versus-host split yet.
   [--state ...]` lists messages; `a2amx cancel <id>` cancels a pending one; the
   prefix then `r` releases a session's hold. Pending messages do not expire;
   corrupted messages retry only until their per-message rejection limit.
+  TEAM appears only when any listed session has one; private teams include `(private)` and
+  ungrouped sessions show `-`. `--team` and `--as` are client-side AND filters; the picker
+  remains unfiltered and uses the same optional TEAM column.
 
 **Quota.** The daemon reads the last three screen rows of running Claude and Codex
 sessions for `5h N% left`, `weekly N% left` and `7d N% left`. For running OMP sessions it

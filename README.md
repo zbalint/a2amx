@@ -150,7 +150,7 @@ scroll mode, `s` toggles the status line, `r` releases the session's message hol
 literal prefix. While a session has not turned on mouse reporting, the mouse wheel scrolls it (three lines a step) and
 enters scroll mode; hold Shift to select text with the mouse. Scrollback in the real terminal after you detach is not
 kept. The status line takes the terminal's last row, keeps a thin rule above it, and shows the session address, optional activity,
-low-quota and harness details, pending-message count, and a HELD alert with the hold reason and (for
+low-quota, role and team, and harness details, pending-message count, and a HELD alert with the hold reason and (for
 releasable holds) a prefix-key hint for `r`; `s` hides both the status line and separator. In `a2amx list`, ATTACHED means a human client is attached, not that
 the session is reachable: a detached session still receives messages. ACTIVITY is `idle`, `working`, or `busy` for running sessions, and `-` for exited sessions. UPTIME is how long the session has existed (`-` when exited), and IN-STATE is how long its current ACTIVITY has lasted (`-` when ACTIVITY is `-`). Both are floored and shown as `Ns`, `Nm` or `Nh`, at one-second sampling resolution, starting when the daemon starts. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the
 reason a hold is stopping delivery (`-` when clear); a session that looks idle with
@@ -165,6 +165,15 @@ uses the daemon's `PATH`, and an OMP session running nothing costs nothing becau
 means no poll. The screen's `usage_limit_reached` error appends `limit`. It is empty when no quota
 signal is recognised.
 
+When any session has a team, `a2amx list` inserts a TEAM column after NAME; a private
+team is shown as `NAME (private)`, and ungrouped sessions show `-`. `--team NAME` filters
+by team; `--as NAME` keeps sessions visible to that named session and the named session
+itself. The filters combine with AND and do not affect the picker. Sessions outside a
+private visibility boundary are omitted from `list_agents`/`list` and return `unknown
+recipient` when addressed by an agent. Ungrouped (hand-started) sessions and
+`private = false` teams see everything and are seen by everyone, so a team is protected
+only from other private teams. Team metadata is not OS-user or process isolation.
+
 `a2amx reset <id|name>` types `/clear` by default, or the ordered `--reset` sequence
 configured for the session. Each step is bracketed-pasted, submitted with one Enter,
 and waits for the harness to become ready before the next step. A reset fails fast on
@@ -177,7 +186,9 @@ timeout; one reset runs at a time. Session-token callers need the target's
 `a2amx team up` reads `a2amx.toml` in the current directory by default:
 
 ```toml
-prefix = "myproject"
+team = "myproject"
+# private = false # teams are private by default
+# allow = ["other-team"] # mutual private-team consent
 [[session]]
 name = "architect"
 command = ["claude"]
@@ -187,6 +198,7 @@ reset = ["/clear", "/prewalk restart"]
 control_from = ["developer"]
 watch = ["developer"]
 heartbeat = "30m" # digest watched peers after 30 minutes of idle time
+# Reference forms: bare local "developer", explicit "other-team/architect", global "/hand".
 
 [[session]]
 name = "developer"
@@ -195,11 +207,13 @@ cwd = "."
 role = "developer"
 ```
 
-The optional file-level `prefix` adds a dash to each session name (`architect`
-becomes `myproject-architect`). It also prefixes `watch` and `control_from`
-entries that name a session in the same file; other entries are used as written,
-so a team file can refer to a session from another file. The flag form has no
-prefix. Each `command` element is one argument, so use `["claude", "--model",
+The file-level `team` prefixes every session name (`architect` becomes `myproject-architect`).
+Teams are private by default; `allow` names teams, and naming a public team changes nothing.
+Private teams can see ungrouped sessions and public teams, but two private teams need mutual
+`allow` entries. Sessions outside a private visibility boundary are omitted from
+`list_agents`/`list` and return `unknown recipient` when addressed by an agent. Team metadata
+is not OS-user or process isolation. The flag form has no team. Each `command` element is one
+argument, so use `["claude", "--model",
 "opus"]`, not `["claude --model opus"]`; an executable path containing a space
 is not accepted.
 
@@ -225,15 +239,16 @@ A copy to start from is in `a2amx.toml.example`; your own `a2amx.toml` is gitign
 Use `--file` for another file; relative `cwd` values are relative to that file's
 directory, while an omitted `cwd` uses the invoking directory. `up` skips and reports
 running sessions. An exited session holding a requested name stops the whole team
-before any spawn; remove it with `a2amx kill NAME` first. If a later spawn fails,
-already-started sessions remain and no further session starts.
+before any spawn; remove it with `a2amx kill NAME` first. A live team name with different
+private/allow settings is a conflict; run `a2amx team down` before changing those settings.
+If a later spawn fails, already-started sessions remain and no further session starts.
 
 Without a file, `a2amx team up architect=claude developer=omp` accepts bare
-executables only and has no prefix; commands with arguments need the file's argv
+executables only and has no team; commands with arguments need the file's argv
 arrays. The file may select one session to attach; the flag form attaches the
 first. `--detach` suppresses attachment, and nonterminal invocation never attaches.
 `a2amx team down` kills the file's named sessions, running or exited; explicit
-names select full session names directly, including any team prefix. It uses the
+names select full session names directly, including any team-prefixed name. It uses the
 same graceful Ctrl-D default as `kill`; pass `--now` to use the immediate HUP/KILL
 path. Missing names are reported without failing; explicit missing names also print
 a stderr hint to use full names from `a2amx list`, while file-derived missing names

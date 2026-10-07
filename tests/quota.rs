@@ -249,6 +249,8 @@ async fn status_line_session_sized(
             harness,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap();
@@ -310,6 +312,8 @@ async fn direct_omp_session(
             control_from: vec![],
             watch: vec![],
             heartbeat: None,
+            team: None,
+            role: None,
             name: Some(name.into()),
             harness: Harness::Omp,
             deliver: Some(Deliver::Hold),

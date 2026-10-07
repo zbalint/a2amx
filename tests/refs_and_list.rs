@@ -359,3 +359,65 @@ async fn list_reports_explicit_omp_and_unnamed_generic_harnesses() -> anyhow::Re
     assert_eq!(&cells[1][..3], ["s2", "-", "generic"]);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_renders_and_filters_team_scope() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("team.toml"),
+        r#"team = "demo"
+[[session]]
+name = "worker"
+command = ["sh", "-c", "sleep 30"]
+"#,
+    )?;
+    let started = run_binary(
+        dir.path(),
+        &["team", "up", "--detach", "--file", "team.toml"],
+    )?;
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let plain = run_binary(
+        dir.path(),
+        &[
+            "new", "--detach", "--name", "plain", "--", "sh", "-c", "sleep 30",
+        ],
+    )?;
+    assert!(plain.status.success());
+
+    let listing = String::from_utf8(run_binary(dir.path(), &["list"])?.stdout)?;
+    assert!(
+        listing
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains("NAME") && line.contains("TEAM"))
+    );
+    assert!(listing.contains("demo (private)"));
+    assert!(
+        listing
+            .lines()
+            .any(|line| line.contains("plain") && line.contains("-"))
+    );
+
+    let team_only = String::from_utf8(run_binary(dir.path(), &["list", "--team", "demo"])?.stdout)?;
+    assert!(team_only.contains("demo (private)"));
+    assert!(!team_only.contains("plain"));
+
+    let visible_to_worker =
+        String::from_utf8(run_binary(dir.path(), &["list", "--as", "demo-worker"])?.stdout)?;
+    assert!(visible_to_worker.contains("demo (private)"));
+    assert!(visible_to_worker.contains("plain"));
+
+    let combined = String::from_utf8(
+        run_binary(dir.path(), &["list", "--team", "demo", "--as", "plain"])?.stdout,
+    )?;
+    assert!(!combined.contains("plain"));
+
+    let unknown = run_binary(dir.path(), &["list", "--as", "nosuch"])?;
+    assert!(!unknown.status.success());
+    assert!(String::from_utf8(unknown.stderr)?.contains("unknown session nosuch"));
+    Ok(())
+}

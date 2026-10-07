@@ -218,6 +218,8 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap();
@@ -252,6 +254,8 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            team: None,
+            role: None,
         },
         Request::Attach {
             session: sender_id.clone(),
@@ -361,6 +365,8 @@ async fn naming_addresses_and_role_expires_after_exit() {
                 harness: Harness::Generic,
                 deliver: Some(Deliver::Hold),
                 heartbeat: None,
+                team: None,
+                role: None,
             })
             .await
             .unwrap();
@@ -380,6 +386,8 @@ async fn naming_addresses_and_role_expires_after_exit() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap();
@@ -424,6 +432,8 @@ async fn naming_addresses_and_role_expires_after_exit() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap();
@@ -461,6 +471,8 @@ async fn naming_addresses_and_role_expires_after_exit() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap();
@@ -486,6 +498,8 @@ async fn list_agents_reports_harness_and_spawn_directory() {
             harness: Harness::Omp,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap();
@@ -682,6 +696,8 @@ async fn limit_edge_exact_body_is_delivered_and_submitted() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap();
@@ -1043,6 +1059,8 @@ async fn recipient_exit_cancelling_and_filtering() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap();
@@ -1201,6 +1219,8 @@ async fn reset_authorizes_controller_and_rejects_unlisted_or_self() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap()
@@ -1409,6 +1429,8 @@ async fn reset_holds_message_delivery_until_sequence_finishes() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap()
@@ -1518,6 +1540,8 @@ async fn reset_rejects_an_in_flight_native_delivery_as_busy() {
             harness: Harness::Omp,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap()

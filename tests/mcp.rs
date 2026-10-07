@@ -222,7 +222,7 @@ async fn mcp_initialize_tools_and_message_calls() {
         json!([
             {
                 "name": "list_agents",
-                "description": "List the agent sessions you can message. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages.",
+                "description": "List the agent sessions you can message. Sessions outside the caller's visibility are not listed. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages. Each entry's \"team\" is its team name when it has one, and \"you\" marks the caller.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
@@ -288,7 +288,7 @@ async fn mcp_initialize_tools_and_message_calls() {
         "params": {"name": "list_agents", "arguments": {}}
     })));
     assert_eq!(agents, json!({"agents":[
-        {"address":"agent-plan@host-a","state":"running","activity":"working","attached":false,"harness":"generic"},
+        {"address":"agent-plan@host-a","state":"running","activity":"working","attached":false,"harness":"generic","you":true},
         {"address":"agent-review@host-a","state":"running","activity":"working","attached":false,"harness":"generic"}
     ]}));
 
@@ -826,7 +826,7 @@ async fn mcp_prewrite_failure_does_not_claim_an_unknown_outcome() {
         assert_eq!(
             tool_result(&response),
             json!({"agents":[
-                {"address":"agent-plan@host-a","state":"running","activity":"working","attached":false,"harness":"generic"}
+                {"address":"agent-plan@host-a","state":"running","activity":"working","attached":false,"harness":"generic","you":true}
             ]})
         );
     })

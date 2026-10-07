@@ -29,6 +29,7 @@ fn summary(name: &str, id: &str, exit_code: Option<i32>) -> SessionSummary {
         harness: Default::default(),
         cwd: None,
         activity: None,
+        team: None,
         uptime_secs: None,
         activity_secs: None,
     }
@@ -83,6 +84,7 @@ cwd = "."
                 watch: Vec::new(),
                 heartbeat: None,
                 role: Some("architect".into()),
+                team: None,
             },
             TeamSession {
                 name: "developer".into(),
@@ -94,6 +96,7 @@ cwd = "."
                 watch: Vec::new(),
                 role: None,
                 heartbeat: None,
+                team: None,
             },
         ]
     );
@@ -136,7 +139,7 @@ command = ["cat"]
 fn prefixed_role_errors_name_the_final_session() {
     let error = team::parse(
         r#"
-prefix = "team"
+team = "team"
 [[session]]
 name = "worker"
 command = ["cat"]
@@ -151,11 +154,11 @@ role = ""
 fn parse_prefixes_names_and_same_file_references() {
     let sessions = team::parse(
         r#"
-prefix = "a2amx"
+team = "a2amx"
 [[session]]
 name = "architect"
 command = ["claude"]
-watch = ["developer", "outsider"]
+watch = ["developer", "other/architect", "/hand"]
 control_from = ["developer"]
 [[session]]
 name = "developer"
@@ -166,75 +169,72 @@ control_from = ["architect"]
     .unwrap();
     assert_eq!(sessions[0].name, "a2amx-architect");
     assert_eq!(sessions[1].name, "a2amx-developer");
-    assert_eq!(sessions[0].watch, ["a2amx-developer", "outsider"]);
+    assert_eq!(
+        sessions[0].watch,
+        ["a2amx-developer", "other-architect", "hand"]
+    );
     assert_eq!(sessions[0].control_from, ["a2amx-developer"]);
     assert_eq!(sessions[1].control_from, ["a2amx-architect"]);
 }
 
 #[test]
-fn parse_leaves_already_final_references_unchanged() {
+fn parse_rejects_unknown_local_and_malformed_explicit_references() {
+    for key in ["watch", "control_from"] {
+        for reference in ["outsider", "a/b/c", "/", "x/"] {
+            let text = format!(
+                "team = \"demo\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\n{key} = [\"{reference}\"]"
+            );
+            let error = team::parse(&text).expect_err(&text);
+            let error = format!("{error:#}");
+            assert!(error.contains(key), "{error}");
+            if reference == "outsider" {
+                assert_eq!(
+                    error,
+                    format!("unknown session outsider in {key} of demo-architect")
+                );
+            }
+        }
+    }
     let sessions = team::parse(
-        r#"
-prefix = "a2amx"
-[[session]]
-name = "architect"
-command = ["cat"]
-watch = ["a2amx-developer"]
-[[session]]
-name = "developer"
-command = ["cat"]
-"#,
-    )
-    .unwrap();
-    assert_eq!(sessions[0].watch, ["a2amx-developer"]);
+        "[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nwatch = [\"outsider\", \"other/architect\", \"/hand\"]",
+    ).unwrap();
+    assert_eq!(sessions[0].watch, ["outsider", "other-architect", "hand"]);
 }
 
 #[test]
-fn parse_base_name_match_wins_over_already_final_spelling() {
-    let sessions = team::parse(
-        r#"
-prefix = "a2amx"
-[[session]]
-name = "architect"
-command = ["cat"]
-watch = ["a2amx-developer"]
-control_from = ["a2amx-developer"]
-[[session]]
-name = "developer"
-command = ["cat"]
-[[session]]
-name = "a2amx-developer"
-command = ["cat"]
-"#,
-    )
-    .unwrap();
-    assert_eq!(sessions[0].watch, ["a2amx-a2amx-developer"]);
-    assert_eq!(sessions[0].control_from, ["a2amx-a2amx-developer"]);
-    assert_eq!(sessions[2].name, "a2amx-a2amx-developer");
-}
-
-#[test]
-fn parse_rejects_empty_trailing_dash_and_non_string_prefixes() {
-    for prefix in [r#""""#, r#""a2amx-""#, "5"] {
-        let text =
-            format!("prefix = {prefix}\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]");
+fn parse_rejects_invalid_team_keys_and_old_prefix() {
+    for (keys, label) in [
+        ("prefix = \"x\"", "renamed to team"),
+        ("team = \"\"", "team"),
+        ("team = \"demo-\"", "team"),
+        ("team = 5", "team"),
+        ("private = true", "private"),
+        ("private = false", "private"),
+        ("allow = [\"x\"]", "allow"),
+        ("allow = []", "allow"),
+        ("team = \"demo\"\nprivate = false\nallow = [\"x\"]", "allow"),
+        ("team = \"demo\"\nprivate = false\nallow = []", "allow"),
+        ("team = \"demo\"\nallow = [\"demo\"]", "allow"),
+        ("team = \"demo\"\nallow = [\"x\", \"x\"]", "allow"),
+        ("team = \"demo\"\nallow = [\"Bad\"]", "allow"),
+    ] {
+        let text = format!("{keys}\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]");
         let error = team::parse(&text).expect_err(&text);
-        assert!(format!("{error:#}").contains("prefix"), "{error:#}");
+        assert!(format!("{error:#}").contains(label), "{error:#}");
     }
 }
 
 #[test]
 fn parse_validates_prefixed_final_names() {
     for (prefix, final_name) in [
-        ("Bad", "Bad-architect"),
+        ("Bad", "Bad"),
         (
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-architect",
         ),
     ] {
-        let text = format!(
-            "prefix = \"{prefix}\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]"
-        );
+        let text =
+            format!("team = \"{prefix}\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]");
         let error = team::parse(&text).expect_err(&text);
         assert!(format!("{error:#}").contains(final_name), "{error:#}");
     }
@@ -243,7 +243,7 @@ fn parse_validates_prefixed_final_names() {
 #[test]
 fn parse_rejects_prefixed_self_watch() {
     let error = team::parse(
-        "prefix = \"a2amx\"\n[[session]]\nname = \"developer\"\ncommand = [\"cat\"]\nwatch = [\"developer\"]",
+        "team = \"a2amx\"\n[[session]]\nname = \"developer\"\ncommand = [\"cat\"]\nwatch = [\"developer\"]",
     )
     .expect_err("prefixed self watch");
     assert!(error.to_string().contains("watches itself"), "{error:#}");
@@ -253,7 +253,7 @@ fn parse_rejects_prefixed_self_watch() {
 fn parse_rejects_whitespace_in_executable_and_preserves_argument_boundaries() {
     for executable in ["claude --model opus", "/tmp/my executable", "cat\\t-n"] {
         let text = format!(
-            "prefix = \"pfx\"\n[[session]]\nname = \"architect\"\ncommand = [\"{executable}\"]"
+            "team = \"pfx\"\n[[session]]\nname = \"architect\"\ncommand = [\"{executable}\"]"
         );
         let error = team::parse(&text).expect_err(&text);
         let error = format!("{error:#}");
@@ -349,6 +349,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 watch: Vec::new(),
                 heartbeat: None,
                 role: None,
+                team: None,
             },
             TeamSession {
                 name: "developer".into(),
@@ -360,6 +361,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 watch: Vec::new(),
                 heartbeat: None,
                 role: None,
+                team: None,
             },
         ]
     );
@@ -388,7 +390,7 @@ fn plan_preserves_wanted_order_and_preflights_every_exited_conflict() {
     assert_eq!(
         team::plan(&wanted, &[summary("developer", "s2", None)]).unwrap(),
         [
-            team::Action::Start(wanted[0].clone()),
+            team::Action::Start(Box::new(wanted[0].clone())),
             team::Action::AlreadyRunning {
                 name: "developer".into(),
                 id: "s2".into()
@@ -399,7 +401,8 @@ fn plan_preserves_wanted_order_and_preflights_every_exited_conflict() {
         team::plan(&wanted, &[summary("developer", "s2", Some(0))]).unwrap_err(),
         [team::Conflict {
             name: "developer".into(),
-            id: "s2".into()
+            id: "s2".into(),
+            reason: team::ConflictReason::Exited,
         }],
     );
     assert_eq!(
@@ -414,13 +417,37 @@ fn plan_preserves_wanted_order_and_preflights_every_exited_conflict() {
         [
             team::Conflict {
                 name: "architect".into(),
-                id: "s1".into()
+                id: "s1".into(),
+                reason: team::ConflictReason::Exited,
             },
             team::Conflict {
                 name: "developer".into(),
-                id: "s2".into()
+                id: "s2".into(),
+                reason: team::ConflictReason::Exited,
             },
         ],
+    );
+}
+
+#[test]
+fn plan_reports_running_team_setting_mismatch() {
+    let wanted =
+        team::parse("team = \"demo\"\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]")
+            .unwrap();
+    let mut existing = summary("demo-worker", "s1", None);
+    existing.team = Some(a2amx::messaging::TeamScope {
+        name: "demo".into(),
+        private: false,
+        allow: Vec::new(),
+    });
+    let conflict = team::plan(&wanted, &[existing]).unwrap_err();
+    assert_eq!(
+        conflict,
+        [team::Conflict {
+            name: "demo-worker".into(),
+            id: "s1".into(),
+            reason: team::ConflictReason::TeamMismatch,
+        }]
     );
 }
 
@@ -518,7 +545,7 @@ async fn prefixed_team_down_uses_full_names_and_hints_only_for_explicit_missing_
     let (dir, _daemon) = common::start_daemon().await;
     std::fs::write(
         dir.path().join("team.toml"),
-        format!("prefix = \"pfx\"\n{LIVE_TEAM}"),
+        format!("team = \"pfx\"\n{LIVE_TEAM}"),
     )
     .unwrap();
     let up = run_binary(

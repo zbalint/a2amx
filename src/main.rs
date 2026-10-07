@@ -19,7 +19,7 @@ use a2amx::emulator::Scroll;
 use a2amx::harness::{Deliver, Harness};
 use a2amx::hook;
 use a2amx::mcp;
-use a2amx::messaging::{display_duration, sgr_mouse_report_len};
+use a2amx::messaging::{self, TeamScope, display_duration, sgr_mouse_report_len};
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::quota;
 use a2amx::status;
@@ -88,7 +88,11 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
             DaemonAction::Stop { yes, now } => run_stop(home, yes, now).await,
         },
         options @ Command::New { .. } => run_new(home, prefix, options).await,
-        Command::List { details } => run_list(home, details).await,
+        Command::List {
+            details,
+            team,
+            viewer,
+        } => run_list(home, details, team, viewer).await,
         Command::Team { action } => match action {
             TeamAction::Up {
                 file,
@@ -362,6 +366,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             name,
             harness,
             role: None,
+            team: None,
             deliver,
             no_authorize_peers,
             no_channel,
@@ -389,6 +394,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
 struct NewOptions {
     name: Option<String>,
     role: Option<String>,
+    team: Option<TeamScope>,
     harness: Option<Harness>,
     deliver: Option<Deliver>,
     no_authorize_peers: bool,
@@ -413,6 +419,7 @@ async fn create_session(
         harness,
         deliver,
         role,
+        team,
         no_authorize_peers,
         no_channel,
         reset,
@@ -495,8 +502,8 @@ async fn create_session(
         env.push((a2amx::codex::NO_AUTHORIZE_ENV.to_owned(), "1".to_owned()));
     }
     if harness == Harness::Codex {
-        if let Some(role) = role {
-            env.push((a2amx::codex::ROLE_ENV.to_owned(), role));
+        if let Some(role) = &role {
+            env.push((a2amx::codex::ROLE_ENV.to_owned(), role.clone()));
         }
     }
     if harness == Harness::Claude && !no_channel {
@@ -515,6 +522,8 @@ async fn create_session(
             name,
             harness,
             deliver,
+            team,
+            role,
             heartbeat,
         })
         .await?;
@@ -559,16 +568,19 @@ async fn run_team_up(
         Ok(actions) => actions,
         Err(conflicts) => {
             for conflict in conflicts {
-                write_stderr(
-                    format!(
+                let message = match conflict.reason {
+                    team::ConflictReason::Exited => format!(
                         "session {} has exited ({}); run a2amx kill {} first\n",
-                        conflict.name, conflict.id, conflict.name,
-                    )
-                    .into_bytes(),
-                )
-                .await?;
+                        conflict.name, conflict.id, conflict.name
+                    ),
+                    team::ConflictReason::TeamMismatch => format!(
+                        "session {} ({}) is running with a different team setting; run a2amx team down first\n",
+                        conflict.name, conflict.id
+                    ),
+                };
+                write_stderr(message.into_bytes()).await?;
             }
-            return Err(anyhow!("team has exited session conflicts"));
+            return Err(anyhow!("team has session conflicts"));
         }
     };
     let (cols, rows) = terminal_size_with_default()?;
@@ -596,6 +608,7 @@ async fn run_team_up(
                         name: Some(name.clone()),
                         harness: None,
                         role: session.role,
+                        team: session.team,
                         deliver: None,
                         no_authorize_peers: false,
                         no_channel: false,
@@ -693,14 +706,43 @@ async fn run_team_down(
     Ok(())
 }
 
-async fn run_list(home: PathBuf, details: bool) -> anyhow::Result<()> {
+async fn run_list(
+    home: PathBuf,
+    details: bool,
+    team_filter: Option<String>,
+    viewer: Option<String>,
+) -> anyhow::Result<()> {
     let mut client = Client::connect(&home).await?;
     let response = client.request(Request::List).await?;
-    let sessions = match response {
+    let mut sessions = match response {
         Response::Sessions { sessions } => sessions,
         Response::Error { message } => return Err(anyhow!(message)),
         other => return Err(anyhow!("unexpected daemon response: {other:?}")),
     };
+    let viewer_info = viewer.map(|name| {
+        let session = sessions
+            .iter()
+            .find(|session| session.name.as_deref() == Some(name.as_str()))
+            .or_else(|| sessions.iter().find(|session| session.id == name))
+            .ok_or_else(|| anyhow!("unknown session {name}"))?;
+        Ok::<_, anyhow::Error>((session.id.clone(), session.team.clone()))
+    });
+    let viewer_info = viewer_info.transpose()?;
+    sessions.retain(|session| {
+        let in_team = team_filter.as_deref().is_none_or(|team| {
+            session
+                .team
+                .as_ref()
+                .is_some_and(|scope| scope.name == team)
+        });
+        let visible_to_viewer = viewer_info
+            .as_ref()
+            .is_none_or(|(viewer_id, viewer_scope)| {
+                session.id == *viewer_id
+                    || messaging::visible(viewer_scope.as_ref(), session.team.as_ref())
+            });
+        in_team && visible_to_viewer
+    });
     write_stdout(format_session_table(&sessions, details).into_bytes()).await
 }
 
@@ -1553,30 +1595,69 @@ fn message_value_rows(messages: &[MessageInfo]) -> Vec<[String; 6]> {
         .collect()
 }
 
-fn column_widths<const N: usize>(headers: &[&str; N], rows: &[[String; N]]) -> [usize; N] {
-    let mut widths = headers.map(str::len);
+fn column_widths<R: AsRef<[String]>>(headers: &[&str], rows: &[R]) -> Vec<usize> {
+    let mut widths: Vec<usize> = headers.iter().map(|header| header.len()).collect();
     for row in rows {
-        for (index, value) in row.iter().enumerate() {
+        for (index, value) in row.as_ref().iter().enumerate() {
             widths[index] = widths[index].max(value.len());
         }
     }
     widths
 }
 
-fn format_table<const N: usize>(headers: &[&str; N], rows: &[[String; N]]) -> String {
+fn format_table<R: AsRef<[String]>>(headers: &[&str], rows: &[R]) -> String {
     let widths = column_widths(headers, rows);
     let mut output = String::new();
     output.push_str(&format_row(headers, &widths));
     output.push('\n');
     for row in rows {
-        output.push_str(&format_row(row, &widths));
+        output.push_str(&format_row(row.as_ref(), &widths));
         output.push('\n');
     }
     output
 }
 
+fn session_team_cells(sessions: &[SessionSummary]) -> Option<Vec<String>> {
+    sessions
+        .iter()
+        .any(|session| session.team.is_some())
+        .then(|| {
+            sessions
+                .iter()
+                .map(|session| {
+                    session.team.as_ref().map_or_else(
+                        || "-".to_owned(),
+                        |team| {
+                            if team.private {
+                                format!("{} (private)", team.name)
+                            } else {
+                                team.name.clone()
+                            }
+                        },
+                    )
+                })
+                .collect()
+        })
+}
+
+fn insert_team_column<'a>(
+    headers: &'a [&'a str],
+    mut rows: Vec<Vec<String>>,
+    teams: Option<Vec<String>>,
+) -> (Vec<&'a str>, Vec<Vec<String>>) {
+    let Some(teams) = teams else {
+        return (headers.to_vec(), rows);
+    };
+    let mut headers = headers.to_vec();
+    headers.insert(2, "TEAM");
+    for (row, team) in rows.iter_mut().zip(teams) {
+        row.insert(2, team);
+    }
+    (headers, rows)
+}
+
 fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
-    let rows: Vec<[String; 12]> = session_value_rows(sessions)
+    let rows: Vec<Vec<String>> = session_value_rows(sessions)
         .into_iter()
         .zip(sessions)
         .map(|(row, session)| {
@@ -1592,7 +1673,7 @@ fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
                 quota,
                 size,
             ] = row;
-            [
+            vec![
                 id,
                 name,
                 harness,
@@ -1614,47 +1695,21 @@ fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
             ]
         })
         .collect();
-    if details {
-        let rows: Vec<[String; 14]> = rows
+    let (headers, rows) = if details {
+        let rows = rows
             .into_iter()
             .zip(sessions)
-            .map(|(row, session)| {
-                let [
-                    id,
-                    name,
-                    harness,
-                    state,
-                    uptime,
-                    activity,
-                    in_state,
-                    attached,
-                    pending,
-                    held,
-                    quota,
-                    size,
-                ] = row;
-                [
-                    id,
-                    name,
-                    harness,
-                    state,
-                    uptime,
-                    activity,
-                    in_state,
-                    attached,
-                    pending,
-                    held,
-                    quota,
-                    size,
-                    session.cwd.clone().unwrap_or_else(|| "-".to_owned()),
-                    session.argv.join(" "),
-                ]
+            .map(|(mut row, session)| {
+                row.push(session.cwd.clone().unwrap_or_else(|| "-".to_owned()));
+                row.push(session.argv.join(" "));
+                row
             })
             .collect();
-        format_table(&DETAIL_HEADERS, &rows)
+        insert_team_column(&DETAIL_HEADERS, rows, session_team_cells(sessions))
     } else {
-        format_table(&SESSION_HEADERS, &rows)
-    }
+        insert_team_column(&SESSION_HEADERS, rows, session_team_cells(sessions))
+    };
+    format_table(&headers, &rows)
 }
 
 fn format_messages_table(messages: &[MessageInfo]) -> String {
@@ -2138,16 +2193,21 @@ fn session_rows(
     selection: usize,
     cols: u16,
 ) -> (String, Vec<String>) {
-    let rows = picker_value_rows(sessions);
-    let widths = column_widths(&PICKER_HEADERS, &rows);
-    let fixed_prefix_width = widths[..10].iter().sum::<usize>() + 2 * 10;
-    let header_has_cwd = usize::from(cols) >= 1 + fixed_prefix_width + PICKER_HEADERS[10].len();
+    let rows: Vec<Vec<String>> = picker_value_rows(sessions)
+        .into_iter()
+        .map(|row| row.into_iter().collect())
+        .collect();
+    let (headers, rows) = insert_team_column(&PICKER_HEADERS, rows, session_team_cells(sessions));
+    let widths = column_widths(&headers, &rows);
+    let cwd = headers.len() - 1;
+    let fixed_prefix_width = widths[..cwd].iter().sum::<usize>() + 2 * cwd;
+    let header_has_cwd = usize::from(cols) >= 1 + fixed_prefix_width + headers[cwd].len();
     let mut header = String::new();
     header.push(' ');
     if header_has_cwd {
-        header.push_str(&format_row(&PICKER_HEADERS, &widths));
+        header.push_str(&format_row(&headers, &widths));
     } else {
-        header.push_str(&format_row(&PICKER_HEADERS[..10], &widths[..10]));
+        header.push_str(&format_row(&headers[..cwd], &widths[..cwd]));
     }
     let lines = rows
         .iter()
@@ -2164,10 +2224,10 @@ fn session_rows(
             let available = usize::from(cols).saturating_sub(1 + fixed_prefix_width + suffix.len());
             if available >= 4 {
                 let mut row = row.clone();
-                row[10] = shorten_left(&row[10], available);
+                row[cwd] = shorten_left(&row[cwd], available);
                 line.push_str(&format_row(&row, &widths));
             } else {
-                line.push_str(&format_row(&row[..10], &widths[..10]));
+                line.push_str(&format_row(&row[..cwd], &widths[..cwd]));
             }
             line.push_str(suffix);
             line

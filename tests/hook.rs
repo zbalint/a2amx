@@ -72,6 +72,8 @@ impl HookCase {
                 harness: Harness::Claude,
                 deliver: Some(Deliver::Auto),
                 heartbeat: None,
+                team: None,
+                role: None,
             })
             .await
             .unwrap();

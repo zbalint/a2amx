@@ -870,3 +870,57 @@ fn restored_drafts_drop_controls_but_keep_newlines_tabs_and_unicode() {
     assert_eq!(sanitize_draft("a\u{1b}b\rc\0d\u{7f}e\u{85}f"), "abcdef");
     assert_eq!(sanitize_draft("x\ny\tz é"), "x\ny\tz é");
 }
+
+#[test]
+fn team_visibility_is_symmetric_and_defaults_to_public_for_ungrouped() {
+    use a2amx::messaging::{TeamScope, visible};
+
+    let private_a = TeamScope {
+        name: "a".into(),
+        private: true,
+        allow: Vec::new(),
+    };
+    let private_b = TeamScope {
+        name: "b".into(),
+        private: true,
+        allow: Vec::new(),
+    };
+    let public_a = TeamScope {
+        name: "a".into(),
+        private: false,
+        allow: Vec::new(),
+    };
+    let allow_a = TeamScope {
+        name: "a".into(),
+        private: true,
+        allow: vec!["b".into()],
+    };
+    let allow_b = TeamScope {
+        name: "b".into(),
+        private: true,
+        allow: vec!["a".into()],
+    };
+    for (a, b, expected) in [
+        (None, None, true),
+        (None, Some(&private_a), true),
+        (Some(&public_a), Some(&private_b), true),
+        (Some(&private_a), Some(&private_a), true),
+        (Some(&private_a), Some(&private_b), false),
+        (Some(&allow_a), Some(&private_b), false),
+        (Some(&allow_a), Some(&allow_b), true),
+    ] {
+        assert_eq!(visible(a, b), expected);
+        assert_eq!(visible(b, a), expected);
+    }
+}
+
+#[test]
+fn role_validation_accepts_architect_and_rejects_invalid_shapes() {
+    use a2amx::messaging::validate_role;
+
+    assert!(validate_role("architect").is_ok());
+    for role in ["", "a\nb", " architect", "architect "] {
+        assert!(validate_role(role).is_err(), "{role:?}");
+    }
+    assert!(validate_role(&"a".repeat(65)).is_err());
+}

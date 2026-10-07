@@ -5,7 +5,7 @@ use std::fmt;
 use std::time::Duration;
 
 use anyhow::bail;
-
+use serde::{Deserialize, Serialize};
 pub const MAX_SUBJECT_BYTES: usize = 200;
 pub const SYSTEM_SENDER: &str = "a2amx-daemon";
 pub const HEARTBEAT_SUBJECT: &str = "heartbeat";
@@ -19,6 +19,13 @@ pub const MAX_MESSAGE_REJECTIONS: u32 = 2;
 pub const UNMATCHABLE_SUBMISSION_REASON: &str = "A2AMX blocked this prompt because it did not match the message it delivered. The message will not be retried.";
 pub const MAX_RESTORE_BYTES: usize = 64 * 1024;
 pub const CORRUPTED_SUBMISSION_REASON: &str = "A2AMX blocked this prompt because it mixed your text with a peer message. The message will be delivered again.";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamScope {
+    pub name: String,
+    pub private: bool,
+    pub allow: Vec<String>,
+}
 
 pub fn display_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();
@@ -186,6 +193,32 @@ fn valid_dns_label(value: &str) -> bool {
         return false;
     }
     value.len() <= 63 && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+}
+
+pub fn visible(a: Option<&TeamScope>, b: Option<&TeamScope>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) if a.name == b.name => true,
+        (Some(a), Some(b)) if a.private && b.private => {
+            a.allow.iter().any(|name| name == &b.name) && b.allow.iter().any(|name| name == &a.name)
+        }
+        _ => true,
+    }
+}
+
+pub fn validate_role(role: &str) -> anyhow::Result<()> {
+    if role.is_empty() {
+        bail!("role must not be empty");
+    }
+    if role.chars().count() > 64 {
+        bail!("role must be at most 64 characters");
+    }
+    if role.chars().any(char::is_control) {
+        bail!("role must not contain control characters");
+    }
+    if role.trim() != role {
+        bail!("role must not have leading or trailing whitespace");
+    }
+    Ok(())
 }
 
 pub fn validate_name(name: &str) -> anyhow::Result<()> {

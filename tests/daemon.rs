@@ -92,6 +92,8 @@ async fn create(client: &mut Client, argv: &[&str], env: Vec<(String, String)>) 
             harness: a2amx::harness::Harness::Generic,
             deliver: None,
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap()
@@ -333,6 +335,8 @@ async fn failed_spawns_and_zero_sizes_leave_no_sessions() {
                     harness: a2amx::harness::Harness::Generic,
                     deliver: None,
                     heartbeat: None,
+                    team: None,
+                    role: None,
                 })
                 .await
                 .unwrap(),
@@ -830,6 +834,8 @@ async fn cwd_environment_and_argument_boundaries_reach_the_child() {
             harness: a2amx::harness::Harness::Generic,
             deliver: None,
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap();
@@ -1134,6 +1140,8 @@ async fn large_final_snapshot_is_split_at_the_data_limit_and_precedes_exit() {
             harness: a2amx::harness::Harness::Generic,
             deliver: None,
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap()
@@ -1242,6 +1250,8 @@ async fn opted_in_attachments_receive_initial_and_changed_status_only() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+            team: None,
+            role: None,
         })
         .await
         .unwrap()

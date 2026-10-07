@@ -57,6 +57,13 @@ pub fn render(
         .filter(|info| info.hold.is_none())
         .and_then(|info| info.activity);
     let harness = info.and_then(|info| info.harness);
+    let role = info
+        .and_then(|info| info.role.as_deref())
+        .map(|role| format!("role {}", sanitize(role)));
+    let team = info.and_then(|info| info.team.as_ref()).map(|team| {
+        let suffix = if team.private { " (private)" } else { "" };
+        format!("team {}{suffix}", sanitize(&team.name))
+    });
     let quota = info
         .and_then(|info| info.quota)
         .filter(is_low_quota)
@@ -67,6 +74,8 @@ pub fn render(
     let hold_reason = info.and_then(|info| info.hold.as_deref()).map(sanitize);
     let mut show_activity = activity.is_some();
     let mut show_quota = quota.is_some();
+    let mut show_role = role.is_some();
+    let mut show_team = team.is_some();
     let mut show_harness = harness.is_some();
     let mut show_pending = pending.is_some();
     let mut show_hint = hold_reason
@@ -80,6 +89,8 @@ pub fn render(
             show_quota
                 .then(|| quota.as_ref().map(|(text, limit)| (text.as_str(), *limit)))
                 .flatten(),
+            show_role.then_some(role.as_deref()).flatten(),
+            show_team.then_some(team.as_deref()).flatten(),
             show_harness.then_some(harness).flatten(),
         );
         let hold = hold_reason
@@ -94,8 +105,12 @@ pub fn render(
         if total <= width {
             break;
         }
-        if show_harness {
+        if show_team {
+            show_team = false;
+        } else if show_harness {
             show_harness = false;
+        } else if show_role {
+            show_role = false;
         } else if show_quota {
             show_quota = false;
         } else if show_activity {
@@ -115,6 +130,8 @@ pub fn render(
         show_quota
             .then(|| quota.as_ref().map(|(text, limit)| (text.as_str(), *limit)))
             .flatten(),
+        show_role.then_some(role.as_deref()).flatten(),
+        show_team.then_some(team.as_deref()).flatten(),
         show_harness.then_some(harness).flatten(),
     );
     let pending = if show_pending {
@@ -201,6 +218,8 @@ fn left_spans(
     name: &str,
     activity: Option<Activity>,
     quota: Option<(&str, bool)>,
+    role: Option<&str>,
+    team: Option<&str>,
     harness: Option<Harness>,
 ) -> Vec<Span> {
     let mut spans = vec![
@@ -226,6 +245,16 @@ fn left_spans(
             text,
             BAR_FOREGROUND,
         ));
+        spans.push(Span::plain(" "));
+    }
+    if let Some(role) = role {
+        spans.extend(detail_prefix());
+        spans.push(Span::plain(role));
+        spans.push(Span::plain(" "));
+    }
+    if let Some(team) = team {
+        spans.extend(detail_prefix());
+        spans.push(Span::plain(team));
         spans.push(Span::plain(" "));
     }
     if let Some(harness) = harness {

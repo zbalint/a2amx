@@ -43,6 +43,8 @@ pub struct SessionSpec {
     pub control_from: Vec<String>,
     pub watch: Vec<String>,
     pub heartbeat: Option<Duration>,
+    pub team: Option<messaging::TeamScope>,
+    pub role: Option<String>,
     pub token: String,
     pub(crate) codex: Option<Arc<crate::codex::Link>>,
 }
@@ -60,6 +62,8 @@ pub struct Session {
     control_from: Vec<String>,
     watch: Vec<String>,
     heartbeat: Option<Duration>,
+    team: Option<messaging::TeamScope>,
+    role: Option<String>,
     token: String,
     codex: Option<Arc<crate::codex::Link>>,
     input_gate: tokio::sync::Mutex<()>,
@@ -316,6 +320,8 @@ impl Session {
             control_from: spec.control_from,
             watch: spec.watch,
             heartbeat: spec.heartbeat,
+            team: spec.team,
+            role: spec.role,
             token: spec.token,
             codex: spec.codex,
             input_gate: tokio::sync::Mutex::new(()),
@@ -371,6 +377,14 @@ impl Session {
     }
     pub(crate) fn heartbeat(&self) -> Option<Duration> {
         self.heartbeat
+    }
+
+    pub fn team(&self) -> Option<&messaging::TeamScope> {
+        self.team.as_ref()
+    }
+
+    pub fn role(&self) -> Option<&str> {
+        self.role.as_deref()
     }
 
     pub(crate) fn note_activity(&self, current: Activity, now: Instant) -> Duration {

@@ -71,6 +71,12 @@ pub enum Command {
         /// Also show each session's working directory and command.
         #[arg(long)]
         details: bool,
+        /// Keep only sessions whose team name equals NAME.
+        #[arg(long)]
+        team: Option<String>,
+        /// Keep only sessions visible to the named session.
+        #[arg(long = "as")]
+        viewer: Option<String>,
     },
     /// Start or stop sessions from a team file or NAME=EXECUTABLE arguments.
     Team {
