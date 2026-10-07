@@ -406,3 +406,12 @@ empty list; `tests/claude_channel.rs:292` only checks a length; `tests/quota.rs`
 `"you":true`); anything else outside section 0 is still BLOCKED. `tests/bridge.rs` is added to
 the `git status` allow list of section 13. Every other decision and acceptance command is
 unchanged.
+
+## Amendment 2 (2026-10-07): the `team up` conflict error text
+
+Found in the architect's review, not by a BLOCKED: section 7 says `run_team_up` "keeps returning the
+existing error", but the existing text, `team has exited session conflicts`, is wrong once a
+conflict can be a `TeamMismatch`. **Ruling:** the returned error text is `team has session
+conflicts` (the developer's wording); the per-conflict stderr lines stay as in D8. No test asserts
+the old text (`rg "exited session conflicts" src tests README.md docs` finds none outside this
+amendment and the spec's own section 7). Nothing else changes.
