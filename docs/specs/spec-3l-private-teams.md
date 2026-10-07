@@ -386,3 +386,23 @@ contamination fails `generic_sessions_get_no_a2amx_bin`.
   consultant against `src/main.rs` (const-generic `column_widths` and `format_table`).
 - Not probed before lock: the exact TOML error text for a wrong-typed `private`; that is serde's.
 - Acceptance commands need the new code and run after implementation.
+
+## Amendment 1 (2026-10-07): exact `list_agents` JSON expectations gain `"you":true`
+
+The developer reported BLOCKED (`m_725`): D7 and D10 add `you: true` to the caller's own
+`list_agents` entry, but `tests/mcp.rs` lines about 290 and 828 assert the exact JSON of a
+session-token caller's `list_agents` without it, and section 0 allowed only the description string
+in that file. Verified real (those two assertions read the caller's list through a real daemon). My
+own search for the same pattern found a third, `tests/bridge.rs` line about 608 (the OMP bridge
+relays the same `list_agents` for a session token), which the review missed too. **Ruling:**
+section 0's scope also allows, in `tests/mcp.rs` and `tests/bridge.rs`, adding `"you":true` to the
+caller's entry in exact `list_agents` JSON expectations, nothing else. Which entry is the caller
+is the session whose token the test's MCP or bridge process uses. Gate re-run against this
+amendment: `rg -n '"agents"' tests` lists the exact-JSON sites (`tests/wire.rs` serializes
+`AgentSummary` values directly with `you` false, so it is unaffected; `tests/mcp.rs:699` has an
+empty list; `tests/claude_channel.rs:292` only checks a length; `tests/quota.rs` and
+`tests/broker.rs` use typed `AgentSummary` field access). If the developer finds any further exact
+`list_agents` JSON assertion for a session-token caller, the same ruling applies (only add
+`"you":true`); anything else outside section 0 is still BLOCKED. `tests/bridge.rs` is added to
+the `git status` allow list of section 13. Every other decision and acceptance command is
+unchanged.
