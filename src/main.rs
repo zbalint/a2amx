@@ -94,11 +94,13 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
             viewer,
         } => run_list(home, details, team, viewer).await,
         Command::Team { action } => match action {
+            TeamAction::Status { file } => return run_team_status(home, file).await,
             TeamAction::Up {
                 file,
                 detach,
+                dry_run,
                 items,
-            } => run_team_up(home, prefix, file, detach, items).await,
+            } => run_team_up(home, prefix, file, detach, dry_run, items).await,
             TeamAction::Down { file, names, now } => run_team_down(home, file, names, now).await,
         },
         Command::Attach { session, force } => {
@@ -409,6 +411,65 @@ struct NewOptions {
     rows: u16,
 }
 
+/// D6 fixes this argument shape so launch wiring is shared by real and dry-run paths.
+#[allow(clippy::too_many_arguments)]
+async fn wired_command(
+    home: &Path,
+    command: Vec<String>,
+    harness: Harness,
+    cwd: &Path,
+    role: Option<&str>,
+    no_authorize_peers: bool,
+    no_channel: bool,
+    install_omp: bool,
+) -> anyhow::Result<Vec<String>> {
+    match harness {
+        Harness::Claude => {
+            let exe = std::env::current_exe()?;
+            let wire_cwd = cwd.to_owned();
+            let wire_role = role.map(str::to_owned);
+            let authorize_peers = !no_authorize_peers;
+            if no_channel {
+                Ok(tokio::task::spawn_blocking(move || {
+                    a2amx::harness::wire_claude_argv(
+                        command,
+                        &exe,
+                        &wire_cwd,
+                        authorize_peers,
+                        wire_role.as_deref(),
+                    )
+                })
+                .await??)
+            } else {
+                Ok(tokio::task::spawn_blocking(move || {
+                    a2amx::harness::wire_claude_channel_argv(
+                        command,
+                        &exe,
+                        &wire_cwd,
+                        authorize_peers,
+                        wire_role.as_deref(),
+                    )
+                })
+                .await??)
+            }
+        }
+        Harness::Omp if !install_omp => Ok(command),
+        Harness::Omp => {
+            let install_home = home.to_owned();
+            let installed =
+                tokio::task::spawn_blocking(move || a2amx::omp::install(&install_home)).await??;
+            Ok(a2amx::harness::wire_omp_argv(
+                command,
+                &installed.extension,
+                &installed.overlay,
+                !no_authorize_peers,
+                role,
+            ))
+        }
+        Harness::Generic | Harness::Codex => Ok(command),
+    }
+}
+
 async fn create_session(
     home: &Path,
     client: &mut Client,
@@ -445,50 +506,17 @@ async fn create_session(
         a2amx::messaging::parse_interval(&format!("{seconds}s"))?;
     }
     let harness = harness.unwrap_or_else(|| Harness::infer(&command));
-    let command = match harness {
-        Harness::Claude => {
-            let exe = std::env::current_exe()?;
-            let wire_cwd = cwd.clone();
-            let wire_role = role.clone();
-            let authorize_peers = !no_authorize_peers;
-            if no_channel {
-                tokio::task::spawn_blocking(move || {
-                    a2amx::harness::wire_claude_argv(
-                        command,
-                        &exe,
-                        &wire_cwd,
-                        authorize_peers,
-                        wire_role.as_deref(),
-                    )
-                })
-                .await??
-            } else {
-                tokio::task::spawn_blocking(move || {
-                    a2amx::harness::wire_claude_channel_argv(
-                        command,
-                        &exe,
-                        &wire_cwd,
-                        authorize_peers,
-                        wire_role.as_deref(),
-                    )
-                })
-                .await??
-            }
-        }
-        Harness::Omp => {
-            let install_home = home.to_owned();
-            let installed =
-                tokio::task::spawn_blocking(move || a2amx::omp::install(&install_home)).await??;
-            a2amx::harness::wire_omp_argv(
-                command,
-                &installed.extension,
-                &installed.overlay,
-                !no_authorize_peers,
-                role.as_deref(),
-            )
-        }
-        Harness::Generic | Harness::Codex => command,
-    };
+    let command = wired_command(
+        home,
+        command,
+        harness,
+        &cwd,
+        role.as_deref(),
+        no_authorize_peers,
+        no_channel,
+        true,
+    )
+    .await?;
     let cwd = cwd.to_string_lossy().into_owned();
     let mut env: Vec<(String, String)> = std::env::vars().collect();
     env.retain(|(key, _)| key != a2amx::codex::ROLE_ENV);
@@ -543,11 +571,188 @@ async fn read_team(file: PathBuf) -> anyhow::Result<Vec<TeamSession>> {
     .await?
 }
 
+fn conflict_text(reason: team::ConflictReason, name: &str, id: &str) -> String {
+    match reason {
+        team::ConflictReason::Exited => {
+            format!("session {name} has exited ({id}); run a2amx kill {name} first")
+        }
+        team::ConflictReason::TeamMismatch => {
+            format!(
+                "session {name} ({id}) is running with a different team setting; run a2amx team down first"
+            )
+        }
+    }
+}
+
+async fn write_conflicts(conflicts: &[team::Conflict]) -> anyhow::Result<()> {
+    for conflict in conflicts {
+        write_stderr(
+            format!(
+                "{}\n",
+                conflict_text(conflict.reason.clone(), &conflict.name, &conflict.id,)
+            )
+            .into_bytes(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn team_label(team: Option<&TeamScope>) -> String {
+    let Some(team) = team else {
+        return "-".to_owned();
+    };
+    if team.private {
+        format!("{} (private)", team.name)
+    } else {
+        team.name.clone()
+    }
+}
+
+fn team_detail(team: Option<&TeamScope>) -> Option<String> {
+    team.map(|team| {
+        let visibility = if team.private { "private" } else { "public" };
+        let allow = if team.allow.is_empty() {
+            "-".to_owned()
+        } else {
+            team.allow.join(",")
+        };
+        format!("{}, {visibility}, allow: {allow}", team.name)
+    })
+}
+
+async fn run_team_status(
+    home: PathBuf,
+    file: Option<PathBuf>,
+) -> anyhow::Result<std::process::ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let file = cwd.join(file.unwrap_or_else(|| PathBuf::from("a2amx.toml")));
+    let wanted = read_team(file).await?;
+    let mut client = Client::connect(&home).await?;
+    let existing = request_sessions(&mut client).await?;
+    let entries = team::inspect(&wanted, &existing);
+    let mut output = String::from("NAME TEAM STATE NOTE\n");
+    let mut has_conflict = false;
+    for (session, entry) in wanted.iter().zip(entries) {
+        let (state, note) = match entry.state {
+            team::EntryState::Missing => ("missing".to_owned(), "-".to_owned()),
+            team::EntryState::Running { id } => ("running".to_owned(), id),
+            team::EntryState::Conflict { id, reason } => {
+                has_conflict = true;
+                let state = match &reason {
+                    team::ConflictReason::Exited => "exited",
+                    team::ConflictReason::TeamMismatch => "team-mismatch",
+                };
+                let full = conflict_text(reason, &entry.name, &id);
+                let note = full
+                    .split_once("; ")
+                    .map_or(full.as_str(), |(_, note)| note)
+                    .to_owned();
+                (state.to_owned(), note)
+            }
+        };
+        output.push_str(&format!(
+            "{} {} {} {}\n",
+            session.name,
+            team_label(session.team.as_ref()),
+            state,
+            note
+        ));
+    }
+    write_stdout(output.into_bytes()).await?;
+    note_lost_messages(&home, &wanted).await;
+    Ok(if has_conflict {
+        std::process::ExitCode::from(1)
+    } else {
+        std::process::ExitCode::SUCCESS
+    })
+}
+
+fn is_redactable_flag(value: &str) -> bool {
+    if let Some(long) = value.strip_prefix("--") {
+        let mut chars = long.bytes();
+        return matches!(chars.next(), Some(byte) if byte.is_ascii_alphabetic())
+            && chars.all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+    }
+    if let Some(short) = value.strip_prefix('-') {
+        return short.len() == 1 && short.as_bytes()[0].is_ascii_alphabetic();
+    }
+    false
+}
+
+fn redact_argv(argv: &[String]) -> String {
+    let Some(first) = argv.first() else {
+        return String::new();
+    };
+    let mut output = vec![first.clone()];
+    let mut after_separator = false;
+    for argument in &argv[1..] {
+        if after_separator {
+            output.push(format!("<{} bytes>", argument.len()));
+            continue;
+        }
+        if argument == "--" {
+            after_separator = true;
+            output.push(argument.clone());
+            continue;
+        }
+        let (flag, value) = argument
+            .split_once('=')
+            .map_or((argument.as_str(), None), |(flag, value)| {
+                (flag, Some(value))
+            });
+        if is_redactable_flag(flag) {
+            match value {
+                Some(value) => output.push(format!("{flag}=<redacted, {} bytes>", value.len())),
+                None => output.push(argument.clone()),
+            }
+        } else {
+            output.push(format!("<{} bytes>", argument.len()));
+        }
+    }
+    output.join(" ")
+}
+
+async fn note_lost_messages(home: &Path, wanted: &[TeamSession]) {
+    let Ok(mut client) = Client::connect(home).await else {
+        return;
+    };
+    let Ok(Response::Messages { messages }) = client
+        .request(Request::ListMessages {
+            session: None,
+            state: Some("undeliverable".to_owned()),
+        })
+        .await
+    else {
+        return;
+    };
+    let count = messages
+        .iter()
+        .filter(|message| message.detail.as_deref() == Some("daemon_restarted"))
+        .filter(|message| {
+            let Some(local) = message.to.split_once('@').map(|(local, _)| local) else {
+                return false;
+            };
+            wanted.iter().any(|session| session.name == local)
+        })
+        .count();
+    if count != 0 {
+        let _ = write_stderr(
+            format!(
+                "note: {count} message(s) to this team were lost in a daemon restart; see a2amx messages --state undeliverable\n"
+            )
+            .into_bytes(),
+        )
+        .await;
+    }
+}
+
 async fn run_team_up(
     home: PathBuf,
     prefix: u8,
     file: Option<PathBuf>,
     detach: bool,
+    dry_run: bool,
     items: Vec<String>,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
@@ -567,22 +772,71 @@ async fn run_team_up(
     let actions = match team::plan(&wanted, &existing) {
         Ok(actions) => actions,
         Err(conflicts) => {
-            for conflict in conflicts {
-                let message = match conflict.reason {
-                    team::ConflictReason::Exited => format!(
-                        "session {} has exited ({}); run a2amx kill {} first\n",
-                        conflict.name, conflict.id, conflict.name
-                    ),
-                    team::ConflictReason::TeamMismatch => format!(
-                        "session {} ({}) is running with a different team setting; run a2amx team down first\n",
-                        conflict.name, conflict.id
-                    ),
-                };
-                write_stderr(message.into_bytes()).await?;
-            }
+            note_lost_messages(&home, &wanted).await;
+            write_conflicts(&conflicts).await?;
             return Err(anyhow!("team has session conflicts"));
         }
     };
+    if dry_run {
+        let mut output = String::new();
+        for action in actions {
+            match action {
+                team::Action::AlreadyRunning { name, id } => {
+                    output.push_str(&format!("already running {name} {id}\n"));
+                }
+                team::Action::Start(session) => {
+                    let harness = Harness::infer(&session.command);
+                    let resolved_cwd = session
+                        .cwd
+                        .as_deref()
+                        .map_or_else(|| cwd.clone(), |path| file_dir.join(path));
+                    let command = wired_command(
+                        &home,
+                        session.command.clone(),
+                        harness,
+                        &resolved_cwd,
+                        session.role.as_deref(),
+                        false,
+                        false,
+                        false,
+                    )
+                    .await?;
+                    output.push_str(&format!("would start {}\n", session.name));
+                    output.push_str(&format!("  harness: {}\n", harness.as_str()));
+                    output.push_str(&format!("  cwd: {}\n", resolved_cwd.display()));
+                    if let Some(team) = team_detail(session.team.as_ref()) {
+                        output.push_str(&format!("  team: {team}\n"));
+                    }
+                    if let Some(role) = &session.role {
+                        output.push_str(&format!("  role: {role}\n"));
+                    }
+                    if session.attach {
+                        output.push_str("  attach: true\n");
+                    }
+                    if !session.watch.is_empty() {
+                        output.push_str(&format!("  watch: {}\n", session.watch.join(", ")));
+                    }
+                    if !session.control_from.is_empty() {
+                        output.push_str(&format!(
+                            "  control_from: {}\n",
+                            session.control_from.join(", ")
+                        ));
+                    }
+                    if let Some(heartbeat) = &session.heartbeat {
+                        output.push_str(&format!("  heartbeat: {heartbeat}\n"));
+                    }
+                    output.push_str(&format!("  command: {}\n", redact_argv(&command)));
+                    if harness == Harness::Omp {
+                        output.push_str("omp extension install skipped (dry run)\n");
+                    }
+                }
+            }
+        }
+        write_stdout(output.into_bytes()).await?;
+        note_lost_messages(&home, &wanted).await;
+        return Ok(());
+    }
+    note_lost_messages(&home, &wanted).await;
     let (cols, rows) = terminal_size_with_default()?;
     let mut attached_id = None;
     // shortcut: the conflict check and the spawns are not atomic; a name taken in between

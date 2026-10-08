@@ -9,6 +9,7 @@ use std::time::Duration;
 use common::pty::PtyHarness;
 
 use a2amx::client::Client;
+use a2amx::harness::{Deliver, Harness};
 use a2amx::team::{self, TeamSession};
 use a2amx::wire::{Request, Response, SessionSummary};
 
@@ -449,6 +450,350 @@ fn plan_reports_running_team_setting_mismatch() {
             reason: team::ConflictReason::TeamMismatch,
         }]
     );
+}
+
+#[test]
+fn inspect_preserves_order_and_plan_reports_the_same_conflicts() {
+    let wanted = team::flag_sessions(&[
+        "a=cat".into(),
+        "b=cat".into(),
+        "c=cat".into(),
+        "d=cat".into(),
+    ])
+    .unwrap();
+    let mut mismatch = summary("c", "c-id", None);
+    mismatch.team = Some(a2amx::messaging::TeamScope {
+        name: "different".into(),
+        private: true,
+        allow: Vec::new(),
+    });
+    let existing = [
+        mismatch,
+        summary("b", "b-id", Some(0)),
+        summary("a", "a-id", None),
+    ];
+    assert_eq!(
+        team::inspect(&wanted, &existing),
+        [
+            team::Entry {
+                name: "a".into(),
+                state: team::EntryState::Running { id: "a-id".into() },
+            },
+            team::Entry {
+                name: "b".into(),
+                state: team::EntryState::Conflict {
+                    id: "b-id".into(),
+                    reason: team::ConflictReason::Exited,
+                },
+            },
+            team::Entry {
+                name: "c".into(),
+                state: team::EntryState::Conflict {
+                    id: "c-id".into(),
+                    reason: team::ConflictReason::TeamMismatch,
+                },
+            },
+            team::Entry {
+                name: "d".into(),
+                state: team::EntryState::Missing,
+            },
+        ]
+    );
+    assert_eq!(
+        team::plan(&wanted, &existing).unwrap_err(),
+        [
+            team::Conflict {
+                name: "b".into(),
+                id: "b-id".into(),
+                reason: team::ConflictReason::Exited,
+            },
+            team::Conflict {
+                name: "c".into(),
+                id: "c-id".into(),
+                reason: team::ConflictReason::TeamMismatch,
+            },
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_reports_running_and_missing_without_changing_sessions() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("up.toml"),
+        r#"
+[[session]]
+name = "running"
+command = ["sh", "-c", "sleep 30"]
+"#,
+    )
+    .unwrap();
+    let up = run_binary(dir.path(), &["team", "up", "--detach", "--file", "up.toml"]).unwrap();
+    assert!(
+        up.status.success(),
+        "{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    std::fs::write(
+        dir.path().join("team.toml"),
+        r#"
+[[session]]
+name = "running"
+command = ["sh", "-c", "sleep 30"]
+[[session]]
+name = "missing"
+command = ["cat"]
+"#,
+    )
+    .unwrap();
+    let before = run_binary(dir.path(), &["list"]).unwrap().stdout;
+
+    let status = run_binary(dir.path(), &["team", "status", "--file", "team.toml"]).unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    assert!(status.stderr.is_empty());
+    let stdout = String::from_utf8(status.stdout).unwrap();
+    assert!(stdout.contains("NAME TEAM STATE NOTE\n"));
+    assert!(stdout.contains("running - running s1\n"));
+    assert!(stdout.contains("missing - missing -\n"));
+
+    let after = run_binary(dir.path(), &["list"]).unwrap().stdout;
+    assert_eq!(after, before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_reports_conflicts_without_a_generic_error_line() {
+    let (dir, _daemon) = common::start_daemon().await;
+    assert!(
+        run_binary(
+            dir.path(),
+            &[
+                "new", "--detach", "--name", "exited", "--", "sh", "-c", "exit 0"
+            ],
+        )
+        .unwrap()
+        .status
+        .success()
+    );
+    common::eventually(|| async {
+        let output = run_binary(dir.path(), &["list"]).unwrap();
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("exited(0)")
+            .then_some(())
+    })
+    .await;
+    std::fs::write(
+        dir.path().join("exited.toml"),
+        "[[session]]\nname = 'exited'\ncommand = ['cat']",
+    )
+    .unwrap();
+    let exited = run_binary(dir.path(), &["team", "status", "--file", "exited.toml"]).unwrap();
+    assert_eq!(exited.status.code(), Some(1));
+    let exited_stdout = String::from_utf8(exited.stdout).unwrap();
+    assert!(exited_stdout.contains("exited - exited"));
+    assert!(exited_stdout.contains("run a2amx kill exited first"));
+    assert!(!String::from_utf8_lossy(&exited.stderr).starts_with("a2amx:"));
+
+    let mismatch_team = r#"team = "x"
+[[session]]
+name = "same"
+command = ["sleep", "30"]
+"#;
+    std::fs::write(dir.path().join("mismatch-up.toml"), mismatch_team).unwrap();
+    let up = run_binary(
+        dir.path(),
+        &["team", "up", "--detach", "--file", "mismatch-up.toml"],
+    )
+    .unwrap();
+    assert!(
+        up.status.success(),
+        "{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    std::fs::write(
+        dir.path().join("mismatch-status.toml"),
+        "team = 'x'\nprivate = false\n[[session]]\nname = 'same'\ncommand = ['cat']",
+    )
+    .unwrap();
+    let mismatch = run_binary(
+        dir.path(),
+        &["team", "status", "--file", "mismatch-status.toml"],
+    )
+    .unwrap();
+    assert_eq!(mismatch.status.code(), Some(1));
+    let mismatch_stdout = String::from_utf8(mismatch.stdout).unwrap();
+    assert!(mismatch_stdout.contains("same x team-mismatch"));
+    assert!(mismatch_stdout.contains("run a2amx team down first"));
+    assert!(!String::from_utf8_lossy(&mismatch.stderr).starts_with("a2amx:"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_prints_wired_commands_without_starting_or_installing() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("dry.toml"),
+        r#"
+[[session]]
+name = "claude"
+command = ["claude", "--settings", "{\"x\":\"UNIQUE-SECRET\"}"]
+cwd = "."
+role = "developer"
+attach = true
+watch = ["other"]
+control_from = ["other"]
+heartbeat = "5s"
+[[session]]
+name = "generic"
+command = ["sh", "-c", "echo generic"]
+[[session]]
+name = "omp"
+command = ["omp", "--secret"]
+"#,
+    )
+    .unwrap();
+    let output = run_binary(
+        dir.path(),
+        &["team", "up", "--dry-run", "--file", "dry.toml"],
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("would start claude\n"));
+    assert!(stdout.contains("would start generic\n"));
+    assert!(stdout.contains("would start omp\n"));
+    assert!(stdout.contains("  harness: claude\n"));
+    assert!(stdout.contains("  cwd: "));
+    assert!(stdout.contains("  role: developer\n"));
+    assert!(stdout.contains("  attach: true\n"));
+    assert!(stdout.contains("  watch: other\n"));
+    assert!(stdout.contains("  control_from: other\n"));
+    assert!(stdout.contains("  heartbeat: 5s\n"));
+    assert!(stdout.contains("  command: claude "));
+    assert!(stdout.contains("--mcp-config "));
+    assert!(stdout.contains("--settings "));
+    assert!(stdout.contains("--append-system-prompt "));
+    assert!(stdout.contains("omp extension install skipped (dry run)\n"));
+    assert!(!stdout.contains("UNIQUE-SECRET"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("UNIQUE-SECRET"));
+    assert!(!dir.path().join("omp").exists());
+    let listed = run_binary(dir.path(), &["list"]).unwrap();
+    assert!(listed.status.success());
+    assert!(!String::from_utf8_lossy(&listed.stdout).contains("claude"));
+}
+
+#[test]
+fn dry_run_rejects_detach_and_inline_items() {
+    let dir = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["team", "up", "--dry-run", "--detach"],
+        vec!["team", "up", "--dry-run", "worker=cat"],
+    ] {
+        let output = run_binary(dir.path(), &args).unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_redacts_flag_values_and_non_flags() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("redact.toml"),
+        r#"
+[[session]]
+name = "values"
+command = ["claude", "--model", "sonnet", "--x=ab", "pos"]
+[[session]]
+name = "separator"
+command = ["claude", "--", "-secret"]
+[[session]]
+name = "short"
+command = ["claude", "-token123"]
+"#,
+    )
+    .unwrap();
+    let output = run_binary(
+        dir.path(),
+        &["team", "up", "--dry-run", "--file", "redact.toml"],
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("command: claude --model <6 bytes> --x=<redacted, 2 bytes> <3 bytes>"));
+    assert!(stdout.contains(" -- <7 bytes>"));
+    assert!(stdout.contains("command: claude <9 bytes>"));
+    assert!(!stdout.contains("sonnet"));
+    assert!(!stdout.contains("-secret"));
+    assert!(!stdout.contains("-token123"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_notes_messages_lost_in_a_daemon_restart_only_for_wanted_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Default::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_recipient_id, _recipient_token, _recipient_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("wanted"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (_sender_id, sender_token, sender_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let mut sender = Client::connect_addr(sender_addr, &sender_token)
+        .await
+        .unwrap();
+    let accepted = sender
+        .request(Request::SendMessage {
+            to: "wanted@host-a".into(),
+            subject: "restart".into(),
+            message: "body".into(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(accepted, Response::Accepted { .. }));
+    drop(daemon);
+
+    let restarted = common::start_daemon_in(dir.path(), Some("host-a"), Default::default()).await;
+    std::fs::write(
+        dir.path().join("wanted.toml"),
+        "[[session]]\nname = 'wanted'\ncommand = ['cat']",
+    )
+    .unwrap();
+    let wanted = run_binary(dir.path(), &["team", "status", "--file", "wanted.toml"]).unwrap();
+    assert!(wanted.status.success());
+    assert!(String::from_utf8_lossy(&wanted.stderr).contains("1 message(s)"));
+
+    std::fs::write(
+        dir.path().join("other.toml"),
+        "[[session]]\nname = 'other'\ncommand = ['cat']",
+    )
+    .unwrap();
+    let other = run_binary(dir.path(), &["team", "status", "--file", "other.toml"]).unwrap();
+    assert!(other.status.success());
+    assert!(!String::from_utf8_lossy(&other.stderr).contains("lost in a daemon restart"));
+
+    restarted.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

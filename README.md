@@ -104,6 +104,8 @@ a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx kill --exited              # remove every exited session without prompting
 a2amx reset <id|name>               # type the configured reset sequence
 a2amx screen <id|name> [--rows N]   # read visible screen text without attaching
+a2amx team status [--file F]                         # read-only wanted-session state
+a2amx team up --dry-run [--file F]                   # print the launch plan, do not start
 a2amx team up [--file F] [--detach] [NAME=EXE ...]   # a2amx.toml or bare executables
 a2amx team down [--file F] [--now] [NAME ...]
 a2amx daemon start --host-name host-a  # names this host in addresses (name@host-a)
@@ -253,6 +255,31 @@ same graceful Ctrl-D default as `kill`; pass `--now` to use the immediate HUP/KI
 path. Missing names are reported without failing; explicit missing names also print
 a stderr hint to use full names from `a2amx list`, while file-derived missing names
 are silent.
+
+`a2amx team status` also needs a running daemon and prints one `NAME TEAM STATE NOTE`
+row per wanted session in file order. `TEAM` is the configured team name, with a
+` (private)` suffix for private teams, or `-` when ungrouped. `STATE` is `missing`,
+`running`, `exited`, or `team-mismatch`; `running` means only that the name and team
+scope match, not that the command, cwd, role, or other settings are current. It exits
+0 when `team up` would proceed (including missing sessions) and 1 when `team up` would
+refuse because of a conflict. A conflict note uses the same remediation text as
+`team up`; status returns that exit code directly without an `a2amx:` error line.
+
+`a2amx team up --dry-run` uses the same daemon list and conflict preflight, then prints
+`would start`/`already running` rows and the resolved harness, cwd, team visibility and
+allow list, role, attachment, watch, controller, heartbeat, and redacted command for
+each session that would start. It needs a running daemon, exits 1 on the same conflicts,
+and never starts or attaches a session; OMP extension installation is explicitly skipped.
+The command keeps `argv[0]`, flag names, and UTF-8 byte counts, but redacts every value
+and every non-flag argument (including everything after `--`) because settings and
+injected prompts can contain secrets. `--dry-run` cannot be combined with `--detach` or
+inline `NAME=EXECUTABLE` items.
+
+After `team up`, `team status`, or a dry run, the command may print
+`note: N message(s) to this team were lost in a daemon restart; see a2amx messages
+--state undeliverable` when retained undeliverable messages have detail
+`daemon_restarted` for one of the wanted names. The note is best-effort and does not
+change the command's result; messages are retained for the existing seven-day window.
 `--file` cannot be combined with inline session items or names.
 
 ## Using it with agents

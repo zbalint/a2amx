@@ -170,6 +170,12 @@ pub enum DaemonAction {
 }
 #[derive(Debug, Subcommand)]
 pub enum TeamAction {
+    /// Show the desired team's session states without changing anything.
+    Status {
+        /// Team file (default: a2amx.toml).
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
     /// Start the sessions that are not running.
     Up {
         /// Team file (default: a2amx.toml). Cannot be combined with NAME=EXECUTABLE items.
@@ -178,11 +184,15 @@ pub enum TeamAction {
         /// Do not attach to any session.
         #[arg(long)]
         detach: bool,
+        /// Print the launch plan without starting sessions.
+        #[arg(long, conflicts_with_all = ["detach", "items"])]
+        dry_run: bool,
         /// NAME=EXECUTABLE; the first session is attached.
         items: Vec<String>,
     },
     /// Kill the team's sessions, running or exited.
     Down {
+        /// Team file (default: a2amx.toml). Cannot be combined with NAME=EXECUTABLE items.
         #[arg(long, conflicts_with = "names")]
         file: Option<PathBuf>,
         /// Session names (default: every name in the team file).

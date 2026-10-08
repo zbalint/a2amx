@@ -317,6 +317,14 @@ the CLI rejects all exited-name and team-setting conflicts and skips running ses
 and spawning are deliberately non-atomic: a concurrent name claim fails at spawn, leaving
 earlier starts intact. Launches reuse `new`'s harness wiring; down targets only the requested names.
 
+`team status` is a read-only client-side inspection of the wanted file against one
+daemon `List` response; it reports missing, running, exited, and team-setting conflict
+states in file order and returns status 1 only when `team up` would refuse. `team up
+--dry-run` reuses the same plan and harness wiring to print the resolved launch details
+and redacted argv without creating sessions or installing the OMP extension. Both
+commands use a separate best-effort messages query to note retained messages lost in a
+daemon restart; the note never changes the command result.
+
 ### Status line
 
 The attach client reserves the terminal's last row for a status line by default and

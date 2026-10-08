@@ -76,3 +76,4 @@ lag the code.
 | U1 | `developer_instructions` taking effect in Codex | verified by the tester on an isolated daemon, 2026-10-04: the default session's model states the peer-authorization instruction and a `--no-authorize-peers` session reports none (Codex 0.160.0, one model; not a version matrix) |
 | U2 | Two simultaneous Codex sessions; `/new` thread switching | verified by the tester, 2026-10-04: a message reached only the receiver's own thread with a native receipt, and after `/new` the next message landed in the new thread only |
 | C16 | Private teams, visibility-aware `list_agents`, team-aware list/picker/status, and `list --team`/`--as` filters | spec 3l |
+| C17 | `team status`, `team up --dry-run`, and the lost-message restart note | spec 3m |

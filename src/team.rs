@@ -67,6 +67,58 @@ pub struct Conflict {
     pub reason: ConflictReason,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    pub state: EntryState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryState {
+    Missing,
+    Running { id: String },
+    Conflict { id: String, reason: ConflictReason },
+}
+
+/// Inspect wanted sessions in file order; this is the single place where
+/// exited-session and team-scope conflicts are classified.
+pub fn inspect(wanted: &[TeamSession], existing: &[SessionSummary]) -> Vec<Entry> {
+    let by_name: HashMap<_, _> = existing
+        .iter()
+        .filter_map(|session| session.name.as_deref().map(|name| (name, session)))
+        .collect();
+    wanted
+        .iter()
+        .map(|session| {
+            let Some(existing) = by_name.get(session.name.as_str()) else {
+                return Entry {
+                    name: session.name.clone(),
+                    state: EntryState::Missing,
+                };
+            };
+            let state = if existing.exit_code.is_some() {
+                EntryState::Conflict {
+                    id: existing.id.clone(),
+                    reason: ConflictReason::Exited,
+                }
+            } else if existing.team.as_ref() != session.team.as_ref() {
+                EntryState::Conflict {
+                    id: existing.id.clone(),
+                    reason: ConflictReason::TeamMismatch,
+                }
+            } else {
+                EntryState::Running {
+                    id: existing.id.clone(),
+                }
+            };
+            Entry {
+                name: session.name.clone(),
+                state,
+            }
+        })
+        .collect()
+}
+
 pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
     let file: TeamFile = toml::from_str(text).context("invalid team file")?;
     let TeamFile {
@@ -230,26 +282,16 @@ pub fn plan(
     wanted: &[TeamSession],
     existing: &[SessionSummary],
 ) -> Result<Vec<Action>, Vec<Conflict>> {
-    let by_name: HashMap<_, _> = existing
+    let entries = inspect(wanted, existing);
+    let conflicts: Vec<_> = entries
         .iter()
-        .filter_map(|session| session.name.as_deref().map(|name| (name, session)))
-        .collect();
-    let conflicts: Vec<_> = wanted
-        .iter()
-        .filter_map(|session| {
-            let existing = by_name.get(session.name.as_str())?;
-            let reason = if existing.exit_code.is_some() {
-                Some(ConflictReason::Exited)
-            } else if existing.team.as_ref() != session.team.as_ref() {
-                Some(ConflictReason::TeamMismatch)
-            } else {
-                None
-            };
-            reason.map(|reason| Conflict {
-                name: session.name.clone(),
-                id: existing.id.clone(),
-                reason,
-            })
+        .filter_map(|entry| match &entry.state {
+            EntryState::Conflict { id, reason } => Some(Conflict {
+                name: entry.name.clone(),
+                id: id.clone(),
+                reason: reason.clone(),
+            }),
+            EntryState::Missing | EntryState::Running { .. } => None,
         })
         .collect();
     if !conflicts.is_empty() {
@@ -257,12 +299,14 @@ pub fn plan(
     }
     Ok(wanted
         .iter()
-        .map(|session| match by_name.get(session.name.as_str()) {
-            Some(existing) => Action::AlreadyRunning {
+        .zip(entries)
+        .map(|(session, entry)| match entry.state {
+            EntryState::Missing => Action::Start(Box::new(session.clone())),
+            EntryState::Running { id } => Action::AlreadyRunning {
                 name: session.name.clone(),
-                id: existing.id.clone(),
+                id,
             },
-            None => Action::Start(Box::new(session.clone())),
+            EntryState::Conflict { .. } => unreachable!("conflicts returned above"),
         })
         .collect())
 }
