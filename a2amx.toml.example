@@ -12,6 +12,7 @@ team = "myproject"
 # role is an optional label shown only to that session (in its system prompt, for
 # Claude, OMP and Codex). It grants no authority and is not shown to peers or in list.
 # Your own agent instructions can say how a session should act on its role.
+# name may be omitted when role is set; the role is then the name
 
 [[session]]
 name = "architect"

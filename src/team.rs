@@ -228,7 +228,24 @@ pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
     let mut sessions: Vec<TeamSession> = session
         .into_iter()
         .enumerate()
-        .map(|(index, table)| {
+        .map(|(index, mut table)| {
+            // A role-only session uses its role as the configuration name.
+            if !table.contains_key("name") {
+                match table.get("role") {
+                    Some(toml::Value::String(role)) => {
+                        if let Err(error) = validate_name(role) {
+                            bail!(
+                                "session {}: name taken from role {role:?}: {error}; set name explicitly",
+                                index + 1
+                            );
+                        }
+                        let name = role.clone();
+                        table.insert("name".into(), toml::Value::String(name));
+                    }
+                    Some(_) => {}
+                    None => bail!("session {}: name or role is required", index + 1),
+                }
+            }
             toml::Value::Table(table)
                 .try_into()
                 .with_context(|| format!("session {}", index + 1))

@@ -79,3 +79,4 @@ lag the code.
 | C18 | Agent-level allow between private teams | spec 3n |
 | C19 | Team-wide ordered context reset with attached-session safety and continuation on refusal | spec 3o |
 | C20 | Needs-input label for stuck sessions (Claude screen heuristic, Codex protocol signal); OMP and generic sessions have no signal | spec 3p |
+| C21 | A session with a role and no name uses the role as its name | spec 3q |

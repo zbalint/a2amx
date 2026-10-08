@@ -246,6 +246,8 @@ other commands, and is not visible to peers or in `list`. When set, it is append
 to the same injected operator text as the peer-authorization line, including when
 `--no-authorize-peers` is used.
 
+Within a `[[session]]` table, `name` may be omitted when `role` is set; the role is then used as the name and must itself be a valid name (otherwise set `name` explicitly). An explicit `name` always wins.
+
 A copy to start from is in `a2amx.toml.example`; your own `a2amx.toml` is gitignored.
 
 Use `--file` for another file; relative `cwd` values are relative to that file's

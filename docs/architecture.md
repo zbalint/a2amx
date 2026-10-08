@@ -319,6 +319,7 @@ private unless `private = false`; file-level `allow` is mutual consent between t
 the CLI rejects all exited-name and team-setting conflicts and skips running sessions. Preflight
 and spawning are deliberately non-atomic: a concurrent name claim fails at spawn, leaving
 earlier starts intact. Launches reuse `new`'s harness wiring; down targets only the requested names.
+A session may omit `name` when it has a valid `role`; parsing uses that role as its name, while an explicit name wins.
 
 `team status` is a read-only client-side inspection of the wanted file against one
 daemon `List` response; it reports missing, running, exited, and team-setting conflict

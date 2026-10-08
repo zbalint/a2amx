@@ -239,6 +239,97 @@ fn parse_rejects_invalid_session_agent_allow_entries() {
 }
 
 #[test]
+fn parse_defaults_name_to_role() {
+    let sessions = team::parse(
+        r#"
+[[session]]
+role = "architect"
+command = ["cat"]
+"#,
+    )
+    .unwrap();
+    assert_eq!(sessions[0].name, "architect");
+    assert_eq!(sessions[0].role.as_deref(), Some("architect"));
+}
+
+#[test]
+fn parse_defaults_role_name_before_prefix_and_reference_resolution() {
+    let sessions = team::parse(
+        r#"
+team = "t"
+[[session]]
+role = "architect"
+command = ["cat"]
+[[session]]
+name = "developer"
+command = ["cat"]
+watch = ["architect"]
+"#,
+    )
+    .unwrap();
+    assert_eq!(sessions[0].name, "t-architect");
+    assert_eq!(sessions[1].watch, ["t-architect"]);
+}
+
+#[test]
+fn parse_explicit_name_wins_over_role() {
+    let sessions = team::parse(
+        r#"
+[[session]]
+name = "worker"
+role = "architect"
+command = ["cat"]
+"#,
+    )
+    .unwrap();
+    assert_eq!(sessions[0].name, "worker");
+    assert_eq!(sessions[0].role.as_deref(), Some("architect"));
+}
+
+#[test]
+fn parse_rejects_invalid_derived_names_with_name_guidance() {
+    for (role, expected) in [
+        (
+            "Senior Reviewer",
+            "session 1: name taken from role \"Senior Reviewer\"",
+        ),
+        ("s12", "session 1: name taken from role \"s12\""),
+        (
+            " architect",
+            "session 1: name taken from role \" architect\"",
+        ),
+    ] {
+        let text = format!("[[session]]\nrole = {role:?}\ncommand = [\"cat\"]");
+        let error = team::parse(&text).expect_err(role);
+        let error = error.to_string();
+        assert!(error.contains(expected), "{error}");
+        assert!(error.contains("set name explicitly"), "{error}");
+    }
+}
+
+#[test]
+fn parse_requires_name_or_role() {
+    let error = team::parse("[[session]]\ncommand = [\"cat\"]").expect_err("missing identity");
+    assert_eq!(error.to_string(), "session 1: name or role is required");
+}
+
+#[test]
+fn parse_rejects_duplicate_derived_names() {
+    let error = team::parse(
+        r#"
+[[session]]
+role = "developer"
+command = ["cat"]
+[[session]]
+role = "developer"
+command = ["cat"]
+"#,
+    )
+    .expect_err("duplicate role-only names");
+    assert!(error.to_string().contains("duplicate name"), "{error:#}");
+}
+
+#[test]
 fn parse_accepts_and_validates_roles() {
     let valid = team::parse(
         r#"
