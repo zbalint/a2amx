@@ -108,6 +108,7 @@ a2amx team status [--file F]                         # read-only wanted-session 
 a2amx team up --dry-run [--file F]                   # print the launch plan, do not start
 a2amx team up [--file F] [--detach] [NAME=EXE ...]   # a2amx.toml or bare executables
 a2amx team down [--file F] [--now] [NAME ...]
+a2amx team reset [--file F | NAME ...] [--except NAME]... [--include-attached] [--yes]
 a2amx daemon start --host-name host-a  # names this host in addresses (name@host-a)
 # --harness is inferred from the command name when omitted (claude, codex, omp)
 a2amx new --name agent-plan --harness claude -- claude
@@ -255,6 +256,24 @@ same graceful Ctrl-D default as `kill`; pass `--now` to use the immediate HUP/KI
 path. Missing names are reported without failing; explicit missing names also print
 a stderr hint to use full names from `a2amx list`, while file-derived missing names
 are silent.
+
+`a2amx team reset [--file F | NAME ...] [--except NAME]... [--include-attached] [--yes]`
+clears the configured reset sequence for each selected session, in file order or NAME
+argument order. It asks for confirmation before the first reset; pass `--yes` for
+noninteractive use. Use `--except` to leave selected sessions untouched (an excepted name
+that was not selected is ignored). Sessions with a human attachment are skipped by default
+when selected from the file, because reset clears the conversation that person is viewing;
+name a session explicitly or pass `--include-attached` to opt in. Missing sessions print
+`no session`, exited sessions print a skip line, and a busy or drafting session is skipped
+by the daemon, reported as `failed`, and followed by the remaining sessions. The command
+exits 1 if any reset failed and 0 when every running session reset or was legitimately
+skipped.
+
+Resets are sequential and preserve selection order. Each reset step settles for at least
+1.5 seconds, and a step that never becomes ready can take up to the 30-second timeout, so
+a five-session team can take roughly ten to twenty seconds when all sessions are ready.
+The command does not detect whether its caller is one of the selected agents; the state
+directory is the trust boundary. Use `--except` for the session running the command.
 
 `a2amx team status` also needs a running daemon and prints one `NAME TEAM STATE NOTE`
 row per wanted session in file order. `TEAM` is the configured team name, with a

@@ -102,6 +102,13 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 items,
             } => run_team_up(home, prefix, file, detach, dry_run, items).await,
             TeamAction::Down { file, names, now } => run_team_down(home, file, names, now).await,
+            TeamAction::Reset {
+                file,
+                names,
+                except,
+                include_attached,
+                yes,
+            } => run_team_reset(home, file, names, except, include_attached, yes).await,
         },
         Command::Attach { session, force } => {
             run_attach_command(home, prefix, session, force).await
@@ -960,6 +967,103 @@ async fn run_team_down(
     Ok(())
 }
 
+async fn run_team_reset(
+    home: PathBuf,
+    file: Option<PathBuf>,
+    names: Vec<String>,
+    except: Vec<String>,
+    include_attached: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let explicit = !names.is_empty();
+    let names = if explicit {
+        names
+    } else {
+        let file =
+            std::env::current_dir()?.join(file.unwrap_or_else(|| PathBuf::from("a2amx.toml")));
+        read_team(file)
+            .await?
+            .into_iter()
+            .map(|session| session.name)
+            .collect()
+    };
+    let mut client = Client::connect(&home).await?;
+    let sessions = request_sessions(&mut client).await?;
+    let targets = team::reset_targets(&names, explicit, &except, include_attached, &sessions);
+    let running = targets
+        .iter()
+        .filter(|target| matches!(target.state, team::ResetState::Reset { .. }))
+        .count();
+    if running > 0 && !yes {
+        let mut preview = String::new();
+        for target in &targets {
+            let team::ResetState::Reset { id } = &target.state else {
+                continue;
+            };
+            let attached = sessions
+                .iter()
+                .find(|session| session.id == *id)
+                .is_some_and(|session| session.attached);
+            preview.push_str(&format!(
+                "{} {}{}\n",
+                target.name,
+                id,
+                if attached { " (attached)" } else { "" }
+            ));
+        }
+        write_stdout(preview.into_bytes()).await?;
+        let prompt = format!("Reset {running} session(s)? This clears their conversations. [y/N] ");
+        if !confirm(
+            &prompt,
+            &format!("refusing to reset: {running} running session(s); pass --yes to reset them"),
+        )
+        .await?
+        {
+            return write_stdout(b"not reset\n".to_vec()).await;
+        }
+    }
+
+    let mut failed = false;
+    for target in targets {
+        match target.state {
+            team::ResetState::Reset { id } => match reset_one(&mut client, &id).await {
+                Ok(steps) => {
+                    let noun = if steps == 1 { "step" } else { "steps" };
+                    write_stdout(
+                        format!("reset {} {id}: {steps} {noun}\n", target.name).into_bytes(),
+                    )
+                    .await?;
+                }
+                Err(error) => {
+                    write_stderr(format!("failed {}: {error}\n", target.name).into_bytes()).await?;
+                    failed = true;
+                }
+            },
+            team::ResetState::Missing => {
+                write_stdout(format!("no session {}\n", target.name).into_bytes()).await?;
+            }
+            team::ResetState::Exited { id } => {
+                write_stdout(format!("skipped {} {id} (exited)\n", target.name).into_bytes())
+                    .await?;
+            }
+            team::ResetState::SkippedAttached { id } => {
+                write_stdout(
+                    format!(
+                        "skipped {} {id} (attached; use --include-attached or name it)\n",
+                        target.name
+                    )
+                    .into_bytes(),
+                )
+                .await?;
+            }
+        }
+    }
+    if failed {
+        return Err(anyhow!("one or more team sessions could not be reset"));
+    }
+    Ok(())
+}
+
 async fn run_list(
     home: PathBuf,
     details: bool,
@@ -1062,24 +1166,29 @@ async fn kill_session(client: &mut Client, session: String, now: bool) -> anyhow
     }
 }
 
-async fn run_reset(home: PathBuf, reference: String) -> anyhow::Result<()> {
-    let session = resolve_session(&home, &reference).await?;
-    let mut client = Client::connect(&home).await?;
+async fn reset_one(client: &mut Client, session: &str) -> anyhow::Result<usize> {
     match client
         .request(Request::Reset {
-            session: session.clone(),
+            session: session.to_owned(),
         })
         .await?
     {
         Response::Reset { steps } => {
-            let noun = if steps == 1 { "step" } else { "steps" };
-            write_stdout(format!("reset {session}: {steps} {noun}\n").into_bytes()).await?;
-            Ok(())
+            usize::try_from(steps).map_err(|_| anyhow!("reset step count does not fit in usize"))
         }
         Response::Failed { code, message } => Err(anyhow!("{code}: {message}")),
         Response::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }
+}
+
+async fn run_reset(home: PathBuf, reference: String) -> anyhow::Result<()> {
+    let session = resolve_session(&home, &reference).await?;
+    let mut client = Client::connect(&home).await?;
+    let steps = reset_one(&mut client, &session).await?;
+    let noun = if steps == 1 { "step" } else { "steps" };
+    write_stdout(format!("reset {session}: {steps} {noun}\n").into_bytes()).await?;
+    Ok(())
 }
 
 async fn run_screen(home: PathBuf, session: String, rows: Option<usize>) -> anyhow::Result<()> {

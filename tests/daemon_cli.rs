@@ -477,6 +477,362 @@ fn reset_runs_configured_steps_in_order() {
 }
 
 #[test]
+fn team_reset_file_resets_sessions_in_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let fixture = fake_reset_composer(dir.path());
+    let file = dir.path().join("team.toml");
+    std::fs::write(
+        &file,
+        format!(
+            "[[session]]\nname = \"alpha\"\ncommand = [\"{}\"]\n\
+             [[session]]\nname = \"beta\"\ncommand = [\"{}\"]\n",
+            fixture.display(),
+            fixture.display()
+        ),
+    )
+    .unwrap();
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    for name in ["alpha", "beta"] {
+        let created = run(
+            &home,
+            &[
+                "new",
+                "--detach",
+                "--name",
+                name,
+                "--harness",
+                "generic",
+                "--",
+                "python3",
+                "-u",
+                fixture.to_str().unwrap(),
+            ],
+        );
+        assert!(created.status.success(), "stderr: {}", stderr(&created));
+    }
+
+    let file_arg = file.to_str().unwrap();
+    let reset = run(&home, &["team", "reset", "--file", file_arg, "--yes"]);
+
+    assert!(
+        reset.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&reset),
+        stderr(&reset)
+    );
+    assert_eq!(
+        stdout(&reset),
+        "reset alpha s1: 1 step\nreset beta s2: 1 step\n"
+    );
+    for name in ["alpha", "beta"] {
+        let screen = screen_contains_until(&home, &["screen", name], "marker:/clear");
+        assert!(screen.status.success(), "stderr: {}", stderr(&screen));
+    }
+}
+
+#[test]
+fn team_reset_reports_missing_and_exited_before_resetting_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let fixture = fake_reset_composer(dir.path());
+    let file = dir.path().join("team.toml");
+    std::fs::write(
+        &file,
+        format!(
+            "[[session]]\nname = \"missing\"\ncommand = [\"{}\"]\n\
+             [[session]]\nname = \"exited\"\ncommand = [\"{}\"]\n\
+             [[session]]\nname = \"ready\"\ncommand = [\"{}\"]\n",
+            fixture.display(),
+            fixture.display(),
+            fixture.display()
+        ),
+    )
+    .unwrap();
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let exited = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "exited",
+            "--harness",
+            "generic",
+            "--",
+            "true",
+        ],
+    );
+    assert!(exited.status.success(), "stderr: {}", stderr(&exited));
+    let ready = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "ready",
+            "--harness",
+            "generic",
+            "--",
+            "python3",
+            "-u",
+            fixture.to_str().unwrap(),
+        ],
+    );
+    assert!(ready.status.success(), "stderr: {}", stderr(&ready));
+
+    let file_arg = file.to_str().unwrap();
+    let reset = run(&home, &["team", "reset", "--file", file_arg, "--yes"]);
+
+    assert!(
+        reset.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&reset),
+        stderr(&reset)
+    );
+    assert_eq!(
+        stdout(&reset),
+        "no session missing\nskipped exited s1 (exited)\nreset ready s2: 1 step\n"
+    );
+}
+
+#[test]
+fn team_reset_continues_after_a_not_ready_session_and_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let fixture = fake_reset_composer(dir.path());
+    let file = dir.path().join("team.toml");
+    std::fs::write(
+        &file,
+        format!(
+            "[[session]]\nname = \"first\"\ncommand = [\"{}\"]\n\
+             [[session]]\nname = \"not-ready\"\ncommand = [\"{}\"]\n\
+             [[session]]\nname = \"last\"\ncommand = [\"{}\"]\n",
+            fixture.display(),
+            fixture.display(),
+            fixture.display()
+        ),
+    )
+    .unwrap();
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    for (name, command) in [
+        ("first", vec!["python3", "-u", fixture.to_str().unwrap()]),
+        ("not-ready", vec!["sleep", "30"]),
+        ("last", vec!["python3", "-u", fixture.to_str().unwrap()]),
+    ] {
+        let mut args = vec![
+            "new",
+            "--detach",
+            "--name",
+            name,
+            "--harness",
+            "generic",
+            "--",
+        ];
+        args.extend(command);
+        let created = run(&home, &args);
+        assert!(created.status.success(), "stderr: {}", stderr(&created));
+    }
+
+    let file_arg = file.to_str().unwrap();
+    let reset = run(&home, &["team", "reset", "--file", file_arg, "--yes"]);
+
+    assert!(!reset.status.success(), "stdout: {}", stdout(&reset));
+    assert!(
+        stderr(&reset).contains("failed not-ready: not_ready:"),
+        "{}",
+        stderr(&reset)
+    );
+    assert_eq!(
+        stdout(&reset),
+        "reset first s1: 1 step\nreset last s3: 1 step\n"
+    );
+}
+
+#[test]
+fn team_reset_except_leaves_the_named_session_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let fixture = fake_reset_composer(dir.path());
+    let file = dir.path().join("team.toml");
+    std::fs::write(
+        &file,
+        format!(
+            "[[session]]\nname = \"keep\"\ncommand = [\"{}\"]\n\
+             [[session]]\nname = \"reset\"\ncommand = [\"{}\"]\n",
+            fixture.display(),
+            fixture.display()
+        ),
+    )
+    .unwrap();
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    for name in ["keep", "reset"] {
+        let created = run(
+            &home,
+            &[
+                "new",
+                "--detach",
+                "--name",
+                name,
+                "--harness",
+                "generic",
+                "--",
+                "python3",
+                "-u",
+                fixture.to_str().unwrap(),
+            ],
+        );
+        assert!(created.status.success(), "stderr: {}", stderr(&created));
+    }
+
+    let file_arg = file.to_str().unwrap();
+    let reset = run(
+        &home,
+        &[
+            "team",
+            "reset",
+            "--file",
+            file_arg,
+            "--except",
+            "keep",
+            "--except",
+            "not-selected",
+            "--yes",
+        ],
+    );
+
+    assert!(reset.status.success(), "stderr: {}", stderr(&reset));
+    assert_eq!(stdout(&reset), "reset reset s2: 1 step\n");
+    let keep_screen = run(&home, &["screen", "keep"]);
+    assert!(
+        keep_screen.status.success(),
+        "stderr: {}",
+        stderr(&keep_screen)
+    );
+    assert!(!stdout(&keep_screen).contains("marker:/clear"));
+}
+
+#[test]
+fn team_reset_requires_yes_for_nonterminal_invocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let fixture = fake_reset_composer(dir.path());
+    let file = dir.path().join("team.toml");
+    std::fs::write(
+        &file,
+        format!(
+            "[[session]]\nname = \"alpha\"\ncommand = [\"{}\"]\n\
+             [[session]]\nname = \"beta\"\ncommand = [\"{}\"]\n",
+            fixture.display(),
+            fixture.display()
+        ),
+    )
+    .unwrap();
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    for name in ["alpha", "beta"] {
+        let created = run(
+            &home,
+            &[
+                "new",
+                "--detach",
+                "--name",
+                name,
+                "--harness",
+                "generic",
+                "--",
+                "python3",
+                "-u",
+                fixture.to_str().unwrap(),
+            ],
+        );
+        assert!(created.status.success(), "stderr: {}", stderr(&created));
+    }
+
+    let file_arg = file.to_str().unwrap();
+    let reset = run(&home, &["team", "reset", "--file", file_arg]);
+
+    assert!(!reset.status.success());
+    assert!(
+        stderr(&reset).starts_with("a2amx: refusing to reset: "),
+        "{}",
+        stderr(&reset)
+    );
+    for name in ["alpha", "beta"] {
+        let screen = run(&home, &["screen", name]);
+        assert!(screen.status.success(), "stderr: {}", stderr(&screen));
+        assert!(!stdout(&screen).contains("marker:/clear"));
+    }
+}
+
+#[test]
+fn team_reset_accepts_explicit_names_and_rejects_file_name_mix() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let fixture = fake_reset_composer(dir.path());
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    for name in ["alpha", "beta"] {
+        let created = run(
+            &home,
+            &[
+                "new",
+                "--detach",
+                "--name",
+                name,
+                "--harness",
+                "generic",
+                "--",
+                "python3",
+                "-u",
+                fixture.to_str().unwrap(),
+            ],
+        );
+        assert!(created.status.success(), "stderr: {}", stderr(&created));
+    }
+
+    let reset = run(&home, &["team", "reset", "alpha", "beta", "--yes"]);
+    assert!(
+        reset.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout(&reset),
+        stderr(&reset)
+    );
+    assert_eq!(
+        stdout(&reset),
+        "reset alpha s1: 1 step\nreset beta s2: 1 step\n"
+    );
+
+    let file = dir.path().join("team.toml");
+    std::fs::write(
+        &file,
+        "[[session]]\nname = \"alpha\"\ncommand = [\"cat\"]\n",
+    )
+    .unwrap();
+    let mixed = run(
+        &home,
+        &[
+            "team",
+            "reset",
+            "--file",
+            file.to_str().unwrap(),
+            "alpha",
+            "--yes",
+        ],
+    );
+    assert!(!mixed.status.success());
+    assert!(
+        stderr(&mixed).contains("cannot be used with"),
+        "{}",
+        stderr(&mixed)
+    );
+}
+
+#[test]
 fn harness_is_inferred_from_the_command() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");

@@ -35,6 +35,65 @@ fn summary(name: &str, id: &str, exit_code: Option<i32>) -> SessionSummary {
         activity_secs: None,
     }
 }
+#[test]
+fn reset_targets_preserve_order_and_protect_attached_sessions() {
+    use team::{ResetState, ResetTarget};
+
+    let names = ["a", "b", "c", "d", "e"].map(String::from);
+    let mut attached = summary("c", "c-id", None);
+    attached.attached = true;
+    let existing = [
+        attached,
+        summary("b", "b-id", Some(0)),
+        summary("a", "a-id", None),
+        summary("d", "d-id", None),
+    ];
+    let except = ["d", "unselected"].map(String::from);
+    assert_eq!(
+        team::reset_targets(&names, false, &except, false, &existing),
+        vec![
+            ResetTarget {
+                name: "a".into(),
+                state: ResetState::Reset { id: "a-id".into() },
+            },
+            ResetTarget {
+                name: "b".into(),
+                state: ResetState::Exited { id: "b-id".into() },
+            },
+            ResetTarget {
+                name: "c".into(),
+                state: ResetState::SkippedAttached { id: "c-id".into() },
+            },
+            ResetTarget {
+                name: "e".into(),
+                state: ResetState::Missing,
+            },
+        ]
+    );
+    for (explicit, include_attached) in [(false, true), (true, false)] {
+        assert_eq!(
+            team::reset_targets(&names, explicit, &except, include_attached, &existing),
+            vec![
+                ResetTarget {
+                    name: "a".into(),
+                    state: ResetState::Reset { id: "a-id".into() },
+                },
+                ResetTarget {
+                    name: "b".into(),
+                    state: ResetState::Exited { id: "b-id".into() },
+                },
+                ResetTarget {
+                    name: "c".into(),
+                    state: ResetState::Reset { id: "c-id".into() },
+                },
+                ResetTarget {
+                    name: "e".into(),
+                    state: ResetState::Missing,
+                },
+            ]
+        );
+    }
+}
 
 fn run_binary(home: &Path, args: &[&str]) -> std::io::Result<Output> {
     Command::new(env!("CARGO_BIN_EXE_a2amx"))

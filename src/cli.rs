@@ -201,4 +201,22 @@ pub enum TeamAction {
         #[arg(long)]
         now: bool,
     },
+
+    /// Reset the team's sessions (clear their conversations).
+    Reset {
+        /// Team file (default: a2amx.toml). Cannot be combined with session names.
+        #[arg(long, conflicts_with = "names")]
+        file: Option<PathBuf>,
+        /// Session names (default: every name in the team file).
+        names: Vec<String>,
+        /// Do not reset this session; repeatable.
+        #[arg(long)]
+        except: Vec<String>,
+        /// Include sessions with a human attachment.
+        #[arg(long)]
+        include_attached: bool,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
 }

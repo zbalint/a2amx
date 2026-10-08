@@ -80,6 +80,58 @@ pub enum EntryState {
     Conflict { id: String, reason: ConflictReason },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResetTarget {
+    pub name: String,
+    pub state: ResetState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResetState {
+    Reset { id: String },
+    Missing,
+    Exited { id: String },
+    SkippedAttached { id: String },
+}
+
+/// Classify selected session names for an ordered team reset.
+pub fn reset_targets(
+    names: &[String],
+    explicit: bool,
+    except: &[String],
+    include_attached: bool,
+    existing: &[SessionSummary],
+) -> Vec<ResetTarget> {
+    let except: HashSet<_> = except.iter().map(String::as_str).collect();
+    names
+        .iter()
+        .filter(|name| !except.contains(name.as_str()))
+        .map(|name| {
+            let state = match existing
+                .iter()
+                .find(|session| session.name.as_deref() == Some(name.as_str()))
+            {
+                None => ResetState::Missing,
+                Some(session) if session.exit_code.is_some() => ResetState::Exited {
+                    id: session.id.clone(),
+                },
+                Some(session) if session.attached && !explicit && !include_attached => {
+                    ResetState::SkippedAttached {
+                        id: session.id.clone(),
+                    }
+                }
+                Some(session) => ResetState::Reset {
+                    id: session.id.clone(),
+                },
+            };
+            ResetTarget {
+                name: name.clone(),
+                state,
+            }
+        })
+        .collect()
+}
+
 /// Inspect wanted sessions in file order; this is the single place where
 /// exited-session and team-scope conflicts are classified.
 pub fn inspect(wanted: &[TeamSession], existing: &[SessionSummary]) -> Vec<Entry> {
