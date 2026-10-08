@@ -69,7 +69,8 @@ restart lost messages.
   `team up` (1 on conflicts).
 - **D4. Redaction.** The printed `command` shows the executable (`argv[0]`) verbatim. A later
   element is shown verbatim only when the part before any `=` has the exact shape of a flag name,
-  `-x` or `--long-name` (`^--?[A-Za-z][A-Za-z0-9-]*$`), and no `--` element precedes it; when it had
+  `-x` (a single dash and exactly one ASCII letter) or `--long-name`
+  (`^(-[A-Za-z]|--[A-Za-z][A-Za-z0-9-]*)$`), and no `--` element precedes it; when it had
   an `=` it is followed by `=<redacted, N bytes>`. Every other element, including anything that
   starts with `-` but is not shaped like a flag and everything after a `--` element, is printed as
   `<N bytes>` (N is the UTF-8 byte length). Example: `claude --model sonnet --settings {"a":1}` is
@@ -204,6 +205,12 @@ All pass with no warnings. Known-flaky PTY tests (see spec 2n) are rerun once an
 hidden. Also report `git status --short` showing only the files in section 0's scope list.
 
 ## 9. Pre-lock gate notes
+
+- **Amendment 1 (2026-10-08, developer BLOCKED `m_774`):** D4's flag regex `^--?[A-Za-z][A-Za-z0-9-]*$`
+  matched `-token123`, which D4's own example and test 7 require to be redacted as `<9 bytes>`. The
+  regex is now `^(-[A-Za-z]|--[A-Za-z][A-Za-z0-9-]*)$`: a single-dash flag is exactly one letter, so
+  `-x` stays verbatim and `-token123` is redacted. Examples and tests are unchanged. A clustered
+  short-flag form such as `-abc` is redacted; that over-redaction is deliberate.
 
 - Baseline: `env -u A2AMX_BIN -u NO_COLOR cargo test` passes on `9dc715a` (404 passed, 27 suites, 3
   ignored, run by the architect when accepting spec 3l; the tree has not changed since).
