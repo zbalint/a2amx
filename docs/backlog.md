@@ -76,5 +76,6 @@ lag the code.
 | U2 | Two simultaneous Codex sessions; `/new` thread switching | verified by the tester, 2026-10-04: a message reached only the receiver's own thread with a native receipt, and after `/new` the next message landed in the new thread only |
 | C16 | Private teams, visibility-aware `list_agents`, team-aware list/picker/status, and `list --team`/`--as` filters | spec 3l |
 | C17 | `team status`, `team up --dry-run`, and the lost-message restart note | spec 3m |
+| C18 | Agent-level allow between private teams | spec 3n |
 | C19 | Team-wide ordered context reset with attached-session safety and continuation on refusal | spec 3o |
 | C20 | Needs-input label for stuck sessions (Claude screen heuristic, Codex protocol signal); OMP and generic sessions have no signal | spec 3p |

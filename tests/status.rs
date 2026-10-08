@@ -48,6 +48,7 @@ fn status_shows_sanitized_role_and_private_team_before_harness() {
         name: "demo\r\nteam".into(),
         private: true,
         allow: Vec::new(),
+        agents: Vec::new(),
     });
     status.harness = Some(Harness::Claude);
     let text = visible(&status::render(

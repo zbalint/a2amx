@@ -29,6 +29,8 @@ pub struct TeamSession {
     pub heartbeat: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
+    #[serde(default)]
+    pub allow: Vec<String>,
     #[serde(skip)]
     pub team: Option<TeamScope>,
 }
@@ -218,6 +220,7 @@ pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
             name,
             private,
             allow,
+            agents: Vec::new(),
         })
     } else {
         None
@@ -236,30 +239,85 @@ pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
         .map(|session| session.name.clone())
         .collect();
     for session in &mut sessions {
-        session.team = scope.clone();
-    }
-    for session in &mut sessions {
         let original_name = session.name.clone();
-        if let Some(scope) = &scope {
-            session.name = format!("{}-{original_name}", scope.name);
+        if let Some(base_scope) = &scope {
+            session.name = format!("{}-{original_name}", base_scope.name);
+            let mut session_scope = base_scope.clone();
+            session_scope.agents = resolve_agent_allow(
+                &session.allow,
+                &base_scope.name,
+                &session.name,
+                base_scope.private,
+            )?;
+            session.team = Some(session_scope);
+        } else {
+            if !session.allow.is_empty() {
+                bail!("session {}: allow needs a private team", session.name);
+            }
+            session.team = None;
         }
+        let session_scope = session.team.as_ref();
         resolve_references(
             &mut session.watch,
             &base_names,
-            scope.as_ref(),
+            session_scope,
             &session.name,
             "watch",
         )?;
         resolve_references(
             &mut session.control_from,
             &base_names,
-            scope.as_ref(),
+            session_scope,
             &session.name,
             "control_from",
         )?;
     }
     validate_sessions(&sessions)?;
     Ok(sessions)
+}
+fn resolve_agent_allow(
+    entries: &[String],
+    own_team: &str,
+    session_name: &str,
+    private: bool,
+) -> anyhow::Result<Vec<String>> {
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !private {
+        bail!("session {session_name}: allow needs a private team");
+    }
+    if entries.len() > 16 {
+        bail!("session {session_name}: allow has at most 16 entries");
+    }
+    let mut seen = HashSet::with_capacity(entries.len());
+    let mut agents = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some((team, agent)) = entry.split_once('/') else {
+            bail!("session {session_name}: allow entry {entry:?} must be TEAM/AGENT");
+        };
+        if team.is_empty() || agent.is_empty() || agent.contains('/') {
+            bail!("session {session_name}: allow entry {entry:?} must be TEAM/AGENT");
+        }
+        validate_name(team).map_err(|error| {
+            anyhow::anyhow!("session {session_name}: allow entry {entry:?}: {error}")
+        })?;
+        validate_name(agent).map_err(|error| {
+            anyhow::anyhow!("session {session_name}: allow entry {entry:?}: {error}")
+        })?;
+        if team == own_team {
+            bail!("session {session_name}: allow entry {entry:?} must name another team");
+        }
+        let resolved = format!("{team}-{agent}");
+        validate_name(&resolved).map_err(|error| {
+            anyhow::anyhow!("session {session_name}: allow entry {entry:?}: {error}")
+        })?;
+        if !seen.insert(resolved.clone()) {
+            bail!("session {session_name}: allow entry {entry:?} is repeated");
+        }
+        agents.push(resolved);
+    }
+    Ok(agents)
 }
 
 fn resolve_references(
@@ -323,6 +381,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             watch: Vec::new(),
             heartbeat: None,
             role: None,
+            allow: Vec::new(),
             team: None,
         });
     }

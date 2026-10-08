@@ -201,8 +201,9 @@ belongs to the envelope and authorization design, which is unresolved.
 A team `role`, when set, is appended to the same injected operator text for Claude,
 OMP, and Codex; it is shown to that session and in its attach status line, not to peers
 or in `list`/`list_agents`. A team is private by default; ungrouped sessions and public
-teams are visible to everyone, while private teams require mutual team-level `allow`.
-The daemon applies that visibility to list, message, reset, exit-event, and heartbeat paths.
+teams are visible to everyone, while private teams require mutual team-level `allow` or
+mutual session-level `allow` for a named pair. The daemon applies that visibility to list,
+message, reset, exit-event, and heartbeat paths.
 
 Open: exact exchange/workspace visibility rules and management permissions.
 Agents should only discover and message recipients authorized for their scope.

@@ -25,6 +25,14 @@ pub struct TeamScope {
     pub name: String,
     pub private: bool,
     pub allow: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Party<'a> {
+    pub name: Option<&'a str>,
+    pub team: Option<&'a TeamScope>,
 }
 
 pub fn display_duration(duration: Duration) -> String {
@@ -195,14 +203,25 @@ fn valid_dns_label(value: &str) -> bool {
     value.len() <= 63 && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
 }
 
-pub fn visible(a: Option<&TeamScope>, b: Option<&TeamScope>) -> bool {
-    match (a, b) {
+/// Visible when both parties share a team, either side is ungrouped/public, or mutual team allow.
+/// It is also visible for two named parties when each session-level agents list contains the other.
+/// The result is symmetric and requires mutual consent for both allow forms.
+pub fn visible(a: Party<'_>, b: Party<'_>) -> bool {
+    let team_visible = match (a.team, b.team) {
         (Some(a), Some(b)) if a.name == b.name => true,
         (Some(a), Some(b)) if a.private && b.private => {
             a.allow.iter().any(|name| name == &b.name) && b.allow.iter().any(|name| name == &a.name)
         }
         _ => true,
-    }
+    };
+    team_visible
+        || match (a.name, a.team, b.name, b.team) {
+            (Some(a_name), Some(a_team), Some(b_name), Some(b_team)) => {
+                a_team.agents.iter().any(|name| name == b_name)
+                    && b_team.agents.iter().any(|name| name == a_name)
+            }
+            _ => false,
+        }
 }
 
 pub fn validate_role(role: &str) -> anyhow::Result<()> {

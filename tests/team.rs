@@ -144,6 +144,7 @@ cwd = "."
                 watch: Vec::new(),
                 heartbeat: None,
                 role: Some("architect".into()),
+                allow: Vec::new(),
                 team: None,
             },
             TeamSession {
@@ -154,12 +155,87 @@ cwd = "."
                 reset: None,
                 control_from: Vec::new(),
                 watch: Vec::new(),
-                role: None,
                 heartbeat: None,
+                role: None,
+                allow: Vec::new(),
                 team: None,
             },
         ]
     );
+}
+
+#[test]
+fn parse_resolves_agent_allow_only_for_the_declaring_session() {
+    let sessions = team::parse(
+        r#"team = "a2amx"
+allow = ["other"]
+[[session]]
+name = "architect"
+command = ["cat"]
+allow = ["saltmdb/architect"]
+[[session]]
+name = "developer"
+command = ["cat"]
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(sessions[0].team.as_ref().unwrap()).unwrap(),
+        serde_json::json!({
+            "name": "a2amx", "private": true, "allow": ["other"],
+            "agents": ["saltmdb-architect"]
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(sessions[1].team.as_ref().unwrap()).unwrap(),
+        serde_json::json!({"name": "a2amx", "private": true, "allow": ["other"]})
+    );
+}
+#[test]
+fn parse_rejects_invalid_session_agent_allow_entries() {
+    let invalid = [
+        "architect",
+        "/architect",
+        "a/b/c",
+        "saltmdb/",
+        "a2amx/architect",
+        "saltmdb/architect,saltmdb/architect",
+    ];
+    for entry in invalid {
+        let allow = if entry.contains(',') {
+            entry.replace(',', "\", \"")
+        } else {
+            entry.to_owned()
+        };
+        let text = format!(
+            "team = \"a2amx\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [\"{allow}\"]"
+        );
+        let error = team::parse(&text).expect_err(entry);
+        assert!(error.to_string().contains("session"), "{entry}: {error}");
+        assert!(error.to_string().contains("allow"), "{entry}: {error}");
+    }
+    let entries = (0..17)
+        .map(|index| format!("\"saltmdb/agent{index}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let error = team::parse(&format!(
+        "team = \"a2amx\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [{entries}]"
+    ))
+    .expect_err("allow cap");
+    assert!(error.to_string().contains("session"));
+    assert!(error.to_string().contains("allow"));
+    let error = team::parse(
+        "team = \"a2amx\"\nprivate = false\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [\"saltmdb/architect\"]",
+    )
+    .expect_err("public team");
+    assert!(error.to_string().contains("session a2amx-architect"));
+    assert!(error.to_string().contains("allow"));
+    let error = team::parse(
+        "[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [\"saltmdb/architect\"]",
+    )
+    .expect_err("ungrouped session");
+    assert!(error.to_string().contains("session architect"));
+    assert!(error.to_string().contains("allow"));
 }
 
 #[test]
@@ -409,6 +485,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 watch: Vec::new(),
                 heartbeat: None,
                 role: None,
+                allow: Vec::new(),
                 team: None,
             },
             TeamSession {
@@ -421,6 +498,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 watch: Vec::new(),
                 heartbeat: None,
                 role: None,
+                allow: Vec::new(),
                 team: None,
             },
         ]
@@ -499,6 +577,7 @@ fn plan_reports_running_team_setting_mismatch() {
         name: "demo".into(),
         private: false,
         allow: Vec::new(),
+        agents: Vec::new(),
     });
     let conflict = team::plan(&wanted, &[existing]).unwrap_err();
     assert_eq!(
@@ -508,6 +587,36 @@ fn plan_reports_running_team_setting_mismatch() {
             id: "s1".into(),
             reason: team::ConflictReason::TeamMismatch,
         }]
+    );
+}
+#[test]
+fn plan_notices_agent_scope_mismatch_and_accepts_matching_scope() {
+    let wanted = team::parse(
+        "team = \"a2amx\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [\"saltmdb/architect\"]",
+    )
+    .unwrap();
+    let mut existing = summary("a2amx-architect", "s1", None);
+    existing.team = Some(a2amx::messaging::TeamScope {
+        name: "a2amx".into(),
+        private: true,
+        allow: Vec::new(),
+        agents: Vec::new(),
+    });
+    assert_eq!(
+        team::plan(&wanted, &[existing.clone()]),
+        Err(vec![team::Conflict {
+            name: "a2amx-architect".into(),
+            id: "s1".into(),
+            reason: team::ConflictReason::TeamMismatch,
+        }])
+    );
+    existing.team.as_mut().unwrap().agents = vec!["saltmdb-architect".into()];
+    assert_eq!(
+        team::plan(&wanted, &[existing]),
+        Ok(vec![team::Action::AlreadyRunning {
+            name: "a2amx-architect".into(),
+            id: "s1".into(),
+        }])
     );
 }
 
@@ -525,6 +634,7 @@ fn inspect_preserves_order_and_plan_reports_the_same_conflicts() {
         name: "different".into(),
         private: true,
         allow: Vec::new(),
+        agents: Vec::new(),
     });
     let existing = [
         mismatch,

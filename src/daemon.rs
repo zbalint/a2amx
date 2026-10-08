@@ -358,6 +358,34 @@ impl Runtime {
                     });
                 }
             }
+            if !scope.private && !scope.agents.is_empty() {
+                return Ok(Response::Error {
+                    message: "allow needs a private team".into(),
+                });
+            }
+            if scope.agents.len() > 16 {
+                return Ok(Response::Error {
+                    message: "session allow has at most 16 entries".into(),
+                });
+            }
+            let mut seen_agents = HashSet::with_capacity(scope.agents.len());
+            for entry in &scope.agents {
+                if let Err(error) = messaging::validate_name(entry) {
+                    return Ok(Response::Error {
+                        message: format!("session allow entry {entry:?}: {error}"),
+                    });
+                }
+                if name.as_deref() == Some(entry.as_str()) {
+                    return Ok(Response::Error {
+                        message: "session allow entry must not name itself".into(),
+                    });
+                }
+                if !seen_agents.insert(entry) {
+                    return Ok(Response::Error {
+                        message: format!("session allow entry {entry:?} is repeated"),
+                    });
+                }
+            }
         }
         if let Some(role) = &role {
             if let Err(error) = messaging::validate_role(role) {
@@ -549,7 +577,7 @@ impl Runtime {
             .filter(|watcher| {
                 watcher.exit_code().is_none()
                     && watcher.watch().iter().any(|watched| watched == name)
-                    && messaging::visible(watcher.team(), session.team())
+                    && messaging::visible(watcher.party(), session.party())
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -643,7 +671,7 @@ impl Runtime {
                             .find(|peer| {
                                 peer.exit_code().is_none()
                                     && peer.name() == Some(name.as_str())
-                                    && messaging::visible(session.team(), peer.team())
+                                    && messaging::visible(session.party(), peer.party())
                             })
                             .cloned()
                     })
@@ -806,7 +834,7 @@ impl Runtime {
         let Some((_, sender)) = lookup(self, sender_id) else {
             return failed(code::INTERNAL, "sender session is unavailable");
         };
-        if !messaging::visible(sender.team(), recipient.team()) {
+        if !messaging::visible(sender.party(), recipient.party()) {
             return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
         }
         if recipient.id().0 == sender_id {
@@ -908,7 +936,7 @@ impl Runtime {
                 self.reset_audit(&sender, &reference, messaging::code::UNKNOWN_SESSION, None);
                 return failed(messaging::code::UNKNOWN_SESSION, "unknown session");
             };
-            if !messaging::visible(sender_session.team(), target.team()) {
+            if !messaging::visible(sender_session.party(), target.party()) {
                 let target_address =
                     messaging::address(target.name(), &target.id().0, &self.host_name);
                 self.reset_audit(
@@ -1835,7 +1863,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                             admin
                                 || viewer.as_ref().is_some_and(|viewer| {
                                     session.id() == viewer.id()
-                                        || messaging::visible(viewer.team(), session.team())
+                                        || messaging::visible(viewer.party(), session.party())
                                 })
                         })
                         .map(|session| {

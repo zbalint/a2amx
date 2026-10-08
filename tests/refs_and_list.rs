@@ -421,3 +421,47 @@ command = ["sh", "-c", "sleep 30"]
     assert!(String::from_utf8(unknown.stderr)?.contains("unknown session nosuch"));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_as_applies_mutual_agent_allow() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("a.toml"),
+        r#"team = "a"
+[[session]]
+name = "architect"
+command = ["sh", "-c", "sleep 30"]
+allow = ["b/architect"]
+[[session]]
+name = "developer"
+command = ["sh", "-c", "sleep 30"]
+"#,
+    )?;
+    std::fs::write(
+        dir.path().join("b.toml"),
+        r#"team = "b"
+[[session]]
+name = "architect"
+command = ["sh", "-c", "sleep 30"]
+allow = ["a/architect"]
+[[session]]
+name = "developer"
+command = ["sh", "-c", "sleep 30"]
+"#,
+    )?;
+    for file in ["a.toml", "b.toml"] {
+        let started = run_binary(dir.path(), &["team", "up", "--detach", "--file", file])?;
+        assert!(
+            started.status.success(),
+            "{}",
+            String::from_utf8_lossy(&started.stderr)
+        );
+    }
+    let listing =
+        String::from_utf8(run_binary(dir.path(), &["list", "--as", "a-architect"])?.stdout)?;
+    assert!(listing.contains("a-architect"));
+    assert!(listing.contains("a-developer"));
+    assert!(listing.contains("b-architect"));
+    assert!(!listing.contains("b-developer"));
+    Ok(())
+}

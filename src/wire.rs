@@ -109,6 +109,8 @@ impl FrameDecoder {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+// shortcut: requests are short-lived and not stored in bulk; box the NewSession fields if Request is ever held in a hot collection.
+#[allow(clippy::large_enum_variant)]
 pub enum Request {
     Hello {
         token: String,

@@ -190,12 +190,13 @@ timeout; one reset runs at a time. Session-token callers need the target's
 ```toml
 team = "myproject"
 # private = false # teams are private by default
-# allow = ["other-team"] # mutual private-team consent
+# allow = ["other-team"] # file-level allow: mutual private-team consent by team name
 [[session]]
 name = "architect"
 command = ["claude"]
 attach = true
 role = "architect"
+allow = ["other-team/architect"] # session-level allow: mutual consent by final agent name
 reset = ["/clear", "/prewalk restart"]
 control_from = ["developer"]
 watch = ["developer"]
@@ -210,9 +211,14 @@ role = "developer"
 ```
 
 The file-level `team` prefixes every session name (`architect` becomes `myproject-architect`).
-Teams are private by default; `allow` names teams, and naming a public team changes nothing.
+Teams are private by default; file-level `allow` names teams, and naming a public team changes nothing.
 Private teams can see ungrouped sessions and public teams, but two private teams need mutual
-`allow` entries. Sessions outside a private visibility boundary are omitted from
+file-level `allow` entries. A session-level `allow` uses the same key with `team/agent`
+entries such as `other-team/architect`; both named sessions must list each other. It adds
+that pair to the team-level visibility rule, still needs a private team, and does not expose
+the rest of either team. Changing a running session's list changes its scope and is a
+`team-mismatch`; take the team down with `a2amx team down` before the next `team up`.
+Sessions outside a private visibility boundary are omitted from
 `list_agents`/`list` and return `unknown recipient` when addressed by an agent. Team metadata
 is not OS-user or process isolation. The flag form has no team. Each `command` element is one
 argument, so use `["claude", "--model",
@@ -229,6 +235,10 @@ and unchanged for the interval; it requires a non-empty `watch` list and accepts
 positive `s`, `m`, or `h` values from 1 second through 24 hours. The digest is skipped
 when every live watched peer has `idle` activity and an empty queue. A daemon-ended
 session (for example through `kill`, `team down`, or `daemon stop`) sends no exit event.
+
+A cross-team `control_from` entry such as `other-team/agent` works only when the
+two sessions can already see each other. Mutual session-level `allow` lets one
+architect reset the other when the target lists that architect in `control_from`.
 
 `role` is an optional label of at most 64 characters, shown only to that session in
 its system prompt for Claude, OMP, and Codex. It grants no authority, is ignored for

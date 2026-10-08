@@ -8,10 +8,15 @@ use a2amx::messaging::TeamScope;
 use a2amx::wire::{Request, Response};
 
 fn scope(name: &str, private: bool, allow: &[&str]) -> TeamScope {
+    scope_with_agents(name, private, allow, &[])
+}
+
+fn scope_with_agents(name: &str, private: bool, allow: &[&str], agents: &[&str]) -> TeamScope {
     TeamScope {
         name: name.into(),
         private,
         allow: allow.iter().map(|entry| (*entry).to_owned()).collect(),
+        agents: agents.iter().map(|entry| (*entry).to_owned()).collect(),
     }
 }
 
@@ -412,4 +417,312 @@ async fn live_team_settings_are_consistent_until_the_first_member_exits() {
         .await
         .unwrap();
     assert!(matches!(after_exit, Response::Created { .. }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutual_agent_allow_limits_private_team_visibility_and_messaging() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_a_arch_id, mut a_arch) = session(
+        &mut admin,
+        dir.path(),
+        "a-architect",
+        Some(scope_with_agents("a", true, &[], &["b-architect"])),
+        &[],
+        &[],
+    )
+    .await;
+    let (_a_dev_id, mut a_dev) = session(
+        &mut admin,
+        dir.path(),
+        "a-developer",
+        Some(scope("a", true, &[])),
+        &[],
+        &[],
+    )
+    .await;
+    let (_b_arch_id, mut b_arch) = session(
+        &mut admin,
+        dir.path(),
+        "b-architect",
+        Some(scope_with_agents("b", true, &[], &["a-architect"])),
+        &[],
+        &[],
+    )
+    .await;
+    let (_b_dev_id, _b_dev) = session(
+        &mut admin,
+        dir.path(),
+        "b-developer",
+        Some(scope("b", true, &[])),
+        &[],
+        &[],
+    )
+    .await;
+
+    let Response::Agents { agents } = a_arch.request(Request::ListAgents).await.unwrap() else {
+        panic!("expected agent list");
+    };
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent.address.starts_with("a-architect@"))
+    );
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent.address.starts_with("a-developer@"))
+    );
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent.address.starts_with("b-architect@"))
+    );
+    assert!(
+        !agents
+            .iter()
+            .any(|agent| agent.address.starts_with("b-developer@"))
+    );
+
+    let sent = a_arch
+        .request(Request::SendMessage {
+            to: "b-architect".into(),
+            subject: "hello".into(),
+            message: "hello".into(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(sent, Response::Accepted { .. }), "{sent:?}");
+    let reply = b_arch
+        .request(Request::SendMessage {
+            to: "a-architect".into(),
+            subject: "reply".into(),
+            message: "reply".into(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(reply, Response::Accepted { .. }), "{reply:?}");
+    assert_eq!(
+        a_arch
+            .request(Request::SendMessage {
+                to: "b-developer".into(),
+                subject: "hidden".into(),
+                message: "hidden".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Failed {
+            code: "unknown_recipient".into(),
+            message: "unknown recipient".into(),
+        }
+    );
+    assert_eq!(
+        a_dev
+            .request(Request::SendMessage {
+                to: "b-architect".into(),
+                subject: "hidden".into(),
+                message: "hidden".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Failed {
+            code: "unknown_recipient".into(),
+            message: "unknown recipient".into(),
+        }
+    );
+
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_a_id, mut a) = session(
+        &mut admin,
+        dir.path(),
+        "a-architect",
+        Some(scope_with_agents("a", true, &[], &["b-architect"])),
+        &[],
+        &[],
+    )
+    .await;
+    let (_b_id, _b) = session(
+        &mut admin,
+        dir.path(),
+        "b-architect",
+        Some(scope("b", true, &[])),
+        &[],
+        &[],
+    )
+    .await;
+    let Response::Agents { agents } = a.request(Request::ListAgents).await.unwrap() else {
+        panic!("expected agent list");
+    };
+    assert!(
+        !agents
+            .iter()
+            .any(|agent| agent.address.starts_with("b-architect@"))
+    );
+    assert_eq!(
+        a.request(Request::SendMessage {
+            to: "b-architect".into(),
+            subject: "one-sided".into(),
+            message: "one-sided".into(),
+        })
+        .await
+        .unwrap(),
+        Response::Failed {
+            code: "unknown_recipient".into(),
+            message: "unknown recipient".into(),
+        }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mutual_agent_allow_controls_exit_notifications() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (architect_id, _architect) = session(
+        &mut admin,
+        dir.path(),
+        "a-architect",
+        Some(scope_with_agents("a", true, &[], &["b-architect"])),
+        &["b-architect"],
+        &[],
+    )
+    .await;
+    let (developer_id, _developer) = session(
+        &mut admin,
+        dir.path(),
+        "a-developer",
+        Some(scope("a", true, &[])),
+        &["b-architect"],
+        &[],
+    )
+    .await;
+    let _peer_id = exit_session(
+        &mut admin,
+        "b-architect",
+        scope_with_agents("b", true, &[], &["a-architect"]),
+    )
+    .await;
+    let architect_message = loop {
+        let response = admin
+            .request(Request::ListMessages {
+                session: Some(architect_id.clone()),
+                state: Some("pending".into()),
+            })
+            .await
+            .unwrap();
+        if let Response::Messages { messages } = response {
+            if let Some(message) = messages
+                .into_iter()
+                .find(|message| message.subject.contains("b-architect"))
+            {
+                break message;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert!(architect_message.subject.contains("peer exited"));
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let Response::Messages { messages } = admin
+        .request(Request::ListMessages {
+            session: Some(developer_id),
+            state: Some("pending".into()),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected messages response");
+    };
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.subject.contains("b-architect"))
+    );
+}
+
+fn new_session_request(name: &str, team: TeamScope) -> Request {
+    Request::NewSession {
+        argv: vec!["sh".into(), "-c".into(), "sleep 30".into()],
+        cols: 40,
+        rows: 10,
+        cwd: None,
+        env: Vec::new(),
+        reset: Vec::new(),
+        control_from: Vec::new(),
+        watch: Vec::new(),
+        name: Some(name.into()),
+        harness: Harness::Generic,
+        deliver: Some(Deliver::Hold),
+        team: Some(team),
+        role: None,
+        heartbeat: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn daemon_validates_agent_allow_without_affecting_team_scope_consistency() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_first_id, _first) = session(
+        &mut admin,
+        dir.path(),
+        "a-one",
+        Some(scope("a", true, &[])),
+        &[],
+        &[],
+    )
+    .await;
+    for (name, team, expected) in [
+        (
+            "self",
+            scope_with_agents("a", true, &[], &["self"]),
+            "must not name itself",
+        ),
+        (
+            "repeat",
+            scope_with_agents("a", true, &[], &["other", "other"]),
+            "is repeated",
+        ),
+        (
+            "public",
+            scope_with_agents("a", false, &[], &["other"]),
+            "allow needs a private team",
+        ),
+    ] {
+        let response = admin
+            .request(new_session_request(name, team))
+            .await
+            .unwrap();
+        let Response::Error { message } = response else {
+            panic!("expected validation error");
+        };
+        assert!(message.contains(expected), "{message}");
+    }
+    let too_many = (0..17)
+        .map(|index| format!("other-{index}"))
+        .collect::<Vec<_>>();
+    let response = admin
+        .request(new_session_request(
+            "too-many",
+            TeamScope {
+                name: "a".into(),
+                private: true,
+                allow: Vec::new(),
+                agents: too_many,
+            },
+        ))
+        .await
+        .unwrap();
+    let Response::Error { message } = response else {
+        panic!("expected validation error");
+    };
+    assert!(message.contains("at most 16"), "{message}");
+
+    let accepted = admin
+        .request(new_session_request(
+            "a-two",
+            scope_with_agents("a", true, &[], &["other"]),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(accepted, Response::Created { .. }), "{accepted:?}");
 }

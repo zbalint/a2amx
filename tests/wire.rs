@@ -735,6 +735,7 @@ fn team_fields_round_trip_and_old_new_session_defaults_are_compatible() {
             name: "demo".into(),
             private: true,
             allow: vec!["other".into()],
+            agents: Vec::new(),
         }),
         role: Some("worker".into()),
     };
@@ -743,6 +744,15 @@ fn team_fields_round_trip_and_old_new_session_defaults_are_compatible() {
     assert_eq!(value["team"]["private"], true);
     assert_eq!(value["role"], "worker");
     assert_eq!(serde_json::from_value::<Request>(value).unwrap(), request);
+    let scope: TeamScope = serde_json::from_value(serde_json::json!({
+        "name": "demo",
+        "private": true,
+        "allow": [],
+    }))
+    .unwrap();
+    assert!(scope.agents.is_empty());
+    let value = serde_json::to_value(scope).unwrap();
+    assert!(!value.as_object().unwrap().contains_key("agents"));
     let old = serde_json::json!({
         "type": "new_session",
         "argv": ["sh"],

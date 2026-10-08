@@ -384,6 +384,12 @@ impl Session {
     pub fn team(&self) -> Option<&messaging::TeamScope> {
         self.team.as_ref()
     }
+    pub fn party(&self) -> messaging::Party<'_> {
+        messaging::Party {
+            name: self.name.as_deref(),
+            team: self.team(),
+        }
+    }
 
     pub fn role(&self) -> Option<&str> {
         self.role.as_deref()

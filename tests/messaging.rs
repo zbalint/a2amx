@@ -873,41 +873,201 @@ fn restored_drafts_drop_controls_but_keep_newlines_tabs_and_unicode() {
 
 #[test]
 fn team_visibility_is_symmetric_and_defaults_to_public_for_ungrouped() {
-    use a2amx::messaging::{TeamScope, visible};
+    use a2amx::messaging::{Party, TeamScope, visible};
 
     let private_a = TeamScope {
         name: "a".into(),
         private: true,
         allow: Vec::new(),
+        agents: Vec::new(),
     };
     let private_b = TeamScope {
         name: "b".into(),
         private: true,
         allow: Vec::new(),
+        agents: Vec::new(),
     };
     let public_a = TeamScope {
         name: "a".into(),
         private: false,
         allow: Vec::new(),
+        agents: Vec::new(),
     };
     let allow_a = TeamScope {
         name: "a".into(),
         private: true,
         allow: vec!["b".into()],
+        agents: Vec::new(),
     };
     let allow_b = TeamScope {
         name: "b".into(),
         private: true,
         allow: vec!["a".into()],
+        agents: Vec::new(),
+    };
+    let agent_a = TeamScope {
+        name: "a2amx".into(),
+        private: true,
+        allow: Vec::new(),
+        agents: vec!["saltmdb-architect".into()],
+    };
+    let agent_b = TeamScope {
+        name: "saltmdb".into(),
+        private: true,
+        allow: Vec::new(),
+        agents: vec!["a2amx-architect".into()],
+    };
+    let agent_a_developer = TeamScope {
+        name: "a2amx".into(),
+        private: true,
+        allow: Vec::new(),
+        agents: Vec::new(),
+    };
+    let one_sided_a = TeamScope {
+        name: "a2amx".into(),
+        private: true,
+        allow: Vec::new(),
+        agents: vec!["saltmdb-architect".into()],
+    };
+    let one_sided_b = TeamScope {
+        name: "saltmdb".into(),
+        private: true,
+        allow: Vec::new(),
+        agents: Vec::new(),
     };
     for (a, b, expected) in [
-        (None, None, true),
-        (None, Some(&private_a), true),
-        (Some(&public_a), Some(&private_b), true),
-        (Some(&private_a), Some(&private_a), true),
-        (Some(&private_a), Some(&private_b), false),
-        (Some(&allow_a), Some(&private_b), false),
-        (Some(&allow_a), Some(&allow_b), true),
+        (
+            Party {
+                name: None,
+                team: None,
+            },
+            Party {
+                name: None,
+                team: None,
+            },
+            true,
+        ),
+        (
+            Party {
+                name: Some("plain"),
+                team: None,
+            },
+            Party {
+                name: Some("a"),
+                team: Some(&private_a),
+            },
+            true,
+        ),
+        (
+            Party {
+                name: None,
+                team: None,
+            },
+            Party {
+                name: Some("b"),
+                team: Some(&private_b),
+            },
+            true,
+        ),
+        (
+            Party {
+                name: Some("a"),
+                team: Some(&public_a),
+            },
+            Party {
+                name: Some("b"),
+                team: Some(&private_b),
+            },
+            true,
+        ),
+        (
+            Party {
+                name: Some("a"),
+                team: Some(&private_a),
+            },
+            Party {
+                name: Some("a2"),
+                team: Some(&private_a),
+            },
+            true,
+        ),
+        (
+            Party {
+                name: Some("a"),
+                team: Some(&private_a),
+            },
+            Party {
+                name: Some("b"),
+                team: Some(&private_b),
+            },
+            false,
+        ),
+        (
+            Party {
+                name: Some("a"),
+                team: Some(&allow_a),
+            },
+            Party {
+                name: Some("b"),
+                team: Some(&private_b),
+            },
+            false,
+        ),
+        (
+            Party {
+                name: Some("a"),
+                team: Some(&allow_a),
+            },
+            Party {
+                name: Some("b"),
+                team: Some(&allow_b),
+            },
+            true,
+        ),
+        (
+            Party {
+                name: Some("a2amx-architect"),
+                team: Some(&agent_a),
+            },
+            Party {
+                name: Some("saltmdb-architect"),
+                team: Some(&agent_b),
+            },
+            true,
+        ),
+        (
+            Party {
+                name: Some("a2amx-developer"),
+                team: Some(&agent_a_developer),
+            },
+            Party {
+                name: Some("saltmdb-architect"),
+                team: Some(&agent_b),
+            },
+            false,
+        ),
+        (
+            Party {
+                name: Some("a2amx-architect"),
+                team: Some(&one_sided_a),
+            },
+            Party {
+                name: Some("saltmdb-architect"),
+                team: Some(&one_sided_b),
+            },
+            false,
+        ),
+        (
+            Party {
+                name: None,
+                team: Some(&agent_a),
+            },
+            Party {
+                name: Some("saltmdb-architect"),
+                team: Some(&agent_b),
+            },
+            false,
+        ),
     ] {
         assert_eq!(visible(a, b), expected);
         assert_eq!(visible(b, a), expected);

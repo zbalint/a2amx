@@ -1083,7 +1083,11 @@ async fn run_list(
             .find(|session| session.name.as_deref() == Some(name.as_str()))
             .or_else(|| sessions.iter().find(|session| session.id == name))
             .ok_or_else(|| anyhow!("unknown session {name}"))?;
-        Ok::<_, anyhow::Error>((session.id.clone(), session.team.clone()))
+        Ok::<_, anyhow::Error>((
+            session.id.clone(),
+            session.name.clone(),
+            session.team.clone(),
+        ))
     });
     let viewer_info = viewer_info.transpose()?;
     sessions.retain(|session| {
@@ -1093,12 +1097,22 @@ async fn run_list(
                 .as_ref()
                 .is_some_and(|scope| scope.name == team)
         });
-        let visible_to_viewer = viewer_info
-            .as_ref()
-            .is_none_or(|(viewer_id, viewer_scope)| {
-                session.id == *viewer_id
-                    || messaging::visible(viewer_scope.as_ref(), session.team.as_ref())
-            });
+        let visible_to_viewer =
+            viewer_info
+                .as_ref()
+                .is_none_or(|(viewer_id, viewer_name, viewer_scope)| {
+                    session.id == *viewer_id
+                        || messaging::visible(
+                            messaging::Party {
+                                name: viewer_name.as_deref(),
+                                team: viewer_scope.as_ref(),
+                            },
+                            messaging::Party {
+                                name: session.name.as_deref(),
+                                team: session.team.as_ref(),
+                            },
+                        )
+                });
         in_team && visible_to_viewer
     });
     write_stdout(format_session_table(&sessions, details).into_bytes()).await
