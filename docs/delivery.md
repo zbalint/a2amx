@@ -629,6 +629,9 @@ the session ends rather than staying held), `no_thread` (nothing loaded, for exa
 the TUI shows a startup dialog such as an update prompt or a trust question),
 `waiting_on_approval` (any active flag: an approval or user-input dialog is open),
 `thread_error`, and `in_flight` (an earlier message has not shown up in the thread).
+`no_thread` and `waiting_on_approval` also show as `needs_input` in the HELD cell of `list`
+and the attach status line after ten seconds, as a display-only label (`input?` is the Claude
+screen heuristic); neither label holds or fails delivery.
 A draft in the TUI composer is not a hold: the probes showed API injection leaves it
 untouched. While a dialog is open the app-server accepts `turn/start` but shows the
 message only after the dialog is resolved, which is why that state holds delivery.

@@ -252,7 +252,7 @@ Use `--file` for another file; relative `cwd` values are relative to that file's
 directory, while an omitted `cwd` uses the invoking directory. `up` skips and reports
 running sessions. An exited session holding a requested name stops the whole team
 before any spawn; remove it with `a2amx kill NAME` first. A live team name with different
-private/allow settings is a conflict; run `a2amx team down` before changing those settings.
+private/allow settings (file-level or session-level) is a conflict; run `a2amx team down` before changing those settings.
 If a later spawn fails, already-started sessions remain and no further session starts.
 
 Without a file, `a2amx team up architect=claude developer=omp` accepts bare

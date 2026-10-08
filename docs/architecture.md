@@ -308,12 +308,14 @@ uses the same session list to send one kill request per exited session, leaves r
 sessions untouched, and reports each removed name or ID. An empty selection prints
 `no exited sessions`.
 
-`team up` and `team down` are client-side commands; `team down` sends the same
-graceful `Request::Kill` path as `kill` by default, or `now: true` for `--now`.
+`team up`, `team down`, `team reset` and `team status` are client-side commands; `team down` sends the same
+graceful `Request::Kill` path as `kill` by default, or `now: true` for `--now`. `team reset`
+resets the selected sessions one at a time through the same `Request::Reset` as `a2amx reset`,
+skips attached sessions unless asked, and continues after a refused reset.
 The pure `team` module parses files and flags and plans launches. A file-level `team` is
 applied in `parse` to names and same-file `watch` and `control_from` entries using local,
 explicit-team, or global references, so `plan` and `down` only see final names. Teams are
-private unless `private = false`; `allow` is mutual consent between team names. Before spawning,
+private unless `private = false`; file-level `allow` is mutual consent between team names, and a session-level `allow` is mutual consent between two named agents. Before spawning,
 the CLI rejects all exited-name and team-setting conflicts and skips running sessions. Preflight
 and spawning are deliberately non-atomic: a concurrent name claim fails at spawn, leaving
 earlier starts intact. Launches reuse `new`'s harness wiring; down targets only the requested names.
