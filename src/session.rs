@@ -93,6 +93,7 @@ pub(crate) struct State {
     pub pending_attachment: Option<u64>,
     pub dirty: bool,
     pub last_change: Instant,
+    pub needs_input_since: Option<(Instant, &'static str)>,
     pub activity_since: Option<(Activity, Instant)>,
     pub hold: Option<Hold>,
     pub last_submit: Option<Instant>,
@@ -212,6 +213,7 @@ impl Session {
                 pending_attachment: None,
                 dirty: true,
                 last_change: Instant::now(),
+                needs_input_since: None,
                 activity_since: None,
                 hold: None,
                 last_submit: None,
@@ -390,6 +392,29 @@ impl Session {
     pub(crate) fn note_activity(&self, current: Activity, now: Instant) -> Duration {
         let mut state = self.lock();
         observe_activity(&mut state.activity_since, current, now)
+    }
+
+    pub(crate) fn note_needs_input(&self, signal: Option<&'static str>, now: Instant) {
+        let mut state = self.lock();
+        match signal {
+            Some(signal)
+                if state
+                    .needs_input_since
+                    .is_some_and(|(_, previous)| previous == signal) => {}
+            Some(signal) => state.needs_input_since = Some((now, signal)),
+            None => state.needs_input_since = None,
+        }
+    }
+
+    pub fn needs_input(&self) -> Option<&'static str> {
+        let state = self.lock();
+        if state.exit_code.is_some() {
+            return None;
+        }
+        state.needs_input_since.and_then(|(since, signal)| {
+            (Instant::now().saturating_duration_since(since) >= crate::daemon::NEEDS_INPUT_AFTER)
+                .then_some(signal)
+        })
     }
 
     pub(crate) fn started(&self) -> Instant {

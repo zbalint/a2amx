@@ -341,6 +341,8 @@ older daemons ignore the additive request field.
 The status payload also carries the optional activity, low-quota, harness, team, role, and hold details
 rendered by the bar; these additive fields preserve old payload decoding, and the daemon still sends
 frames only when the complete status changes.
+A needs-input label (`input?` or `needs_input`) rides in the hold field when no real hold is set; the bar then hides the
+activity cell and shows no `r` hint, because only real hold reasons are releasable.
 
 ## Implemented: messaging core
 
@@ -455,8 +457,7 @@ machine; there is no central-versus-host split yet.
   started, and IN-STATE is the age of its current activity; the daemon samples activity once per
   second and shows `-` for exited sessions. The activity column reports `idle`, `working`, or `busy` for
   running sessions and `-` for exited sessions. The CLI resolves session names to ids before
-  attach, kill, and messages; the daemon still receives ids only. HELD
-  shows the hold reason (or `-` when clear); `a2amx messages [--session S]
+  attach, kill, and messages; the daemon still receives ids only. HELD shows a real hold reason (or `-` when clear) and also displays a needs-input warning after ten seconds of a continuous signal: Codex `no_thread`/`waiting_on_approval` is `needs_input`, while Claude's same-row `Enter to confirm` plus `Esc to cancel` screen heuristic is `input?`. The warning is display-only, never sends input, and `input?` is hedged because those markers also occur in ordinary menus and search results; OMP and generic sessions have no needs-input signal. `a2amx messages [--session S]
   [--state ...]` lists messages; `a2amx cancel <id>` cancels a pending one; the
   prefix then `r` releases a session's hold. Pending messages do not expire;
   corrupted messages retry only until their per-message rejection limit.

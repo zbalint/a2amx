@@ -36,6 +36,7 @@ use crate::wire::{
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
 const ACTIVITY_QUIET: Duration = Duration::from_secs(10);
 const ACTIVITY_POLL: Duration = Duration::from_secs(1);
+pub(crate) const NEEDS_INPUT_AFTER: Duration = Duration::from_secs(10);
 const OMP_USAGE_CHECK: Duration = Duration::from_secs(2);
 const OMP_USAGE_REFRESH: Duration = Duration::from_secs(300);
 const OMP_USAGE_STALE: Duration = Duration::from_secs(900);
@@ -593,10 +594,29 @@ impl Runtime {
         let mut ticker = tokio::time::interval(ACTIVITY_POLL);
         loop {
             ticker.tick().await;
+            let now = Instant::now();
+            let signal = match session.harness() {
+                Harness::Codex => session
+                    .codex()
+                    .and_then(|link| harness::label_for_codex_reason(link.reason())),
+                Harness::Claude => {
+                    // shortcut: the Claude signal is a screen heuristic shared with
+                    // `claude_ready`; replace it with a protocol signal if Claude Code ever
+                    // exposes one.
+                    let state = session.lock();
+                    harness::needs_input(Harness::Claude, &state.emulator.screen())
+                        .then_some("input?")
+                }
+                Harness::Omp | Harness::Generic => None,
+            };
+            session.note_needs_input(signal, now);
+            if session.exit_code().is_some() {
+                return;
+            }
             let Some(activity) = session_activity(&session) else {
                 return;
             };
-            session.note_activity(activity, Instant::now());
+            session.note_activity(activity, now);
         }
     }
     async fn heartbeat(self: Arc<Self>, session: Arc<Session>, interval: Duration) {
@@ -1678,7 +1698,9 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                         let activity_secs = activity.map(|current| {
                             session.note_activity(current, Instant::now()).as_secs()
                         });
-                        let hold_reason = AnyChannel::for_session(session.clone()).hold_reason();
+                        let hold_reason = AnyChannel::for_session(session.clone())
+                            .hold_reason()
+                            .or(session.needs_input());
                         let quota = session_quota(session, omp_usage);
                         let state = session.lock();
                         let (uptime_secs, activity_secs) = if state.exit_code.is_none() {
@@ -2102,6 +2124,7 @@ async fn attachment_status(
         pending: counts.get(&session.id().0).copied().unwrap_or(0),
         hold: AnyChannel::for_session(session.clone())
             .hold_reason()
+            .or(session.needs_input())
             .map(str::to_owned),
         harness: Some(session.harness()),
         activity: session_activity(session),

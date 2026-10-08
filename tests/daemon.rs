@@ -103,6 +103,32 @@ async fn create(client: &mut Client, argv: &[&str], env: Vec<(String, String)>) 
     }
 }
 
+async fn create_claude(client: &mut Client, command: &str) -> String {
+    match client
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), command.into()],
+            cols: 40,
+            rows: 5,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: None,
+            harness: a2amx::harness::Harness::Claude,
+            deliver: Some(a2amx::harness::Deliver::Auto),
+            heartbeat: None,
+            team: None,
+            role: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected creation response: {response:?}"),
+    }
+}
+
 async fn list(client: &mut Client) -> Vec<SessionSummary> {
     match client.request(Request::List).await.unwrap() {
         Response::Sessions { sessions } => sessions,
@@ -163,6 +189,149 @@ async fn list_activity_reports_working_then_idle_and_non_ready_working() {
             .and_then(|session| session.activity),
         Some(a2amx::wire::Activity::Idle)
     );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn claude_needs_input_label_reaches_list_and_attach_status() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = create_claude(
+        &mut admin,
+        r#"printf '\033[2J\033[H Enter to confirm · Esc to cancel'; sleep 30"#,
+    )
+    .await;
+    let initial = list(&mut admin).await;
+    let summary = initial.iter().find(|session| session.id == id).unwrap();
+    assert_eq!(summary.hold_reason, None);
+    assert!(!summary.held);
+
+    tokio::time::sleep(Duration::from_millis(10_200)).await;
+    let sessions = eventually_sessions(&mut admin, |sessions| {
+        sessions
+            .iter()
+            .find(|session| session.id == id)
+            .is_some_and(|session| session.hold_reason.as_deref() == Some("input?") && session.held)
+    })
+    .await;
+    let address = sessions
+        .iter()
+        .find(|session| session.id == id)
+        .unwrap()
+        .address
+        .clone();
+
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&id, false, 40, 5)
+        .await
+        .unwrap();
+    assert!(matches!(next(&mut attachment).await, ServerFrame::Data(_)));
+    let ServerFrame::Status(info) = next(&mut attachment).await else {
+        panic!("initial status frame");
+    };
+    assert_eq!(info.hold.as_deref(), Some("input?"));
+    let rendered = String::from_utf8(a2amx::status::render(&id, Some(&info), 2, 80, 24)).unwrap();
+    assert!(rendered.contains("HELD input?"));
+    assert!(!rendered.contains("^B r"));
+
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    let sessions = eventually_sessions(&mut admin, |sessions| {
+        sessions
+            .iter()
+            .find(|session| session.id == id)
+            .is_some_and(|session| session.hold_reason.as_deref() == Some("human_draft"))
+    })
+    .await;
+    assert_eq!(
+        sessions
+            .iter()
+            .find(|session| session.id == id)
+            .unwrap()
+            .hold_reason
+            .as_deref(),
+        Some("human_draft")
+    );
+
+    let (_, token, sender_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("agent-plan"),
+        a2amx::harness::Harness::Generic,
+        a2amx::harness::Deliver::Hold,
+    )
+    .await;
+    let mut sender = Client::connect_addr(sender_addr, &token).await.unwrap();
+    let Response::Accepted { recipient_hold, .. } = sender
+        .request(Request::SendMessage {
+            to: address,
+            subject: "Needs input status".into(),
+            message: "hello".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("message was not accepted");
+    };
+    assert_eq!(recipient_hold.as_deref(), Some("human_draft"));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn claude_needs_input_clears_when_dialog_marker_disappears() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = create_claude(
+        &mut admin,
+        r#"printf '\033[2J\033[H Enter to confirm · Esc to cancel'; sleep 12; printf '\033[2J\033[Hready'; sleep 30"#,
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(10_200)).await;
+    eventually_sessions(&mut admin, |sessions| {
+        sessions
+            .iter()
+            .find(|session| session.id == id)
+            .is_some_and(|session| session.hold_reason.as_deref() == Some("input?"))
+    })
+    .await;
+    eventually_sessions(&mut admin, |sessions| {
+        sessions
+            .iter()
+            .find(|session| session.id == id)
+            .is_some_and(|session| session.hold_reason.is_none() && !session.held)
+    })
+    .await;
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn exited_claude_session_never_reports_needs_input() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = create_claude(
+        &mut admin,
+        r#"printf '\033[2J\033[H Enter to confirm · Esc to cancel'; sleep 11"#,
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(10_200)).await;
+    eventually_sessions(&mut admin, |sessions| {
+        sessions
+            .iter()
+            .find(|session| session.id == id)
+            .is_some_and(|session| session.hold_reason.as_deref() == Some("input?"))
+    })
+    .await;
+    eventually_sessions(&mut admin, |sessions| {
+        sessions
+            .iter()
+            .find(|session| session.id == id)
+            .is_some_and(|session| session.exit_code.is_some() && session.hold_reason.is_none())
+    })
+    .await;
     daemon.shutdown().await.unwrap();
 }
 

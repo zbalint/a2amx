@@ -11,7 +11,7 @@ use a2amx::client::Client;
 use a2amx::daemon::Daemon;
 use a2amx::harness::{Deliver, Harness};
 use a2amx::messaging::Limits;
-use a2amx::wire::{MessageInfo, Request, Response};
+use a2amx::wire::{MessageInfo, Request, Response, SessionSummary};
 use common::fake_codex::{FakeCodex, TurnStart};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -208,6 +208,17 @@ impl Case {
             (message.state == wanted).then_some(message)
         })
         .await
+    }
+
+    async fn summary(&self) -> SessionSummary {
+        let mut admin = Client::connect(&self.state).await.unwrap();
+        let Response::Sessions { sessions } = admin.request(Request::List).await.unwrap() else {
+            panic!("session list missing");
+        };
+        sessions
+            .into_iter()
+            .find(|session| session.harness == Harness::Codex)
+            .expect("Codex session summary")
     }
 
     async fn wait_reason(&self, id: &str, wanted: &str) -> MessageInfo {
@@ -421,8 +432,20 @@ async fn without_a_loaded_thread_the_message_waits() {
     let info = case.wait_reason(&id, "no_thread").await;
     assert_eq!(info.state, "pending");
     assert!(case.fake.turn_starts().is_empty());
+    tokio::time::sleep(std::time::Duration::from_millis(10_200)).await;
+    let held = common::eventually(|| async {
+        let summary = case.summary().await;
+        (summary.hold_reason.as_deref() == Some("needs_input") && summary.held).then_some(summary)
+    })
+    .await;
+    assert_eq!(held.hold_reason.as_deref(), Some("needs_input"));
     case.fake.set_threads(&[("thread-1", idle())]);
     case.fake.auto_enter(true);
+    common::eventually(|| async {
+        let summary = case.summary().await;
+        (summary.hold_reason.is_none() && !summary.held).then_some(())
+    })
+    .await;
     case.wait_state(&id, "submitted").await;
 }
 

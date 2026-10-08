@@ -151,6 +151,30 @@ fn has_dialog_marker(screen: &Screen) -> bool {
     })
 }
 
+/// Returns whether a Claude screen may be waiting for a human dialog response.
+///
+/// The heuristic requires both dialog markers on one row, but those markers can
+/// also appear in ordinary menus or search results, so `true` is only a hedged
+/// `input?` display signal.
+pub fn needs_input(harness: Harness, screen: &Screen) -> bool {
+    if harness != Harness::Claude {
+        return false;
+    }
+    (0..screen.size.rows).any(|row| {
+        DIALOG_MARKERS
+            .iter()
+            .all(|marker| row_contains_marker(screen, row, marker))
+    })
+}
+
+/// Maps a Codex channel reason to the display label for a likely input prompt.
+pub fn label_for_codex_reason(reason: Option<&'static str>) -> Option<&'static str> {
+    match reason {
+        Some("no_thread" | "waiting_on_approval") => Some("needs_input"),
+        _ => None,
+    }
+}
+
 pub fn channel_dialog_visible(screen: &Screen) -> bool {
     (0..screen.size.rows)
         .any(|row| row_contains_marker(screen, row, "I am using this for local development"))
