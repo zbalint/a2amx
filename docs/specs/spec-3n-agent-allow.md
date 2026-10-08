@@ -17,13 +17,14 @@ and `a2amx list --as` (`tests/refs_and_list.rs`).
 **Scope.** May edit exactly these files and no others.
 
 - `src/messaging.rs`, `src/session.rs`, `src/daemon.rs`, `src/team.rs`, `src/main.rs`
+- `src/wire.rs`: exactly one lint attribute on `enum Request` (Amendment 1), nothing else
 - `tests/messaging.rs`, `tests/team.rs`, `tests/teams.rs`, `tests/refs_and_list.rs`,
   `tests/wire.rs`, `tests/status.rs` (mechanical: every `TeamScope { ... }` literal in these files
   gains `agents: Vec::new()`, and every `TeamSession { ... }` literal in `tests/team.rs` gains
   `allow: Vec::new()`)
 - `README.md`, `a2amx.toml.example`, `docs/architecture.md`, `docs/backlog.md`
 
-Does not touch: `src/wire.rs` (no new field: the list rides on `TeamScope`, which is already on
+Does not touch: `src/wire.rs` beyond the one attribute above (no new field: the list rides on `TeamScope`, which is already on
 `Request::NewSession`, `SessionSummary` and `StatusInfo`), `src/cli.rs`, `src/mcp.rs`,
 `src/status.rs`, `src/harness.rs`, every other test file, every other spec document, `AGENTS.md`,
 the owner's gitignored `a2amx.toml`. No new dependency. Do not commit, stage or merge: leave the
@@ -175,6 +176,16 @@ Reviewed against each other after the last edit: the entry shape (D1, section 5,
 `agents` meaning (D2, D3, D5, test 7), the six enforcement sites (D4, section 4).
 
 ## 11. Pre-lock gate notes
+
+- **Amendment 1 (2026-10-08, developer BLOCKED `m_790`):** `TeamScope.agents` grows `Request::NewSession`
+  to 294 bytes against 72 for the next variant, so `cargo clippy --all-targets -- -D warnings` fails
+  with `clippy::large_enum_variant` at `src/wire.rs:112`, which Scope forbade editing. Verified by the
+  architect on the developer's tree. Resolution: add `#[allow(clippy::large_enum_variant)]` directly above
+  `pub enum Request` in `src/wire.rs`, with a `// shortcut:` comment naming the ceiling (requests are
+  short-lived and not stored in bulk) and the upgrade trigger (box the `NewSession` fields if `Request`
+  is ever held in a hot collection). No field, serde attribute or wire shape changes. Boxing was
+  rejected: it changes the Rust types of every `Request::NewSession` construction and match across
+  files outside Scope.
 
 - Baseline: `env -u A2AMX_BIN -u NO_COLOR cargo test` passes on `9dc715a` (404 passed, 27 suites, 3
   ignored; tree unchanged since).
