@@ -35,6 +35,49 @@ fn is_duration_cell(cell: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_generates_distinct_registered_names_and_preserves_explicit_names() -> anyhow::Result<()>
+{
+    let (dir, _daemon) = common::start_daemon().await;
+    let first = run_binary(dir.path(), &["new", "--detach", "--", "sh"])?;
+    assert!(first.status.success());
+    assert_eq!(first.stdout, b"s1\n");
+    let stderr = String::from_utf8(first.stderr)?;
+    let first_name = stderr
+        .strip_prefix("name: ")
+        .expect("generated name")
+        .trim();
+    a2amx::messaging::validate_name(first_name)?;
+    let listed = run_binary(dir.path(), &["list"])?;
+    assert!(listed.status.success());
+    let listing = String::from_utf8(listed.stdout)?;
+    assert_eq!(common::list_cells(&listing, "s1")[1], first_name);
+
+    let second = run_binary(dir.path(), &["new", "--detach", "--", "sh"])?;
+    assert!(second.status.success());
+    assert_eq!(second.stdout, b"s2\n");
+    let stderr = String::from_utf8(second.stderr)?;
+    let second_name = stderr
+        .strip_prefix("name: ")
+        .expect("generated name")
+        .trim();
+    a2amx::messaging::validate_name(second_name)?;
+    assert_ne!(second_name, first_name);
+
+    let explicit = run_binary(
+        dir.path(),
+        &["new", "--detach", "--name", "plain", "--", "sh"],
+    )?;
+    assert!(explicit.status.success());
+    assert!(explicit.stderr.is_empty());
+    let listed = run_binary(dir.path(), &["list"])?;
+    assert!(listed.status.success());
+    let listing = String::from_utf8(listed.stdout)?;
+    assert_eq!(common::list_cells(&listing, "s2")[1], second_name);
+    assert_eq!(common::list_cells(&listing, "s3")[1], "plain");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kill_by_name_removes_the_named_session() -> anyhow::Result<()> {
     let (dir, _daemon) = common::start_daemon().await;
     let created = run_binary(
@@ -150,20 +193,30 @@ async fn kill_exited_reports_ids_and_handles_empty_selection() -> anyhow::Result
     let (dir, _daemon) = common::start_daemon().await;
     let created = run_binary(dir.path(), &["new", "--detach", "--", "sh", "-c", "exit 0"])?;
     assert!(created.status.success());
+    let generated_name = String::from_utf8(created.stderr)?;
+    let generated_name = generated_name
+        .strip_prefix("name: ")
+        .expect("generated name")
+        .trim()
+        .to_owned();
+    a2amx::messaging::validate_name(&generated_name)?;
     assert_eq!(created.stdout, b"s1\n");
     common::eventually(|| async {
         let listed = run_binary(dir.path(), &["list"]).ok()?;
         let listing = String::from_utf8(listed.stdout).ok()?;
         listing
             .lines()
-            .any(|line| line.starts_with("s1") && line.contains("exited(0)"))
+            .any(|line| line.starts_with("s1 ") && line.contains("exited(0)"))
             .then_some(())
     })
     .await;
 
     let removed = run_binary(dir.path(), &["kill", "--exited"])?;
     assert!(removed.status.success());
-    assert_eq!(removed.stdout, b"removed s1\n");
+    assert_eq!(
+        removed.stdout,
+        format!("removed {generated_name}\n").as_bytes()
+    );
     assert!(removed.stderr.is_empty());
 
     let running = run_binary(
@@ -338,7 +391,7 @@ async fn default_list_is_lean_and_details_show_cwd_and_command() -> anyhow::Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_reports_explicit_omp_and_unnamed_generic_harnesses() -> anyhow::Result<()> {
+async fn list_reports_explicit_omp_and_generated_generic_harnesses() -> anyhow::Result<()> {
     let (dir, _daemon) = common::start_daemon().await;
     let omp = run_binary(
         dir.path(),
@@ -355,8 +408,22 @@ async fn list_reports_explicit_omp_and_unnamed_generic_harnesses() -> anyhow::Re
         .skip(1)
         .map(|line| line.split_whitespace().collect())
         .collect();
-    assert_eq!(&cells[0][..3], ["s1", "-", "omp"]);
-    assert_eq!(&cells[1][..3], ["s2", "-", "generic"]);
+    let omp_name = String::from_utf8(omp.stderr)?;
+    let omp_name = omp_name
+        .strip_prefix("name: ")
+        .expect("generated name")
+        .trim();
+    let generic_name = String::from_utf8(generic.stderr)?;
+    let generic_name = generic_name
+        .strip_prefix("name: ")
+        .expect("generated name")
+        .trim();
+    a2amx::messaging::validate_name(omp_name)?;
+    a2amx::messaging::validate_name(generic_name)?;
+    assert_eq!(&cells[0][..2], ["s1", omp_name]);
+    assert_eq!(&cells[1][..2], ["s2", generic_name]);
+    assert_eq!(&cells[0][2..3], ["omp"]);
+    assert_eq!(&cells[1][2..3], ["generic"]);
     Ok(())
 }
 

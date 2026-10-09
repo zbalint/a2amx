@@ -152,7 +152,7 @@ async fn mouse_wheel_scrolls_three_lines_and_q_returns_to_live() -> anyhow::Resu
     attached.wait_for_text("line-100", WAIT)?;
     assert!(attached.screen_text().contains("[scroll: q to exit]"));
     attached.send(b"q")?;
-    attached.wait_for_text("s1@", WAIT)?;
+    attached.wait_for_text("@host-a", WAIT)?;
     assert!(!attached.screen_text().contains("[scroll: q to exit]"));
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
@@ -177,7 +177,7 @@ async fn mouse_click_reports_are_dropped_without_entering_scroll_mode() -> anyho
     assert_eq!(code, 0);
 
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
-    attached.wait_for_text("s1@", WAIT)?;
+    attached.wait_for_text("@host-a", WAIT)?;
     attached.send(b"\x1b[<65;10;5M")?;
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!attached.screen_text().contains("[scroll: q to exit]"));
@@ -226,7 +226,7 @@ async fn mouse_reporting_reset_returns_to_wheel_capture() -> anyhow::Result<()> 
     attached.wait_for_text("[scroll: q to exit]", WAIT)?;
     assert!(!attached.screen_text().contains("^[[<64;10;5M"));
     attached.send(b"q")?;
-    attached.wait_for_text("s1@", WAIT)?;
+    attached.wait_for_text("@host-a", WAIT)?;
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
@@ -348,7 +348,10 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
         .trim_start_matches('>')
         .split_whitespace()
         .collect();
-    assert_eq!(&cells[..4], &["s1", "-", "generic", "running"]);
+    assert_eq!(cells[0], "s1");
+    assert_ne!(cells[1], "-");
+    a2amx::messaging::validate_name(cells[1])?;
+    assert_eq!(&cells[2..4], ["generic", "running"]);
     assert!(matches!(cells[4], "idle" | "working" | "busy"));
     attached.send(b"\r")?;
     attached.wait_for_text("one", WAIT)?;
@@ -392,7 +395,10 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
         .find(|line| line.trim_start().starts_with("s3 "))
         .expect("exited session missing from picker");
     let cells: Vec<_> = exited_row.split_whitespace().collect();
-    assert_eq!(&cells[..5], &["s3", "-", "generic", "exited(7)", "-"]);
+    assert_eq!(cells[0], "s3");
+    assert_ne!(cells[1], "-");
+    a2amx::messaging::validate_name(cells[1])?;
+    assert_eq!(&cells[2..5], ["generic", "exited(7)", "-"]);
     attached.send(b"\r")?;
     attached.wait_for_text("one", WAIT)?;
     attached.send(&[2, b'd'])?;
@@ -499,16 +505,28 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     )?;
     assert_eq!(created.status.code(), Some(0));
     assert_eq!(String::from_utf8(created.stdout)?, "s1\n");
-
+    let generated_name = String::from_utf8(created.stderr)?;
+    let generated_name = generated_name
+        .strip_prefix("name: ")
+        .expect("generated name")
+        .trim();
+    let name_width = generated_name.len().max("NAME".len());
+    let expected_header = format!(
+        "ID  {:<name_width$}  HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE",
+        "NAME",
+        name_width = name_width,
+    );
     let listed = run_binary(first_dir.path(), &["list"], &environment)?;
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
-    assert!(listing.starts_with(
-        "ID  NAME  HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\n",
-    ));
+    let header = listing.lines().next().unwrap_or_default();
+    assert_eq!(header, expected_header);
     let cells = common::list_cells(&listing, "s1");
     assert_eq!(cells.len(), 12);
-    assert_eq!(&cells[..4], ["s1", "-", "generic", "running"]);
+    assert_eq!(cells[0], "s1");
+    assert_ne!(cells[1], "-");
+    a2amx::messaging::validate_name(cells[1])?;
+    assert_eq!(&cells[2..4], ["generic", "running"]);
     assert_eq!(cells[5], "working");
     for index in [4, 6] {
         let bytes = cells[index].as_bytes();
@@ -812,7 +830,10 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     assert_eq!(listed.status.code(), Some(0));
     let listing = String::from_utf8(listed.stdout)?;
     let cells = common::list_cells(&listing, "s1");
-    assert_eq!(&cells[..4], ["s1", "-", "generic", "running"]);
+    assert_eq!(cells[0], "s1");
+    assert_ne!(cells[1], "-");
+    a2amx::messaging::validate_name(cells[1])?;
+    assert_eq!(&cells[2..4], ["generic", "running"]);
     assert_eq!(cells[5], "busy");
     assert_eq!(cells[7], "yes");
     assert_eq!(cells[8], "0");
@@ -836,10 +857,14 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
 
     attached.send(&[2, b'r'])?;
     wait_for_held(dir.path(), "s1", false).await;
-    let (listing, code) = run_cli(dir.path(), &["list"])?;
-    assert_eq!(code, 0);
+    let listed = run_binary(dir.path(), &["list"], &[])?;
+    assert!(listed.status.success());
+    let listing = String::from_utf8(listed.stdout)?;
     let cells = common::list_cells(&listing, "s1");
-    assert_eq!(&cells[..4], ["s1", "-", "generic", "running"]);
+    assert_eq!(cells[0], "s1");
+    assert_ne!(cells[1], "-");
+    a2amx::messaging::validate_name(cells[1])?;
+    assert_eq!(&cells[2..4], ["generic", "running"]);
     assert_eq!(cells[5], "working");
     assert_eq!(cells[7], "yes");
     assert_eq!(cells[8], "0");
@@ -1081,13 +1106,13 @@ async fn status_separator_keeps_session_output_above_the_bar() -> anyhow::Result
     let (_, code) = run_cli(dir.path(), &["new", "--detach", "--", "sh", "-c", script])?;
     assert_eq!(code, 0);
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
-    attached.wait_for_text("s1@", WAIT)?;
+    attached.wait_for_text("@host-a", WAIT)?;
     attached.send(b"draw\n")?;
     attached.wait_for_text("session-row-22", WAIT)?;
     let screen = attached.screen_text();
     let rows: Vec<_> = screen.lines().collect();
     assert_eq!(rows.len(), 24, "screen: {screen:?}");
-    assert!(rows[23].contains("s1@"), "screen: {screen:?}");
+    assert!(rows[23].contains("@host-a"), "screen: {screen:?}");
     assert_eq!(rows[22], "─".repeat(79), "screen: {screen:?}");
     for (row, marker) in rows[..22].iter().zip([
         "session-row-01",

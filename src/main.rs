@@ -20,6 +20,7 @@ use a2amx::harness::{Deliver, Harness};
 use a2amx::hook;
 use a2amx::mcp;
 use a2amx::messaging::{self, TeamScope, display_duration, sgr_mouse_report_len};
+use a2amx::names;
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::quota;
 use a2amx::status;
@@ -367,6 +368,25 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         return Err(anyhow!("heartbeat needs a non-empty watch"));
     }
     let mut client = Client::connect(&home).await?;
+    let mut generated_name = None;
+    let name = match name {
+        Some(name) => Some(name),
+        None => {
+            let taken = request_sessions(&mut client)
+                .await?
+                .into_iter()
+                .filter_map(|session| session.name)
+                .collect::<Vec<_>>();
+            let random = tokio::task::spawn_blocking(daemon::random_hex::<8>).await??;
+            let seed = u64::from_str_radix(&random, 16)?;
+            // shortcut: ceiling is concurrent `new` on one daemon and very churned registry;
+            // upgrade trigger is daemon-side generation if either is reported.
+            let generated = names::pick(&taken, seed)
+                .ok_or_else(|| anyhow!("no free generated session name; pass --name"))?;
+            generated_name = Some(generated.clone());
+            Some(generated)
+        }
+    };
     let (cols, rows) = terminal_size_with_default()?;
     let session = create_session(
         &home,
@@ -390,6 +410,9 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         },
     )
     .await?;
+    if let Some(name) = generated_name {
+        write_stderr(format!("name: {name}\n").into_bytes()).await?;
+    }
     if detach {
         write_stdout(format!("{session}\n").into_bytes()).await?;
         return Ok(());

@@ -307,6 +307,7 @@ for running sessions; exited sessions are removed without prompting. `a2amx kill
 uses the same session list to send one kill request per exited session, leaves running
 sessions untouched, and reports each removed name or ID. An empty selection prints
 `no exited sessions`.
+`a2amx new` generates omitted names client-side through the `names` module from the daemon's current session list.
 
 `team up`, `team down`, `team reset` and `team status` are client-side commands; `team down` sends the same
 graceful `Request::Kill` path as `kill` by default, or `now: true` for `--now`. `team reset`

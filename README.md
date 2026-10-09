@@ -126,6 +126,7 @@ when there is nothing to remove. The `--exited` form cannot be combined with a s
 reference, `--yes`, or `--now`.
 
 Commands that take a session accept its name or its id.
+Without `--name`, `new` generates a name such as `soggy-walrus`, prints it on stderr, and treats it like an explicit name.
 
 `--harness claude` wires the MCP server and the prompt-submit hook into Claude Code
 and delivers messages automatically; `--harness generic` (inferred for unrecognised commands) holds them, and

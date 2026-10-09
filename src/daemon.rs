@@ -1613,7 +1613,7 @@ impl Drop for Daemon {
     }
 }
 
-fn random_hex<const N: usize>() -> anyhow::Result<String> {
+pub fn random_hex<const N: usize>() -> anyhow::Result<String> {
     let mut random = [0; N];
     File::open("/dev/urandom")?.read_exact(&mut random)?;
     let mut text = String::with_capacity(N * 2);

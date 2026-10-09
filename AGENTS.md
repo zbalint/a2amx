@@ -71,6 +71,7 @@ cargo fmt --check
 | `harness` | Harness profiles, command wiring, readiness, and peer authorization |
 | `hook` | The Claude Code `UserPromptSubmit` hook adapter |
 | `messaging` | Message envelopes, validation, limits, states, and rendering |
+| `names` | Generated session names (pure, ADJECTIVE-NOUN with a seeded picker) |
 | `mcp` | The stdio MCP server and its authenticated agent tools |
 | `omp` | The embedded OMP extension and its launch files |
 | `quota` | Harness quota extraction from screen, conversation state, and `omp usage` command output |
