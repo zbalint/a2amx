@@ -191,3 +191,19 @@ commands need the new code and run after implementation.
   taken from the consultant's reading of `status.rs:55`, not run.
 - Rules stated twice, to diff after the last edit: the index formula and wrap rule (D3, section 3 doc,
   tests 1–4); the stdout/stderr output rule (D7, tests 7–9).
+
+## Amendment 1 (2026-10-09, owner: "its okay to change a lot of tests if that would results in a better outcome")
+
+Replaces the last paragraph of section 5 and widens section 0's test scope. The design (D1, client-side
+generation) is unchanged: it already gives every session started with `a2amx new` a name, and a
+daemon-side change would alter the wire for no user-visible gain.
+
+- Scope: any file under `tests/` may be edited, but only to adapt an assertion or setup that expected a
+  session started by `a2amx new` (the binary) without `--name` to have no name (a `-` NAME cell, a
+  hard-coded `s1`/`s2` address used where a name now applies, and similar). Edits that change what a test
+  checks, delete a test, or touch tests of the daemon wire (`Request::NewSession` literals with
+  `name: None`) are not allowed; the wire still permits unnamed sessions.
+- The stop-and-report rule is now: stop with `BLOCKED — SPEC ADJUDICATION REQUIRED` only if a failing
+  test cannot be fixed by such an assertion or setup adaptation.
+- Acceptance: `git status --short` may now list those additional `tests/` files; report each one with the
+  reason for its change.
