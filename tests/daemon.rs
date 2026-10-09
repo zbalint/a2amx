@@ -440,6 +440,61 @@ async fn state_is_owner_only_and_exclusively_locked() {
 }
 
 #[tokio::test]
+async fn admin_version_request_reports_the_build_version() {
+    let (dir, daemon) = common::start_daemon().await;
+    let token = std::fs::read_to_string(dir.path().join("admin.token")).unwrap();
+    let mut socket = TcpStream::connect(daemon.addrs()[0]).await.unwrap();
+    socket
+        .write_all(&encode_frame(&serde_json::to_vec(&Request::Hello { token }).unwrap()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(raw_response(&mut socket).await, Response::Ok);
+
+    socket
+        .write_all(&encode_frame(&serde_json::to_vec(&Request::Version).unwrap()).unwrap())
+        .await
+        .unwrap();
+    match raw_response(&mut socket).await {
+        Response::Version { version } => assert!(!version.is_empty()),
+        response => panic!("unexpected version response: {response:?}"),
+    }
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_control_request_is_recoverable_on_an_authenticated_socket() {
+    let (dir, daemon) = common::start_daemon().await;
+    let token = std::fs::read_to_string(dir.path().join("admin.token")).unwrap();
+    let mut socket = TcpStream::connect(daemon.addrs()[0]).await.unwrap();
+    socket
+        .write_all(&encode_frame(&serde_json::to_vec(&Request::Hello { token }).unwrap()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(raw_response(&mut socket).await, Response::Ok);
+
+    socket
+        .write_all(&encode_frame(br#"{"type":"no_such_request"}"#).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        raw_response(&mut socket).await,
+        Response::Error {
+            message: "invalid control request".into(),
+        }
+    );
+
+    socket
+        .write_all(&encode_frame(&serde_json::to_vec(&Request::List).unwrap()).unwrap())
+        .await
+        .unwrap();
+    assert!(matches!(
+        raw_response(&mut socket).await,
+        Response::Sessions { .. }
+    ));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn every_connection_requires_a_valid_hello() {
     let (dir, daemon) = common::start_daemon().await;
     let addr = daemon.addrs()[0];

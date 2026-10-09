@@ -81,3 +81,4 @@ lag the code.
 | C20 | Needs-input label for stuck sessions (Claude screen heuristic, Codex protocol signal); OMP and generic sessions have no signal | spec 3p |
 | C21 | A session with a role and no name uses the role as its name | spec 3q |
 | C22 | `a2amx new` without `--name` generates a name | spec 3r |
+| C23 | Build version stamped into the binary; the daemon reports it in daemon status | spec 3s |

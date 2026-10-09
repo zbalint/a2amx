@@ -3,6 +3,9 @@
 //! Terminal-core modules expose the screen model, PTY sessions, local daemon,
 //! framing, prefix handling, and human client.
 
+/// Git description of this build, or the package version when git metadata is unavailable.
+pub const VERSION: &str = env!("A2AMX_VERSION");
+
 pub mod bridge;
 mod channel;
 pub mod cli;

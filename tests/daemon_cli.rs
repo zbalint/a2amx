@@ -1230,6 +1230,13 @@ fn daemon_status_reports_address_and_session_counts() {
         .next()
         .unwrap()
         .to_owned();
+    let cli_version = stdout(&run(&home, &["--version"]));
+    let version = cli_version
+        .trim()
+        .strip_prefix("a2amx ")
+        .unwrap()
+        .to_owned();
+    assert!(!version.is_empty());
     let running = run(&home, &["new", "--detach", "--", "sh", "-c", "sleep 30"]);
     assert!(running.status.success(), "stderr: {}", stderr(&running));
     let exited = run(&home, &["new", "--detach", "--", "sh", "-c", "exit 7"]);
@@ -1242,7 +1249,9 @@ fn daemon_status_reports_address_and_session_counts() {
     assert!(status.status.success(), "stderr: {}", stderr(&status));
     assert_eq!(
         stdout(&status),
-        format!("running\nlistening on {address}\nsessions: 1 running, 1 exited\n")
+        format!(
+            "running\nversion: {version}\nlistening on {address}\nsessions: 1 running, 1 exited\n"
+        )
     );
     assert_eq!(stderr(&status), "");
 }

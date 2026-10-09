@@ -275,17 +275,32 @@ async fn run_daemon_status(home: PathBuf) -> anyhow::Result<std::process::ExitCo
     };
     let addrs = read_addrs(&home).await?;
     let sessions = request_sessions(&mut client).await?;
+    let daemon_version = match client.request(Request::Version).await? {
+        Response::Version { version } => Some(version),
+        Response::Error { .. } => None,
+        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+    };
     let running = sessions
         .iter()
         .filter(|session| session.exit_code.is_none())
         .count();
     let exited = sessions.len() - running;
     let mut output = String::from("running\n");
+    output.push_str(&format!(
+        "version: {}\n",
+        daemon_version
+            .as_deref()
+            .unwrap_or("unknown (daemon predates version reporting)")
+    ));
     for addr in addrs.lines() {
         output.push_str(&format!("listening on {addr}\n"));
     }
     output.push_str(&format!("sessions: {running} running, {exited} exited\n"));
     write_stdout(output.into_bytes()).await?;
+    if let Some(warning) = a2amx::client::version_warning(a2amx::VERSION, daemon_version.as_deref())
+    {
+        write_stderr(format!("{warning}\n").into_bytes()).await?;
+    }
     Ok(std::process::ExitCode::SUCCESS)
 }
 

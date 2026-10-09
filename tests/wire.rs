@@ -158,6 +158,23 @@ fn request_json_uses_exact_tagged_shapes() {
 }
 
 #[test]
+fn version_request_and_response_use_exact_shapes() {
+    let json = serde_json::to_string(&Request::Version).unwrap();
+    assert_eq!(json, r#"{"type":"version"}"#);
+    assert_eq!(
+        serde_json::from_str::<Request>(&json).unwrap(),
+        Request::Version
+    );
+
+    let response = Response::Version {
+        version: "ab12cd3-dirty".into(),
+    };
+    let json = serde_json::to_string(&response).unwrap();
+    assert_eq!(json, r#"{"type":"version","version":"ab12cd3-dirty"}"#);
+    assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), response);
+}
+
+#[test]
 fn reset_request_and_response_use_exact_shapes() {
     let request = Request::Reset {
         session: "s2".to_owned(),

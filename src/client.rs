@@ -15,6 +15,20 @@ use crate::wire::{
 
 pub const UNREACHABLE: &str = "cannot reach the a2amx daemon: start it with `a2amx daemon start`";
 
+/// Returns a warning when the daemon's build differs from the running CLI build.
+pub fn version_warning(cli: &str, daemon: Option<&str>) -> Option<String> {
+    match daemon {
+        Some(version) if version == cli => None,
+        Some(version) => Some(format!(
+            "warning: daemon version {version} differs from this binary {cli}; restart the daemon to use this binary (sessions end)"
+        )),
+        None => Some(
+            "warning: daemon predates version reporting; restart it to use this binary (sessions end)"
+                .to_owned(),
+        ),
+    }
+}
+
 fn validate_payload(payload: &[u8]) -> anyhow::Result<()> {
     if payload.len() > crate::wire::MAX_FRAME_LEN {
         bail!("frame exceeds maximum length");

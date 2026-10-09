@@ -141,6 +141,7 @@ pub enum Request {
         role: Option<String>,
     },
     List,
+    Version,
     /// Followed by a switch of this connection to stream frames.
     Attach {
         session: String,
@@ -230,6 +231,9 @@ pub enum Response {
     },
     Sessions {
         sessions: Vec<SessionSummary>,
+    },
+    Version {
+        version: String,
     },
     Screen {
         lines: Vec<String>,

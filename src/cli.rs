@@ -8,7 +8,7 @@ use crate::harness::{Deliver, Harness};
 use crate::prefix::parse_prefix;
 
 #[derive(Debug, Parser)]
-#[command(name = "a2amx", version)]
+#[command(name = "a2amx", version = crate::VERSION)]
 pub struct Cli {
     /// State directory. Defaults to A2AMX_HOME, XDG_STATE_HOME, or $HOME.
     #[arg(long, global = true, env = "A2AMX_HOME")]

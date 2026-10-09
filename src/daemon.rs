@@ -1766,6 +1766,9 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     .collect();
                 Response::Sessions { sessions }
             }
+            Request::Version => Response::Version {
+                version: crate::VERSION.to_owned(),
+            },
             request @ Request::NewSession { .. } => runtime.create_session(request).await?,
             Request::Shutdown { now } => {
                 // Answer first: shutdown closes every connection, this one included.

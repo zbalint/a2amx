@@ -291,6 +291,8 @@ section is the summary.
   `addr`), authenticated by an `admin.token` file. The state directory is 0700 and
   its files 0600. Framing is a `u32` big-endian length plus payload, with JSON on the
   control channel and tagged binary frames on attach streams.
+- The build-time git description is exposed by `a2amx --version`; admin-only `Request::Version`
+  lets `a2amx daemon status` report the daemon's build version and warn when it differs.
 - The client has a prefix state machine (bracketed-paste aware), a scroll mode, and
   a session picker.
 - The admin-only `a2amx screen <id|name> [--rows N]` request copies visible text from

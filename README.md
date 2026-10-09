@@ -95,7 +95,7 @@ must pass, and the results recorded so far, are in the validation plan.
 cargo build
 cargo test
 a2amx daemon start [--foreground]  # start the daemon; detached by default
-a2amx daemon status               # show daemon state and session counts
+a2amx daemon status               # show daemon state, build version and session counts
 a2amx daemon stop [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx new --watch developer --heartbeat 30m -- sh # digest watched peers after idle
 a2amx list [--details]
@@ -344,6 +344,12 @@ break the MCP command of a later Codex session. Install freely; the atomic insta
 a running daemon using its old image. Restart deliberately to pick up the new version,
 because restarting the daemon ends all sessions. The script leaves PATH, aliases, services,
 and daemon start or stop to the operator.
+
+Each build carries its git description (`a2amx --version`), and the running daemon reports
+the same value in `a2amx daemon status`. A `-dirty` suffix marks a build from a modified
+source tree. Status writes a warning to stderr when the daemon was built from a different
+version and recommends a restart; restarting ends all sessions. A source tarball without
+git metadata reports `0.0.0`, which cannot be compared for a mismatch.
 
 ## Contributing
 
