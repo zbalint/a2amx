@@ -151,7 +151,8 @@ The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`
 then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
 `A2AMX_PREFIX` to change it). After the prefix: `d` detach, `w` session picker, `[`
 scroll mode, `s` toggles the status line, `r` releases the session's message hold, and the prefix twice sends a
-literal prefix. While a session has not turned on mouse reporting, the mouse wheel scrolls it (three lines a step) and
+literal prefix. The picker accepts PageUp/PageDown and Home/End and scrolls when sessions do not fit.
+While a session has not turned on mouse reporting, the mouse wheel scrolls it (three lines a step) and
 enters scroll mode; hold Shift to select text with the mouse. Scrollback in the real terminal after you detach is not
 kept. The status line takes the terminal's last row, keeps a thin rule above it, and shows the session address, optional activity,
 low-quota, role and team, and harness details, pending-message count, and a HELD alert with the hold reason and (for

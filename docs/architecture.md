@@ -294,7 +294,8 @@ section is the summary.
 - The build-time git description is exposed by `a2amx --version`; admin-only `Request::Version`
   lets `a2amx daemon status` report the daemon's build version and warn when it differs.
 - The client has a prefix state machine (bracketed-paste aware), a scroll mode, and
-  a session picker.
+  a session picker. Its scrolling window covers session rows and shows a one-based
+  position indicator when the list does not fit.
 - The admin-only `a2amx screen <id|name> [--rows N]` request copies visible text from
   the session emulator without attaching, resizing, or sending input; it works for
   attached, detached, and exited-until-killed sessions.

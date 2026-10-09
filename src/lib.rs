@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod messaging;
 pub mod names;
 pub mod omp;
+pub mod picker;
 pub mod prefix;
 pub mod quota;
 pub mod session;

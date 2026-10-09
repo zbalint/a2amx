@@ -408,6 +408,49 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn picker_scrolls_and_takes_page_home_end_keys() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    for name in [
+        "pk-a", "pk-b", "pk-c", "pk-d", "pk-e", "pk-f", "pk-g", "pk-h",
+    ] {
+        let (_, code) = run_cli(
+            dir.path(),
+            &[
+                "new", "--detach", "--name", name, "--", "sh", "-c", "sleep 30",
+            ],
+        )?;
+        assert_eq!(code, 0);
+    }
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "pk-a"]), dir.path())?;
+    attached.resize(100, 8)?;
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("1/8", WAIT)?;
+    let screen = attached.screen_text();
+    assert!(screen.contains("pk-a"), "picker screen: {screen:?}");
+    assert!(!screen.contains("pk-h"), "picker screen: {screen:?}");
+
+    attached.send(b"\x1b[F")?;
+    attached.wait_for_text("8/8", WAIT)?;
+    let screen = attached.screen_text();
+    assert!(screen.contains("pk-h"), "picker screen: {screen:?}");
+    assert!(!screen.contains("pk-a"), "picker screen: {screen:?}");
+
+    attached.send(b"\x1b[H")?;
+    attached.wait_for_text("1/8", WAIT)?;
+    assert!(attached.screen_text().contains("pk-a"));
+    attached.send(b"\x1b[6~")?;
+    attached.wait_for_text("5/8", WAIT)?;
+
+    attached.send(b"q")?;
+    attached.wait_for_text("@host-a", WAIT)?;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn picker_clips_long_cwd_to_narrow_terminal() -> anyhow::Result<()> {
     let (dir, _daemon) = common::start_daemon().await;
     let cwd_root = tempfile::tempdir()?;

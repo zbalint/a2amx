@@ -21,6 +21,7 @@ use a2amx::hook;
 use a2amx::mcp;
 use a2amx::messaging::{self, TeamScope, display_duration, sgr_mouse_report_len};
 use a2amx::names;
+use a2amx::picker::{PickerAction, PickerParser, scroll_into_view, target};
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::quota;
 use a2amx::status;
@@ -1678,6 +1679,12 @@ impl AttachmentState {
                         state.render(&self.output)?;
                     }
                 }
+                PickerAction::Page(_) | PickerAction::Home | PickerAction::End => {
+                    if let Some(state) = self.picker.as_mut() {
+                        state.set_target(action);
+                        state.render(&self.output)?;
+                    }
+                }
                 PickerAction::Select => {
                     let Some(selected) = self.picker.as_ref().and_then(PickerState::selected_id)
                     else {
@@ -1793,6 +1800,7 @@ async fn run_attachment_loop(
                     if let Some(picker) = state.picker.as_mut() {
                         picker.cols = new_cols;
                         picker.rows = new_rows;
+                        picker.recompute_offset();
                         picker.render(&state.output)?;
                     }
                     if let Some(attached) = state.attachment.as_mut() {
@@ -2431,13 +2439,9 @@ struct PickerState {
     cols: u16,
     rows: u16,
     selection: usize,
+    offset: usize,
     parser: PickerParser,
     footer: Option<String>,
-}
-enum PickerAction {
-    Cancel,
-    Move(isize),
-    Select,
 }
 
 impl PickerState {
@@ -2454,6 +2458,12 @@ impl PickerState {
             .iter()
             .position(|session| session.id == current)
             .unwrap_or(0);
+        let offset = scroll_into_view(
+            0,
+            selection,
+            usize::from(rows.saturating_sub(3)),
+            sessions.len(),
+        );
         let state = Self {
             control,
             sessions,
@@ -2461,6 +2471,7 @@ impl PickerState {
             cols,
             rows,
             selection,
+            offset,
             parser: PickerParser::default(),
             footer: None,
         };
@@ -2472,17 +2483,26 @@ impl PickerState {
         self.parser.feed(bytes, escape_alone)
     }
 
+    fn height(&self) -> usize {
+        usize::from(self.rows.saturating_sub(3))
+    }
+
+    fn recompute_offset(&mut self) {
+        self.offset = scroll_into_view(
+            self.offset,
+            self.selection,
+            self.height(),
+            self.sessions.len(),
+        );
+    }
+
+    fn set_target(&mut self, action: PickerAction) {
+        self.selection = target(self.selection, action, self.height(), self.sessions.len());
+        self.recompute_offset();
+    }
+
     fn move_selection(&mut self, delta: isize) {
-        if self.sessions.is_empty() {
-            self.selection = 0;
-            return;
-        }
-        let max = self.sessions.len() - 1;
-        self.selection = if delta < 0 {
-            self.selection.saturating_sub(delta.unsigned_abs())
-        } else {
-            (self.selection + delta as usize).min(max)
-        };
+        self.set_target(PickerAction::Move(delta));
     }
 
     fn selected_id(&self) -> Option<String> {
@@ -2496,6 +2516,7 @@ impl PickerState {
         if self.selection >= self.sessions.len() {
             self.selection = self.sessions.len().saturating_sub(1);
         }
+        self.recompute_offset();
         Ok(())
     }
 
@@ -2509,19 +2530,20 @@ impl PickerState {
         );
         let (header, rows) = session_rows(&self.sessions, &self.current, self.selection, self.cols);
         picker_line(&mut text, 2, &header, self.cols);
-        for (index, row) in rows.iter().enumerate() {
-            let row_number = index + 3;
-            if row_number >= usize::from(self.rows) {
-                break;
-            }
-            picker_line(&mut text, row_number as u16, row, self.cols);
+        let height = self.height();
+        let start = self.offset.min(rows.len());
+        let end = start.saturating_add(height).min(rows.len());
+        for (index, row) in rows[start..end].iter().enumerate() {
+            picker_line(&mut text, (index + 3) as u16, row, self.cols);
         }
-        picker_line(
-            &mut text,
-            self.rows.max(1),
-            self.footer.as_deref().unwrap_or(""),
-            self.cols,
-        );
+        let footer = self.footer.clone().unwrap_or_else(|| {
+            if rows.len() > height {
+                format!("{}/{}", self.selection + 1, rows.len())
+            } else {
+                String::new()
+            }
+        });
+        picker_line(&mut text, self.rows.max(1), &footer, self.cols);
         output.send(text.into_bytes())
     }
 }
@@ -2554,51 +2576,6 @@ async fn resolve_session(home: &Path, reference: &str) -> anyhow::Result<String>
         &request_sessions(&mut client).await?,
         reference,
     ))
-}
-
-#[derive(Default)]
-struct PickerParser {
-    pending: Vec<u8>,
-}
-
-impl PickerParser {
-    fn feed(&mut self, bytes: &[u8], escape_alone: bool) -> Vec<PickerAction> {
-        // shortcut: ESC-alone detection is intentionally one-read based.
-        if escape_alone {
-            self.pending.clear();
-            return vec![PickerAction::Cancel];
-        }
-        let mut actions = Vec::new();
-        for byte in bytes {
-            if self.pending.is_empty() && *byte == b'q' {
-                actions.push(PickerAction::Cancel);
-                continue;
-            }
-            if self.pending.is_empty() && *byte == b'j' {
-                actions.push(PickerAction::Move(1));
-                continue;
-            }
-            if self.pending.is_empty() && *byte == b'k' {
-                actions.push(PickerAction::Move(-1));
-                continue;
-            }
-            if self.pending.is_empty() && *byte == b'\r' {
-                actions.push(PickerAction::Select);
-                continue;
-            }
-            self.pending.push(*byte);
-            if self.pending == b"\x1b[A" || self.pending == b"\x1bOA" {
-                self.pending.clear();
-                actions.push(PickerAction::Move(-1));
-            } else if self.pending == b"\x1b[B" || self.pending == b"\x1bOB" {
-                self.pending.clear();
-                actions.push(PickerAction::Move(1));
-            } else if self.pending.len() > 3 || self.pending.first() != Some(&0x1b) {
-                self.pending.clear();
-            }
-        }
-        actions
-    }
 }
 
 // shortcut: picker widths use byte/scalar counts rather than terminal cell widths.
