@@ -294,8 +294,11 @@ section is the summary.
 - The build-time git description is exposed by `a2amx --version`; admin-only `Request::Version`
   lets `a2amx daemon status` report the daemon's build version and warn when it differs.
 - The client has a prefix state machine (bracketed-paste aware), a scroll mode, and
-  a session picker. Its scrolling window covers session rows and shows a one-based
-  position indicator when the list does not fit.
+  a session picker. When any session has a team, the picker groups sessions into
+  sorted foldable team sections, keeps ungrouped sessions in a `(no team)` section,
+  and applies an ASCII case-insensitive `/` filter; with more than two teams, other
+  teams start folded. Its scrolling window covers headers and session rows and shows
+  a one-based position indicator when the lines do not fit.
 - The admin-only `a2amx screen <id|name> [--rows N]` request copies visible text from
   the session emulator without attaching, resizing, or sending input; it works for
   attached, detached, and exited-until-killed sessions.
@@ -471,7 +474,7 @@ machine; there is no central-versus-host split yet.
   corrupted messages retry only until their per-message rejection limit.
   TEAM appears only when any listed session has one; private teams include `(private)` and
   ungrouped sessions show `-`. `--team` and `--as` are client-side AND filters; the picker
-  remains unfiltered and uses the same optional TEAM column.
+  remains the unfiltered operator view and presents team sections rather than a TEAM column.
 
 **Quota.** The daemon reads the last three screen rows of running Claude and Codex
 sessions for `5h N% left`, `weekly N% left` and `7d N% left`. For running OMP sessions it

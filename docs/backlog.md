@@ -83,3 +83,4 @@ lag the code.
 | C22 | `a2amx new` without `--name` generates a name | spec 3r |
 | C23 | Build version stamped into the binary; the daemon reports it in daemon status | spec 3s |
 | C24 | Session picker scrolls and takes page/home/end keys | spec 3t |
+| C25 | Session picker groups sessions into foldable team sections and filters | spec 3u |

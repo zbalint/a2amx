@@ -1315,7 +1315,7 @@ gate.recv(1)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn picker_shows_team_column_when_a_team_session_exists() -> anyhow::Result<()> {
+async fn picker_groups_sessions_into_team_sections() -> anyhow::Result<()> {
     let (dir, _daemon) = common::start_daemon().await;
     let (created, code) = run_cli(
         dir.path(),
@@ -1346,15 +1346,98 @@ async fn picker_shows_team_column_when_a_team_session_exists() -> anyhow::Result
     attached.send(&[2, b'w'])?;
     attached.wait_for_text("a2amx sessions:", WAIT)?;
     attached.wait_for_text("NAME", WAIT)?;
-    attached.wait_for_text("TEAM", WAIT)?;
-    attached.wait_for_text("demo (private)", WAIT)?;
+    attached.wait_for_text("[-] demo (private) (1)", WAIT)?;
+    attached.wait_for_text("worker", WAIT)?;
+    attached.wait_for_text("[-] (no team) (1)", WAIT)?;
     let screen = attached.screen_text();
-    assert!(screen.contains(" - "));
-    assert!(screen.find("NAME").unwrap_or(usize::MAX) < screen.find("TEAM").unwrap_or(0));
+    assert!(!screen.contains("TEAM"), "picker screen: {screen:?}");
+    assert!(screen.contains("plain"), "picker screen: {screen:?}");
+    assert!(
+        screen.find("NAME").unwrap_or(usize::MAX) < screen.find("worker").unwrap_or(0),
+        "picker screen: {screen:?}"
+    );
     attached.send(b"q")?;
     attached.wait_for_text("a2amx sessions:", WAIT)?;
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn picker_folds_teams_and_filters() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let (created, code) = run_cli(
+        dir.path(),
+        &[
+            "new", "--detach", "--name", "base", "--", "sh", "-c", "sleep 30",
+        ],
+    )?;
+    assert_eq!(code, 0);
+    assert!(created.contains("s1"));
+    for (team, sessions) in [
+        ("alpha", [("al-1", "sleep 30"), ("al-2", "sleep 30")]),
+        (
+            "beta",
+            [("be-1", "sleep 30"), ("be-2", "printf BE2-READY; sleep 30")],
+        ),
+        ("gamma", [("ga-1", "sleep 30"), ("ga-2", "sleep 30")]),
+    ] {
+        let path = dir.path().join(format!("{team}.toml"));
+        let mut file = format!("team = \"{team}\"\n");
+        for (name, command) in sessions {
+            file.push_str(&format!(
+                "[[session]]\nname = \"{name}\"\ncommand = [\"sh\", \"-c\", \"{command}\"]\n"
+            ));
+        }
+        std::fs::write(&path, file)?;
+        let path = path.to_string_lossy().into_owned();
+        let started = run_binary(
+            dir.path(),
+            &["team", "up", "--detach", "--file", &path],
+            &[],
+        )?;
+        assert!(
+            started.status.success(),
+            "team up {team} output: {}",
+            String::from_utf8_lossy(&started.stderr)
+        );
+    }
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("a2amx sessions:", WAIT)?;
+    attached.wait_for_text("[+] alpha (private) (2)", WAIT)?;
+    attached.wait_for_text("[+] beta (private) (2)", WAIT)?;
+    attached.wait_for_text("[+] gamma (private) (2)", WAIT)?;
+    attached.wait_for_text("[-] (no team) (1)", WAIT)?;
+    attached.wait_for_text("base", WAIT)?;
+    let screen = attached.screen_text();
+    assert!(!screen.contains("al-1"), "picker screen: {screen:?}");
+
+    attached.send(b"\x1b[H\r")?;
+    attached.wait_for_text("[-] alpha (private) (2)", WAIT)?;
+    attached.wait_for_text("al-1", WAIT)?;
+    attached.wait_for_text("al-2", WAIT)?;
+    let screen = attached.screen_text();
+    assert!(!screen.contains("be-1"), "picker screen: {screen:?}");
+
+    attached.send(b" ")?;
+    attached.wait_for_text("[+] alpha (private) (2)", WAIT)?;
+    let screen = attached.screen_text();
+    assert!(!screen.contains("al-1"), "picker screen: {screen:?}");
+
+    attached.send(b"/be-2")?;
+    attached.wait_for_text("[-] beta (private) (1)", WAIT)?;
+    attached.wait_for_text("be-2", WAIT)?;
+    attached.wait_for_text("/be-2", WAIT)?;
+    let screen = attached.screen_text();
+    assert!(!screen.contains("al-1"), "picker screen: {screen:?}");
+
+    attached.send(b"\r")?;
+    attached.wait_for_text("BE2-READY", WAIT)?;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from ", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
     Ok(())
 }

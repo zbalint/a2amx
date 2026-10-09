@@ -74,7 +74,7 @@ cargo fmt --check
 | `names` | Generated session names (pure, ADJECTIVE-NOUN with a seeded picker) |
 | `mcp` | The stdio MCP server and its authenticated agent tools |
 | `omp` | The embedded OMP extension and its launch files |
-| `picker` | The session picker's key parser and scroll window (pure) |
+| `picker` | The session picker's key parser, view model (team sections, folds, filter) and scroll window (pure) |
 | `quota` | Harness quota extraction from screen, conversation state, and `omp usage` command output |
 | `status` | Attach status-line formatting and status frames |
 | `store` | SQLite message and delivery-attempt persistence |

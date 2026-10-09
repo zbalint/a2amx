@@ -21,7 +21,9 @@ use a2amx::hook;
 use a2amx::mcp;
 use a2amx::messaging::{self, TeamScope, display_duration, sgr_mouse_report_len};
 use a2amx::names;
-use a2amx::picker::{PickerAction, PickerParser, scroll_into_view, target};
+use a2amx::picker::{
+    EntryState, Outcome, PickerAction, PickerEntry, PickerParser, PickerView, scroll_into_view,
+};
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::quota;
 use a2amx::status;
@@ -1662,37 +1664,45 @@ impl AttachmentState {
         bytes: &[u8],
         escape_alone: bool,
     ) -> anyhow::Result<Option<AttachOutcome>> {
+        let had_footer = {
+            let Some(state) = self.picker.as_mut() else {
+                return Ok(None);
+            };
+            state.footer.take().is_some()
+        };
+        if had_footer {
+            if let Some(state) = self.picker.as_ref() {
+                state.render(&self.output)?;
+            }
+        }
         let actions = match self.picker.as_mut() {
             Some(state) => state.feed(bytes, escape_alone),
             None => return Ok(None),
         };
         for action in actions {
-            match action {
-                PickerAction::Cancel => {
-                    if !self.restore_current().await? {
-                        continue;
-                    }
-                }
-                PickerAction::Move(delta) => {
-                    if let Some(state) = self.picker.as_mut() {
-                        state.move_selection(delta);
+            let outcome = {
+                let Some(state) = self.picker.as_mut() else {
+                    return Ok(None);
+                };
+                let outcome = state.apply(action);
+                state.parser.set_filter_mode(state.view.filter_mode());
+                outcome
+            };
+            match outcome {
+                None => {
+                    if let Some(state) = self.picker.as_ref() {
                         state.render(&self.output)?;
                     }
                 }
-                PickerAction::Page(_) | PickerAction::Home | PickerAction::End => {
-                    if let Some(state) = self.picker.as_mut() {
-                        state.set_target(action);
-                        state.render(&self.output)?;
+                Some(Outcome::Cancel) => {
+                    if self.restore_current().await? {
+                        return Ok(None);
                     }
                 }
-                PickerAction::Select => {
-                    let Some(selected) = self.picker.as_ref().and_then(PickerState::selected_id)
-                    else {
-                        continue;
-                    };
+                Some(Outcome::Attach(selected)) => {
                     if selected == self.session {
-                        if !self.restore_current().await? {
-                            continue;
+                        if self.restore_current().await? {
+                            return Ok(None);
                         }
                         continue;
                     }
@@ -1722,6 +1732,7 @@ impl AttachmentState {
                             self.output
                                 .send(format!("\x1b]2;a2amx: {}\x07", self.session).into_bytes())?;
                             self.picker = None;
+                            return Ok(None);
                         }
                         Err(error) => {
                             if let Some(state) = self.picker.as_mut() {
@@ -2436,9 +2447,9 @@ struct PickerState {
     control: Client,
     sessions: Vec<SessionSummary>,
     current: String,
+    view: PickerView,
     cols: u16,
     rows: u16,
-    selection: usize,
     offset: usize,
     parser: PickerParser,
     footer: Option<String>,
@@ -2454,27 +2465,19 @@ impl PickerState {
     ) -> anyhow::Result<Self> {
         let mut control = Client::connect(home).await?;
         let sessions = request_sessions(&mut control).await?;
-        let selection = sessions
-            .iter()
-            .position(|session| session.id == current)
-            .unwrap_or(0);
-        let offset = scroll_into_view(
-            0,
-            selection,
-            usize::from(rows.saturating_sub(3)),
-            sessions.len(),
-        );
-        let state = Self {
+        let view = PickerView::new(picker_entries(&sessions), current);
+        let mut state = Self {
             control,
             sessions,
             current: current.to_owned(),
+            view,
             cols,
             rows,
-            selection,
-            offset,
+            offset: 0,
             parser: PickerParser::default(),
             footer: None,
         };
+        state.recompute_offset();
         state.render(output)?;
         Ok(state)
     }
@@ -2490,32 +2493,21 @@ impl PickerState {
     fn recompute_offset(&mut self) {
         self.offset = scroll_into_view(
             self.offset,
-            self.selection,
+            self.view.selected_line().unwrap_or(0),
             self.height(),
-            self.sessions.len(),
+            self.view.lines().len(),
         );
     }
 
-    fn set_target(&mut self, action: PickerAction) {
-        self.selection = target(self.selection, action, self.height(), self.sessions.len());
+    fn apply(&mut self, action: PickerAction) -> Option<Outcome> {
+        let outcome = self.view.apply(action, self.height());
         self.recompute_offset();
-    }
-
-    fn move_selection(&mut self, delta: isize) {
-        self.set_target(PickerAction::Move(delta));
-    }
-
-    fn selected_id(&self) -> Option<String> {
-        self.sessions
-            .get(self.selection)
-            .map(|session| session.id.clone())
+        outcome
     }
 
     async fn refresh(&mut self) -> anyhow::Result<()> {
         self.sessions = request_sessions(&mut self.control).await?;
-        if self.selection >= self.sessions.len() {
-            self.selection = self.sessions.len().saturating_sub(1);
-        }
+        self.view.replace(picker_entries(&self.sessions));
         self.recompute_offset();
         Ok(())
     }
@@ -2525,20 +2517,50 @@ impl PickerState {
         picker_line(
             &mut text,
             1,
-            "a2amx sessions: Enter attach, Esc or q cancel, Up/Down or j/k move",
+            "a2amx sessions: Enter attach/fold, Esc or q cancel, / filter, Space fold, j/k move",
             self.cols,
         );
-        let (header, rows) = session_rows(&self.sessions, &self.current, self.selection, self.cols);
+        let indent = if self.sessions.iter().any(|session| session.team.is_some()) {
+            2
+        } else {
+            0
+        };
+        let (header, rows) = session_rows(&self.sessions, &self.current, self.cols, indent);
         picker_line(&mut text, 2, &header, self.cols);
+        let lines = self.view.lines();
         let height = self.height();
-        let start = self.offset.min(rows.len());
-        let end = start.saturating_add(height).min(rows.len());
-        for (index, row) in rows[start..end].iter().enumerate() {
-            picker_line(&mut text, (index + 3) as u16, row, self.cols);
+        let start = self.offset.min(lines.len());
+        let end = start.saturating_add(height).min(lines.len());
+        let selected = self.view.selected_line();
+        for (index, line) in lines[start..end].iter().enumerate() {
+            let line_index = start + index;
+            let marker = if selected == Some(line_index) {
+                '>'
+            } else {
+                ' '
+            };
+            let rendered = match line {
+                a2amx::picker::Line::Header { text, .. } => format!("{marker}{text}"),
+                a2amx::picker::Line::Session { id } => {
+                    let row = rows
+                        .iter()
+                        .find(|(row_id, _)| row_id == id)
+                        .map_or("", |(_, row)| row.as_str());
+                    format!("{marker}{row}")
+                }
+            };
+            picker_line(&mut text, (index + 3) as u16, &rendered, self.cols);
         }
         let footer = self.footer.clone().unwrap_or_else(|| {
-            if rows.len() > height {
-                format!("{}/{}", self.selection + 1, rows.len())
+            let position = || format!("{}/{}", selected.map_or(0, |line| line + 1), lines.len());
+            if self.view.filter_mode() {
+                if lines.len() > height {
+                    format!("/{}  {}", self.view.query(), position())
+                } else {
+                    format!("/{}", self.view.query())
+                }
+            } else if lines.len() > height {
+                position()
             } else {
                 String::new()
             }
@@ -2562,6 +2584,32 @@ async fn request_sessions(client: &mut Client) -> anyhow::Result<Vec<SessionSumm
     }
 }
 
+fn picker_entries(sessions: &[SessionSummary]) -> Vec<PickerEntry> {
+    sessions
+        .iter()
+        .map(|session| {
+            let state = if session.exit_code.is_some() {
+                EntryState::Exited
+            } else {
+                match session.activity {
+                    Some(Activity::Working) => EntryState::Working,
+                    Some(Activity::Busy) => EntryState::Busy,
+                    Some(Activity::Idle) => EntryState::Idle,
+                    None => EntryState::Unknown,
+                }
+            };
+            PickerEntry {
+                id: session.id.clone(),
+                name: session.name.clone().unwrap_or_default(),
+                team: session.team.as_ref().map(|team| team.name.clone()),
+                private: session.team.as_ref().is_some_and(|team| team.private),
+                state,
+                held: session.held,
+            }
+        })
+        .collect()
+}
+
 /// A name resolves to its id; other references remain for the daemon to judge.
 fn resolve_reference(sessions: &[SessionSummary], reference: &str) -> String {
     sessions
@@ -2582,47 +2630,46 @@ async fn resolve_session(home: &Path, reference: &str) -> anyhow::Result<String>
 fn session_rows(
     sessions: &[SessionSummary],
     current: &str,
-    selection: usize,
     cols: u16,
-) -> (String, Vec<String>) {
+    indent: usize,
+) -> (String, Vec<(String, String)>) {
     let rows: Vec<Vec<String>> = picker_value_rows(sessions)
         .into_iter()
         .map(|row| row.into_iter().collect())
         .collect();
-    let (headers, rows) = insert_team_column(&PICKER_HEADERS, rows, session_team_cells(sessions));
+    let headers = PICKER_HEADERS.to_vec();
     let widths = column_widths(&headers, &rows);
     let cwd = headers.len() - 1;
     let fixed_prefix_width = widths[..cwd].iter().sum::<usize>() + 2 * cwd;
-    let header_has_cwd = usize::from(cols) >= 1 + fixed_prefix_width + headers[cwd].len();
-    let mut header = String::new();
-    header.push(' ');
+    let header_has_cwd = usize::from(cols) >= 1 + indent + fixed_prefix_width + headers[cwd].len();
+    let mut header = String::from(" ");
+    header.push_str(&" ".repeat(indent));
     if header_has_cwd {
         header.push_str(&format_row(&headers, &widths));
     } else {
         header.push_str(&format_row(&headers[..cwd], &widths[..cwd]));
     }
     let lines = rows
-        .iter()
-        .enumerate()
-        .map(|(index, row)| {
-            let suffix = if sessions[index].id == current {
+        .into_iter()
+        .zip(sessions)
+        .map(|(row, session)| {
+            let suffix = if session.id == current {
                 " (current)"
             } else {
                 ""
             };
-            let marker = if index == selection { '>' } else { ' ' };
-            let mut line = String::new();
-            line.push(marker);
-            let available = usize::from(cols).saturating_sub(1 + fixed_prefix_width + suffix.len());
+            let mut line = " ".repeat(indent);
+            let available =
+                usize::from(cols).saturating_sub(1 + indent + fixed_prefix_width + suffix.len());
             if available >= 4 {
-                let mut row = row.clone();
+                let mut row = row;
                 row[cwd] = shorten_left(&row[cwd], available);
                 line.push_str(&format_row(&row, &widths));
             } else {
                 line.push_str(&format_row(&row[..cwd], &widths[..cwd]));
             }
             line.push_str(suffix);
-            line
+            (session.id.clone(), line)
         })
         .collect();
     (header, lines)
