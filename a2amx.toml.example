@@ -30,7 +30,7 @@ heartbeat = "30m" # digest watched peers after 30 minutes of idle time; needs wa
 # before locking it, and name the decision its answer feeds.
 [[session]]
 name = "consultant"
-command = ["claude", "--model", "opus"]
+command = ["claude", "--model", "opus", "--disallowedTools", "Edit,Write,NotebookEdit"]
 role = "consultant"
 
 [[session]]
