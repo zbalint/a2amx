@@ -21,6 +21,9 @@ lag the code.
 | --- | --- | --- |
 | G1 | Agent-initiated launch (an agent starting another session). Out of scope for now (owner, 2026-10-04); revisit later | docs |
 | G3 | Cross-host support: central broker, remote launch, cross-host delivery. Deferred until the owner says it is needed | docs |
+| G7 | Expose OMP native idle, pending, in-flight, and waiting flags in `list --details` | docs |
+| G8 | Apply stale-human-draft clearing to OMP message delivery; reset-only clearing intentionally does not call `begin_delivery` | docs |
+| G9 | Show OMP `human_draft` in `list`: `NativeChannel::hold_reason()` is always empty, so the current list and picker cannot expose that hold | code |
 
 ## Untested or unverified
 

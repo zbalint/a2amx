@@ -8,10 +8,10 @@ use std::path::Path;
 use std::process::{Child, Command};
 use std::time::Duration;
 
-use a2amx::client::Client;
+use a2amx::client::{BridgeLink, Client};
 use a2amx::harness::{Deliver, Harness};
 use a2amx::messaging::Limits;
-use a2amx::wire::{BridgeDown, BridgeUp, Request, Response};
+use a2amx::wire::{BridgeDown, BridgeUp, ClientFrame, Request, Response};
 
 struct DaemonChild(Option<Child>);
 
@@ -1505,6 +1505,476 @@ async fn reset_holds_message_delivery_until_sequence_finishes() {
         screen.iter().any(|line| line.contains("queued")),
         "queued message did not arrive after reset: {screen:?}"
     );
+    daemon.shutdown().await.unwrap();
+}
+
+async fn omp_reset_target(
+    admin: &mut Client,
+    dir: &Path,
+    daemon_address: SocketAddr,
+) -> (String, BridgeLink, SocketAddr, String, String) {
+    let (_, controller_token, controller_address) = common::new_agent(
+        admin,
+        dir,
+        Some("controller"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let output = tempfile::NamedTempFile::new_in(dir).unwrap();
+    let target = match admin
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > \"$OUT\"; printf '\\033[?2004h'; cat".into(),
+            ],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![("OUT".into(), output.path().to_string_lossy().into_owned())],
+            reset: vec![],
+            control_from: vec!["controller".into()],
+            watch: vec![],
+            name: Some("target".into()),
+            harness: Harness::Omp,
+            deliver: Some(Deliver::Auto),
+            heartbeat: None,
+            team: None,
+            role: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected target response: {response:?}"),
+    };
+    let target_token = common::eventually(|| async {
+        let text = std::fs::read_to_string(output.path()).ok()?;
+        let token = text.lines().next()?.to_owned();
+        (token.len() == 64).then_some(token)
+    })
+    .await;
+    let mut bridge = Client::connect_addr(daemon_address, &target_token)
+        .await
+        .unwrap()
+        .bridge()
+        .await
+        .unwrap();
+    bridge
+        .send(BridgeUp::Hello {
+            protocol: 1,
+            omp_version: "18.4.5".into(),
+            missing: vec![],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        bridge.recv().await.unwrap(),
+        Some(BridgeDown::Ready)
+    ));
+    (
+        target,
+        bridge,
+        controller_address,
+        controller_token,
+        target_token,
+    )
+}
+
+async fn reset_rejection(
+    address: SocketAddr,
+    token: &str,
+    target: &str,
+    expected_code: &str,
+    source: &str,
+) -> String {
+    common::eventually(|| async {
+        let mut controller = Client::connect_addr(address, token).await.unwrap();
+        let response = controller
+            .request(Request::Reset {
+                session: target.to_owned(),
+            })
+            .await
+            .unwrap();
+        match response {
+            Response::Failed { code, message }
+                if code == expected_code && message.contains(source) =>
+            {
+                Some(message)
+            }
+            Response::Failed { .. } => None,
+            response => panic!("unexpected reset response: {response:?}"),
+        }
+    })
+    .await
+}
+async fn reset_success(address: SocketAddr, token: &str, target: &str) -> u32 {
+    common::eventually(|| async {
+        let mut controller = Client::connect_addr(address, token).await.unwrap();
+        match controller
+            .request(Request::Reset {
+                session: target.to_owned(),
+            })
+            .await
+            .unwrap()
+        {
+            Response::Reset { steps } => Some(steps),
+            Response::Failed { .. } => None,
+            response => panic!("unexpected reset response: {response:?}"),
+        }
+    })
+    .await
+}
+
+fn timing_seconds(message: &str, field: &str) -> u64 {
+    message
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix(field))
+        .and_then(|value| value.strip_suffix('s'))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("missing timing field {field} in {message}"))
+}
+
+#[tokio::test]
+async fn reset_diagnostic_busy_names_native_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (target, mut bridge, address, token, _target_token) =
+        omp_reset_target(&mut admin, dir.path(), daemon.addrs()[0]).await;
+    bridge
+        .send(BridgeUp::State {
+            idle: false,
+            pending: false,
+            draft: false,
+        })
+        .await
+        .unwrap();
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "busy",
+        "reset gate rejected step 1 of 1: native busy: idle=false in_flight=false waiting=false",
+    )
+    .await;
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: true,
+            draft: false,
+        })
+        .await
+        .unwrap();
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "busy",
+        "native busy: idle=true in_flight=true waiting=false",
+    )
+    .await;
+    daemon.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn reset_diagnostic_native_timing_survives_reconnect() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (target, mut bridge, address, token, target_token) =
+        omp_reset_target(&mut admin, dir.path(), daemon.addrs()[0]).await;
+    bridge
+        .send(BridgeUp::State {
+            idle: false,
+            pending: false,
+            draft: false,
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let first = reset_rejection(
+        address,
+        &token,
+        &target,
+        "busy",
+        "native busy: idle=false in_flight=false waiting=false",
+    )
+    .await;
+    assert!(first.contains("idle_for="), "{first}");
+    assert!(first.contains("reported="), "{first}");
+    assert!(timing_seconds(&first, "idle_for=") >= 1, "{first}");
+
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: true,
+            draft: false,
+        })
+        .await
+        .unwrap();
+    let second = reset_rejection(
+        address,
+        &token,
+        &target,
+        "busy",
+        "native busy: idle=true in_flight=true waiting=false",
+    )
+    .await;
+    assert!(timing_seconds(&second, "idle_for=") <= 1, "{second}");
+    bridge
+        .send(BridgeUp::State {
+            idle: false,
+            pending: true,
+            draft: false,
+        })
+        .await
+        .unwrap();
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "busy",
+        "native busy: idle=false in_flight=true waiting=false",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+
+    drop(bridge);
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "not_ready",
+        "native bridge not connected",
+    )
+    .await;
+    let mut reconnected = common::eventually(|| async {
+        Client::connect_addr(daemon.addrs()[0], &target_token)
+            .await
+            .ok()?
+            .bridge()
+            .await
+            .ok()
+    })
+    .await;
+    reconnected
+        .send(BridgeUp::Hello {
+            protocol: 1,
+            omp_version: "18.4.5".into(),
+            missing: vec![],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        reconnected.recv().await.unwrap(),
+        Some(BridgeDown::Ready)
+    ));
+    reconnected
+        .send(BridgeUp::State {
+            idle: false,
+            pending: true,
+            draft: true,
+        })
+        .await
+        .unwrap();
+    let third = reset_rejection(
+        address,
+        &token,
+        &target,
+        "draft_present",
+        "native draft=true",
+    )
+    .await;
+    assert!(timing_seconds(&third, "idle_for=") >= 1, "{third}");
+    assert!(timing_seconds(&third, "reported=") <= 1, "{third}");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_diagnostic_draft_names_native_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (target, mut bridge, address, token, _target_token) =
+        omp_reset_target(&mut admin, dir.path(), daemon.addrs()[0]).await;
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: false,
+            draft: true,
+        })
+        .await
+        .unwrap();
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "draft_present",
+        "native draft=true",
+    )
+    .await;
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_diagnostic_hold_names_human_draft() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (target, mut bridge, address, token, _target_token) =
+        omp_reset_target(&mut admin, dir.path(), daemon.addrs()[0]).await;
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: false,
+            draft: true,
+        })
+        .await
+        .unwrap();
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "draft_present",
+        "native draft=true",
+    )
+    .await;
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    let message = reset_rejection(
+        address,
+        &token,
+        &target,
+        "draft_present",
+        "hold human_draft",
+    )
+    .await;
+    assert!(!message.contains("idle_for="), "{message}");
+    daemon.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn reset_stale_omp_draft_hold_clears_after_margin() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (target, mut bridge, address, token, _target_token) =
+        omp_reset_target(&mut admin, dir.path(), daemon.addrs()[0]).await;
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: false,
+            draft: true,
+        })
+        .await
+        .unwrap();
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "draft_present",
+        "native draft=true",
+    )
+    .await;
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(vec![0x1b]))
+        .await
+        .unwrap();
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "draft_present",
+        "hold human_draft",
+    )
+    .await;
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: false,
+            draft: false,
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(reset_success(address, &token, &target).await, 1);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_real_omp_draft_hold_survives_margin_then_clears() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (target, mut bridge, address, token, _target_token) =
+        omp_reset_target(&mut admin, dir.path(), daemon.addrs()[0]).await;
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: false,
+            draft: true,
+        })
+        .await
+        .unwrap();
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "draft_present",
+        "native draft=true",
+    )
+    .await;
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    reset_rejection(
+        address,
+        &token,
+        &target,
+        "draft_present",
+        "hold human_draft",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    let message = reset_rejection(
+        address,
+        &token,
+        &target,
+        "draft_present",
+        "hold human_draft",
+    )
+    .await;
+    assert!(!message.contains("native draft=true"), "{message}");
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: false,
+            draft: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(reset_success(address, &token, &target).await, 1);
     daemon.shutdown().await.unwrap();
 }
 

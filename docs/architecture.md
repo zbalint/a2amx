@@ -425,6 +425,8 @@ machine; there is no central-versus-host split yet.
   callers; the CLI/admin token is always allowed. Reset holds message delivery,
   rejects drafts and non-ready composers, waits 1.5 seconds plus readiness polling
   after each Enter, and fails a step after 30 seconds.
+  Rejections name the blocking hold or native flag. On OMP, a stale human-draft hold clears
+  when the extension reports an idle, empty composer 2 seconds after the last human keystroke.
 - **MCP server.** `src/mcp.rs` owns `a2amx mcp`, a hand-written stdio JSON-RPC server with four
   tools: `list_agents`, `send_message`, `message_status`, and `reset_session`. It runs wherever
   the harness runs and connects to the daemon over TCP. Reset requests use the target's

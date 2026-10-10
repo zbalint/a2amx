@@ -389,7 +389,7 @@ impl Ticket for AnyTicket<'_> {
     }
 }
 
-fn hold_name(hold: Hold) -> &'static str {
+pub(crate) fn hold_name(hold: Hold) -> &'static str {
     match hold {
         Hold::HumanDraft => "human_draft",
         Hold::UnsubmittedEnvelope => "unsubmitted_envelope",

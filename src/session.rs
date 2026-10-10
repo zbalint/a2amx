@@ -17,6 +17,7 @@ use anyhow::{Context, bail};
 use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 
+use crate::delivery;
 use crate::emulator::{Emulator, Size, window_size};
 use crate::harness::{self, Deliver, Harness};
 use crate::messaging;
@@ -25,6 +26,7 @@ use crate::wire::{Activity, BridgeDown};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionId(pub String);
 const RESET_SETTLE: Duration = Duration::from_millis(1500); // shortcut: fixed settle; replace with a per-harness completion marker if a harness reports readiness early or needs longer.
+const STALE_DRAFT_MARGIN: Duration = Duration::from_secs(2); // shortcut: fixed margin; replace with a per-keystroke acknowledgement if OMP polling becomes slower.
 const RESET_POLL: Duration = Duration::from_millis(100);
 const RESET_TIMEOUT: Duration = Duration::from_secs(30);
 const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -97,6 +99,7 @@ pub(crate) struct State {
     pub activity_since: Option<(Activity, Instant)>,
     pub hold: Option<Hold>,
     pub last_submit: Option<Instant>,
+    pub last_human_input: Option<Instant>,
     pub restore: Option<String>,
     pub corrupted: u32,
     pub native: NativeSlot,
@@ -109,6 +112,8 @@ pub(crate) struct NativeSlot {
     idle: bool,
     draft: bool,
     in_flight: bool,
+    idle_since: Option<Instant>,
+    reported_at: Option<Instant>,
     link: Option<mpsc::UnboundedSender<BridgeDown>>,
     waiting: Option<(String, oneshot::Sender<Result<(), String>>)>,
 }
@@ -217,6 +222,7 @@ impl Session {
                 activity_since: None,
                 hold: None,
                 last_submit: None,
+                last_human_input: None,
                 restore: None,
                 corrupted: 0,
                 native: NativeSlot::default(),
@@ -449,6 +455,7 @@ impl Session {
     pub(crate) fn note_human_input(&self, bytes: &[u8]) {
         if messaging::input_is_typing(bytes) {
             let mut state = self.lock();
+            state.last_human_input = Some(Instant::now());
             state.restore = None;
             state.hold.get_or_insert(Hold::HumanDraft);
         }
@@ -577,6 +584,11 @@ impl Session {
 
     pub(crate) fn native_state(&self, idle: bool, draft: bool, pending: bool) {
         let mut state = self.lock();
+        let now = Instant::now();
+        if state.native.idle_since.is_none() || state.native.idle != idle {
+            state.native.idle_since = Some(now);
+        }
+        state.native.reported_at = Some(now);
         state.native.idle = idle;
         state.native.draft = draft;
         state.native.in_flight = pending;
@@ -652,40 +664,96 @@ impl Session {
             None
         }
     }
-    fn reset_native_reason(&self) -> Option<&'static str> {
+    fn native_timing(native: &NativeSlot) -> String {
+        let now = Instant::now();
+        let idle_for = native
+            .idle_since
+            .map(|since| format!("{}s", now.saturating_duration_since(since).as_secs()))
+            .unwrap_or_else(|| "none".to_owned());
+        let reported = native
+            .reported_at
+            .map(|since| format!("{}s ago", now.saturating_duration_since(since).as_secs()))
+            .unwrap_or_else(|| "none".to_owned());
+        format!(" idle_for={idle_for} reported={reported}")
+    }
+
+    fn reset_native_reason(&self) -> Option<(&'static str, String)> {
         if self.harness != Harness::Omp {
             return None;
         }
         let state = self.lock();
-        if !state.native.connected || state.native.refused {
-            Some("not_ready")
+        let timing = Self::native_timing(&state.native);
+        if state.native.refused {
+            Some((
+                messaging::code::NOT_READY,
+                format!("native bridge refused{timing}"),
+            ))
+        } else if !state.native.connected {
+            Some((
+                messaging::code::NOT_READY,
+                format!("native bridge not connected{timing}"),
+            ))
         } else if state.native.draft {
-            Some("draft_present")
+            Some((
+                messaging::code::DRAFT_PRESENT,
+                format!("native draft=true{timing}"),
+            ))
         } else if !state.native.idle || state.native.in_flight || state.native.waiting.is_some() {
-            Some("busy")
+            Some((
+                messaging::code::BUSY,
+                format!(
+                    "native busy: idle={} in_flight={} waiting={}{}",
+                    state.native.idle,
+                    state.native.in_flight,
+                    state.native.waiting.is_some(),
+                    timing
+                ),
+            ))
         } else {
             None
         }
     }
 
-    fn reset_gate_reason(&self) -> Option<&'static str> {
+    fn clear_stale_omp_draft(&self) {
+        if self.harness != Harness::Omp {
+            return;
+        }
+        let mut state = self.lock();
+        if state.hold != Some(Hold::HumanDraft)
+            || state.restore.is_some()
+            || !state.native.connected
+            || state.native.refused
+            || state.native.draft
+            || !state.native.idle
+            || state
+                .last_human_input
+                .is_some_and(|input| input.elapsed() < STALE_DRAFT_MARGIN)
+        {
+            return;
+        }
+        state.hold = None;
+    }
+
+    fn reset_gate_reason(&self) -> Option<(&'static str, String)> {
+        self.clear_stale_omp_draft();
         if self.exit_code().is_some() {
-            return Some(messaging::code::EXITED);
+            return Some((messaging::code::EXITED, "exited".to_owned()));
         }
         {
             let state = self.lock();
             if let Some(hold) = state.hold {
-                return Some(match hold {
+                let code = match hold {
                     Hold::HumanDraft => messaging::code::DRAFT_PRESENT,
                     Hold::UnsubmittedEnvelope | Hold::CorruptedSubmissions => messaging::code::HELD,
-                });
+                };
+                return Some((code, format!("hold {}", delivery::hold_name(hold))));
             }
             if !harness::ready(
                 self.harness,
                 &state.emulator.screen(),
                 state.emulator.is_scrolled(),
             ) {
-                return Some(messaging::code::NOT_READY);
+                return Some((messaging::code::NOT_READY, "screen not ready".to_owned()));
             }
         }
         self.reset_native_reason()
@@ -723,19 +791,21 @@ impl Session {
         let total = steps.len();
         for (index, step) in steps.iter().enumerate() {
             let number = index + 1;
-            if let Some(code) = self.reset_gate_reason() {
+            if let Some((code, source)) = self.reset_gate_reason() {
                 return Err(Self::reset_error(
                     code,
                     Some((number, total)),
-                    format!("reset gate rejected step {number} of {total}"),
+                    format!("reset gate rejected step {number} of {total}: {source}"),
                 ));
             }
             let Some(delivery) = self.begin_delivery().await else {
-                let code = self.reset_gate_reason().unwrap_or(messaging::code::HELD);
+                let (code, source) = self
+                    .reset_gate_reason()
+                    .unwrap_or((messaging::code::HELD, "begin_delivery refused".to_owned()));
                 return Err(Self::reset_error(
                     code,
                     Some((number, total)),
-                    format!("reset gate rejected step {number} of {total}"),
+                    format!("reset gate rejected step {number} of {total}: {source}"),
                 ));
             };
             match delivery
@@ -943,7 +1013,7 @@ impl Session {
         };
         // shortcut: a human can start typing between this gate check and the key;
         // re-check inside the input lock if a composer corruption is observed.
-        if let Some(code) = self.reset_gate_reason() {
+        if let Some((code, _)) = self.reset_gate_reason() {
             self.log_graceful("skipped", Some(code), None);
             return false;
         }
