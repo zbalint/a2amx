@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-**LOCKED** (2026-10-10; pre-lock gate run against develop at `d6e797c`; consultant review `m_1143`, amended F1-F5). Owner-directed
+**LOCKED** (2026-10-10; pre-lock gate run against develop at `d6e797c`; consultant review `m_1143`, amended F1-F5; Amendment 1 after developer BLOCKED `m_1151`: the test seam is the rejection message, not `list`). Owner-directed
 investigation, context `answer-side-memory-hook-2026-10-10` (findings in SALTMDB memories `7f0141d5`
 and `169d3e09`). Implementation goes to `a2amx-developer` only.
 
@@ -109,29 +109,33 @@ All in `tests/broker.rs`, built on the shape of `reset_rejects_an_in_flight_nati
 `Hello` and `State`, and a controller listed in `control_from`. Give each target `reset: vec![]` (default
 `/clear`) unless noted.
 
-**Synchronisation.** `BridgeUp::State`, `ClientFrame::Input` and `Request::Reset` travel on separate connections,
-so a test must not assume a frame has been processed. (a) After sending `ClientFrame::Input`, wait until the list
-seam shows `hold_reason == "human_draft"` for the target (`common::eventually`, as `tests/daemon.rs:240-258` does).
-(b) Tests 1-3 can never succeed, and a rejection has no side effects, so poll `Request::Reset` with
-`common::eventually` until the expected code and message text appear. (c) A success leg may be polled the same way
-(the first success ends the polling). (d) Where a test needs `draft: true` to be seen before a margin wait, send
-it before the first reset and poll test-2 style until `draft_present` is returned; only then start the wait.
+**Synchronisation (Amendment 1).** `BridgeUp::State`, `ClientFrame::Input` and `Request::Reset` travel on
+separate connections, so a test must not assume a frame has been processed. The list seam cannot observe an OMP
+hold (`NativeChannel::hold_reason()` is `None`, `src/delivery.rs:202-204`), so the rejection message of D1 is the
+observation seam. (a) A rejection has no side effects, so poll `Request::Reset` with `common::eventually` until the
+expected code and message text appear. (b) Observe a state frame by polling until the message names its flag
+(`native draft=true`, `native busy: idle=false ...`). (c) Observe attached input by first holding the bridge at
+`draft: true` (observed per (b)), then sending the `ClientFrame::Input`, then polling until the message contains
+`hold human_draft`; `draft: true` makes every reset before and after that point a rejection, so the poll can never
+type `/clear`. (d) A success leg is polled the same way (the first success ends the polling). Time spans are
+measured from the poll iteration that first observed `hold human_draft`, which is not earlier than the keystroke.
 
 1. **Busy names the flags.** Bridge reports `idle: false, pending: false, draft: false`: `Request::Reset` fails
    with code `busy` and a message containing `native busy: idle=false in_flight=false waiting=false`. Then
    `idle: true, pending: true`: the message contains `in_flight=true`.
 2. **Draft names the flag.** Bridge reports `draft: true`: code `draft_present`, message contains
    `native draft=true`.
-3. **Hold is named.** Attach a client to the target (`Client::attach`; see `tests/daemon.rs:240` for sending
-   `ClientFrame::Input`), send `ClientFrame::Input(b"x".to_vec())`; bridge reports `idle: true, pending: false,
-   draft: true`. Reset fails with `draft_present` and a message containing `hold human_draft`.
-4. **Stale hold clears (the regression).** Attach, send `ClientFrame::Input(vec![0x1b])` (a bare Esc); bridge
-   reports `idle: true, pending: false, draft: false`. Reset at once: fails `draft_present` (inside the 2 s
-   margin; the `human_draft` wait of (a) makes the Esc processed, and the first reset follows within 1 s of it).
-   After 2.2 s past the Esc, reset again: succeeds with `Response::Reset { steps: 1 }`.
-5. **A real draft survives.** As test 4 but the bridge then reports `draft: true`, and after the margin reset
-   still fails `draft_present`; after the bridge reports `draft: false` again and the margin passes, a reset
-   succeeds. (The hold stays set while `draft` is true; no second keystroke is needed.)
+3. **Hold is named.** Bridge reports `idle: true, pending: false, draft: true`; observe it (b). Attach a client
+   to the target (`Client::attach`; see `tests/daemon.rs:240` for sending `ClientFrame::Input`) and send
+   `ClientFrame::Input(b"x".to_vec())`; poll per (c): code `draft_present`, message containing `hold human_draft`.
+4. **Stale hold clears (the regression).** As test 3 but the input is `ClientFrame::Input(vec![0x1b])` (a bare
+   Esc). Once `hold human_draft` is observed (inside the 2 s margin, so the hold is still named), the bridge reports
+   `idle: true, pending: false, draft: false`; wait 2.2 s from the observation, then poll `Request::Reset` until it
+   succeeds with `Response::Reset { steps: 1 }`.
+5. **A real draft survives.** As test 3 up to the observation of `hold human_draft` with `draft: true` held. Wait
+   2.2 s from the observation: `Request::Reset` still fails `draft_present` with `hold human_draft` (D3 does not
+   clear while `draft=true`). Then the bridge reports `draft: false`; poll `Request::Reset` until it succeeds with
+   `Response::Reset { steps: 1 }`.
 6. Existing reset tests (`broker.rs` `reset_*`, `daemon_cli.rs` `reset_*` and `team_reset_*`, `delivery.rs`
    `human_draft_*`, `bridge.rs` draft tests, `attach_cli.rs` `attached_input_sets_hold_and_prefix_release_clears_it`)
    pass unchanged. They already pass on the old code (contract tests).
@@ -144,6 +148,7 @@ the test name; do not edit it.
 - The root cause of the 10-10 `busy` beyond diagnostics; the extension, `extension/omp.ts` and the protocol.
 - Making the flags readable in `list --details`: it needs a field on the wire session summary and a column
   (`src/wire.rs`, `src/main.rs`, the picker); recorded in `docs/backlog.md` instead.
+- Making `list` show an OMP hold (the third backlog item above; `src/delivery.rs`, `src/daemon.rs`).
 - Applying D3 to message delivery (`begin_delivery`): a held peer message on an OMP session has the same
   stale-hold problem; recorded in the backlog, to be specified separately.
 - Claude and Codex draft handling, the hook, the picker, `team reset`.
@@ -154,8 +159,9 @@ the test name; do not edit it.
 - `docs/architecture.md`: where the reset gate and `draft_present` are described (about lines 263-266 and 422), two
   sentences: a rejection names its hold or native flag; on OMP a stale human-draft hold clears when the extension
   reports an idle, empty composer 2 s after the last human keystroke.
-- `docs/backlog.md`: under the section for ideas or known gaps, two items (flags in `list --details`; stale hold
-  for message delivery on OMP).
+- `docs/backlog.md`: under the section for ideas or known gaps, three items (flags in `list --details`; stale hold
+  for message delivery on OMP; `hold_reason` is always empty for OMP sessions, `NativeChannel::hold_reason`
+  `src/delivery.rs:202`, so `list` and the picker cannot show an OMP `human_draft` hold).
 
 ## 7. Acceptance
 
