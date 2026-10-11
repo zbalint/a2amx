@@ -45,6 +45,7 @@ lag the code.
 | ID | Item | Evidence |
 | --- | --- | --- |
 | F2 | Named launch templates in an operator config file, launch ownership (a launcher may kill only what it launched), trusted working directory so the Claude trust dialog cannot block unattended delivery. Out of scope for now with G1 (owner, 2026-10-04) | docs |
+| F6 | Session activity feed for watchers, so an operator can build an advisor-style peer (as OMP's advisor does inside its harness). A mechanism, not a role: who watches and what a note means is the operator's policy, and what a feed carries is documented rather than gated. Shape: a richer `watch` (turn finished, activity digest) through the ordinary queue and hold gates; Claude Code hooks (`Stop` with its transcript path, `PostToolUse`) are the likely source, while OMP and Codex would need feeds from the extension and the app-server. Open: volume against the bounded queue, and file-change attribution when sessions share a directory (hooks give declared changes only; `Bash` is opaque). Parked by the owner, 2026-10-11; exploratory | reported |
 
 ## Closed
 
