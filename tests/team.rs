@@ -252,6 +252,20 @@ fn parse_global_team_conflict_precedes_prefix() {
 }
 
 #[test]
+fn parse_reports_invalid_team_name_with_team_prefix() {
+    let error = team::parse("team = 'bad name!'").unwrap_err().to_string();
+    assert!(error.starts_with("team \"bad name!\": "), "{error}");
+}
+
+#[test]
+fn parse_reports_invalid_allow_entry_with_entry_prefix() {
+    let error = team::parse("team = 'demo'\nallow = ['bad name!']")
+        .unwrap_err()
+        .to_string();
+    assert!(error.starts_with("allow entry \"bad name!\": "), "{error}");
+}
+
+#[test]
 fn parse_prefix_precedes_private_without_team() {
     let error = team::parse("prefix = 'old'\nprivate = true")
         .unwrap_err()
