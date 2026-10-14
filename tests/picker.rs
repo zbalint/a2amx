@@ -71,6 +71,48 @@ fn parser_maps_an_alone_escape_to_cancel() {
 }
 
 #[test]
+fn parser_maps_normal_q_to_cancel() {
+    let mut parser = PickerParser::default();
+    assert_eq!(parser.feed(b"q", false), vec![PickerAction::Cancel]);
+}
+
+#[test]
+fn parser_maps_normal_k_to_move_up() {
+    let mut parser = PickerParser::default();
+    assert_eq!(parser.feed(b"k", false), vec![PickerAction::Move(-1)]);
+}
+
+#[test]
+fn parser_maps_csi_down_to_move_down() {
+    let mut parser = PickerParser::default();
+    assert_eq!(parser.feed(b"\x1b[B", false), vec![PickerAction::Move(1)]);
+}
+
+#[test]
+fn parser_maps_ss3_up_to_move_up() {
+    let mut parser = PickerParser::default();
+    assert_eq!(parser.feed(b"\x1bOA", false), vec![PickerAction::Move(-1)]);
+}
+
+#[test]
+fn parser_maps_ss3_down_to_move_down() {
+    let mut parser = PickerParser::default();
+    assert_eq!(parser.feed(b"\x1bOB", false), vec![PickerAction::Move(1)]);
+}
+
+#[test]
+fn parser_drops_unmapped_normal_bytes() {
+    let mut parser = PickerParser::default();
+    assert_eq!(parser.feed(b"x\t", false), Vec::<PickerAction>::new());
+}
+
+#[test]
+fn parser_unknown_three_byte_escape_swallows_the_next_byte() {
+    let mut parser = PickerParser::default();
+    assert_eq!(parser.feed(b"\x1b[Zj", false), Vec::<PickerAction>::new());
+}
+
+#[test]
 fn target_clamps_moves_pages_and_absolute_keys() {
     let cases = [
         ((0, PickerAction::Move(1), 5, 12), 1),

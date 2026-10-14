@@ -45,47 +45,8 @@ impl PickerParser {
                 self.pending.clear();
             }
             if self.pending.is_empty() {
-                if self.filter_mode {
-                    if (0x20..=0x7e).contains(byte) {
-                        actions.push(PickerAction::Char(*byte));
-                        continue;
-                    }
-                    if *byte == 0x7f || *byte == 0x08 {
-                        actions.push(PickerAction::Backspace);
-                        continue;
-                    }
-                } else {
-                    if *byte == b' ' {
-                        actions.push(PickerAction::Toggle);
-                        continue;
-                    }
-                    if *byte == b'h' {
-                        actions.push(PickerAction::Fold);
-                        continue;
-                    }
-                    if *byte == b'l' {
-                        actions.push(PickerAction::Unfold);
-                        continue;
-                    }
-                    if *byte == b'/' {
-                        actions.push(PickerAction::StartFilter);
-                        continue;
-                    }
-                }
-                if *byte == b'q' {
-                    actions.push(PickerAction::Cancel);
-                    continue;
-                }
-                if *byte == b'j' {
-                    actions.push(PickerAction::Move(1));
-                    continue;
-                }
-                if *byte == b'k' {
-                    actions.push(PickerAction::Move(-1));
-                    continue;
-                }
-                if *byte == b'\r' {
-                    actions.push(PickerAction::Select);
+                if let Some(action) = plain_key(*byte, self.filter_mode) {
+                    actions.push(action);
                     continue;
                 }
                 if *byte == 0x1b {
@@ -95,41 +56,50 @@ impl PickerParser {
             } else {
                 self.pending.push(*byte);
             }
-            if self.pending == b"\x1b[A" || self.pending == b"\x1bOA" {
+            if let Some(action) = escape_action(&self.pending) {
                 self.pending.clear();
-                actions.push(PickerAction::Move(-1));
-            } else if self.pending == b"\x1b[B" || self.pending == b"\x1bOB" {
-                self.pending.clear();
-                actions.push(PickerAction::Move(1));
-            } else if self.pending == b"\x1b[5~" {
-                self.pending.clear();
-                actions.push(PickerAction::Page(-1));
-            } else if self.pending == b"\x1b[6~" {
-                self.pending.clear();
-                actions.push(PickerAction::Page(1));
-            } else if self.pending == b"\x1b[H"
-                || self.pending == b"\x1bOH"
-                || self.pending == b"\x1b[1~"
-            {
-                self.pending.clear();
-                actions.push(PickerAction::Home);
-            } else if self.pending == b"\x1b[F"
-                || self.pending == b"\x1bOF"
-                || self.pending == b"\x1b[4~"
-            {
-                self.pending.clear();
-                actions.push(PickerAction::End);
-            } else if self.pending == b"\x1b[C" || self.pending == b"\x1bOC" {
-                self.pending.clear();
-                actions.push(PickerAction::Unfold);
-            } else if self.pending == b"\x1b[D" || self.pending == b"\x1bOD" {
-                self.pending.clear();
-                actions.push(PickerAction::Fold);
+                actions.push(action);
             } else if self.pending.len() > 3 || self.pending.first() != Some(&0x1b) {
                 self.pending.clear();
             }
         }
         actions
+    }
+}
+
+fn plain_key(byte: u8, filter_mode: bool) -> Option<PickerAction> {
+    if filter_mode {
+        return match byte {
+            0x20..=0x7e => Some(PickerAction::Char(byte)),
+            0x7f | 0x08 => Some(PickerAction::Backspace),
+            b'\r' => Some(PickerAction::Select),
+            _ => None,
+        };
+    }
+    match byte {
+        b' ' => Some(PickerAction::Toggle),
+        b'h' => Some(PickerAction::Fold),
+        b'l' => Some(PickerAction::Unfold),
+        b'/' => Some(PickerAction::StartFilter),
+        b'q' => Some(PickerAction::Cancel),
+        b'j' => Some(PickerAction::Move(1)),
+        b'k' => Some(PickerAction::Move(-1)),
+        b'\r' => Some(PickerAction::Select),
+        _ => None,
+    }
+}
+
+fn escape_action(pending: &[u8]) -> Option<PickerAction> {
+    match pending {
+        b"\x1b[A" | b"\x1bOA" => Some(PickerAction::Move(-1)),
+        b"\x1b[B" | b"\x1bOB" => Some(PickerAction::Move(1)),
+        b"\x1b[5~" => Some(PickerAction::Page(-1)),
+        b"\x1b[6~" => Some(PickerAction::Page(1)),
+        b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" => Some(PickerAction::Home),
+        b"\x1b[F" | b"\x1bOF" | b"\x1b[4~" => Some(PickerAction::End),
+        b"\x1b[C" | b"\x1bOC" => Some(PickerAction::Unfold),
+        b"\x1b[D" | b"\x1bOD" => Some(PickerAction::Fold),
+        _ => None,
     }
 }
 

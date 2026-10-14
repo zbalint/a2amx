@@ -177,6 +177,109 @@ pub fn observe_activity(
     Duration::ZERO
 }
 
+fn writer_loop(mut writes: mpsc::Receiver<Option<Vec<u8>>>, mut writer: File) {
+    while let Some(Some(bytes)) = writes.blocking_recv() {
+        if let Err(error) = writer.write_all(&bytes) {
+            tracing::debug!(%error, "PTY writer stopped");
+            break;
+        }
+    }
+}
+
+fn reader_loop(mut reader: File, state: Arc<Shared>, replies: mpsc::Sender<Option<Vec<u8>>>) {
+    let mut bytes = [0; 8192];
+    loop {
+        let count = match reader.read(&mut bytes) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.raw_os_error() == Some(5) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                tracing::warn!(%error, "PTY reader stopped");
+                break;
+            }
+        };
+        let response = {
+            let mut state = state.state.lock().unwrap_or_else(|e| e.into_inner());
+            let response = state.emulator.feed(&bytes[..count]);
+            state.dirty = true;
+            state.last_change = Instant::now();
+            response
+        };
+        if !response.is_empty() && replies.blocking_send(Some(response)).is_err() {
+            tracing::debug!("PTY reply writer closed");
+        }
+        // Rendering and delivery both observe output; wake both, retaining
+        // one permit for a observer registering after this update.
+        state.notify.notify_waiters();
+        state.notify.notify_one();
+    }
+}
+
+struct MonitorArgs {
+    pty: tty::Pty,
+    pid: Pid,
+    drop_requested: Arc<AtomicBool>,
+    child_done: Arc<AtomicBool>,
+    state: Arc<Shared>,
+    stop_writer: mpsc::Sender<Option<Vec<u8>>>,
+    reader_thread: std::thread::JoinHandle<()>,
+}
+
+fn monitor_loop(args: MonitorArgs) {
+    let MonitorArgs {
+        mut pty,
+        pid,
+        drop_requested,
+        child_done,
+        state,
+        stop_writer,
+        reader_thread,
+    } = args;
+    let mut dropping_since = None;
+    let mut kill_sent = false;
+    let status = loop {
+        if let Some(ChildEvent::Exited(Some(status))) = pty.next_child_event() {
+            child_done.store(true, Ordering::Release);
+            break status.into_raw();
+        }
+        if drop_requested.load(Ordering::Acquire) {
+            let since = dropping_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= Duration::from_secs(3) && !kill_sent {
+                kill_sent = true;
+                if let Err(error) = kill_process_group(pid, Signal::KILL) {
+                    if error != rustix::io::Errno::SRCH {
+                        tracing::warn!(%error, "PTY teardown signal failed");
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    if reader_thread.join().is_err() {
+        tracing::error!("PTY reader panicked");
+    }
+    let code = exit_code_from_status(status);
+    state
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .exit_code = Some(code);
+    state.notify.notify_waiters();
+    state.notify.notify_one();
+    // Wake the writer even when the exited session remains in the registry.
+    let _ = stop_writer.blocking_send(None);
+    drop(pty);
+}
+
+fn exit_code_from_status(status: i32) -> i32 {
+    if (status & 0x7f) == 0 {
+        status >> 8
+    } else {
+        128 + (status & 0x7f)
+    }
+}
+
 impl Session {
     pub fn spawn(id: SessionId, spec: SessionSpec) -> anyhow::Result<Self> {
         let Some(program) = spec.argv.first() else {
@@ -200,9 +303,9 @@ impl Session {
             env,
             drain_on_exit: true,
         };
-        let mut pty = tty::new(&options, window_size(spec.size), 0)?;
-        let mut reader = pty.file().try_clone()?;
-        let mut writer = pty.file().try_clone()?;
+        let pty = tty::new(&options, window_size(spec.size), 0)?;
+        let reader = pty.file().try_clone()?;
+        let writer = pty.file().try_clone()?;
         let master = pty.file().try_clone()?;
         let flags = rustix::fs::fcntl_getfl(&reader)?;
         rustix::fs::fcntl_setfl(&reader, flags & !rustix::fs::OFlags::NONBLOCK)?;
@@ -229,46 +332,11 @@ impl Session {
             }),
             notify: Notify::new(),
         });
-        let (input, mut writes) = mpsc::channel::<Option<Vec<u8>>>(256);
-        std::thread::spawn(move || {
-            while let Some(Some(bytes)) = writes.blocking_recv() {
-                if let Err(error) = writer.write_all(&bytes) {
-                    tracing::debug!(%error, "PTY writer stopped");
-                    break;
-                }
-            }
-        });
+        let (input, writes) = mpsc::channel::<Option<Vec<u8>>>(256);
+        std::thread::spawn(move || writer_loop(writes, writer));
         let reader_state = shared.clone();
         let replies = input.clone();
-        let reader_thread = std::thread::spawn(move || {
-            let mut bytes = [0; 8192];
-            loop {
-                let count = match reader.read(&mut bytes) {
-                    Ok(0) => break,
-                    Ok(count) => count,
-                    Err(error) if error.raw_os_error() == Some(5) => break,
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(error) => {
-                        tracing::warn!(%error, "PTY reader stopped");
-                        break;
-                    }
-                };
-                let response = {
-                    let mut state = reader_state.state.lock().unwrap_or_else(|e| e.into_inner());
-                    let response = state.emulator.feed(&bytes[..count]);
-                    state.dirty = true;
-                    state.last_change = Instant::now();
-                    response
-                };
-                if !response.is_empty() && replies.blocking_send(Some(response)).is_err() {
-                    tracing::debug!("PTY reply writer closed");
-                }
-                // Rendering and delivery both observe output; wake both, retaining
-                // one permit for a observer registering after this update.
-                reader_state.notify.notify_waiters();
-                reader_state.notify.notify_one();
-            }
-        });
+        let reader_thread = std::thread::spawn(move || reader_loop(reader, reader_state, replies));
         let drop_requested = Arc::new(AtomicBool::new(false));
         let child_done = Arc::new(AtomicBool::new(false));
         let monitor_drop = drop_requested.clone();
@@ -276,44 +344,15 @@ impl Session {
         let monitor_state = shared.clone();
         let stop_writer = input.clone();
         std::thread::spawn(move || {
-            let mut dropping_since = None;
-            let mut kill_sent = false;
-            let status = loop {
-                if let Some(ChildEvent::Exited(Some(status))) = pty.next_child_event() {
-                    monitor_done.store(true, Ordering::Release);
-                    break status.into_raw();
-                }
-                if monitor_drop.load(Ordering::Acquire) {
-                    let since = dropping_since.get_or_insert_with(Instant::now);
-                    if since.elapsed() >= Duration::from_secs(3) && !kill_sent {
-                        kill_sent = true;
-                        if let Err(error) = kill_process_group(pid, Signal::KILL) {
-                            if error != rustix::io::Errno::SRCH {
-                                tracing::warn!(%error, "PTY teardown signal failed");
-                            }
-                        }
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            };
-            if reader_thread.join().is_err() {
-                tracing::error!("PTY reader panicked");
-            }
-            let code = if status & 0x7f == 0 {
-                status >> 8
-            } else {
-                128 + (status & 0x7f)
-            };
-            monitor_state
-                .state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .exit_code = Some(code);
-            monitor_state.notify.notify_waiters();
-            monitor_state.notify.notify_one();
-            // Wake the writer even when the exited session remains in the registry.
-            let _ = stop_writer.blocking_send(None);
-            drop(pty);
+            monitor_loop(MonitorArgs {
+                pty,
+                pid,
+                drop_requested: monitor_drop,
+                child_done: monitor_done,
+                state: monitor_state,
+                stop_writer,
+                reader_thread,
+            });
         });
         Ok(Self {
             id,
