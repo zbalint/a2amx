@@ -41,7 +41,6 @@ lag the code.
 | I3 | A split escape sequence can hold a session; the paste-then-`CR` gap is one fixed constant; an unreadable PTY can hold the writer gate; message bodies are stored as plaintext | docs |
 | I4 | SonarQube Cloud flags S3776 (cognitive complexity over 30) on command logic. Done: `src/team.rs` (specs 3x, `6672971`) and `src/main.rs` `run_team_up`, `handle_input`, `handle_picker_input` (spec 3y, `9ac581a`); the rescan after a push confirms the scores. Split into helpers, one spec per function group, behavior unchanged | reported |
 | I5 | Same S3776 finding on the large loops and state machines, still open: `src/daemon.rs` at 267 (78), 659 (35), 998 (42), 1652 (88), `src/picker.rs:32` (72) and `src/session.rs:181` (45; the last two are drafted as spec 3z). Riskier to split (timing-sensitive, flaky tests nearby); one spec per daemon function, or accept and tune the Sonar threshold. Sonar scan of `master` before 2026-10-14; lines shift after each refactor | reported |
-| I6 | Flaky test: `tests/attach_cli.rs::picker_switches_sessions_and_exit_status_is_reported` times out waiting for `QUOTA` when two generated session names (spec 3r, ADJECTIVE-NOUN) are long, because the 80-column picker header clips at `QUO`. Measured 3 of 20 failures on `dfafa86` and 6 of 20 with spec 3y, same symptom. Fix the test, not the picker: give the sessions explicit short names | manual |
 | I7 | Flaky test: `tests/attach_cli.rs::attach_does_not_capture_session_already_in_drag_mode` fails now and then with an unexpected `ESC[?1000h` in the attached output (line 254); passes 6 of 6 when run alone. Likely a race: the attach client enables wheel capture before it learns the session is already in drag mode | manual |
 
 ## Ideas and possible features
@@ -92,3 +91,4 @@ lag the code.
 | C23 | Build version stamped into the binary; the daemon reports it in daemon status | spec 3s |
 | C24 | Session picker scrolls and takes page/home/end keys | spec 3t |
 | C25 | Session picker groups sessions into foldable team sections and filters | spec 3u |
+| I6 | Flaky `picker_switches_sessions_and_exit_status_is_reported`: the 80-column header clipped `QUOTA` when two generated names were long (3 of 20 failures before, 6 of 20 during spec 3y) | test now names its sessions `aa` and `bb`; 25 of 25 passes (test-only change, 2026-10-14) |

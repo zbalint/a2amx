@@ -308,6 +308,8 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
         &[
             "new",
             "--detach",
+            "--name",
+            "aa",
             "--",
             "sh",
             "-c",
@@ -320,6 +322,8 @@ async fn picker_switches_sessions_and_exit_status_is_reported() -> anyhow::Resul
         &[
             "new",
             "--detach",
+            "--name",
+            "bb",
             "--",
             "sh",
             "-c",
