@@ -2080,6 +2080,95 @@ fn idle_watcher_skips_heartbeat_for_ready_peer() {
     }
 }
 
+#[tokio::test]
+async fn idle_watcher_receives_heartbeat_for_queued_idle_peer() {
+    use a2amx::client::Client;
+    use a2amx::harness::{Deliver, Harness};
+    use a2amx::wire::{Request, Response};
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let peer = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "dev",
+            "--harness",
+            "generic",
+            "--deliver",
+            "hold",
+            "--",
+            "sh",
+            "-c",
+            "printf '\\033[?2004h'; sleep 60",
+        ],
+    );
+    assert!(peer.status.success(), "stderr: {}", stderr(&peer));
+    std::thread::sleep(Duration::from_millis(10_500));
+    let mut admin = Client::connect(&home).await.unwrap();
+    let (_, token, address) = common::new_agent(
+        &mut admin,
+        &home,
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let mut sender = Client::connect_addr(address, &token).await.unwrap();
+    assert!(matches!(
+        sender
+            .request(Request::SendMessage {
+                to: "dev".into(),
+                subject: "Queued work".into(),
+                message: "Review this when ready.".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Accepted { .. }
+    ));
+    let queued = run(
+        &home,
+        &["messages", "--session", "dev", "--state", "pending"],
+    );
+    assert!(queued.status.success(), "stderr: {}", stderr(&queued));
+    assert!(
+        stdout(&queued).contains("Queued work"),
+        "{}",
+        stdout(&queued)
+    );
+    let watcher = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "arch",
+            "--harness",
+            "generic",
+            "--watch",
+            "dev",
+            "--heartbeat",
+            "2s",
+            "--",
+            "sh",
+            "-c",
+            "printf '\\033[?2004h'; sleep 60",
+        ],
+    );
+    assert!(watcher.status.success(), "stderr: {}", stderr(&watcher));
+    let messages = screen_contains_until(&home, &["messages", "--session", "arch"], "heartbeat");
+    assert!(messages.status.success(), "stderr: {}", stderr(&messages));
+    assert!(
+        stdout(&messages).contains("a2amx-daemon@"),
+        "{}",
+        stdout(&messages)
+    );
+}
+
 #[test]
 fn held_delivery_keeps_at_most_one_heartbeat_open() {
     let dir = tempfile::tempdir().unwrap();

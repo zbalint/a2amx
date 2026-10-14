@@ -94,6 +94,51 @@ struct HeartbeatPeer {
     queued: u32,
 }
 
+struct ObservedPeer {
+    peer: Arc<Session>,
+    idle: bool,
+    busy_for: Option<Duration>,
+    unchanged_for: Duration,
+    hold: Option<String>,
+}
+
+fn observe_peers(
+    live: Vec<Arc<Session>>,
+    busy_since: &mut HashMap<String, Instant>,
+    now: Instant,
+) -> Vec<ObservedPeer> {
+    let mut observed = Vec::with_capacity(live.len());
+    for peer in live {
+        let activity = session_activity(&peer);
+        let (idle, unchanged_for) = {
+            let state = peer.lock();
+            (
+                !activity.is_some_and(|value| value != Activity::Idle),
+                now.saturating_duration_since(state.last_change),
+            )
+        };
+        let hold = AnyChannel::for_session(peer.clone())
+            .hold_reason()
+            .map(str::to_owned);
+        let id = peer.id().0.clone();
+        let busy_for = if activity.is_some_and(|value| value != Activity::Idle) {
+            let since = *busy_since.entry(id).or_insert(now);
+            Some(now.saturating_duration_since(since))
+        } else {
+            busy_since.remove(&id);
+            None
+        };
+        observed.push(ObservedPeer {
+            peer,
+            idle,
+            busy_for,
+            unchanged_for,
+            hold,
+        });
+    }
+    observed
+}
+
 fn heartbeat_body(interval: Duration, peers: &[HeartbeatPeer]) -> String {
     let mut body = format!(
         "Heartbeat: you have been idle for {}. Watched peers:\n",
@@ -677,155 +722,166 @@ impl Runtime {
                 return;
             }
             let now = Instant::now();
-            let watched = session.watch().to_vec();
-            let live_peers = {
-                let sessions = self
-                    .sessions
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                watched
-                    .iter()
-                    .filter_map(|name| {
-                        sessions
-                            .values()
-                            .find(|peer| {
-                                peer.exit_code().is_none()
-                                    && peer.name() == Some(name.as_str())
-                                    && messaging::visible(session.party(), peer.party())
-                            })
-                            .cloned()
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let mut observed = Vec::with_capacity(live_peers.len());
-            for peer in live_peers {
-                let activity = session_activity(&peer);
-                let (idle, unchanged_for) = {
-                    let state = peer.lock();
-                    (
-                        !activity.is_some_and(|value| value != Activity::Idle),
-                        now.saturating_duration_since(state.last_change),
-                    )
-                };
-                let hold = AnyChannel::for_session(peer.clone())
-                    .hold_reason()
-                    .map(str::to_owned);
-                let id = peer.id().0.clone();
-                let busy_for = if activity.is_some_and(|value| value != Activity::Idle) {
-                    let since = *busy_since.entry(id).or_insert(now);
-                    Some(now.saturating_duration_since(since))
-                } else {
-                    busy_since.remove(&id);
-                    None
-                };
-                observed.push((peer, idle, busy_for, unchanged_for, hold));
-            }
-            let watcher_ready = {
-                let state = session.lock();
-                harness::ready(
-                    session.harness(),
-                    &state.emulator.screen(),
-                    state.emulator.is_scrolled(),
-                )
-            };
-            if !watcher_ready
-                || session.resetting()
-                || AnyChannel::for_session(session.clone())
-                    .hold_reason()
-                    .is_some()
-                || now.saturating_duration_since(session.last_change()) < interval
-            {
+            let live_peers = self.live_watched_peers(&session);
+            let observed = observe_peers(live_peers, &mut busy_since, now);
+            if !self.watcher_may_receive(&session, interval, now) {
                 continue;
             }
-            let open = match self
-                .store
-                .open_system_heartbeat(&self.boot, &session.id().0)
-                .await
-            {
-                Ok(open) => open,
-                Err(error) => {
-                    tracing::error!(%error, recipient = %session.id().0, "heartbeat state lookup failed");
-                    continue;
-                }
-            };
-            if open {
+            let Some(peers) = self.heartbeat_digest(&session, observed).await else {
                 continue;
-            }
-            let counts = match self.store.open_counts(&self.boot).await {
-                Ok(counts) => counts,
-                Err(error) => {
-                    tracing::error!(%error, "heartbeat queue lookup failed");
-                    continue;
-                }
             };
-            let mut digest_peers = Vec::with_capacity(observed.len());
-            let mut has_busy_peer = false;
-            for (peer, idle, busy_for, unchanged_for, hold) in observed {
-                let queued = counts.get(&peer.id().0).copied().unwrap_or_default();
-                if !idle || queued > 0 {
-                    has_busy_peer = true;
-                }
-                let last_message_age =
-                    match self.store.last_message_age(&self.boot, &peer.id().0).await {
-                        Ok(age) => age.map(Duration::from_secs),
-                        Err(error) => {
-                            tracing::error!(
-                                %error,
-                                peer = %peer.id().0,
-                                "heartbeat message age lookup failed"
-                            );
-                            None
-                        }
-                    };
-                digest_peers.push(HeartbeatPeer {
-                    name: peer.name().unwrap_or(&peer.id().0).to_owned(),
-                    address: messaging::address(peer.name(), &peer.id().0, &self.host_name),
-                    busy_for,
-                    unchanged_for: Some(unchanged_for),
-                    hold,
-                    last_message_age,
-                    queued,
-                });
-            }
-            if !has_busy_peer || digest_peers.is_empty() {
-                continue;
-            }
             if session.exit_code().is_some() {
                 return;
             }
-            let body = heartbeat_body(interval, &digest_peers);
-            let message = NewMessage {
-                boot: self.boot.clone(),
-                sender_session: "daemon".into(),
-                sender_address: messaging::address(
-                    Some(messaging::SYSTEM_SENDER),
-                    messaging::SYSTEM_SENDER,
-                    &self.host_name,
-                ),
-                recipient_session: session.id().0.clone(),
-                recipient_address: messaging::address(
-                    session.name(),
-                    &session.id().0,
-                    &self.host_name,
-                ),
-                subject: messaging::HEARTBEAT_SUBJECT.into(),
-                body,
-            };
-            match self.store.insert_message(message).await {
-                Ok(_) => session.message_notify().notify_one(),
-                Err(InsertError::QueueFull) => {
-                    tracing::warn!(
-                        recipient = %session.id().0,
-                        "heartbeat message queue is full"
-                    );
-                }
-                Err(InsertError::Internal(error)) => {
+            self.send_heartbeat(&session, interval, peers).await;
+        }
+    }
+
+    fn live_watched_peers(&self, session: &Arc<Session>) -> Vec<Arc<Session>> {
+        let watched = session.watch().to_vec();
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        watched
+            .iter()
+            .filter_map(|name| {
+                sessions
+                    .values()
+                    .find(|peer| {
+                        peer.exit_code().is_none()
+                            && peer.name() == Some(name.as_str())
+                            && messaging::visible(session.party(), peer.party())
+                    })
+                    .cloned()
+            })
+            .collect()
+    }
+
+    fn watcher_may_receive(
+        &self,
+        session: &Arc<Session>,
+        interval: Duration,
+        now: Instant,
+    ) -> bool {
+        let watcher_ready = {
+            let state = session.lock();
+            harness::ready(
+                session.harness(),
+                &state.emulator.screen(),
+                state.emulator.is_scrolled(),
+            )
+        };
+        watcher_ready
+            && !session.resetting()
+            && AnyChannel::for_session(session.clone())
+                .hold_reason()
+                .is_none()
+            && now.saturating_duration_since(session.last_change()) >= interval
+    }
+
+    async fn heartbeat_digest(
+        &self,
+        session: &Arc<Session>,
+        observed: Vec<ObservedPeer>,
+    ) -> Option<Vec<HeartbeatPeer>> {
+        let open = match self
+            .store
+            .open_system_heartbeat(&self.boot, &session.id().0)
+            .await
+        {
+            Ok(open) => open,
+            Err(error) => {
+                tracing::error!(%error, recipient = %session.id().0, "heartbeat state lookup failed");
+                return None;
+            }
+        };
+        if open {
+            return None;
+        }
+        let counts = match self.store.open_counts(&self.boot).await {
+            Ok(counts) => counts,
+            Err(error) => {
+                tracing::error!(%error, "heartbeat queue lookup failed");
+                return None;
+            }
+        };
+        let mut digest_peers = Vec::with_capacity(observed.len());
+        let mut has_busy_peer = false;
+        for ObservedPeer {
+            peer,
+            idle,
+            busy_for,
+            unchanged_for,
+            hold,
+        } in observed
+        {
+            let queued = counts.get(&peer.id().0).copied().unwrap_or_default();
+            if !idle || queued > 0 {
+                has_busy_peer = true;
+            }
+            let last_message_age = match self.store.last_message_age(&self.boot, &peer.id().0).await
+            {
+                Ok(age) => age.map(Duration::from_secs),
+                Err(error) => {
                     tracing::error!(
                         %error,
-                        recipient = %session.id().0,
-                        "heartbeat message acceptance failed"
+                        peer = %peer.id().0,
+                        "heartbeat message age lookup failed"
                     );
+                    None
                 }
+            };
+            digest_peers.push(HeartbeatPeer {
+                name: peer.name().unwrap_or(&peer.id().0).to_owned(),
+                address: messaging::address(peer.name(), &peer.id().0, &self.host_name),
+                busy_for,
+                unchanged_for: Some(unchanged_for),
+                hold,
+                last_message_age,
+                queued,
+            });
+        }
+        if !has_busy_peer || digest_peers.is_empty() {
+            return None;
+        }
+        Some(digest_peers)
+    }
+
+    async fn send_heartbeat(
+        &self,
+        session: &Arc<Session>,
+        interval: Duration,
+        peers: Vec<HeartbeatPeer>,
+    ) {
+        let body = heartbeat_body(interval, &peers);
+        let message = NewMessage {
+            boot: self.boot.clone(),
+            sender_session: "daemon".into(),
+            sender_address: messaging::address(
+                Some(messaging::SYSTEM_SENDER),
+                messaging::SYSTEM_SENDER,
+                &self.host_name,
+            ),
+            recipient_session: session.id().0.clone(),
+            recipient_address: messaging::address(session.name(), &session.id().0, &self.host_name),
+            subject: messaging::HEARTBEAT_SUBJECT.into(),
+            body,
+        };
+        match self.store.insert_message(message).await {
+            Ok(_) => session.message_notify().notify_one(),
+            Err(InsertError::QueueFull) => {
+                tracing::warn!(
+                    recipient = %session.id().0,
+                    "heartbeat message queue is full"
+                );
+            }
+            Err(InsertError::Internal(error)) => {
+                tracing::error!(
+                    %error,
+                    recipient = %session.id().0,
+                    "heartbeat message acceptance failed"
+                );
             }
         }
     }
