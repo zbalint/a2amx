@@ -2,13 +2,12 @@
 
 ## 0. Status
 
-**DRAFT** (2026-10-14; consultant-reviewed and amended, not yet LOCKED: at lock, fill in the baseline commit, re-read the line anchors and re-run the pre-lock gate against the then-current tree). Architect-directed, backlog I5 part 5, context
+**LOCKED** (2026-10-14). Architect-directed, backlog I5 part 5, context
 `a2amx-sonar-s3776-2026-10-14`. Implementation goes to `a2amx-developer` only.
 
-**Sequencing:** assigned only after spec 3ac (same file) is accepted and committed; the developer re-reads where `serve` starts at the
-new baseline (line 1652 at `0ce2ee4`).
+**Sequencing:** spec 3ac (same file) is accepted and committed, so `src/daemon.rs` has one writer. At the baseline below `serve` starts at line 1742; the developer re-reads the anchors if the tree moved.
 
-**Baseline:** develop at `<fill at commit>`; the developer records `cargo test --test daemon --test daemon_cli --test delivery --test bridge --test broker` counts before the first edit.
+**Baseline:** develop at `7ee110b` (the locking commit follows it and changes only this file); at that commit `cargo test --test daemon --test daemon_cli --test delivery --test bridge --test broker` passes 33, 59, 24, 17 and 29 tests (162 of 162). The developer records `cargo test --test daemon --test daemon_cli --test delivery --test bridge --test broker` counts before the first edit.
 **Location and branch:** main checkout `/home/zbalint/workspace/a2amx`, branch `develop`.
 **Public test seams:** the daemon's TCP control protocol through real daemons (`tests/daemon.rs`, `tests/daemon_cli.rs`,
 `tests/delivery.rs`, `tests/bridge.rs`, `tests/broker.rs`; `serve` is also exercised by `refs_and_list.rs`, `attach_cli.rs`, `claude_channel.rs`, `teams.rs`, which the full suite runs). New helpers are private to `src/daemon.rs`.
