@@ -7,7 +7,7 @@ use std::sync::mpsc as std_mpsc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use clap::Parser;
 use tokio::sync::mpsc;
 
@@ -610,11 +610,103 @@ async fn create_session(
     }
 }
 
-async fn read_team(file: PathBuf) -> anyhow::Result<Vec<TeamSession>> {
+#[derive(Clone)]
+struct TeamSource {
+    path: PathBuf,
+    dir: PathBuf,
+    default_team: Option<String>,
+}
+
+async fn resolve_team_file(home: &Path, file: Option<PathBuf>) -> anyhow::Result<TeamSource> {
+    let invoking_cwd = std::env::current_dir()?;
+    if let Some(file) = file {
+        let path = invoking_cwd.join(file);
+        let dir = path.parent().unwrap_or(&invoking_cwd).to_owned();
+        return Ok(TeamSource {
+            path,
+            dir,
+            default_team: None,
+        });
+    }
+    let state_home = home.to_owned();
+    let user_home = std::env::var_os("HOME").map(PathBuf::from);
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<TeamSource> {
+        let cwd = std::fs::canonicalize(&invoking_cwd).with_context(|| {
+            format!(
+                "cannot canonicalize invoking directory {}",
+                invoking_cwd.display()
+            )
+        })?;
+        let state_home = std::fs::canonicalize(&state_home).unwrap_or(state_home);
+        let user_home = user_home.map(|path| {
+            if path.is_absolute() {
+                std::fs::canonicalize(&path).unwrap_or(path)
+            } else {
+                path
+            }
+        });
+        let local = invoking_cwd.join("a2amx.toml");
+        match std::fs::metadata(&local) {
+            Ok(_) => {
+                return Ok(TeamSource {
+                    path: local,
+                    dir: invoking_cwd,
+                    default_team: None,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(anyhow!(
+                    "cannot inspect team file {}: {error}",
+                    local.display()
+                ));
+            }
+        }
+        let global = state_home.join("team.toml");
+        match std::fs::metadata(&global) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                bail!(
+                    "no a2amx.toml in {} and no global team file at {}",
+                    cwd.display(),
+                    global.display()
+                );
+            }
+            Err(error) => {
+                return Err(anyhow!(
+                    "cannot inspect global team file {}: {error}",
+                    global.display()
+                ));
+            }
+        }
+        team::check_global_allowed(&cwd, user_home.as_deref(), &state_home)?;
+        let name = team::team_name_for(&cwd)?;
+        Ok(TeamSource {
+            path: global,
+            dir: cwd,
+            default_team: Some(name),
+        })
+    })
+    .await??;
+    if let Some(name) = &result.default_team {
+        write_stderr(
+            format!(
+                "using global team file {} as team {name}\n",
+                result.path.display()
+            )
+            .into_bytes(),
+        )
+        .await?;
+    }
+    Ok(result)
+}
+
+async fn read_team(source: TeamSource) -> anyhow::Result<Vec<TeamSession>> {
     tokio::task::spawn_blocking(move || {
-        let text = std::fs::read_to_string(&file)
-            .with_context(|| format!("cannot read team file {}", file.display()))?;
-        team::parse(&text).with_context(|| format!("team file {}", file.display()))
+        let text = std::fs::read_to_string(&source.path)
+            .with_context(|| format!("cannot read team file {}", source.path.display()))?;
+        team::parse_with(&text, source.default_team.as_deref())
+            .with_context(|| format!("team file {}", source.path.display()))
     })
     .await?
 }
@@ -673,9 +765,8 @@ async fn run_team_status(
     home: PathBuf,
     file: Option<PathBuf>,
 ) -> anyhow::Result<std::process::ExitCode> {
-    let cwd = std::env::current_dir()?;
-    let file = cwd.join(file.unwrap_or_else(|| PathBuf::from("a2amx.toml")));
-    let wanted = read_team(file).await?;
+    let source = resolve_team_file(&home, file).await?;
+    let wanted = read_team(source).await?;
     let mut client = Client::connect(&home).await?;
     let existing = request_sessions(&mut client).await?;
     let entries = team::inspect(&wanted, &existing);
@@ -805,9 +896,9 @@ async fn run_team_up(
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let (wanted, file_dir) = if items.is_empty() {
-        let file = cwd.join(file.unwrap_or_else(|| PathBuf::from("a2amx.toml")));
-        let file_dir = file.parent().unwrap_or(&cwd).to_owned();
-        (read_team(file).await?, file_dir)
+        let source = resolve_team_file(&home, file).await?;
+        let file_dir = source.dir.clone();
+        (read_team(source).await?, file_dir)
     } else {
         (team::flag_sessions(&items)?, cwd.clone())
     };
@@ -952,9 +1043,8 @@ async fn run_team_down(
 ) -> anyhow::Result<()> {
     let explicit = !names.is_empty();
     let names = if names.is_empty() {
-        let file =
-            std::env::current_dir()?.join(file.unwrap_or_else(|| PathBuf::from("a2amx.toml")));
-        read_team(file)
+        let source = resolve_team_file(&home, file).await?;
+        read_team(source)
             .await?
             .into_iter()
             .map(|session| session.name)
@@ -1020,9 +1110,8 @@ async fn run_team_reset(
     let names = if explicit {
         names
     } else {
-        let file =
-            std::env::current_dir()?.join(file.unwrap_or_else(|| PathBuf::from("a2amx.toml")));
-        read_team(file)
+        let source = resolve_team_file(&home, file).await?;
+        read_team(source)
             .await?
             .into_iter()
             .map(|session| session.name)

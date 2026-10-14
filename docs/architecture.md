@@ -328,6 +328,14 @@ and spawning are deliberately non-atomic: a concurrent name claim fails at spawn
 earlier starts intact. Launches reuse `new`'s harness wiring; down targets only the requested names.
 A session may omit `name` when it has a valid `role`; parsing uses that role as its name, while an explicit name wins.
 
+When no `--file` is supplied, these commands resolve `a2amx.toml` in the
+invoking directory first, then `<state home>/team.toml`. The global file derives
+its team name from the canonical invoking directory and resolves relative
+session `cwd` values there; it must not contain a `team` key. Before parsing,
+the client rejects roots, home and user-data directories, hidden home
+subdirectories, daemon/system trees, and top-level or Windows container/home
+directories. A local file or explicit `--file` bypasses this fallback and guard.
+
 `team status` is a read-only client-side inspection of the wanted file against one
 daemon `List` response; it reports missing, running, exited, and team-setting conflict
 states in file order and returns status 1 only when `team up` would refuse. `team up

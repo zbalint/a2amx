@@ -173,7 +173,215 @@ pub fn inspect(wanted: &[TeamSession], existing: &[SessionSummary]) -> Vec<Entry
         .collect()
 }
 
+/// Derive the team name used by a global team file from its invoking directory.
+pub fn team_name_for(cwd: &std::path::Path) -> anyhow::Result<String> {
+    let component = cwd
+        .file_name()
+        .ok_or_else(|| {
+            anyhow::anyhow!("cannot derive a team name from directory {}", cwd.display())
+        })?
+        .to_string_lossy();
+    let mut name = String::new();
+    let mut separator = false;
+    for byte in component.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            if separator && !name.is_empty() {
+                name.push('-');
+            }
+            name.push(byte.to_ascii_lowercase() as char);
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
+    if name.len() > 40 {
+        name.truncate(40);
+        while name.ends_with('-') {
+            name.pop();
+        }
+    }
+    validate_name(&name).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot derive a valid team name {name:?} from directory {}: {error}; create an a2amx.toml here, or pass --file",
+            cwd.display()
+        )
+    })?;
+    Ok(name)
+}
+
+/// Reject global team files in directories that are not project-like.
+pub fn check_global_allowed(
+    cwd: &std::path::Path,
+    user_home: Option<&std::path::Path>,
+    state_home: &std::path::Path,
+) -> anyhow::Result<()> {
+    fn is_direct_child(path: &std::path::Path, parent: &std::path::Path) -> bool {
+        path.parent() == Some(parent)
+    }
+    let reason = if cwd.parent().is_none() {
+        Some("the filesystem root")
+    } else if let Some(home) = user_home.filter(|home| home.is_absolute()) {
+        if cwd == home || home.starts_with(cwd) {
+            Some("your home directory")
+        } else if let Ok(below) = cwd.strip_prefix(home) {
+            let first = below
+                .components()
+                .next()
+                .map(|component| component.as_os_str());
+            if first.is_some_and(|component| component.to_string_lossy().starts_with('.')) {
+                Some("a hidden directory under your home directory")
+            } else if [
+                "Desktop",
+                "Documents",
+                "Downloads",
+                "Music",
+                "Pictures",
+                "Videos",
+                "Public",
+                "Templates",
+                "Library",
+                "Applications",
+            ]
+            .iter()
+            .any(|name| below == std::path::Path::new(name))
+            {
+                Some("a user-data folder")
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let reason = reason.or_else(|| {
+        let components: Vec<_> = cwd.components().collect();
+        let mnt = components.get(1).is_some_and(|component| {
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("mnt")
+        });
+        let wsl_system = mnt
+            && components.get(2).is_some_and(|component| {
+                let name = component.as_os_str().to_string_lossy();
+                name.eq_ignore_ascii_case("wsl") || name.eq_ignore_ascii_case("wslg")
+            });
+        let system = [
+            state_home,
+            std::path::Path::new("/bin"),
+            std::path::Path::new("/boot"),
+            std::path::Path::new("/dev"),
+            std::path::Path::new("/etc"),
+            std::path::Path::new("/lib"),
+            std::path::Path::new("/lib32"),
+            std::path::Path::new("/lib64"),
+            std::path::Path::new("/libx32"),
+            std::path::Path::new("/proc"),
+            std::path::Path::new("/run"),
+            std::path::Path::new("/sbin"),
+            std::path::Path::new("/sys"),
+            std::path::Path::new("/usr"),
+            std::path::Path::new("/snap"),
+            std::path::Path::new("/nix"),
+            std::path::Path::new("/lost+found"),
+            std::path::Path::new("/System"),
+            std::path::Path::new("/Library"),
+            std::path::Path::new("/Applications"),
+            std::path::Path::new("/private/etc"),
+            std::path::Path::new("/var/lib"),
+            std::path::Path::new("/var/log"),
+            std::path::Path::new("/var/cache"),
+            std::path::Path::new("/var/spool"),
+            std::path::Path::new("/var/mail"),
+            std::path::Path::new("/mnt/wsl"),
+            std::path::Path::new("/mnt/wslg"),
+        ];
+        if wsl_system || system.iter().any(|prefix| cwd.starts_with(prefix)) {
+            return Some("the daemon state directory or a system directory");
+        }
+        if components.len() >= 3 && mnt && components[2].as_os_str().to_string_lossy().len() == 1 {
+            let drive = components[2].as_os_str().to_string_lossy();
+            if drive.as_bytes()[0].is_ascii_alphabetic() {
+                let windows = [
+                    "Windows",
+                    "Program Files",
+                    "Program Files (x86)",
+                    "ProgramData",
+                ];
+                if components.len() >= 4
+                    && windows.iter().any(|name| {
+                        components[3]
+                            .as_os_str()
+                            .to_string_lossy()
+                            .eq_ignore_ascii_case(name)
+                    })
+                {
+                    return Some("the daemon state directory or a system directory");
+                }
+            }
+        }
+        if [
+            "/home",
+            "/Users",
+            "/root",
+            "/tmp",
+            "/var",
+            "/opt",
+            "/srv",
+            "/mnt",
+            "/media",
+            "/Volumes",
+            "/private",
+            "/private/tmp",
+            "/private/var",
+        ]
+        .iter()
+        .any(|prefix| cwd == std::path::Path::new(prefix))
+        {
+            return Some("a top-level container directory");
+        }
+        if is_direct_child(cwd, std::path::Path::new("/home"))
+            || is_direct_child(cwd, std::path::Path::new("/Users"))
+        {
+            return Some("another user's home directory");
+        }
+        if components.len() == 3
+            && mnt
+            && components[2].as_os_str().to_string_lossy().len() == 1
+            && components[2].as_os_str().to_string_lossy().as_bytes()[0].is_ascii_alphabetic()
+        {
+            return Some("a top-level container directory");
+        }
+        if components.len() >= 4
+            && mnt
+            && components[2].as_os_str().to_string_lossy().len() == 1
+            && components[2].as_os_str().to_string_lossy().as_bytes()[0].is_ascii_alphabetic()
+            && components[3]
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("Users")
+            && (components.len() == 4 || components.len() == 5)
+        {
+            return Some("a Windows home directory");
+        }
+        None
+    });
+    if let Some(reason) = reason {
+        bail!(
+            "refusing the global team file in {}: {reason}; create an a2amx.toml here, or pass --file, to start a team in this directory",
+            cwd.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
+    parse_with(text, None)
+}
+
+pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<TeamSession>> {
     let file: TeamFile = toml::from_str(text).context("invalid team file")?;
     let TeamFile {
         team,
@@ -182,6 +390,10 @@ pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
         prefix,
         session,
     } = file;
+    if team.is_some() && default_team.is_some() {
+        bail!("the global team file must not set team; the team is named after the directory");
+    }
+    let team = team.or_else(|| default_team.map(str::to_owned));
     let allow_given = allow.is_some();
     let allow = allow.unwrap_or_default();
     if prefix.is_some() {

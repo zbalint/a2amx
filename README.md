@@ -192,7 +192,21 @@ timeout; one reset runs at a time. Session-token callers need the target's
 
 ### Teams
 
-`a2amx team up` reads `a2amx.toml` in the current directory by default:
+`a2amx team status`, `team up` (file form), `team down`, and `team reset` use
+`a2amx.toml` in the invoking directory when it exists. Otherwise they use
+`<state home>/team.toml` as a global fallback. A global file gets its team name
+from the invoking directory: the final directory component is lowercased,
+non-alphanumeric runs become `-`, and the result is limited to 40 bytes. A
+global file must not set `team`; it may set `private` and `allow`, which apply
+to the derived team. Relative session `cwd` values (including `cwd = "."`) are
+resolved against the invoking directory for a global file. The fallback refuses
+the filesystem root, home directories, hidden or user-data directories under
+home, the daemon state and system trees, and top-level/container or Windows
+home directories. A local `a2amx.toml` or explicit `--file` always overrides
+the fallback and the guard. Two project directories with the same final
+component therefore share a derived team name and its sessions; this is a
+known limitation.
+A team file looks like:
 
 ```toml
 team = "myproject"
