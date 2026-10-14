@@ -2,3 +2,5 @@
 *.swp
 .DS_Store
 /a2amx.toml
+/lcov.info
+*.profraw
