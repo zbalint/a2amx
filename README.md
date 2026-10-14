@@ -1,7 +1,7 @@
 # A2AMX
 
-[![Quality gate status (master)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=master&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=master)
-[![Quality gate status (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
+`master`: [![Quality gate status (master)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=master&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=master)
+&nbsp;&nbsp;`develop`: [![Quality gate status (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
 
 **Agent-to-Agent Message eXchange**
 
@@ -392,6 +392,12 @@ conversations, and local memory exports out of files, issues, commits, and pull
 requests. Keep runtime databases and logs outside the checkout; review any proposed
 diagnostic attachment before publishing it. Ignore rules are not a substitute for
 reviewing staged content.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report issues and build the project, and
+[SECURITY.md](SECURITY.md) for how to report a vulnerability. Changes are listed in the
+[changelog](CHANGELOG.md).
 
 ## License
 
