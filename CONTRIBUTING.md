@@ -8,10 +8,11 @@ For vulnerabilities, use the private route in [SECURITY.md](SECURITY.md) instead
 
 ## Pull requests
 
-Pull requests are not accepted at the moment. The project is developed through a
-spec-first workflow in which agents implement, test, and review locked specifications,
-and an outside change does not fit it yet. This may change; an issue is the place to
-propose something.
+Pull requests from outside contributors, people or agents, are welcome. The project's own
+team commits straight to `develop` through a spec-first workflow in which agents implement,
+test, and review locked specifications, so there is no pull request process of its own yet.
+A pull request may wait for a while before it is reviewed. For anything larger than a small
+fix, please open an issue first so the change can be agreed before you write it.
 
 ## Building and testing
 
