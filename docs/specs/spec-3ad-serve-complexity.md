@@ -65,10 +65,9 @@ store-Unknown path (`attach_cli.rs`, `a2amx cancel m_99`).
 
 Not asserted anywhere, to add in `tests/daemon.rs` over a real daemon connection, each passing on the unchanged code, with the full message: `already authenticated`
 (an admin token sending Hello again); `authentication required; check admin.token`; `session has exited` (and that the connection then closes; also the case where
-the session is gone from the registry after Kill); `attachment dimensions must be nonzero` (Attach with zero cols or rows); `sender session is unavailable`
-(ListAgents with a session token whose session is gone); `unknown message state` (ListMessages with a bad state filter); `message {id} is {state} and cannot be
+the session is gone from the registry after Kill); `attachment dimensions must be nonzero` (Attach with zero cols or rows); `unknown message state` (ListMessages with a bad state filter); `message {id} is {state} and cannot be
 cancelled`; `unknown message {id}` for an id `parse_message_id` rejects (for example `abc`); `unknown session {id}` for Screen and for Attach. The `bridge session
-disappeared` race has no cheap test; it relies on reading the diff, which the report must say.
+disappeared` race and the `sender session is unavailable` race (Amendment 1) have no cheap test; they rely on reading the diff, which the report must say.
 
 Order pairs, asserting the first message: a session token sending unparsable bytes gets `invalid control request`, not `not permitted for a session token` (the parse
 precedes the permission check); an exited session's token gets `session has exited` before any parse (a valid or invalid body does not matter). Expected values are
@@ -92,3 +91,14 @@ git status --short   # only src/daemon.rs and, if added, tests/daemon.rs
 Run the full suite twice and report both counts. Known flakes: `tests/attach_cli.rs::mouse_wheel_scrolls_three_lines_and_q_returns_to_live`
 and `attach_does_not_capture_session_already_in_drag_mode` (backlog I7): rerun once, record as pre-existing. Final proof of the
 complexity fix is the Sonar rescan after the owner pushes.
+
+## Amendment 1 (2026-10-14): `sender session is unavailable` is race-only
+
+The developer reported BLOCKED (m_1699): section 4 required a test for `sender session is unavailable` from `ListAgents` with a session token whose
+session is gone, passing on the unchanged code. Verified: the loop's exited-session check (`serve`, line 1765 at `7ee110b`) answers `session has exited` and
+shuts the connection down before any request is parsed, and `authenticate` (line 294) refuses new connections for gone or exited sessions, so the
+`ListAgents` branch is reachable only when the session disappears between that check and the `sessions` lock. A deterministic public-seam test cannot reach it.
+
+Decision: the `sender session is unavailable` test is removed from the section 4 list and the message joins the `bridge session disappeared` race as diff-review-only;
+the report must say so. The `session has exited` tests (including the gone-from-registry-after-Kill case) stay and cover the precheck. Nothing else in the spec changes; scope, section 3 and acceptance
+are unaffected. Pre-lock gate re-run on this amendment: the old wording of the removed list entry no longer appears in the spec outside this amendment and the race sentence.
