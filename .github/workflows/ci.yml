@@ -23,12 +23,50 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Check on the declared rust-version
         run: |
           msrv="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)"
           test -n "$msrv"
           rustup toolchain install "$msrv" --profile minimal
           cargo "+$msrv" check --locked --all-targets
+  # The same fast checks as scripts/prepush-fast.sh: secrets in history, dependency policy
+  # (deny.toml), and workflow lint and audit. Versions are pinned; bump them on purpose.
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      ACTIONLINT_VERSION: 1.7.12
+      CARGO_DENY_VERSION: 0.20.2
+      ZIZMOR_VERSION: 1.30.1
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks and actionlint
+        run: |
+          bin="$HOME/.local/bin"
+          mkdir -p "$bin" "$RUNNER_TEMP/tools"
+          cd "$RUNNER_TEMP/tools"
+          gl="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -fsSLO "$gl/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLO "$gl/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep "linux_x64.tar.gz" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          tar xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -C "$bin" gitleaks
+          al="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          curl -fsSLO "$al/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO "$al/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          grep "linux_amd64.tar.gz" "actionlint_${ACTIONLINT_VERSION}_checksums.txt" | sha256sum -c -
+          tar xzf "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -C "$bin" actionlint
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: Install zizmor
+        run: pipx install "zizmor==${ZIZMOR_VERSION}"
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab # v2.7.5
+      - run: cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"
+      - run: scripts/prepush-fast.sh
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -37,6 +75,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       # Reads the pinned channel and components from rust-toolchain.toml.
       - run: rustup toolchain install
       - run: rustup component add llvm-tools-preview
