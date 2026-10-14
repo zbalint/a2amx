@@ -39,11 +39,10 @@ lag the code.
 | ID | Item | Evidence |
 | --- | --- | --- |
 | I3 | A split escape sequence can hold a session; the paste-then-`CR` gap is one fixed constant; an unreadable PTY can hold the writer gate; message bodies are stored as plaintext | docs |
-| I4 | SonarQube Cloud flags S3776 (cognitive complexity over 30) on command logic. Done: `src/team.rs` (specs 3x, `6672971`) and `src/main.rs` `run_team_up`, `handle_input`, `handle_picker_input` (spec 3y, `9ac581a`); the rescan after a push confirms the scores. Split into helpers, one spec per function group, behavior unchanged | reported |
-| I5 | Same S3776 finding on the large loops and state machines, still open: `src/daemon.rs` `heartbeat` (35), `report_prompt` (42) and `serve` (88). Done: `src/picker.rs` and `src/session.rs` (spec 3z) and `create_session` (spec 3aa, `9141e7c`). The three remaining are drafted, consultant-reviewed and not yet locked or implemented: `docs/specs/spec-3ab-heartbeat-complexity.md`, `spec-3ac-report-prompt-complexity.md`, `spec-3ad-serve-complexity.md`; they edit the same file, so one at a time and in that order. Riskier to split (timing-sensitive, flaky tests nearby); one spec per daemon function, or accept and tune the Sonar threshold. Sonar scan of `master` before 2026-10-14; lines shift after each refactor | reported |
 | I7 | Flaky test: `tests/attach_cli.rs::attach_does_not_capture_session_already_in_drag_mode` fails now and then with an unexpected `ESC[?1000h` in the attached output (line 254); passes 6 of 6 when run alone. Likely a race: the attach client enables wheel capture before it learns the session is already in drag mode | manual |
 | I8 | The daemon sometimes does not deliver a message to an OMP session, and sometimes does not run the reset. Seen 2026-10-14: `reset_session` on the tester was rejected as `busy` (`idle=true in_flight=true`, idle for over two hours) and a HOLD notice sat `pending` ("an earlier message is queued in the recipient and has not entered its conversation yet") until the owner reset the session by hand; `message_status` then showed `native_receipt`. The owner says it is a real a2amx bug and has happened before with the OMP harness; a restart of the team usually postpones it. Needs a reproduction: look at the OMP bridge and native delivery path for an `in_flight` flag that is never cleared | reported |
 | I9 | Flaky test: `tests/daemon.rs::exited_claude_session_never_reports_needs_input` failed once in an invalidated full run (deadline timeout family) and passed its focused rerun and later full runs | manual |
+| I10 | SonarQube Cloud flags `rust:S1612` (closure that should be `PoisonError::into_inner`) at three sites; 26 sites in `src/` share the shape. Fix all 26 in one pass, behavior unchanged: `docs/specs/spec-3ae-poison-into-inner.md` (locked, not yet implemented). The gate stays `OK` meanwhile (code smells 10 of 14) | reported |
 
 ## Ideas and possible features
 
@@ -64,6 +63,8 @@ lag the code.
 | C6 | Agent activity (`idle`, `working`, `busy`) in `list` and `list_agents`, and activity-aware heartbeat busy detection | spec 2y |
 | I1 | Exited sessions keep their name until `a2amx kill`, so a new session cannot reuse it | spec 2z |
 | I2 | OMP install and extension cleanup/error handling nits | spec 3a |
+| I4 | SonarQube Cloud S3776 (cognitive complexity over 30) on command logic: `src/team.rs` and `src/main.rs` split into helpers, behavior unchanged | specs 3x (`6672971`) and 3y (`9ac581a`) |
+| I5 | Same S3776 finding on the large loops and state machines: `src/picker.rs`, `src/session.rs`, and `src/daemon.rs` `create_session`, `heartbeat`, `report_prompt`, `serve` split into helpers, behavior unchanged | specs 3z, 3aa (`9141e7c`), 3ab (`28cf1b8`), 3ac (`7ee110b`), 3ad (`288e15f`); Sonar scan of `develop` at `457a500` has no open S3776 issue and the gate is `OK` |
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited` | spec 2z |
 | U5 | Limits at the edges: 50 open messages per recipient, 20 sends per minute per sender, bodies near 32 KiB, recipient exiting with an open message, daemon restart with open messages | spec 3b |
 | C7 | Attach rendering no longer erases a glyph written in the terminal's last column | spec 3c |
