@@ -103,6 +103,214 @@ async fn create(client: &mut Client, argv: &[&str], env: Vec<(String, String)>) 
     }
 }
 
+#[tokio::test]
+async fn new_session_validation_messages_and_precedence() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut client = Client::connect(dir.path()).await.unwrap();
+    for (empty_argv, cols, rows, reset, control_from, watch, heartbeat, name, role, expected) in [
+        (
+            true,
+            40,
+            5,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            "worker",
+            None,
+            "command and nonzero dimensions are required",
+        ),
+        (
+            false,
+            0,
+            5,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            "worker",
+            None,
+            "command and nonzero dimensions are required",
+        ),
+        (
+            false,
+            40,
+            0,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            "worker",
+            None,
+            "command and nonzero dimensions are required",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec!["clear"],
+            vec![],
+            vec![],
+            None,
+            "worker",
+            None,
+            "reset step 1 must start with '/'",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec![],
+            vec!["Bad_Name"],
+            vec![],
+            None,
+            "worker",
+            None,
+            "control_from entry \"Bad_Name\": invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec![],
+            vec![],
+            vec!["Bad_Name"],
+            None,
+            "worker",
+            None,
+            "watch entry \"Bad_Name\": invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec![],
+            vec![],
+            vec!["peer"],
+            Some(0),
+            "worker",
+            None,
+            "invalid heartbeat \"0s\": expected a number followed by s, m or h, from 1s to 24h",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec![],
+            vec![],
+            vec![],
+            Some(1),
+            "worker",
+            None,
+            "session worker: heartbeat needs a non-empty watch",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            "worker",
+            Some(""),
+            "role must not be empty",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            "Bad_Name",
+            None,
+            "invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            true,
+            40,
+            5,
+            vec![],
+            vec!["Bad_Name"],
+            vec![],
+            None,
+            "worker",
+            None,
+            "command and nonzero dimensions are required",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec![],
+            vec!["Bad_Name"],
+            vec!["worker"],
+            None,
+            "worker",
+            None,
+            "control_from entry \"Bad_Name\": invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec![],
+            vec![],
+            vec![],
+            None,
+            "Bad_Name",
+            Some(""),
+            "role must not be empty",
+        ),
+        (
+            false,
+            40,
+            5,
+            vec![],
+            vec![],
+            vec![],
+            Some(1),
+            "Bad_Name",
+            None,
+            "session Bad_Name: heartbeat needs a non-empty watch",
+        ),
+    ] {
+        let response = client
+            .request(Request::NewSession {
+                argv: if empty_argv {
+                    vec![]
+                } else {
+                    vec!["cat".into()]
+                },
+                cols,
+                rows,
+                cwd: None,
+                env: vec![],
+                reset: reset.into_iter().map(str::to_owned).collect(),
+                control_from: control_from.into_iter().map(str::to_owned).collect(),
+                watch: watch.into_iter().map(str::to_owned).collect(),
+                heartbeat,
+                name: Some(name.into()),
+                harness: a2amx::harness::Harness::Generic,
+                deliver: None,
+                team: None,
+                role: role.map(str::to_owned),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            response,
+            Response::Error {
+                message: expected.into()
+            },
+            "{name}"
+        );
+    }
+    daemon.shutdown().await.unwrap();
+}
+
 async fn create_claude(client: &mut Client, command: &str) -> String {
     match client
         .request(Request::NewSession {

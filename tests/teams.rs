@@ -726,3 +726,80 @@ async fn daemon_validates_agent_allow_without_affecting_team_scope_consistency()
         .unwrap();
     assert!(matches!(accepted, Response::Created { .. }), "{accepted:?}");
 }
+
+#[tokio::test]
+async fn new_session_team_validation_messages_and_precedence() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    for (team, role, expected) in [
+        (
+            scope("Bad_Name", true, &[]),
+            None,
+            "team: invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (scope("a-", true, &[]), None, "team must not end in '-'"),
+        (
+            scope("a", false, &["Bad_Name"]),
+            None,
+            "allow needs a private team",
+        ),
+        (
+            scope("a", true, &["Bad_Name"]),
+            None,
+            "team allow entry \"Bad_Name\": invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            scope("a", true, &["a"]),
+            None,
+            "team allow entry must not be the team itself",
+        ),
+        (
+            scope("a", true, &["b", "b"]),
+            None,
+            "team allow entry \"b\" is repeated",
+        ),
+        (
+            scope_with_agents("a", true, &[], &["Bad_Name"]),
+            None,
+            "session allow entry \"Bad_Name\": invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            scope("Bad_Name", true, &[]),
+            Some(""),
+            "team: invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+    ] {
+        let mut request = new_session_request("worker", team);
+        if let Request::NewSession { role: value, .. } = &mut request {
+            *value = role.map(str::to_owned);
+        }
+        assert_eq!(
+            admin.request(request).await.unwrap(),
+            Response::Error {
+                message: expected.into()
+            }
+        );
+    }
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn new_session_team_conflict_precedes_in_use_name() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let created = admin
+        .request(new_session_request("worker", scope("a", true, &[])))
+        .await
+        .unwrap();
+    assert!(matches!(created, Response::Created { .. }), "{created:?}");
+    assert_eq!(
+        admin
+            .request(new_session_request("worker", scope("a", false, &[])))
+            .await
+            .unwrap(),
+        Response::Error {
+            message: "team a is already running with different settings".into()
+        }
+    );
+    daemon.shutdown().await.unwrap();
+}
