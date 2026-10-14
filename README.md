@@ -1,6 +1,14 @@
 # A2AMX
 
+[![Quality gate status (master)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=master&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=master)
+[![Quality gate status (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
+
 **Agent-to-Agent Message eXchange**
+
+> **Not the A2A protocol.** A2AMX is an independent project and has no affiliation with
+> the [Agent2Agent (A2A) protocol](https://github.com/a2aproject/A2A), an open protocol
+> for communication between agentic applications. A2AMX does not implement that protocol.
+> It is a terminal multiplexer and message exchange for local agent harness sessions.
 
 A terminal multiplexer and message exchange for communication between AI agent sessions.
 

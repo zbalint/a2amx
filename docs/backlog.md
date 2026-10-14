@@ -49,6 +49,11 @@ lag the code.
 | --- | --- | --- |
 | F2 | Named launch templates in an operator config file, launch ownership (a launcher may kill only what it launched), trusted working directory so the Claude trust dialog cannot block unattended delivery. Out of scope for now with G1 (owner, 2026-10-04) | docs |
 | F6 | Session activity feed for watchers, so an operator can build an advisor-style peer (as OMP's advisor does inside its harness). A mechanism, not a role: who watches and what a note means is the operator's policy, and what a feed carries is documented rather than gated. Shape: a richer `watch` (turn finished, activity digest) through the ordinary queue and hold gates; Claude Code hooks (`Stop` with its transcript path, `PostToolUse`) are the likely source, while OMP and Codex would need feeds from the extension and the app-server. Open: volume against the bounded queue, and file-change attribution when sessions share a directory (hooks give declared changes only; `Bash` is opaque). Parked by the owner, 2026-10-11; exploratory | reported |
+| F7 | Pre-push gate: extend `scripts/prepush-sonar.sh` (or add a sibling) with Gitleaks, `cargo-deny`, and `actionlint`/`zizmor`, so secrets, advisories and workflow mistakes are caught before a push, not after. Push-time CI can only detect, not prevent | reported (owner, 2026-10-14) |
+| F8 | Repo basics for outside readers: `SECURITY.md`, `CONTRIBUTING.md`, and a changelog or release notes; link the security policy from the README. None exist today | code |
+| F9 | Verify or drop the `rust-version = "1.85"` claim: `rust-toolchain.toml` pins 1.98.1, so nothing tests the declared MSRV. Add a CI job on 1.85, or declare what is tested | code |
+| F10 | `proptest` properties for the pure modules (`wire` framing, `prefix`, `messaging` validation, `names`, `picker` model); `cargo-fuzz` on `wire` and `messaging` parsing as a follow-up | reported (owner, 2026-10-14) |
+| F11 | `cargo-mutants` baseline on the pure modules, scoped per module because a full test run takes minutes. Used to find weak tests, not published | reported (owner, 2026-10-14) |
 
 ## Closed
 
