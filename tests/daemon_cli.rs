@@ -2108,7 +2108,7 @@ async fn idle_watcher_receives_heartbeat_for_queued_idle_peer() {
         ],
     );
     assert!(peer.status.success(), "stderr: {}", stderr(&peer));
-    std::thread::sleep(Duration::from_millis(10_500));
+    tokio::time::sleep(Duration::from_millis(10_500)).await;
     let mut admin = Client::connect(&home).await.unwrap();
     let (_, token, address) = common::new_agent(
         &mut admin,
