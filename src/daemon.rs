@@ -2165,7 +2165,16 @@ async fn bridge(
                 };
                 match frame {
                     BridgeUp::Hello { .. } => return Ok(()),
-                    BridgeUp::State { idle, draft, pending } => session.native_state(idle, draft, pending),
+                    BridgeUp::State {
+                        idle,
+                        draft,
+                        pending,
+                        queue,
+                        host_pending,
+                    } => {
+                        session.native_state(idle, draft, pending);
+                        session.native_diagnostics(queue, host_pending);
+                    }
                     BridgeUp::Ack { id } => session.native_ack(&id, Ok(())),
                     BridgeUp::Nack { id, reason } => session.native_ack(&id, Err(reason)),
                     BridgeUp::Receipt { id } => {

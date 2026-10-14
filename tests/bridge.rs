@@ -31,6 +31,8 @@ fn state(draft: bool, pending: bool) -> BridgeUp {
         idle: true,
         pending,
         draft,
+        queue: None,
+        host_pending: None,
     }
 }
 
@@ -714,6 +716,16 @@ fn bridge_frames_serialize_to_the_documented_json() {
             r#"{"type":"state","idle":true,"pending":false,"draft":false}"#,
         ),
         (
+            BridgeUp::State {
+                idle: true,
+                pending: true,
+                draft: false,
+                queue: Some(2),
+                host_pending: Some(true),
+            },
+            r#"{"type":"state","idle":true,"pending":true,"draft":false,"queue":2,"host_pending":true}"#,
+        ),
+        (
             BridgeUp::Ack { id: "m_1".into() },
             r#"{"type":"ack","id":"m_1"}"#,
         ),
@@ -733,6 +745,13 @@ fn bridge_frames_serialize_to_the_documented_json() {
         assert_eq!(serde_json::to_string(&frame).unwrap(), text);
         assert_eq!(serde_json::from_str::<BridgeUp>(text).unwrap(), frame);
     }
+    assert_eq!(
+        serde_json::from_str::<BridgeUp>(
+            r#"{"type":"state","idle":true,"pending":false,"draft":false}"#,
+        )
+        .unwrap(),
+        state(false, false),
+    );
     let down = [
         (BridgeDown::Ready, r#"{"type":"ready"}"#),
         (

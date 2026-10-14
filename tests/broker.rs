@@ -1648,6 +1648,8 @@ async fn reset_diagnostic_busy_names_native_flags() {
             idle: false,
             pending: false,
             draft: false,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1664,6 +1666,8 @@ async fn reset_diagnostic_busy_names_native_flags() {
             idle: true,
             pending: true,
             draft: false,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1675,6 +1679,72 @@ async fn reset_diagnostic_busy_names_native_flags() {
         "native busy: idle=true in_flight=true waiting=false",
     )
     .await;
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_diagnostic_extension_queue_tracks_state_and_reconnect() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (target, mut bridge, address, token, _target_token) =
+        omp_reset_target(&mut admin, dir.path(), daemon.addrs()[0]).await;
+    for (text, flags, suffix) in [
+        (
+            r#"{"type":"state","idle":true,"pending":true,"draft":false}"#,
+            "idle=true in_flight=true waiting=false",
+            None,
+        ),
+        (
+            r#"{"type":"state","idle":true,"pending":true,"draft":false,"queue":2,"host_pending":true}"#,
+            "idle=true in_flight=true waiting=false",
+            Some("ext_queue=2 ext_pending=true"),
+        ),
+        (
+            r#"{"type":"state","idle":true,"pending":true,"draft":false,"queue":0,"host_pending":false}"#,
+            "idle=true in_flight=true waiting=false",
+            Some("ext_queue=0 ext_pending=false"),
+        ),
+        (
+            r#"{"type":"state","idle":false,"pending":true,"draft":false}"#,
+            "idle=false in_flight=true waiting=false",
+            None,
+        ),
+        (
+            r#"{"type":"state","idle":true,"pending":true,"draft":false,"queue":2,"host_pending":true}"#,
+            "idle=true in_flight=true waiting=false",
+            Some("ext_queue=2 ext_pending=true"),
+        ),
+        (
+            r#"{"type":"state","idle":false,"pending":true,"draft":false,"queue":2}"#,
+            "idle=false in_flight=true waiting=false",
+            None,
+        ),
+        (
+            r#"{"type":"state","idle":true,"pending":true,"draft":false,"queue":2,"host_pending":true}"#,
+            "idle=true in_flight=true waiting=false",
+            Some("ext_queue=2 ext_pending=true"),
+        ),
+        (
+            r#"{"type":"state","idle":false,"pending":true,"draft":false,"host_pending":true}"#,
+            "idle=false in_flight=true waiting=false",
+            None,
+        ),
+    ] {
+        bridge
+            .send(serde_json::from_str(text).unwrap())
+            .await
+            .unwrap();
+        let source = format!("reset gate rejected step 1 of 1: native busy: {flags}");
+        let message =
+            reset_rejection(address, &token, &target, "busy", suffix.unwrap_or(&source)).await;
+        assert!(message.starts_with(&source), "{message}");
+        if let Some(suffix) = suffix {
+            assert!(message.ends_with(suffix), "{message}");
+        } else {
+            assert!(!message.contains("ext_"), "{message}");
+        }
+    }
     daemon.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -1689,6 +1759,8 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
             idle: false,
             pending: false,
             draft: false,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1710,6 +1782,8 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
             idle: true,
             pending: true,
             draft: false,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1727,6 +1801,8 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
             idle: false,
             pending: true,
             draft: false,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1775,6 +1851,8 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
             idle: false,
             pending: true,
             draft: true,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1788,6 +1866,25 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
     .await;
     assert!(timing_seconds(&third, "idle_for=") >= 1, "{third}");
     assert!(timing_seconds(&third, "reported=") <= 1, "{third}");
+    reconnected
+        .send(BridgeUp::State {
+            idle: true,
+            pending: true,
+            draft: false,
+            queue: None,
+            host_pending: None,
+        })
+        .await
+        .unwrap();
+    let after_reconnect = reset_rejection(
+        address,
+        &token,
+        &target,
+        "busy",
+        "native busy: idle=true in_flight=true waiting=false",
+    )
+    .await;
+    assert!(!after_reconnect.contains("ext_"), "{after_reconnect}");
     daemon.shutdown().await.unwrap();
 }
 
@@ -1803,6 +1900,8 @@ async fn reset_diagnostic_draft_names_native_flag() {
             idle: true,
             pending: false,
             draft: true,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1829,6 +1928,8 @@ async fn reset_diagnostic_hold_names_human_draft() {
             idle: true,
             pending: false,
             draft: true,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1873,6 +1974,8 @@ async fn reset_stale_omp_draft_hold_clears_after_margin() {
             idle: true,
             pending: false,
             draft: true,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1907,6 +2010,8 @@ async fn reset_stale_omp_draft_hold_clears_after_margin() {
             idle: true,
             pending: false,
             draft: false,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1927,6 +2032,8 @@ async fn reset_real_omp_draft_hold_survives_margin_then_clears() {
             idle: true,
             pending: false,
             draft: true,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -1971,6 +2078,8 @@ async fn reset_real_omp_draft_hold_survives_margin_then_clears() {
             idle: true,
             pending: false,
             draft: false,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();
@@ -2048,6 +2157,8 @@ async fn reset_rejects_an_in_flight_native_delivery_as_busy() {
             idle: true,
             pending: false,
             draft: false,
+            queue: None,
+            host_pending: None,
         })
         .await
         .unwrap();

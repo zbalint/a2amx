@@ -38,6 +38,8 @@ pub(crate) async fn run(
         idle: true,
         pending: false,
         draft: false,
+        queue: None,
+        host_pending: None,
     })
     .await?;
 
@@ -62,6 +64,8 @@ pub(crate) async fn run(
                         idle: true,
                         pending: false,
                         draft: false,
+                        queue: None,
+                        host_pending: None,
                     })
                     .await?;
                 } else {

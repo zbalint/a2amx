@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 
 const PROTOCOL = 1;
+const KEEPALIVE_MS = 30000;
 const TOOLS = [/* a2amx:tools */];
 
 export default function (pi) {
@@ -12,6 +13,7 @@ export default function (pi) {
   let respawnTimer = null;
   let pollTimer = null;
   let lastState = null;
+  let lastSentAt = 0;
   let backoff = 300;
   let failedStarts = 0;
   let lastStderrLine = "";
@@ -216,18 +218,28 @@ export default function (pi) {
       dropHeadForLateReceipt(now);
     }
 
-    const value = { idle, pending: fifo.length > 0 || hasPending, draft: safeDraft() };
+    const value = {
+      idle,
+      pending: fifo.length > 0 || hasPending,
+      draft: safeDraft(),
+      queue: fifo.length,
+      host_pending: hasPending === true,
+    };
     if (
       !force &&
       lastState &&
       lastState.idle === value.idle &&
       lastState.pending === value.pending &&
-      lastState.draft === value.draft
+      lastState.draft === value.draft &&
+      lastState.queue === value.queue &&
+      lastState.host_pending === value.host_pending &&
+      now - lastSentAt < KEEPALIVE_MS
     ) {
       return;
     }
     if (!sendFrame(state, { type: "state", ...value })) return;
     lastState = value;
+    lastSentAt = now;
   }
 
   function handleDeliver(frame) {

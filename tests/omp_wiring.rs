@@ -151,6 +151,8 @@ fn the_rendered_extension_embeds_the_tool_schemas_and_the_protocol() {
         "const PROTOCOL = {};",
         a2amx::wire::BRIDGE_PROTOCOL
     )));
+    assert!(rendered.contains("host_pending"));
+    assert!(rendered.contains("KEEPALIVE_MS"));
 }
 
 #[test]

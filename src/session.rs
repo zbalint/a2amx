@@ -114,6 +114,7 @@ pub(crate) struct NativeSlot {
     in_flight: bool,
     idle_since: Option<Instant>,
     reported_at: Option<Instant>,
+    diagnostics: Option<(u32, bool)>,
     link: Option<mpsc::UnboundedSender<BridgeDown>>,
     waiting: Option<(String, oneshot::Sender<Result<(), String>>)>,
 }
@@ -635,6 +636,11 @@ impl Session {
         self.message_notify.notify_one();
     }
 
+    pub(crate) fn native_diagnostics(&self, queue: Option<u32>, host_pending: Option<bool>) {
+        let mut state = self.lock();
+        state.native.diagnostics = queue.zip(host_pending);
+    }
+
     pub(crate) fn native_ack(&self, id: &str, result: Result<(), String>) {
         let sender = {
             let mut state = self.lock();
@@ -738,14 +744,22 @@ impl Session {
                 format!("native draft=true{timing}"),
             ))
         } else if !state.native.idle || state.native.in_flight || state.native.waiting.is_some() {
+            let diagnostics = state
+                .native
+                .diagnostics
+                .map(|(queue, host_pending)| {
+                    format!(" ext_queue={queue} ext_pending={host_pending}")
+                })
+                .unwrap_or_default();
             Some((
                 messaging::code::BUSY,
                 format!(
-                    "native busy: idle={} in_flight={} waiting={}{}",
+                    "native busy: idle={} in_flight={} waiting={}{}{}",
                     state.native.idle,
                     state.native.in_flight,
                     state.native.waiting.is_some(),
-                    timing
+                    timing,
+                    diagnostics
                 ),
             ))
         } else {
@@ -1115,6 +1129,7 @@ impl Drop for NativeGuard {
         state.native.waiting = None;
         state.native.draft = false;
         state.native.in_flight = false;
+        state.native.diagnostics = None;
         drop(state);
         self.session.message_notify.notify_one();
     }

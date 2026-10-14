@@ -514,7 +514,8 @@ Frames and lines have the existing 1 MiB payload limit.
 The extension first sends `hello`, with the bridge protocol integer, its OMP
 version and any missing APIs. The daemon answers `ready`, or `refused` for a
 protocol mismatch or missing APIs and closes the link. OMP's version is logged,
-not enforced. `state` reports idle, queued-message and human-draft state.
+not enforced. `state` reports idle, queued-message and human-draft state plus the extension FIFO
+length and OMP queued-message flag.
 `deliver` carries the message id and the same rendered envelope as the PTY
 channel. `ack` means OMP queued it, giving `write_complete`; `nack` makes it
 `undeliverable` with the supplied reason, without retry. A later `receipt`
@@ -577,13 +578,17 @@ of it, which the envelope itself does not contain.
 
 State is reported after connection, on agent and turn lifecycle events, every
 send and matching receipt, and by an unreferenced 500 ms poll that sends only
-changes. Draft state comes from nonblank editor text and is false when the
-editor API is missing or throws. Pending state combines the extension's FIFO
-with OMP's queued-message flag; the state immediately after an acknowledgement
-always reports pending. A head seen pending is dropped when OMP's flag becomes
-false; an entry older than 120 s is dropped when that flag is false, preventing
-a missing or changed receipt event from blocking delivery forever; a dropped entry
-still receives its receipt if the matching `message_end` arrives within 120 s.
+changes. The extension also re-sends an unchanged state every 30 s. Draft state
+comes from nonblank editor text and is false when the editor API is missing or
+throws. Pending state combines the extension's FIFO with OMP's queued-message flag;
+the state frame carries `queue` (the FIFO length) and `host_pending` (OMP's queued-
+message flag) as optional diagnostic fields. The state immediately after an
+acknowledgement always reports pending. A head seen pending is dropped when OMP's
+flag becomes false; an entry older than 120 s is dropped when that flag is false,
+preventing a missing or changed receipt event from blocking delivery forever; a
+dropped entry still receives its receipt if the matching `message_end` arrives
+within 120 s. A busy reset rejection ends with `ext_queue=N ext_pending=B` when
+the extension has reported both diagnostic fields.
 
 Nonzero or signalled bridge exits reconnect with backoff starting at 300 ms,
 doubling to a 5 s cap. A successful connection resets it; ten consecutive
