@@ -28,9 +28,7 @@ fn run_binary(home: &Path, command: &[&str]) -> anyhow::Result<Output> {
 fn is_duration_cell(cell: &str) -> bool {
     let bytes = cell.as_bytes();
     bytes.len() >= 2
-        && bytes[..bytes.len() - 1]
-            .iter()
-            .all(|byte| byte.is_ascii_digit())
+        && bytes[..bytes.len() - 1].iter().all(u8::is_ascii_digit)
         && matches!(bytes.last(), Some(b's' | b'm' | b'h'))
 }
 

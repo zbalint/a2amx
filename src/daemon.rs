@@ -8,7 +8,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -184,7 +184,10 @@ fn failed(code: &str, message: &str) -> Response {
 
 impl Runtime {
     fn omp_usage(&self) -> Option<QuotaInfo> {
-        let cache = self.omp_usage.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = self
+            .omp_usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let (at, quota) = (*cache)?;
         (at.elapsed() < OMP_USAGE_STALE).then_some(quota)
     }
@@ -195,14 +198,18 @@ impl Runtime {
     fn omp_usage_command(&self) -> Option<(String, Option<PathBuf>)> {
         self.sessions
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
             .find_map(|session| {
                 if session.exit_code().is_some() || session.harness() != Harness::Omp {
                     return None;
                 }
                 let argv0 = session.argv.first()?;
-                if Path::new(argv0).file_name().and_then(|name| name.to_str()) != Some("omp") {
+                if Path::new(argv0)
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    != Some("omp")
+                {
                     return None;
                 }
                 Some((argv0.clone(), session.cwd().map(Path::to_owned)))
@@ -217,7 +224,7 @@ impl Runtime {
             let mut attempt = self
                 .omp_usage_attempt
                 .lock()
-                .unwrap_or_else(|e| e.into_inner());
+                .unwrap_or_else(PoisonError::into_inner);
             if attempt.is_some_and(|at| at.elapsed() < OMP_USAGE_REFRESH) {
                 return false;
             }
@@ -225,8 +232,10 @@ impl Runtime {
         }
         match run_omp_usage(&argv0, cwd.as_deref(), stopping).await {
             Ok(quota) => {
-                *self.omp_usage.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some((Instant::now(), quota));
+                *self
+                    .omp_usage
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), quota));
                 false
             }
             Err("shutdown") => true,
@@ -399,7 +408,7 @@ impl Runtime {
             let differs = self
                 .sessions
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .values()
                 .any(|session| {
                     session.exit_code().is_none()
@@ -1847,7 +1856,10 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     Role::Admin => None,
                     Role::Session(id) => Some(id.as_str()),
                 };
-                let sessions = runtime.sessions.lock().unwrap_or_else(|e| e.into_inner());
+                let sessions = runtime
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
                 let viewer = viewer_id.and_then(|id| {
                     sessions
                         .values()

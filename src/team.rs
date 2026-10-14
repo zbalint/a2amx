@@ -227,7 +227,7 @@ pub fn check_global_allowed(
             let first = below
                 .components()
                 .next()
-                .map(|component| component.as_os_str());
+                .map(std::path::Component::as_os_str);
             if first.is_some_and(|component| component.to_string_lossy().starts_with('.')) {
                 Some("a hidden directory under your home directory")
             } else if [
