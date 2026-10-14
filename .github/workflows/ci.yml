@@ -4,9 +4,8 @@ on:
   push:
   pull_request:
 
-permissions:
-  contents: read
-  pull-requests: read
+# Read access is granted per job, not here.
+permissions: {}
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -17,6 +16,9 @@ jobs:
   # a newer compiler fails here, which clippy's incompatible_msrv lint does not catch. Check
   # only; the tests run on the pinned toolchain in the check job.
   msrv:
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -33,6 +35,9 @@ jobs:
   # The same fast checks as scripts/prepush-fast.sh: secrets in history, dependency policy
   # (deny.toml), and workflow lint and audit. Versions are pinned; bump them on purpose.
   hygiene:
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -51,13 +56,13 @@ jobs:
           mkdir -p "$bin" "$RUNNER_TEMP/tools"
           cd "$RUNNER_TEMP/tools"
           gl="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
-          curl -fsSLO "$gl/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -fsSLO "$gl/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          curl --proto '=https' --tlsv1.2 -fsSLO "$gl/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSLO "$gl/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
           grep "linux_x64.tar.gz" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
           tar xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -C "$bin" gitleaks
           al="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
-          curl -fsSLO "$al/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -fsSLO "$al/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          curl --proto '=https' --tlsv1.2 -fsSLO "$al/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSLO "$al/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           grep "linux_amd64.tar.gz" "actionlint_${ACTIONLINT_VERSION}_checksums.txt" | sha256sum -c -
           tar xzf "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -C "$bin" actionlint
           echo "$bin" >> "$GITHUB_PATH"
@@ -68,6 +73,9 @@ jobs:
       - run: cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"
       - run: scripts/prepush-fast.sh
   check:
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
