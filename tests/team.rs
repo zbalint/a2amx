@@ -144,6 +144,215 @@ command = ["cat"]
             .all(|session| session.team.is_none())
     );
 }
+#[test]
+fn global_guard_characterizes_root_reason() {
+    let error = team::check_global_allowed(Path::new("/"), None, Path::new("/state"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(": the filesystem root;"), "{error}");
+}
+
+#[test]
+fn global_guard_home_precedes_container_reason() {
+    let error = team::check_global_allowed(
+        Path::new("/home"),
+        Some(Path::new("/home/u")),
+        Path::new("/home/u/.a2amx"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains(": your home directory;"), "{error}");
+}
+
+#[test]
+fn global_guard_hidden_home_precedes_state_reason() {
+    let error = team::check_global_allowed(
+        Path::new("/home/u/.a2amx"),
+        Some(Path::new("/home/u")),
+        Path::new("/home/u/.a2amx"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains(": a hidden directory under your home directory;"),
+        "{error}"
+    );
+}
+
+#[test]
+fn global_guard_characterizes_user_data_reason() {
+    let error = team::check_global_allowed(
+        Path::new("/home/u/Documents"),
+        Some(Path::new("/home/u")),
+        Path::new("/state"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains(": a user-data folder;"), "{error}");
+}
+
+#[test]
+fn global_guard_characterizes_system_reason() {
+    for path in ["/state/project", "/etc/x", "/MNT/WSL", "/MNT/C/Windows"] {
+        let error = team::check_global_allowed(Path::new(path), None, Path::new("/state"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(": the daemon state directory or a system directory;"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn global_guard_characterizes_container_reason() {
+    for path in ["/tmp", "/mnt/c"] {
+        let error = team::check_global_allowed(Path::new(path), None, Path::new("/state"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(": a top-level container directory;"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn global_guard_characterizes_other_home_reason() {
+    let error = team::check_global_allowed(
+        Path::new("/home/other"),
+        Some(Path::new("/home/u")),
+        Path::new("/state"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains(": another user's home directory;"),
+        "{error}"
+    );
+}
+
+#[test]
+fn global_guard_characterizes_windows_home_reason() {
+    let error = team::check_global_allowed(Path::new("/Mnt/c/Users/u"), None, Path::new("/state"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(": a Windows home directory;"), "{error}");
+}
+
+#[test]
+fn parse_global_team_conflict_precedes_prefix() {
+    let error = team::parse_with("team = 'demo'\nprefix = 'old'", Some("project"))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "the global team file must not set team; the team is named after the directory"
+    );
+}
+
+#[test]
+fn parse_prefix_precedes_private_without_team() {
+    let error = team::parse("prefix = 'old'\nprivate = true")
+        .unwrap_err()
+        .to_string();
+    assert_eq!(error, "prefix was renamed to team; see the README");
+}
+
+#[test]
+fn parse_characterizes_private_requires_team() {
+    assert_eq!(
+        team::parse("private = true").unwrap_err().to_string(),
+        "private requires team"
+    );
+}
+
+#[test]
+fn parse_characterizes_allow_requires_team() {
+    assert_eq!(
+        team::parse("allow = []").unwrap_err().to_string(),
+        "allow requires team"
+    );
+}
+
+#[test]
+fn parse_characterizes_empty_team() {
+    assert_eq!(
+        team::parse("team = ''").unwrap_err().to_string(),
+        "team must not be empty"
+    );
+}
+
+#[test]
+fn parse_characterizes_team_trailing_dash() {
+    assert_eq!(
+        team::parse("team = 'demo-'").unwrap_err().to_string(),
+        "team \"demo-\" must not end in '-'; the dash is added for you"
+    );
+}
+
+#[test]
+fn parse_public_team_precedes_allow_validation() {
+    assert_eq!(
+        team::parse("team = 'demo'\nprivate = false\nallow = ['demo', 'demo']")
+            .unwrap_err()
+            .to_string(),
+        "allow needs a private team"
+    );
+}
+
+#[test]
+fn parse_characterizes_self_allow() {
+    assert_eq!(
+        team::parse("team = 'demo'\nallow = ['demo']")
+            .unwrap_err()
+            .to_string(),
+        "allow entry must not be the team itself"
+    );
+}
+
+#[test]
+fn parse_characterizes_repeated_allow() {
+    assert_eq!(
+        team::parse("team = 'demo'\nallow = ['other', 'other']")
+            .unwrap_err()
+            .to_string(),
+        "allow entry \"other\" is repeated"
+    );
+}
+
+#[test]
+fn parse_characterizes_role_name_error() {
+    let error = team::parse("[[session]]\nrole = 'Bad'\ncommand = ['cat']")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("session 1: name taken from role \"Bad\":"),
+        "{error}"
+    );
+    assert!(error.ends_with("; set name explicitly"), "{error}");
+}
+
+#[test]
+fn parse_characterizes_missing_name_and_role() {
+    assert_eq!(
+        team::parse("[[session]]\ncommand = ['cat']")
+            .unwrap_err()
+            .to_string(),
+        "session 1: name or role is required"
+    );
+}
+
+#[test]
+fn parse_characterizes_session_allow_without_team() {
+    assert_eq!(
+        team::parse("[[session]]\nname = 'architect'\ncommand = ['cat']\nallow = ['other/peer']")
+            .unwrap_err()
+            .to_string(),
+        "session architect: allow needs a private team"
+    );
+}
+
 fn summary(name: &str, id: &str, exit_code: Option<i32>) -> SessionSummary {
     SessionSummary {
         id: id.into(),
