@@ -39,6 +39,8 @@ lag the code.
 | ID | Item | Evidence |
 | --- | --- | --- |
 | I3 | A split escape sequence can hold a session; the paste-then-`CR` gap is one fixed constant; an unreadable PTY can hold the writer gate; message bodies are stored as plaintext | docs |
+| I4 | SonarQube Cloud flags S3776 (cognitive complexity over 30) on command logic: `src/team.rs:213` (42) and `:384` (40), `src/main.rs:889` (46) and `:1751` (33). Split into helpers, one function per spec, behavior unchanged. Scan of `develop` at aa3d4f9 | reported |
+| I5 | Same S3776 finding on the large loops and state machines: `src/daemon.rs:258` (78), `:650` (35), `:1643` (88) and `src/picker.rs:32` (72). Riskier to split (timing-sensitive, flaky tests nearby); schedule after I4 or accept and tune the Sonar threshold. Scan of `develop` at aa3d4f9 | reported |
 
 ## Ideas and possible features
 
