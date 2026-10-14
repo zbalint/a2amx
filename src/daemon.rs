@@ -1741,23 +1741,7 @@ async fn response(connection: &mut Framed, response: Response) -> anyhow::Result
 
 async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
     let mut connection = Framed::new(socket);
-    let hello = tokio::time::timeout(Duration::from_secs(5), connection.recv()).await;
-    let role = match hello {
-        Ok(Ok(Some(bytes))) => match serde_json::from_slice::<Request>(&bytes) {
-            Ok(Request::Hello { token }) => runtime.authenticate(&token),
-            _ => None,
-        },
-        _ => None,
-    };
-    let Some(role) = role else {
-        response(
-            &mut connection,
-            Response::Error {
-                message: "authentication required; check admin.token".into(),
-            },
-        )
-        .await?;
-        connection.stream.shutdown().await?;
+    let Some(role) = authenticate_hello(&mut connection, &runtime).await? else {
         return Ok(());
     };
     response(&mut connection, Response::Ok).await?;
@@ -1788,17 +1772,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 continue;
             }
         };
-        if matches!(&role, Role::Session(_))
-            && !matches!(
-                &request,
-                Request::SendMessage { .. }
-                    | Request::Reset { .. }
-                    | Request::ListAgents
-                    | Request::MessageStatus { .. }
-                    | Request::ReportPrompt { .. }
-                    | Request::BridgeAttach,
-            )
-        {
+        if matches!(&role, Role::Session(_)) && !session_token_permitted(&request) {
             response(
                 &mut connection,
                 Response::Error {
@@ -1812,59 +1786,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
             Request::Hello { .. } => Response::Error {
                 message: "already authenticated".into(),
             },
-            Request::List => {
-                let counts = runtime.store.open_counts(&runtime.boot).await?;
-                let omp_usage = runtime.omp_usage();
-                let sessions = runtime
-                    .sessions
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .values()
-                    .map(|session| {
-                        let activity = session_activity(session);
-                        let activity_secs = activity.map(|current| {
-                            session.note_activity(current, Instant::now()).as_secs()
-                        });
-                        let hold_reason = AnyChannel::for_session(session.clone())
-                            .hold_reason()
-                            .or(session.needs_input());
-                        let quota = session_quota(session, omp_usage);
-                        let state = session.lock();
-                        let (uptime_secs, activity_secs) = if state.exit_code.is_none() {
-                            (Some(session.started().elapsed().as_secs()), activity_secs)
-                        } else {
-                            (None, None)
-                        };
-                        SessionSummary {
-                            id: session.id().0.clone(),
-                            argv: session.argv.clone(),
-                            cols: state.size.cols,
-                            rows: state.size.rows,
-                            attached: state.attachment.is_some(),
-                            exit_code: state.exit_code,
-                            name: session.name().map(str::to_owned),
-                            team: session.team().cloned(),
-                            address: messaging::address(
-                                session.name(),
-                                &session.id().0,
-                                &runtime.host_name,
-                            ),
-                            pending: counts.get(&session.id().0).copied().unwrap_or(0),
-                            held: hold_reason.is_some(),
-                            hold_reason: hold_reason.map(str::to_owned),
-                            quota,
-                            harness: session.harness(),
-                            cwd: session
-                                .cwd()
-                                .map(|path| path.to_string_lossy().into_owned()),
-                            activity,
-                            uptime_secs,
-                            activity_secs,
-                        }
-                    })
-                    .collect();
-                Response::Sessions { sessions }
-            }
+            Request::List => list_sessions(&runtime).await?,
             Request::Version => Response::Version {
                 version: crate::VERSION.to_owned(),
             },
@@ -1877,39 +1799,9 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 sent?;
                 continue;
             }
-            Request::Kill { session: id, now } => match lookup(&runtime, &id) {
-                Some((number, session)) => match session.kill(!now).await {
-                    Ok(()) => {
-                        runtime
-                            .sessions
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .remove(&number);
-                        Response::Ok
-                    }
-                    Err(error) => Response::Error {
-                        message: error.to_string(),
-                    },
-                },
-                None => Response::Error {
-                    message: format!("unknown session {id}"),
-                },
-            },
+            Request::Kill { session: id, now } => kill_session(&runtime, &id, now).await,
             Request::Reset { session } => runtime.reset_session(&role, session).await,
-            Request::Screen { session: id } => match lookup(&runtime, &id) {
-                Some((_, session)) => {
-                    let screen = {
-                        let state = session.lock();
-                        state.emulator.screen()
-                    };
-                    Response::Screen {
-                        lines: screen.text_lines(),
-                    }
-                }
-                None => Response::Error {
-                    message: format!("unknown session {id}"),
-                },
-            },
+            Request::Screen { session: id } => screen_of(&runtime, &id),
             Request::Attach {
                 session: id,
                 force,
@@ -1940,68 +1832,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                     }
                 }
             }
-            Request::ListAgents => {
-                let admin = matches!(role, Role::Admin);
-                let viewer_id = match &role {
-                    Role::Admin => None,
-                    Role::Session(id) => Some(id.as_str()),
-                };
-                let sessions = runtime
-                    .sessions
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                let viewer = viewer_id.and_then(|id| {
-                    sessions
-                        .values()
-                        .find(|session| session.id().0 == id)
-                        .cloned()
-                });
-                if !admin && viewer.is_none() {
-                    Response::Error {
-                        message: "sender session is unavailable".into(),
-                    }
-                } else {
-                    let omp_usage = runtime.omp_usage();
-                    let agents = sessions
-                        .values()
-                        .filter(|session| {
-                            admin
-                                || viewer.as_ref().is_some_and(|viewer| {
-                                    session.id() == viewer.id()
-                                        || messaging::visible(viewer.party(), session.party())
-                                })
-                        })
-                        .map(|session| {
-                            let activity = session_activity(session);
-                            AgentSummary {
-                                address: messaging::address(
-                                    session.name(),
-                                    &session.id().0,
-                                    &runtime.host_name,
-                                ),
-                                state: if session.exit_code().is_some() {
-                                    "exited"
-                                } else {
-                                    "running"
-                                }
-                                .into(),
-                                attached: session.attached(),
-                                team: session.team().map(|scope| scope.name.clone()),
-                                you: viewer
-                                    .as_ref()
-                                    .is_some_and(|viewer| session.id() == viewer.id()),
-                                quota: session_quota(session, omp_usage),
-                                harness: session.harness(),
-                                cwd: session
-                                    .cwd()
-                                    .map(|path| path.to_string_lossy().into_owned()),
-                                activity,
-                            }
-                        })
-                        .collect();
-                    Response::Agents { agents }
-                }
-            }
+            Request::ListAgents => list_agents(&runtime, &role),
             Request::SendMessage {
                 to,
                 subject,
@@ -2018,69 +1849,274 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 },
                 Role::Session(id) => runtime.report_prompt(id, prompt).await?,
             },
-            Request::BridgeAttach => match &role {
-                Role::Admin => Response::Error {
-                    message: "bridge_attach needs a session token".into(),
-                },
-                Role::Session(id) => {
-                    let Some((_, session)) = lookup(&runtime, id) else {
-                        anyhow::bail!("bridge session disappeared");
-                    };
-                    if session.harness() != Harness::Omp && !session.channel() {
-                        Response::Error {
-                            message: "session is not an omp session".into(),
-                        }
-                    } else if let Some(guard) = session.native_attach() {
-                        response(&mut connection, Response::Attached).await?;
-                        bridge(&mut connection, &runtime, session, guard).await?;
-                        return Ok(());
-                    } else {
-                        Response::Error {
-                            message: "a bridge is already attached to this session".into(),
-                        }
-                    }
-                }
-            },
-            Request::MessageStatus { id } => runtime.message_status(&role, &id).await?,
-            Request::ListMessages { session, state } => {
-                let filter = state.as_deref().map(MessageState::parse);
-                if matches!(filter, Some(None)) {
-                    Response::Error {
-                        message: "unknown message state".into(),
-                    }
+            Request::BridgeAttach => {
+                if let Some(result) = bridge_attach(&mut connection, &runtime, &role).await? {
+                    result
                 } else {
-                    let rows = runtime
-                        .store
-                        .list(&runtime.boot, session.as_deref(), filter.flatten())
-                        .await?;
-                    let mut messages = Vec::with_capacity(rows.len());
-                    for row in rows {
-                        messages.push(runtime.message_info(row).await?);
-                    }
-                    Response::Messages { messages }
+                    return Ok(());
                 }
             }
-            Request::CancelMessage { id } => match parse_message_id(&id) {
-                Some(seq) => match runtime.store.cancel(seq).await? {
-                    CancelResult::Cancelled => Response::Ok,
-                    CancelResult::NotCancellable(state) => Response::Error {
-                        message: format!(
-                            "message {id} is {} and cannot be cancelled",
-                            state.as_str()
-                        ),
-                    },
-                    CancelResult::Unknown => Response::Error {
-                        message: format!("unknown message {id}"),
-                    },
-                },
-                None => Response::Error {
-                    message: format!("unknown message {id}"),
-                },
-            },
+            Request::MessageStatus { id } => runtime.message_status(&role, &id).await?,
+            Request::ListMessages { session, state } => {
+                list_messages(&runtime, session, state).await?
+            }
+            Request::CancelMessage { id } => cancel_message(&runtime, &id).await?,
         };
         response(&mut connection, result).await?;
     }
     Ok(())
+}
+
+async fn authenticate_hello(
+    connection: &mut Framed,
+    runtime: &Runtime,
+) -> anyhow::Result<Option<Role>> {
+    let hello = tokio::time::timeout(Duration::from_secs(5), connection.recv()).await;
+    let role = match hello {
+        Ok(Ok(Some(bytes))) => match serde_json::from_slice::<Request>(&bytes) {
+            Ok(Request::Hello { token }) => runtime.authenticate(&token),
+            _ => None,
+        },
+        _ => None,
+    };
+    let Some(role) = role else {
+        response(
+            connection,
+            Response::Error {
+                message: "authentication required; check admin.token".into(),
+            },
+        )
+        .await?;
+        connection.stream.shutdown().await?;
+        return Ok(None);
+    };
+    Ok(Some(role))
+}
+
+fn session_token_permitted(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::SendMessage { .. }
+            | Request::Reset { .. }
+            | Request::ListAgents
+            | Request::MessageStatus { .. }
+            | Request::ReportPrompt { .. }
+            | Request::BridgeAttach
+    )
+}
+
+async fn list_sessions(runtime: &Runtime) -> anyhow::Result<Response> {
+    let counts = runtime.store.open_counts(&runtime.boot).await?;
+    let omp_usage = runtime.omp_usage();
+    let sessions = runtime
+        .sessions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .map(|session| {
+            let activity = session_activity(session);
+            let activity_secs =
+                activity.map(|current| session.note_activity(current, Instant::now()).as_secs());
+            let hold_reason = AnyChannel::for_session(session.clone())
+                .hold_reason()
+                .or(session.needs_input());
+            let quota = session_quota(session, omp_usage);
+            let state = session.lock();
+            let (uptime_secs, activity_secs) = if state.exit_code.is_none() {
+                (Some(session.started().elapsed().as_secs()), activity_secs)
+            } else {
+                (None, None)
+            };
+            SessionSummary {
+                id: session.id().0.clone(),
+                argv: session.argv.clone(),
+                cols: state.size.cols,
+                rows: state.size.rows,
+                attached: state.attachment.is_some(),
+                exit_code: state.exit_code,
+                name: session.name().map(str::to_owned),
+                team: session.team().cloned(),
+                address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
+                pending: counts.get(&session.id().0).copied().unwrap_or(0),
+                held: hold_reason.is_some(),
+                hold_reason: hold_reason.map(str::to_owned),
+                quota,
+                harness: session.harness(),
+                cwd: session
+                    .cwd()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                activity,
+                uptime_secs,
+                activity_secs,
+            }
+        })
+        .collect();
+    Ok(Response::Sessions { sessions })
+}
+
+fn list_agents(runtime: &Runtime, role: &Role) -> Response {
+    let admin = matches!(role, Role::Admin);
+    let viewer_id = match role {
+        Role::Admin => None,
+        Role::Session(id) => Some(id.as_str()),
+    };
+    let sessions = runtime
+        .sessions
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let viewer = viewer_id.and_then(|id| {
+        sessions
+            .values()
+            .find(|session| session.id().0 == id)
+            .cloned()
+    });
+    if !admin && viewer.is_none() {
+        return Response::Error {
+            message: "sender session is unavailable".into(),
+        };
+    }
+    let omp_usage = runtime.omp_usage();
+    let agents = sessions
+        .values()
+        .filter(|session| {
+            admin
+                || viewer.as_ref().is_some_and(|viewer| {
+                    session.id() == viewer.id()
+                        || messaging::visible(viewer.party(), session.party())
+                })
+        })
+        .map(|session| {
+            let activity = session_activity(session);
+            AgentSummary {
+                address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
+                state: if session.exit_code().is_some() {
+                    "exited"
+                } else {
+                    "running"
+                }
+                .into(),
+                attached: session.attached(),
+                team: session.team().map(|scope| scope.name.clone()),
+                you: viewer
+                    .as_ref()
+                    .is_some_and(|viewer| session.id() == viewer.id()),
+                quota: session_quota(session, omp_usage),
+                harness: session.harness(),
+                cwd: session
+                    .cwd()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                activity,
+            }
+        })
+        .collect();
+    Response::Agents { agents }
+}
+
+async fn kill_session(runtime: &Runtime, id: &str, now: bool) -> Response {
+    match lookup(runtime, id) {
+        Some((number, session)) => match session.kill(!now).await {
+            Ok(()) => {
+                runtime
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&number);
+                Response::Ok
+            }
+            Err(error) => Response::Error {
+                message: error.to_string(),
+            },
+        },
+        None => Response::Error {
+            message: format!("unknown session {id}"),
+        },
+    }
+}
+
+fn screen_of(runtime: &Runtime, id: &str) -> Response {
+    match lookup(runtime, id) {
+        Some((_, session)) => {
+            let screen = {
+                let state = session.lock();
+                state.emulator.screen()
+            };
+            Response::Screen {
+                lines: screen.text_lines(),
+            }
+        }
+        None => Response::Error {
+            message: format!("unknown session {id}"),
+        },
+    }
+}
+
+async fn bridge_attach(
+    connection: &mut Framed,
+    runtime: &Arc<Runtime>,
+    role: &Role,
+) -> anyhow::Result<Option<Response>> {
+    match role {
+        Role::Admin => Ok(Some(Response::Error {
+            message: "bridge_attach needs a session token".into(),
+        })),
+        Role::Session(id) => {
+            let Some((_, session)) = lookup(runtime, id) else {
+                anyhow::bail!("bridge session disappeared");
+            };
+            if session.harness() != Harness::Omp && !session.channel() {
+                Ok(Some(Response::Error {
+                    message: "session is not an omp session".into(),
+                }))
+            } else if let Some(guard) = session.native_attach() {
+                response(connection, Response::Attached).await?;
+                bridge(connection, runtime, session, guard).await?;
+                Ok(None)
+            } else {
+                Ok(Some(Response::Error {
+                    message: "a bridge is already attached to this session".into(),
+                }))
+            }
+        }
+    }
+}
+
+async fn list_messages(
+    runtime: &Runtime,
+    session: Option<String>,
+    state: Option<String>,
+) -> anyhow::Result<Response> {
+    let filter = state.as_deref().map(MessageState::parse);
+    if matches!(filter, Some(None)) {
+        return Ok(Response::Error {
+            message: "unknown message state".into(),
+        });
+    }
+    let rows = runtime
+        .store
+        .list(&runtime.boot, session.as_deref(), filter.flatten())
+        .await?;
+    let mut messages = Vec::with_capacity(rows.len());
+    for row in rows {
+        messages.push(runtime.message_info(row).await?);
+    }
+    Ok(Response::Messages { messages })
+}
+
+async fn cancel_message(runtime: &Runtime, id: &str) -> anyhow::Result<Response> {
+    Ok(match parse_message_id(id) {
+        Some(seq) => match runtime.store.cancel(seq).await? {
+            CancelResult::Cancelled => Response::Ok,
+            CancelResult::NotCancellable(state) => Response::Error {
+                message: format!("message {id} is {} and cannot be cancelled", state.as_str()),
+            },
+            CancelResult::Unknown => Response::Error {
+                message: format!("unknown message {id}"),
+            },
+        },
+        None => Response::Error {
+            message: format!("unknown message {id}"),
+        },
+    })
 }
 
 async fn bridge(
