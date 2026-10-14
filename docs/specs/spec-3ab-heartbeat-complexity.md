@@ -2,12 +2,12 @@
 
 ## 0. Status
 
-**DRAFT** (2026-10-14; consultant-reviewed and amended, not yet LOCKED: at lock, fill in the baseline commit, re-read the line anchors and re-run the pre-lock gate against the then-current tree). Architect-directed, backlog I5 part 3, context
+**LOCKED** (2026-10-14). Architect-directed, backlog I5 part 3, context
 `a2amx-sonar-s3776-2026-10-14`. Implementation goes to `a2amx-developer` only.
 
-**Sequencing:** this spec is assigned only after spec 3aa (same file) is accepted and committed; the developer re-reads where `heartbeat` starts at the new baseline (it is near line 659 at `0ce2ee4` and moves after 3aa), so two writers never share `src/daemon.rs`.
+**Sequencing:** spec 3aa (same file) is accepted and committed, so `src/daemon.rs` has one writer. At the baseline below `heartbeat` starts at line 670; the developer re-reads the anchors if the tree moved.
 
-**Baseline:** develop at `<fill at commit>`; the developer records `cargo test --test daemon_cli heartbeat` and the unit test `heartbeat_body_matches_digest_example` before the first edit.
+**Baseline:** develop at `68756b1` (the commit that adds this spec's draft; the locking commit follows it and changes only this file); at that commit `cargo test --test daemon_cli heartbeat` passes 5 of 5 and `cargo test --lib heartbeat_body` passes 1 of 1. The developer records `cargo test --test daemon_cli heartbeat` and the unit test `heartbeat_body_matches_digest_example` before the first edit.
 **Location and branch:** main checkout `/home/zbalint/workspace/a2amx`, branch `develop`.
 **Public test seams:** the daemon through the CLI (`tests/daemon_cli.rs`: `idle_watcher_receives_heartbeat_for_busy_peer`,
 `idle_watcher_skips_heartbeat_for_ready_peer`, `held_delivery_keeps_at_most_one_heartbeat_open`,
