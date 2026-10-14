@@ -57,15 +57,17 @@ since it appears three times today.
 
 ### 3.2 `parse_with`
 
-Keep the function and its signature. Order of checks today, which must not change: (a) `toml::from_str`, (b) the
-`team` plus `default_team` conflict, (c) the `prefix` rejection, (d) merge `team.or_else(default_team)`, (e) `private
-requires team`, (f) `allow requires team`, (g) the name, `private`, `allow` checks, (h) the session tables, (i) the
-final scope/`watch`/`control_from` loop, (j) `validate_sessions`.
+Keep the function and its signature. Order today (src/team.rs lines 385-406), which must not change: (a)
+`toml::from_str`, (b) the `team` plus `default_team` conflict `bail!`, (c) the pure merge
+`team.or_else(default_team)`, (d) the `prefix` rejection, (e) `private requires team`, (f) `allow requires team`,
+(g) the name, `private`, `allow` checks, (h) the session tables, (i) the final scope/`watch`/`control_from` loop,
+(j) `validate_sessions`. The two lines `allow_given = allow.is_some()` and `allow.unwrap_or_default()` that sit
+between (c) and (d) today are pure and move into `build_scope`; that is the only permitted reordering.
 
-Extract, keeping (a) to (d) inline in `parse_with`, in today's order:
+Extract, keeping (a) to (d) inline in `parse_with` in the order above:
 
 1. `build_scope(team: Option<String>, private: Option<bool>, allow: Option<Vec<String>>)` returning
-   `anyhow::Result<Option<TeamScope>>`, covering (e) to (g). `team` is the value after the merge in (d). The
+   `anyhow::Result<Option<TeamScope>>`, covering (e) to (g). `team` is the value after the merge in (c). The
    function derives `allow_given = allow.is_some()` itself and then `allow.unwrap_or_default()`. It has no
    `default_team` or `prefix` parameter.
 2. `session_from_table(index: usize, table: toml::value::Table)` returning `anyhow::Result<TeamSession>`: the body
@@ -117,3 +119,11 @@ git status --short   # only src/team.rs and, if added, tests/team.rs
 - Known flaky: `tests/attach_cli.rs::mouse_wheel_scrolls_three_lines_and_q_returns_to_live` (PTY timing). On a
   failure rerun that test once; if it then passes, record it as a pre-existing flake. Any other failure is new
   unless it reproduces on a clean `ce1dc83`.
+
+## Amendment 1 (2026-10-14, after `BLOCKED` m_1620)
+
+Section 3.2's order list put the `prefix` rejection before the merge. Actual `src/team.rs:393-400` is conflict,
+merge, `allow_given`/`allow` defaults, prefix rejection. Section 3.2 now states that order: (c) merge, (d) prefix.
+The merge and the two `allow` lines are pure, so moving the `allow` lines into `build_scope` changes no observable
+behavior. Section 4's precedence pair "`team` with `default_team` and `prefix`" still expects "must not set team" and
+is unaffected. Scope, acceptance and the rest are unchanged.
