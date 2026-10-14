@@ -2,13 +2,12 @@
 
 ## 0. Status
 
-**DRAFT** (2026-10-14; consultant-reviewed and amended, not yet LOCKED: at lock, fill in the baseline commit, re-read the line anchors and re-run the pre-lock gate against the then-current tree). Architect-directed, backlog I5 part 4, context
+**LOCKED** (2026-10-14). Architect-directed, backlog I5 part 4, context
 `a2amx-sonar-s3776-2026-10-14`. Implementation goes to `a2amx-developer` only.
 
-**Sequencing:** assigned only after spec 3ab (same file) is accepted and committed; the developer re-reads where `report_prompt`
-starts at the new baseline (near line 998 at `0ce2ee4`).
+**Sequencing:** spec 3ab (same file) is accepted and committed, so `src/daemon.rs` has one writer. At the baseline below `report_prompt` starts at line 1065; the developer re-reads the anchors if the tree moved.
 
-**Baseline:** develop at `<fill at commit>`; the developer records `cargo test --test delivery --test hook --test claude_channel` counts before the first edit.
+**Baseline:** develop at `28cf1b8` (the locking commit follows it and changes only this file); at that commit `cargo test --test delivery --test hook --test claude_channel` passes 23, 8 and 13 tests (44 of 44). The developer records `cargo test --test delivery --test hook --test claude_channel` counts before the first edit.
 **Location and branch:** main checkout `/home/zbalint/workspace/a2amx`, branch `develop`.
 **Public test seams:** the `report_prompt` wire request through a real daemon (`tests/delivery.rs`, `tests/hook.rs`,
 `tests/claude_channel.rs`). New helpers are private to `src/daemon.rs`.
