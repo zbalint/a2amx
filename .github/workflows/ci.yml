@@ -13,6 +13,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Keeps the rust-version claim in Cargo.toml true: a language feature or dependency that needs
+  # a newer compiler fails here, which clippy's incompatible_msrv lint does not catch. Check
+  # only; the tests run on the pinned toolchain in the check job.
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Check on the declared rust-version
+        run: |
+          msrv="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)"
+          test -n "$msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          cargo "+$msrv" check --locked --all-targets
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 45
