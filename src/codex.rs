@@ -2,7 +2,7 @@
 //! with `--remote`, and the daemon's native delivery channel built on its protocol.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
@@ -254,7 +254,7 @@ pub(crate) struct Link {
 
 impl Link {
     fn lock(&self) -> std::sync::MutexGuard<'_, LinkState> {
-        self.state.lock().unwrap_or_else(|e| e.into_inner())
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn socket(&self) -> &Path {
@@ -288,7 +288,11 @@ impl Link {
     }
 
     fn kill(&self) {
-        let child = self.child.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let child = self
+            .child
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         if let Some(mut child) = child {
             // start_kill only signals; kill_on_drop reaps the zombie with the handle.
             let _ = child.start_kill();

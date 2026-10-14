@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::tty::{self, ChildEvent, EventedPty};
@@ -200,7 +200,7 @@ fn reader_loop(mut reader: File, state: Arc<Shared>, replies: mpsc::Sender<Optio
             }
         };
         let response = {
-            let mut state = state.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = state.state.lock().unwrap_or_else(PoisonError::into_inner);
             let response = state.emulator.feed(&bytes[..count]);
             state.dirty = true;
             state.last_change = Instant::now();
@@ -263,7 +263,7 @@ fn monitor_loop(args: MonitorArgs) {
     state
         .state
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .exit_code = Some(code);
     state.notify.notify_waiters();
     state.notify.notify_one();
@@ -943,7 +943,10 @@ impl Session {
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, State> {
-        self.shared.state.lock().unwrap_or_else(|e| e.into_inner())
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) async fn enqueue(&self, bytes: Vec<u8>) -> anyhow::Result<bool> {

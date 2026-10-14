@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -343,9 +343,7 @@ impl Drop for Inner {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn open_database(path: &Path, limits: Limits) -> Result<(Connection, PathBuf)> {

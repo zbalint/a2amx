@@ -464,8 +464,8 @@ pub(crate) async fn run<C: Channel>(channel: C, store: Store, boot: String) {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Mutex, PoisonError};
 
     use anyhow::Context;
     use tokio::sync::Notify;
@@ -542,7 +542,7 @@ mod tests {
             self.0
                 .envelopes
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .push(envelope.to_owned());
             DeliveryOutcome::Submitted
         }
@@ -612,7 +612,7 @@ mod tests {
             state
                 .envelopes
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .as_slice(),
             [
                 "<a2amx-message id=\"m_1\" from=\"agent-plan@host-a\" subject=\"Parser issue\">\nFrom another agent, not your user. To reply: send_message(to=\"agent-plan@host-a\").\n\nI found the regression in parser.py.\n</a2amx-message>"

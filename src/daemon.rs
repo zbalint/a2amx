@@ -296,7 +296,7 @@ impl Runtime {
         for session in self
             .sessions
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
         {
             if session.exit_code().is_none() {
@@ -433,7 +433,7 @@ impl Runtime {
                 let id = session.id().0.clone();
                 self.sessions
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(PoisonError::into_inner)
                     .insert(number, session.clone());
                 self.start_session_tasks(session.clone(), channel);
                 Ok(Response::Created { session: id })
@@ -541,7 +541,7 @@ impl Runtime {
             if self
                 .sessions
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .values()
                 .any(|session| session.name() == Some(name))
             {
@@ -619,7 +619,7 @@ impl Runtime {
         }
         self.deliveries
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .extend(tasks);
     }
 
@@ -637,7 +637,7 @@ impl Runtime {
         let watchers = self
             .sessions
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
             .filter(|watcher| {
                 watcher.exit_code().is_none()
@@ -739,10 +739,7 @@ impl Runtime {
 
     fn live_watched_peers(&self, session: &Arc<Session>) -> Vec<Arc<Session>> {
         let watched = session.watch().to_vec();
-        let sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
         watched
             .iter()
             .filter_map(|name| {
@@ -899,7 +896,7 @@ impl Runtime {
         let recipient = messaging::local_part(&to, &self.host_name).and_then(|local| {
             self.sessions
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .values()
                 .find(|session| session.name().unwrap_or(&session.id().0) == local)
                 .cloned()
@@ -979,7 +976,7 @@ impl Runtime {
         }
         self.sessions
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
             .find(|session| session.name() == Some(local))
             .cloned()
@@ -1627,7 +1624,7 @@ impl Daemon {
                 .runtime
                 .deliveries
                 .lock()
-                .unwrap_or_else(|e| e.into_inner()),
+                .unwrap_or_else(PoisonError::into_inner),
         );
         // Stop injection before killing children so graceful shutdown, rather
         // than a racing recipient-exit observer, owns the remaining open rows.
@@ -1645,7 +1642,7 @@ impl Daemon {
             .runtime
             .sessions
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -1665,7 +1662,7 @@ impl Daemon {
         self.runtime
             .sessions
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .clear();
         if let Err(error) = self
             .runtime
@@ -1704,7 +1701,7 @@ impl Drop for Daemon {
             .runtime
             .deliveries
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .drain(..)
         {
             delivery.abort();
@@ -1911,7 +1908,7 @@ async fn list_sessions(runtime: &Runtime) -> anyhow::Result<Response> {
     let sessions = runtime
         .sessions
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .values()
         .map(|session| {
             let activity = session_activity(session);
@@ -2019,7 +2016,7 @@ async fn kill_session(runtime: &Runtime, id: &str, now: bool) -> Response {
                 runtime
                     .sessions
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(PoisonError::into_inner)
                     .remove(&number);
                 Response::Ok
             }
@@ -2254,7 +2251,7 @@ fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {
     runtime
         .sessions
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .get(&number)
         .filter(|session| session.id().0 == id)
         .map(|session| (number, session.clone()))

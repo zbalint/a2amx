@@ -5,7 +5,7 @@
 //! the screen model, the replies to terminal queries, and the snapshot serializer
 //! that redraws a client from the model (docs/architecture.md, "Terminal behavior").
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use alacritty_terminal::term::cell::{Cell as AlacrittyCell, Flags};
 use alacritty_terminal::vte::ansi::{Color as AlacrittyColor, NamedColor};
@@ -137,18 +137,12 @@ struct ReplyListener {
 
 impl ReplyListener {
     fn clear(&self) {
-        let mut replies = self
-            .replies
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut replies = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
         replies.clear();
     }
 
     fn take(&self) -> Vec<u8> {
-        let mut replies = self
-            .replies
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut replies = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
         std::mem::take(&mut *replies)
     }
 }
@@ -158,10 +152,7 @@ impl event::EventListener for ReplyListener {
         // shortcut: color/pixel-size queries and clipboard loads have no reply; bell, title,
         // clipboard, hyperlink, and other non-screen effects are deliberately dropped.
         if let event::Event::PtyWrite(reply) = event {
-            let mut replies = self
-                .replies
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut replies = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
             replies.extend_from_slice(reply.as_bytes());
         }
     }
