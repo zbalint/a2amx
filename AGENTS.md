@@ -45,6 +45,26 @@ cargo fmt --check
 - Never send input that destroys human work. In particular, never send Ctrl-C to
   clear a composer draft.
 
+## Versioning
+
+The project follows [Semantic Versioning 2.0.0](https://semver.org/). `version` in
+`Cargo.toml` is the single source of truth, and `CHANGELOG.md` records user-visible changes.
+
+- The public interface is what an operator or a harness depends on: CLI commands and flags,
+  the config and team file formats, the control and wire protocol between client and daemon,
+  the message database schema, and the MCP tools with their arguments. Internal modules are
+  not public.
+- While the major version is 0, a breaking change raises the minor version and a compatible
+  change or fix raises the patch version. From 1.0.0, a breaking change raises the major
+  version.
+- Only the architect changes `version`, when cutting a release, in the commit that moves
+  the changelog's Unreleased entries under the new heading. A feature or fix does not bump it.
+  After a release, `develop` carries the next version.
+- A change that breaks the public interface says so in its spec and in its changelog entry.
+  The architect adds a line under Unreleased for each user-visible change when committing
+  it; a developer's spec scope does not include the changelog.
+- Release tags are `vMAJOR.MINOR.PATCH`, created on the default branch.
+
 ## Tests
 
 - Test through public interfaces at agreed seams; do not test private functions or
