@@ -577,10 +577,10 @@ async fn create_session(
     if harness == Harness::Codex && no_authorize_peers {
         env.push((a2amx::codex::NO_AUTHORIZE_ENV.to_owned(), "1".to_owned()));
     }
-    if harness == Harness::Codex {
-        if let Some(role) = &role {
-            env.push((a2amx::codex::ROLE_ENV.to_owned(), role.clone()));
-        }
+    if harness == Harness::Codex
+        && let Some(role) = &role
+    {
+        env.push((a2amx::codex::ROLE_ENV.to_owned(), role.clone()));
     }
     if harness == Harness::Claude && !no_channel {
         env.push((a2amx::harness::CHANNEL_ENV.to_owned(), "1".to_owned()));
@@ -1050,10 +1050,11 @@ async fn run_team_up(
             attached_id = Some(id);
         }
     }
-    if !detach && stdin_is_terminal() {
-        if let Some(session) = attached_id {
-            run_attachment(client, &home, prefix, session, false, cols, rows).await?;
-        }
+    if !detach
+        && stdin_is_terminal()
+        && let Some(session) = attached_id
+    {
+        run_attachment(client, &home, prefix, session, false, cols, rows).await?;
     }
     Ok(())
 }
@@ -1547,13 +1548,13 @@ impl AttachmentState {
             } else {
                 find_mouse_report(bytes, offset)
             };
-            if let Some((start, end)) = report {
-                if start == offset {
-                    let button = parse_decimal(&bytes[offset + 3..]);
-                    self.handle_mouse_button(button).await?;
-                    offset = end;
-                    continue;
-                }
+            if let Some((start, end)) = report
+                && start == offset
+            {
+                let button = parse_decimal(&bytes[offset + 3..]);
+                self.handle_mouse_button(button).await?;
+                offset = end;
+                continue;
             }
             let segment_end = report.map_or(bytes.len(), |(start, _)| start);
             if self.picker.is_some() {
@@ -1806,10 +1807,8 @@ impl AttachmentState {
             };
             state.footer.take().is_some()
         };
-        if had_footer {
-            if let Some(state) = self.picker.as_ref() {
-                state.render(&self.output)?;
-            }
+        if had_footer && let Some(state) = self.picker.as_ref() {
+            state.render(&self.output)?;
         }
         let actions = match self.picker.as_mut() {
             Some(state) => state.feed(bytes, escape_alone),
@@ -2327,19 +2326,18 @@ impl Output {
                 for message in rx {
                     match message {
                         OutputMessage::Write(bytes) => {
-                            if result.is_ok() {
-                                if let Err(error) =
+                            if result.is_ok()
+                                && let Err(error) =
                                     stdout.write_all(&bytes).and_then(|()| stdout.flush())
-                                {
-                                    result = Err(error);
-                                }
+                            {
+                                result = Err(error);
                             }
                         }
                         OutputMessage::Flush(sender) => {
-                            if result.is_ok() {
-                                if let Err(error) = stdout.flush() {
-                                    result = Err(error);
-                                }
+                            if result.is_ok()
+                                && let Err(error) = stdout.flush()
+                            {
+                                result = Err(error);
                             }
                             let response = result
                                 .as_ref()
@@ -2394,15 +2392,15 @@ impl Drop for Output {
             return;
         }
         run_cleanup(move || {
-            if let Some(handle) = handle {
-                if let Err(error) = handle.flush() {
-                    tracing::debug!(%error, "terminal output cleanup failed");
-                }
+            if let Some(handle) = handle
+                && let Err(error) = handle.flush()
+            {
+                tracing::debug!(%error, "terminal output cleanup failed");
             }
-            if let Some(join) = join {
-                if join.join().is_err() {
-                    tracing::error!("terminal output thread panicked");
-                }
+            if let Some(join) = join
+                && join.join().is_err()
+            {
+                tracing::error!("terminal output thread panicked");
             }
         });
     }

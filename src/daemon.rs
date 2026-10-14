@@ -362,17 +362,17 @@ impl Runtime {
             });
         }
 
-        if let Some(scope) = &team {
-            if let Some(message) = Self::validate_team_scope(scope, name.as_deref()) {
-                return Ok(Response::Error { message });
-            }
+        if let Some(scope) = &team
+            && let Some(message) = Self::validate_team_scope(scope, name.as_deref())
+        {
+            return Ok(Response::Error { message });
         }
-        if let Some(role) = &role {
-            if let Err(error) = messaging::validate_role(role) {
-                return Ok(Response::Error {
-                    message: error.to_string(),
-                });
-            }
+        if let Some(role) = &role
+            && let Err(error) = messaging::validate_role(role)
+        {
+            return Ok(Response::Error {
+                message: error.to_string(),
+            });
         }
         let _gate = self.new_session_gate.lock().await;
         if let Some(message) = self.check_team_and_name(team.as_ref(), name.as_deref()) {
@@ -1062,15 +1062,15 @@ impl Runtime {
     async fn report_prompt(&self, session_id: &str, prompt: String) -> anyhow::Result<Response> {
         let (_, session) =
             lookup(self, session_id).ok_or_else(|| anyhow::anyhow!("session is unavailable"))?;
-        if session.channel() {
-            if let Some(inner) = messaging::unwrap_channel(&prompt) {
-                self.channel_prompt_verdict(&session, session_id, &inner)
-                    .await?;
-                return Ok(Response::PromptVerdict {
-                    verdict: "allow".into(),
-                    reason: None,
-                });
-            }
+        if session.channel()
+            && let Some(inner) = messaging::unwrap_channel(&prompt)
+        {
+            self.channel_prompt_verdict(&session, session_id, &inner)
+                .await?;
+            return Ok(Response::PromptVerdict {
+                verdict: "allow".into(),
+                reason: None,
+            });
         }
         let text = messaging::unwrap_pastes(&prompt);
         let known = self.known_envelopes(&session, session_id, &text).await?;
@@ -1105,21 +1105,19 @@ impl Runtime {
         inner: &str,
     ) -> anyhow::Result<()> {
         let ids = messaging::envelope_ids(inner);
-        if let [seq] = ids.as_slice() {
-            if let Some(message) = self.store.get(*seq).await? {
-                if self.is_awaiting_receipt(&message, session_id)
-                    && inner
-                        == messaging::channel_view(&messaging::render_envelope(
-                            &format!("m_{seq}"),
-                            &message.sender_address,
-                            &message.subject,
-                            &message.body,
-                        ))
-                {
-                    self.store.record_receipt(*seq).await?;
-                    session.native_received();
-                }
-            }
+        if let [seq] = ids.as_slice()
+            && let Some(message) = self.store.get(*seq).await?
+            && self.is_awaiting_receipt(&message, session_id)
+            && inner
+                == messaging::channel_view(&messaging::render_envelope(
+                    &format!("m_{seq}"),
+                    &message.sender_address,
+                    &message.subject,
+                    &message.body,
+                ))
+        {
+            self.store.record_receipt(*seq).await?;
+            session.native_received();
         }
         Ok(())
     }
@@ -1134,20 +1132,20 @@ impl Runtime {
         // shortcut: a session-token holder can forge prompts for that session;
         // stronger attestation requires a different same-user trust contract.
         for seq in messaging::envelope_ids(text) {
-            if let Some(message) = self.store.get(seq).await? {
-                if self.is_awaiting_receipt(&message, session_id) {
-                    // The hook sees the envelope as the harness transformed it on paste.
-                    let envelope = harness::paste_view(
-                        session.harness(),
-                        &messaging::render_envelope(
-                            &format!("m_{seq}"),
-                            &message.sender_address,
-                            &message.subject,
-                            &message.body,
-                        ),
-                    );
-                    known.push((seq, envelope));
-                }
+            if let Some(message) = self.store.get(seq).await?
+                && self.is_awaiting_receipt(&message, session_id)
+            {
+                // The hook sees the envelope as the harness transformed it on paste.
+                let envelope = harness::paste_view(
+                    session.harness(),
+                    &messaging::render_envelope(
+                        &format!("m_{seq}"),
+                        &message.sender_address,
+                        &message.subject,
+                        &message.body,
+                    ),
+                );
+                known.push((seq, envelope));
             }
         }
         Ok(known)
@@ -1210,10 +1208,10 @@ impl Runtime {
         let Some(message) = self.store.get(seq).await? else {
             return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
         };
-        if let Role::Session(sender) = role {
-            if message.boot != self.boot || message.sender_session != *sender {
-                return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
-            }
+        if let Role::Session(sender) = role
+            && (message.boot != self.boot || message.sender_session != *sender)
+        {
+            return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
         }
         Ok(Response::Status {
             message: self.message_info(message).await?,
@@ -1743,18 +1741,18 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
     };
     response(&mut connection, Response::Ok).await?;
     while let Some(bytes) = connection.recv().await? {
-        if let Role::Session(id) = &role {
-            if !lookup(&runtime, id).is_some_and(|(_, session)| session.exit_code().is_none()) {
-                response(
-                    &mut connection,
-                    Response::Error {
-                        message: "session has exited".into(),
-                    },
-                )
-                .await?;
-                connection.stream.shutdown().await?;
-                return Ok(());
-            }
+        if let Role::Session(id) = &role
+            && !lookup(&runtime, id).is_some_and(|(_, session)| session.exit_code().is_none())
+        {
+            response(
+                &mut connection,
+                Response::Error {
+                    message: "session has exited".into(),
+                },
+            )
+            .await?;
+            connection.stream.shutdown().await?;
+            return Ok(());
         }
         let request = match serde_json::from_slice::<Request>(&bytes) {
             Ok(request) => request,

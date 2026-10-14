@@ -169,10 +169,10 @@ pub fn observe_activity(
     current: Activity,
     now: Instant,
 ) -> Duration {
-    if let Some((activity, since)) = *slot {
-        if activity == current {
-            return now.saturating_duration_since(since);
-        }
+    if let Some((activity, since)) = *slot
+        && activity == current
+    {
+        return now.saturating_duration_since(since);
     }
     *slot = Some((current, now));
     Duration::ZERO
@@ -248,10 +248,10 @@ fn monitor_loop(args: MonitorArgs) {
             let since = dropping_since.get_or_insert_with(Instant::now);
             if since.elapsed() >= Duration::from_secs(3) && !kill_sent {
                 kill_sent = true;
-                if let Err(error) = kill_process_group(pid, Signal::KILL) {
-                    if error != rustix::io::Errno::SRCH {
-                        tracing::warn!(%error, "PTY teardown signal failed");
-                    }
+                if let Err(error) = kill_process_group(pid, Signal::KILL)
+                    && error != rustix::io::Errno::SRCH
+                {
+                    tracing::warn!(%error, "PTY teardown signal failed");
                 }
             }
         }
@@ -1009,21 +1009,20 @@ impl Session {
         if graceful && self.harness != Harness::Generic && self.graceful_exit().await {
             return Ok(());
         }
-        if let Err(error) = kill_process_group(self.pid, Signal::HUP) {
-            if error != rustix::io::Errno::SRCH {
-                return Err(error.into());
-            }
+        if let Err(error) = kill_process_group(self.pid, Signal::HUP)
+            && error != rustix::io::Errno::SRCH
+        {
+            return Err(error.into());
         }
         if tokio::time::timeout(Duration::from_secs(3), self.wait_exit())
             .await
             .is_err()
         {
-            if !self.child_done.load(Ordering::Acquire) {
-                if let Err(error) = kill_process_group(self.pid, Signal::KILL) {
-                    if error != rustix::io::Errno::SRCH {
-                        return Err(error.into());
-                    }
-                }
+            if !self.child_done.load(Ordering::Acquire)
+                && let Err(error) = kill_process_group(self.pid, Signal::KILL)
+                && error != rustix::io::Errno::SRCH
+            {
+                return Err(error.into());
             }
             self.wait_exit().await;
         }
@@ -1194,12 +1193,11 @@ impl Delivery<'_> {
 impl Drop for Session {
     fn drop(&mut self) {
         self.drop_requested.store(true, Ordering::Release);
-        if !self.child_done.load(Ordering::Acquire) {
-            if let Err(error) = kill_process_group(self.pid, Signal::HUP) {
-                if error != rustix::io::Errno::SRCH {
-                    tracing::warn!(%error, "PTY drop signal failed");
-                }
-            }
+        if !self.child_done.load(Ordering::Acquire)
+            && let Err(error) = kill_process_group(self.pid, Signal::HUP)
+            && error != rustix::io::Errno::SRCH
+        {
+            tracing::warn!(%error, "PTY drop signal failed");
         }
     }
 }

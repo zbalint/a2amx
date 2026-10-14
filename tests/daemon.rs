@@ -2021,16 +2021,16 @@ async fn opted_in_attachments_receive_initial_and_changed_status_only() {
     ));
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Some(ServerFrame::Status(info)) = attachment.recv().await.unwrap() {
-                if info.pending == 1 {
-                    assert_eq!(info.address, address);
-                    assert_eq!(info.pending, 1);
-                    assert_eq!(info.hold, Some("human_draft".into()));
-                    assert_eq!(info.harness, Some(Harness::Generic));
-                    assert!(info.activity.is_some());
-                    assert_eq!(info.quota, None);
-                    break;
-                }
+            if let Some(ServerFrame::Status(info)) = attachment.recv().await.unwrap()
+                && info.pending == 1
+            {
+                assert_eq!(info.address, address);
+                assert_eq!(info.pending, 1);
+                assert_eq!(info.hold, Some("human_draft".into()));
+                assert_eq!(info.harness, Some(Harness::Generic));
+                assert!(info.activity.is_some());
+                assert_eq!(info.quota, None);
+                break;
             }
         }
     })

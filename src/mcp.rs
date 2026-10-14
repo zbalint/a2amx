@@ -43,11 +43,10 @@ pub async fn run(channel: bool) -> Result<()> {
             event = lines.recv() => {
                 match event {
                     Some(StdioEvent::Line(line)) => {
-                        if let Some(response) = server.handle_line(&line).await {
-                            if let Err(error) = write_response(response).await {
+                        if let Some(response) = server.handle_line(&line).await
+                            && let Err(error) = write_response(response).await {
                                 break Err(error);
                             }
-                        }
                         if channel && server.initialized() && task.is_none() {
                             let token = token.clone();
                             let version = server.client_version().map(str::to_owned);

@@ -51,10 +51,10 @@ pub async fn run() -> anyhow::Result<()> {
         note(INVALID_PAYLOAD);
         return Ok(());
     };
-    if let Some(event) = object.get("hook_event_name") {
-        if event.as_str() != Some("UserPromptSubmit") {
-            return Ok(());
-        }
+    if let Some(event) = object.get("hook_event_name")
+        && event.as_str() != Some("UserPromptSubmit")
+    {
+        return Ok(());
     }
     let Some(prompt) = object.remove("prompt") else {
         note(PROMPT_MISSING);

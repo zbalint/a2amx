@@ -250,12 +250,11 @@ impl PtyHarness {
 impl Drop for PtyHarness {
     fn drop(&mut self) {
         drop(self.writer.take());
-        if let Some(pty) = self.pty.take() {
-            if let Ok(pty) = Arc::try_unwrap(pty) {
-                if let Ok(pty) = pty.into_inner() {
-                    drop(pty);
-                }
-            }
+        if let Some(pty) = self.pty.take()
+            && let Ok(pty) = Arc::try_unwrap(pty)
+            && let Ok(pty) = pty.into_inner()
+        {
+            drop(pty);
         }
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();

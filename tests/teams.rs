@@ -42,13 +42,12 @@ async fn session(
     let client = Client::connect_addr(address, &token).await.unwrap();
     let id = loop {
         let response = admin.request(Request::List).await.unwrap();
-        if let Response::Sessions { sessions } = response {
-            if let Some(session) = sessions
+        if let Response::Sessions { sessions } = response
+            && let Some(session) = sessions
                 .into_iter()
                 .find(|session| session.name.as_deref() == Some(name))
-            {
-                break session.id;
-            }
+        {
+            break session.id;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     };
@@ -284,13 +283,12 @@ async fn invisible_exit_notifications_are_not_queued() {
             })
             .await
             .unwrap();
-        if let Response::Messages { messages } = response {
-            if let Some(message) = messages
+        if let Response::Messages { messages } = response
+            && let Some(message) = messages
                 .into_iter()
                 .find(|message| message.subject.contains("same-peer"))
-            {
-                break message;
-            }
+        {
+            break message;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     };
@@ -610,13 +608,12 @@ async fn mutual_agent_allow_controls_exit_notifications() {
             })
             .await
             .unwrap();
-        if let Response::Messages { messages } = response {
-            if let Some(message) = messages
+        if let Response::Messages { messages } = response
+            && let Some(message) = messages
                 .into_iter()
                 .find(|message| message.subject.contains("b-architect"))
-            {
-                break message;
-            }
+        {
+            break message;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     };

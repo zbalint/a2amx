@@ -505,12 +505,13 @@ pub fn envelope_ids(text: &str) -> Vec<i64> {
     for (start, _) in text.match_indices(PREFIX) {
         let digits = &text[start + PREFIX.len()..];
         let count = digits.bytes().take_while(u8::is_ascii_digit).count();
-        if (1..=18).contains(&count) && digits.as_bytes().get(count) == Some(&b'"') {
-            if let Ok(seq) = digits[..count].parse::<i64>() {
-                if seq > 0 && !ids.contains(&seq) {
-                    ids.push(seq);
-                }
-            }
+        if (1..=18).contains(&count)
+            && digits.as_bytes().get(count) == Some(&b'"')
+            && let Ok(seq) = digits[..count].parse::<i64>()
+            && seq > 0
+            && !ids.contains(&seq)
+        {
+            ids.push(seq);
         }
     }
     ids
