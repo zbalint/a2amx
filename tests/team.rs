@@ -1476,6 +1476,64 @@ command = ["omp", "--secret"]
     assert!(!String::from_utf8_lossy(&listed.stdout).contains("claude"));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_prints_exact_private_team_report() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("dry.toml"),
+        "team = \"t\"\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\ncwd = \"/\"\n",
+    )
+    .unwrap();
+    let output = run_binary(
+        dir.path(),
+        &["team", "up", "--dry-run", "--file", "dry.toml"],
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  command: cat\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_prints_exact_already_running_report() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("running.toml"),
+        "[[session]]\nname = \"running\"\ncommand = [\"cat\"]\n",
+    )
+    .unwrap();
+    let started = run_binary(
+        dir.path(),
+        &["team", "up", "--detach", "--file", "running.toml"],
+    )
+    .unwrap();
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let output = run_binary(
+        dir.path(),
+        &["team", "up", "--dry-run", "--file", "running.toml"],
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "already running running s1\n"
+    );
+}
+
 #[test]
 fn dry_run_rejects_detach_and_inline_items() {
     let dir = tempfile::tempdir().unwrap();

@@ -886,6 +886,114 @@ async fn note_lost_messages(home: &Path, wanted: &[TeamSession]) {
     }
 }
 
+async fn dry_run_report(
+    home: &Path,
+    cwd: &Path,
+    file_dir: &Path,
+    actions: Vec<team::Action>,
+) -> anyhow::Result<String> {
+    let mut output = String::new();
+    for action in actions {
+        match action {
+            team::Action::AlreadyRunning { name, id } => {
+                output.push_str(&format!("already running {name} {id}\n"));
+            }
+            team::Action::Start(session) => {
+                let harness = Harness::infer(&session.command);
+                let resolved_cwd = session
+                    .cwd
+                    .as_deref()
+                    .map_or_else(|| cwd.to_owned(), |path| file_dir.join(path));
+                let command = wired_command(
+                    home,
+                    session.command.clone(),
+                    harness,
+                    &resolved_cwd,
+                    session.role.as_deref(),
+                    false,
+                    false,
+                    false,
+                )
+                .await?;
+                output.push_str(&format!("would start {}\n", session.name));
+                output.push_str(&format!("  harness: {}\n", harness.as_str()));
+                output.push_str(&format!("  cwd: {}\n", resolved_cwd.display()));
+                if let Some(team) = team_detail(session.team.as_ref()) {
+                    output.push_str(&format!("  team: {team}\n"));
+                }
+                if let Some(role) = &session.role {
+                    output.push_str(&format!("  role: {role}\n"));
+                }
+                if session.attach {
+                    output.push_str("  attach: true\n");
+                }
+                if !session.watch.is_empty() {
+                    output.push_str(&format!("  watch: {}\n", session.watch.join(", ")));
+                }
+                if !session.control_from.is_empty() {
+                    output.push_str(&format!(
+                        "  control_from: {}\n",
+                        session.control_from.join(", ")
+                    ));
+                }
+                if let Some(heartbeat) = &session.heartbeat {
+                    output.push_str(&format!("  heartbeat: {heartbeat}\n"));
+                }
+                output.push_str(&format!("  command: {}\n", redact_argv(&command)));
+                if harness == Harness::Omp {
+                    output.push_str("omp extension install skipped (dry run)\n");
+                }
+            }
+        }
+    }
+    Ok(output)
+}
+
+async fn start_planned_session(
+    home: &Path,
+    client: &mut Client,
+    session: Box<TeamSession>,
+    cwd: &Path,
+    file_dir: &Path,
+    cols: u16,
+    rows: u16,
+) -> anyhow::Result<(String, String)> {
+    let heartbeat = session
+        .heartbeat
+        .as_deref()
+        .map(a2amx::messaging::parse_interval)
+        .transpose()?
+        .map(|duration| duration.as_secs());
+    let name = session.name;
+    let result = create_session(
+        home,
+        client,
+        NewOptions {
+            name: Some(name.clone()),
+            harness: None,
+            role: session.role,
+            team: session.team,
+            deliver: None,
+            no_authorize_peers: false,
+            no_channel: false,
+            reset: session.reset.unwrap_or_default(),
+            control_from: session.control_from,
+            watch: session.watch,
+            heartbeat,
+            command: session.command,
+            cwd: session
+                .cwd
+                .map_or_else(|| cwd.to_owned(), |path| file_dir.join(path)),
+            cols,
+            rows,
+        },
+    )
+    .await
+    .with_context(|| format!("failed {name}"))?;
+    write_stdout(format!("started {name} {result}\n").into_bytes()).await?;
+    Ok((name, result))
+}
+
 async fn run_team_up(
     home: PathBuf,
     prefix: u8,
@@ -917,60 +1025,7 @@ async fn run_team_up(
         }
     };
     if dry_run {
-        let mut output = String::new();
-        for action in actions {
-            match action {
-                team::Action::AlreadyRunning { name, id } => {
-                    output.push_str(&format!("already running {name} {id}\n"));
-                }
-                team::Action::Start(session) => {
-                    let harness = Harness::infer(&session.command);
-                    let resolved_cwd = session
-                        .cwd
-                        .as_deref()
-                        .map_or_else(|| cwd.clone(), |path| file_dir.join(path));
-                    let command = wired_command(
-                        &home,
-                        session.command.clone(),
-                        harness,
-                        &resolved_cwd,
-                        session.role.as_deref(),
-                        false,
-                        false,
-                        false,
-                    )
-                    .await?;
-                    output.push_str(&format!("would start {}\n", session.name));
-                    output.push_str(&format!("  harness: {}\n", harness.as_str()));
-                    output.push_str(&format!("  cwd: {}\n", resolved_cwd.display()));
-                    if let Some(team) = team_detail(session.team.as_ref()) {
-                        output.push_str(&format!("  team: {team}\n"));
-                    }
-                    if let Some(role) = &session.role {
-                        output.push_str(&format!("  role: {role}\n"));
-                    }
-                    if session.attach {
-                        output.push_str("  attach: true\n");
-                    }
-                    if !session.watch.is_empty() {
-                        output.push_str(&format!("  watch: {}\n", session.watch.join(", ")));
-                    }
-                    if !session.control_from.is_empty() {
-                        output.push_str(&format!(
-                            "  control_from: {}\n",
-                            session.control_from.join(", ")
-                        ));
-                    }
-                    if let Some(heartbeat) = &session.heartbeat {
-                        output.push_str(&format!("  heartbeat: {heartbeat}\n"));
-                    }
-                    output.push_str(&format!("  command: {}\n", redact_argv(&command)));
-                    if harness == Harness::Omp {
-                        output.push_str("omp extension install skipped (dry run)\n");
-                    }
-                }
-            }
-        }
+        let output = dry_run_report(&home, &cwd, &file_dir, actions).await?;
         write_stdout(output.into_bytes()).await?;
         note_lost_messages(&home, &wanted).await;
         return Ok(());
@@ -987,40 +1042,8 @@ async fn run_team_up(
                 (name, id)
             }
             team::Action::Start(session) => {
-                let heartbeat = session
-                    .heartbeat
-                    .as_deref()
-                    .map(a2amx::messaging::parse_interval)
-                    .transpose()?
-                    .map(|duration| duration.as_secs());
-                let name = session.name;
-                let result = create_session(
-                    &home,
-                    &mut client,
-                    NewOptions {
-                        name: Some(name.clone()),
-                        harness: None,
-                        role: session.role,
-                        team: session.team,
-                        deliver: None,
-                        no_authorize_peers: false,
-                        no_channel: false,
-                        reset: session.reset.unwrap_or_default(),
-                        control_from: session.control_from,
-                        watch: session.watch,
-                        heartbeat,
-                        command: session.command,
-                        cwd: session
-                            .cwd
-                            .map_or_else(|| cwd.clone(), |path| file_dir.join(path)),
-                        cols,
-                        rows,
-                    },
-                )
-                .await;
-                let id = result.with_context(|| format!("failed {name}"))?;
-                write_stdout(format!("started {name} {id}\n").into_bytes()).await?;
-                (name, id)
+                start_planned_session(&home, &mut client, session, &cwd, &file_dir, cols, rows)
+                    .await?
             }
         };
         if attach_name == Some(name.as_str()) {
@@ -1526,14 +1549,7 @@ impl AttachmentState {
             };
             if let Some((start, end)) = report {
                 if start == offset {
-                    let button = bytes[offset + 3..]
-                        .iter()
-                        .take_while(|byte| byte.is_ascii_digit())
-                        .fold(0u16, |value, byte| {
-                            value
-                                .saturating_mul(10)
-                                .saturating_add(u16::from(byte - b'0'))
-                        });
+                    let button = parse_decimal(&bytes[offset + 3..]);
                     self.handle_mouse_button(button).await?;
                     offset = end;
                     continue;
@@ -1549,39 +1565,10 @@ impl AttachmentState {
                 }
                 offset += 1;
             } else if self.scroll_mode {
-                for key in self.scroll_parser.feed(&bytes[offset..offset + 1]) {
-                    match key {
-                        ScrollKey::Scroll(scroll) => {
-                            if let Some(attached) = self.attachment.as_mut() {
-                                attached.send(ClientFrame::Scroll(scroll)).await?;
-                            }
-                        }
-                        ScrollKey::Quit => {
-                            if let Some(attached) = self.attachment.as_mut() {
-                                attached.send(ClientFrame::Scroll(Scroll::Bottom)).await?;
-                                attached.send(ClientFrame::Redraw).await?;
-                            }
-                            self.scroll_mode = false;
-                            self.scroll_parser.clear();
-                        }
-                    }
-                }
+                self.feed_scroll_input(&bytes[offset..offset + 1]).await?;
                 offset += 1;
             } else {
-                // End a batch at the prefix and consume its next byte separately:
-                // a command can change how the remaining bytes must be interpreted.
-                let count = if self.after_prefix {
-                    self.after_prefix = false;
-                    1
-                } else if let Some(index) = bytes[offset..segment_end]
-                    .iter()
-                    .position(|b| *b == self.prefix_byte)
-                {
-                    self.after_prefix = true;
-                    index + 1
-                } else {
-                    segment_end - offset
-                };
+                let count = self.prefix_batch_len(bytes, offset, segment_end);
                 let actions = self.prefix_machine.feed(&bytes[offset..offset + count]);
                 if let Some(outcome) = self.handle_prefix_actions(actions).await? {
                     return Ok(Some(outcome));
@@ -1590,6 +1577,44 @@ impl AttachmentState {
             }
         }
         Ok(None)
+    }
+
+    async fn feed_scroll_input(&mut self, byte: &[u8]) -> anyhow::Result<()> {
+        for key in self.scroll_parser.feed(byte) {
+            match key {
+                ScrollKey::Scroll(scroll) => {
+                    if let Some(attached) = self.attachment.as_mut() {
+                        attached.send(ClientFrame::Scroll(scroll)).await?;
+                    }
+                }
+                ScrollKey::Quit => {
+                    if let Some(attached) = self.attachment.as_mut() {
+                        attached.send(ClientFrame::Scroll(Scroll::Bottom)).await?;
+                        attached.send(ClientFrame::Redraw).await?;
+                    }
+                    self.scroll_mode = false;
+                    self.scroll_parser.clear();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn prefix_batch_len(&mut self, bytes: &[u8], offset: usize, segment_end: usize) -> usize {
+        // End a batch at the prefix and consume its next byte separately:
+        // a command can change how the remaining bytes must be interpreted.
+        if self.after_prefix {
+            self.after_prefix = false;
+            1
+        } else if let Some(index) = bytes[offset..segment_end]
+            .iter()
+            .position(|b| *b == self.prefix_byte)
+        {
+            self.after_prefix = true;
+            index + 1
+        } else {
+            segment_end - offset
+        }
     }
 
     async fn handle_prefix_actions(
@@ -1698,11 +1723,7 @@ impl AttachmentState {
                     end += 1;
                 }
                 if end > first && matches!(bytes.get(end), Some(b'h' | b'l')) {
-                    let mode = bytes[first..end].iter().fold(0u16, |value, byte| {
-                        value
-                            .saturating_mul(10)
-                            .saturating_add(u16::from(byte - b'0'))
-                    });
+                    let mode = parse_decimal(&bytes[first..end]);
                     if matches!(mode, 1000 | 1002 | 1003) {
                         found = true;
                         self.session_mouse = bytes[end] == b'h';
@@ -1714,22 +1735,21 @@ impl AttachmentState {
         found
     }
 
+    async fn attach_session(&self, session: &str) -> anyhow::Result<Attachment> {
+        let client = Client::connect(&self.home).await?;
+        client
+            .attach_status(
+                session,
+                false,
+                self.cols,
+                pty_rows(self.rows, self.status_visible),
+            )
+            .await
+    }
+
     async fn restore_current(&mut self) -> anyhow::Result<bool> {
         if self.attachment.is_none() {
-            let attach_result = match Client::connect(&self.home).await {
-                Ok(client) => {
-                    client
-                        .attach_status(
-                            &self.session,
-                            false,
-                            self.cols,
-                            pty_rows(self.rows, self.status_visible),
-                        )
-                        .await
-                }
-                Err(error) => Err(error),
-            };
-            match attach_result {
+            match self.attach_session(&self.session).await {
                 Ok(next) => self.attachment = Some(next),
                 Err(error) => {
                     if let Some(state) = self.picker.as_mut() {
@@ -1746,6 +1766,33 @@ impl AttachmentState {
         }
         self.picker = None;
         Ok(true)
+    }
+
+    async fn switch_session(&mut self, selected: String) -> anyhow::Result<bool> {
+        if let Some(attached) = self.attachment.as_mut() {
+            let _ = attached.send(ClientFrame::Detach).await;
+            let _ = tokio::time::timeout(Duration::from_secs(5), attached.recv()).await;
+        }
+        self.attachment = None;
+        match self.attach_session(&selected).await {
+            Ok(next) => {
+                self.attachment = Some(next);
+                self.session = selected;
+                self.status = None;
+                self.output
+                    .send(format!("\x1b]2;a2amx: {}\x07", self.session).into_bytes())?;
+                self.picker = None;
+                Ok(true)
+            }
+            Err(error) => {
+                if let Some(state) = self.picker.as_mut() {
+                    state.footer = Some(error.to_string());
+                    state.refresh().await?;
+                    state.render(&self.output)?;
+                }
+                Ok(false)
+            }
+        }
     }
 
     async fn handle_picker_input(
@@ -1795,47 +1842,25 @@ impl AttachmentState {
                         }
                         continue;
                     }
-                    if let Some(attached) = self.attachment.as_mut() {
-                        let _ = attached.send(ClientFrame::Detach).await;
-                        let _ = tokio::time::timeout(Duration::from_secs(5), attached.recv()).await;
-                    }
-                    self.attachment = None;
-                    let attach_result = match Client::connect(&self.home).await {
-                        Ok(client) => {
-                            client
-                                .attach_status(
-                                    &selected,
-                                    false,
-                                    self.cols,
-                                    pty_rows(self.rows, self.status_visible),
-                                )
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    };
-                    match attach_result {
-                        Ok(next) => {
-                            self.attachment = Some(next);
-                            self.session = selected;
-                            self.status = None;
-                            self.output
-                                .send(format!("\x1b]2;a2amx: {}\x07", self.session).into_bytes())?;
-                            self.picker = None;
-                            return Ok(None);
-                        }
-                        Err(error) => {
-                            if let Some(state) = self.picker.as_mut() {
-                                state.footer = Some(error.to_string());
-                                state.refresh().await?;
-                                state.render(&self.output)?;
-                            }
-                        }
+                    if self.switch_session(selected).await? {
+                        return Ok(None);
                     }
                 }
             }
         }
         Ok(None)
     }
+}
+
+fn parse_decimal(bytes: &[u8]) -> u16 {
+    bytes
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .fold(0u16, |value, byte| {
+            value
+                .saturating_mul(10)
+                .saturating_add(u16::from(byte - b'0'))
+        })
 }
 
 // shortcut: a report split across input chunks is typed input; reassemble only if it proves noisy.
