@@ -117,7 +117,7 @@ cargo +1.88 check --locked --all-targets
 
 ## 10. Acceptance
 
-Run from `/home/zbalint/workspace/a2amx` on the final diff. Every command must exit 0 with no warnings.
+Run from `/home/zbalint/workspace/a2amx` on the final diff. Every command must exit 0 with no warnings, with the one exception in Amendment 1.
 
 ```sh
 cargo test --locked --test prop_wire --test prop_prefix --test prop_messaging --test prop_names --test prop_picker
@@ -134,3 +134,9 @@ cargo +1.88 check --locked --all-targets
 - `git diff --stat` and `git status --short` show only the files in section 0's scope. A regression file (`proptest-regressions/` or `tests/prop_*.proptest-regressions`) is present only if a property failed during development.
 - Run the first command three times in a row and record that all three pass; a property that fails on a later run is a finding, not a flake, and is handled under section 2.
 - Known flaky tests in the full suite: `tests/attach_cli.rs::attach_does_not_capture_session_already_in_drag_mode` (backlog I7) and `tests/daemon.rs::exited_claude_session_never_reports_needs_input` (I9). If either fails in `cargo test --locked`, rerun that one test once; record a pass on rerun as the pre-existing flake.
+
+## Amendment 1 (2026-10-15)
+
+The developer reported `BLOCKED` (message `m_1767`): `cargo +1.88 check --locked --all-targets` exits 0 but prints `warning: value assigned to `last` is never read` at `src/codex.rs:396:13` (`unused_assignments`), once for the lib and once for the lib test. The architect confirmed it is pre-existing and comes from the older compiler: the pinned 1.98.1 toolchain with `cargo clippy --locked --all-targets -- -D warnings` is clean on the same line, and CI's `msrv` job does not use `-D warnings` for the same reason. Section 10 asked for no warnings from every command, which this one cannot meet without editing `src/`, and `src/` is out of scope.
+
+Decision: `cargo +1.88 check --locked --all-targets` must exit 0, and the only warning it may print is that one (`unused_assignments` at `src/codex.rs:396:13`, once for the lib and once for the lib test). Any other warning from it fails acceptance. Every other command in section 10 still requires no warnings. `src/` stays out of scope and nothing is suppressed.
