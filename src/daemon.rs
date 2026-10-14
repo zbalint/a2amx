@@ -1067,31 +1067,8 @@ impl Runtime {
             lookup(self, session_id).ok_or_else(|| anyhow::anyhow!("session is unavailable"))?;
         if session.channel() {
             if let Some(inner) = messaging::unwrap_channel(&prompt) {
-                let ids = messaging::envelope_ids(&inner);
-                if let [seq] = ids.as_slice() {
-                    if let Some(message) = self.store.get(*seq).await? {
-                        if message.boot == self.boot
-                            && message.recipient_session == session_id
-                            && matches!(
-                                message.state,
-                                MessageState::Delivering
-                                    | MessageState::Submitted
-                                    | MessageState::Unsubmitted
-                            )
-                            && !message.observed
-                            && inner
-                                == messaging::channel_view(&messaging::render_envelope(
-                                    &format!("m_{seq}"),
-                                    &message.sender_address,
-                                    &message.subject,
-                                    &message.body,
-                                ))
-                        {
-                            self.store.record_receipt(*seq).await?;
-                            session.native_received();
-                        }
-                    }
-                }
+                self.channel_prompt_verdict(&session, session_id, &inner)
+                    .await?;
                 return Ok(Response::PromptVerdict {
                     verdict: "allow".into(),
                     reason: None,
@@ -1099,21 +1076,69 @@ impl Runtime {
             }
         }
         let text = messaging::unwrap_pastes(&prompt);
+        let known = self.known_envelopes(&session, session_id, &text).await?;
+        if known.is_empty() {
+            session.note_submit(false);
+        } else if known.len() == 1 && text == known[0].1 {
+            self.store.record_receipt(known[0].0).await?;
+            session.note_submit(true);
+        } else {
+            return self.block_corrupted_submission(&session, text, known).await;
+        }
+        Ok(Response::PromptVerdict {
+            verdict: "allow".into(),
+            reason: None,
+        })
+    }
+
+    fn is_awaiting_receipt(&self, message: &Message, session_id: &str) -> bool {
+        message.boot == self.boot
+            && message.recipient_session == session_id
+            && matches!(
+                message.state,
+                MessageState::Delivering | MessageState::Submitted | MessageState::Unsubmitted
+            )
+            && !message.observed
+    }
+
+    async fn channel_prompt_verdict(
+        &self,
+        session: &Arc<Session>,
+        session_id: &str,
+        inner: &str,
+    ) -> anyhow::Result<()> {
+        let ids = messaging::envelope_ids(inner);
+        if let [seq] = ids.as_slice() {
+            if let Some(message) = self.store.get(*seq).await? {
+                if self.is_awaiting_receipt(&message, session_id)
+                    && inner
+                        == messaging::channel_view(&messaging::render_envelope(
+                            &format!("m_{seq}"),
+                            &message.sender_address,
+                            &message.subject,
+                            &message.body,
+                        ))
+                {
+                    self.store.record_receipt(*seq).await?;
+                    session.native_received();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn known_envelopes(
+        &self,
+        session: &Arc<Session>,
+        session_id: &str,
+        text: &str,
+    ) -> anyhow::Result<Vec<(i64, String)>> {
         let mut known = Vec::new();
         // shortcut: a session-token holder can forge prompts for that session;
         // stronger attestation requires a different same-user trust contract.
-        for seq in messaging::envelope_ids(&text) {
+        for seq in messaging::envelope_ids(text) {
             if let Some(message) = self.store.get(seq).await? {
-                if message.boot == self.boot
-                    && message.recipient_session == session_id
-                    && matches!(
-                        message.state,
-                        MessageState::Delivering
-                            | MessageState::Submitted
-                            | MessageState::Unsubmitted
-                    )
-                    && !message.observed
-                {
+                if self.is_awaiting_receipt(&message, session_id) {
                     // The hook sees the envelope as the harness transformed it on paste.
                     let envelope = harness::paste_view(
                         session.harness(),
@@ -1128,58 +1153,56 @@ impl Runtime {
                 }
             }
         }
-        if known.is_empty() {
-            session.note_submit(false);
-        } else if known.len() == 1 && text == known[0].1 {
-            self.store.record_receipt(known[0].0).await?;
-            session.note_submit(true);
-        } else {
-            let mut remainder = text;
-            let mut complete = true;
-            for (_, envelope) in &known {
-                if let Some(start) = remainder.find(envelope) {
-                    remainder.replace_range(start..start + envelope.len(), "");
-                } else {
-                    complete = false;
-                    break;
-                }
+        Ok(known)
+    }
+
+    async fn block_corrupted_submission(
+        &self,
+        session: &Arc<Session>,
+        text: String,
+        known: Vec<(i64, String)>,
+    ) -> anyhow::Result<Response> {
+        let mut remainder = text;
+        let mut complete = true;
+        for (_, envelope) in &known {
+            if let Some(start) = remainder.find(envelope) {
+                remainder.replace_range(start..start + envelope.len(), "");
+            } else {
+                complete = false;
+                break;
             }
-            // shortcut: interleaved envelopes cannot be separated safely; their
-            // human text stays in the transcript until a harness can rewrite it.
-            // A leftover wrapper tag means unwrapping failed; pasting it back would put
-            // harness markup in the human's composer.
-            let draft = (complete
-                && !remainder.contains("<pasted_content")
-                && !remainder.contains("</pasted_content"))
-            .then(|| messaging::sanitize_draft(remainder.trim()));
-            session.note_corrupted(draft);
-            let mut undeliverable = false;
-            for (seq, _) in known {
-                if self
-                    .store
-                    .reject_attempt(seq, messaging::MAX_MESSAGE_REJECTIONS)
-                    .await?
-                    == RejectOutcome::Undeliverable
-                {
-                    undeliverable = true;
-                }
-            }
-            session.message_notify().notify_one();
-            return Ok(Response::PromptVerdict {
-                verdict: "block".into(),
-                reason: Some(
-                    if undeliverable {
-                        messaging::UNMATCHABLE_SUBMISSION_REASON
-                    } else {
-                        messaging::CORRUPTED_SUBMISSION_REASON
-                    }
-                    .into(),
-                ),
-            });
         }
+        // shortcut: interleaved envelopes cannot be separated safely; their
+        // human text stays in the transcript until a harness can rewrite it.
+        // A leftover wrapper tag means unwrapping failed; pasting it back would put
+        // harness markup in the human's composer.
+        let draft = (complete
+            && !remainder.contains("<pasted_content")
+            && !remainder.contains("</pasted_content"))
+        .then(|| messaging::sanitize_draft(remainder.trim()));
+        session.note_corrupted(draft);
+        let mut undeliverable = false;
+        for (seq, _) in known {
+            if self
+                .store
+                .reject_attempt(seq, messaging::MAX_MESSAGE_REJECTIONS)
+                .await?
+                == RejectOutcome::Undeliverable
+            {
+                undeliverable = true;
+            }
+        }
+        session.message_notify().notify_one();
         Ok(Response::PromptVerdict {
-            verdict: "allow".into(),
-            reason: None,
+            verdict: "block".into(),
+            reason: Some(
+                if undeliverable {
+                    messaging::UNMATCHABLE_SUBMISSION_REASON
+                } else {
+                    messaging::CORRUPTED_SUBMISSION_REASON
+                }
+                .into(),
+            ),
         })
     }
 

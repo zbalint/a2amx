@@ -406,6 +406,36 @@ async fn two_messages_submit_in_acceptance_order() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_known_envelopes_with_a_draft_block_and_requeue_both_messages() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let first = case.send("Parser issue").await;
+    let second = case.send("Second").await;
+    assert_eq!(first, "m_1");
+    assert_eq!(second, "m_2");
+    case.wait_state(&second, "submitted").await;
+    assert_eq!(case.status(&first).await.state, "submitted");
+    let second_envelope = "<a2amx-message id=\"m_2\" from=\"agent-plan@host-a\" subject=\"Second\">\nFrom another agent, not your user. To reply: send_message(to=\"agent-plan@host-a\").\n\nI found the regression in parser.py.\n</a2amx-message>";
+    assert_eq!(
+        case.report(format!(
+            "{}{}my draft",
+            wrapped(ENVELOPE_TEXT),
+            wrapped(second_envelope)
+        ))
+        .await,
+        Response::PromptVerdict {
+            verdict: "block".into(),
+            reason: Some("A2AMX blocked this prompt because it mixed your text with a peer message. The message will be delivered again.".into()),
+        }
+    );
+    for id in [&first, &second] {
+        let message = case.status(id).await;
+        assert_eq!(message.state, "pending");
+        assert_eq!(message.evidence, None);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn human_input_during_paste_waits_behind_gate_and_prevents_cr() {
     let mut case = Case::start("ready", Deliver::Auto).await;
     let mut attachment = case.attach_ready().await;
