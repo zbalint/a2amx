@@ -582,7 +582,11 @@ changes. The extension also re-sends an unchanged state every 30 s. Draft state
 comes from nonblank editor text and is false when the editor API is missing or
 throws. Pending state combines the extension's FIFO with OMP's queued-message flag;
 the state frame carries `queue` (the FIFO length) and `host_pending` (OMP's queued-
-message flag) as optional diagnostic fields. The state immediately after an
+message flag) as optional diagnostic fields. When `idle`, `queue` is 0, and
+`host_pending` is true, the daemon does not count the state as in flight because OMP
+is waiting for its next turn (for example, a queued reminder after a failed `todo`
+call); the next delivery starts that turn, and a reset is not rejected `busy` in
+that state. The state immediately after an
 acknowledgement always reports pending. A head seen pending is dropped when OMP's
 flag becomes false; an entry older than 120 s is dropped when that flag is false,
 preventing a missing or changed receipt event from blocking delivery forever; a

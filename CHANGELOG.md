@@ -18,3 +18,7 @@ the full history is in `git log`.
   private app-server).
 - Session names, a status line with quota, a session picker with team sections, and
   `a2amx team` to start and stop a team of sessions.
+
+### Fixed
+
+- An idle OMP session that holds queued next-turn messages of its own (for example after a failed `todo` call) no longer blocks message delivery or `reset_session`.

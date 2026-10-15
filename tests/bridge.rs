@@ -438,6 +438,118 @@ async fn a_receipt_upgrades_the_evidence_to_native_receipt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_idle_host_with_queued_next_turn_messages_does_not_block_delivery() {
+    let case = Case::start().await;
+    let mut link = case.ready().await;
+    assert_eq!(case.send().await, "m_1");
+    first_delivery(&mut link).await;
+    link.send(BridgeUp::Ack { id: "m_1".into() }).await.unwrap();
+    case.wait_state("m_1", "submitted").await;
+    assert_eq!(case.send().await, "m_2");
+    link.send(BridgeUp::State {
+        idle: true,
+        pending: true,
+        draft: false,
+        queue: Some(0),
+        host_pending: Some(true),
+    })
+    .await
+    .unwrap();
+    assert_eq!(next(&mut link).await, BridgeDown::Deliver {
+        id: "m_2".into(),
+        envelope: "<a2amx-message id=\"m_2\" from=\"agent-plan@host-a\" subject=\"Parser issue\">\nFrom another agent, not your user. To reply: send_message(to=\"agent-plan@host-a\").\n\nI found the regression in parser.py.\n</a2amx-message>".into(),
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_non_empty_extension_queue_still_blocks_delivery() {
+    let case = Case::start().await;
+    let mut link = case.ready().await;
+    assert_eq!(case.send().await, "m_1");
+    first_delivery(&mut link).await;
+    link.send(BridgeUp::Ack { id: "m_1".into() }).await.unwrap();
+    case.wait_state("m_1", "submitted").await;
+    assert_eq!(case.send().await, "m_2");
+    link.send(BridgeUp::State {
+        idle: true,
+        pending: true,
+        draft: false,
+        queue: Some(1),
+        host_pending: Some(true),
+    })
+    .await
+    .unwrap();
+    case.wait_reason("m_2", "in_flight").await;
+    no_delivery(&mut link).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_busy_host_with_queued_messages_still_blocks_delivery() {
+    let case = Case::start().await;
+    let mut link = case.ready().await;
+    assert_eq!(case.send().await, "m_1");
+    first_delivery(&mut link).await;
+    link.send(BridgeUp::Ack { id: "m_1".into() }).await.unwrap();
+    case.wait_state("m_1", "submitted").await;
+    assert_eq!(case.send().await, "m_2");
+    link.send(BridgeUp::State {
+        idle: false,
+        pending: true,
+        draft: false,
+        queue: Some(0),
+        host_pending: Some(true),
+    })
+    .await
+    .unwrap();
+    case.wait_reason("m_2", "in_flight").await;
+    no_delivery(&mut link).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_extension_without_diagnostics_keeps_blocking_delivery() {
+    let case = Case::start().await;
+    let mut link = case.ready().await;
+    assert_eq!(case.send().await, "m_1");
+    first_delivery(&mut link).await;
+    link.send(BridgeUp::Ack { id: "m_1".into() }).await.unwrap();
+    case.wait_state("m_1", "submitted").await;
+    assert_eq!(case.send().await, "m_2");
+    link.send(BridgeUp::State {
+        idle: true,
+        pending: true,
+        draft: false,
+        queue: None,
+        host_pending: None,
+    })
+    .await
+    .unwrap();
+    case.wait_reason("m_2", "in_flight").await;
+    no_delivery(&mut link).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_inconsistent_state_report_keeps_blocking_delivery() {
+    let case = Case::start().await;
+    let mut link = case.ready().await;
+    assert_eq!(case.send().await, "m_1");
+    first_delivery(&mut link).await;
+    link.send(BridgeUp::Ack { id: "m_1".into() }).await.unwrap();
+    case.wait_state("m_1", "submitted").await;
+    assert_eq!(case.send().await, "m_2");
+    link.send(BridgeUp::State {
+        idle: true,
+        pending: true,
+        draft: false,
+        queue: Some(0),
+        host_pending: Some(false),
+    })
+    .await
+    .unwrap();
+    case.wait_reason("m_2", "in_flight").await;
+    no_delivery(&mut link).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_draft_delays_delivery_until_it_clears() {
     let case = Case::start().await;
     let mut link = case.ready().await;

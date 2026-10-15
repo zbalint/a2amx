@@ -2170,7 +2170,10 @@ async fn bridge(
                         queue,
                         host_pending,
                     } => {
-                        session.native_state(idle, draft, pending);
+                        // OMP holds next-turn reminders while idle; an empty extension queue means a2amx has nothing in flight.
+                        let waiting_for_turn =
+                            idle && queue == Some(0) && host_pending == Some(true);
+                        session.native_state(idle, draft, pending && !waiting_for_turn);
                         session.native_diagnostics(queue, host_pending);
                     }
                     BridgeUp::Ack { id } => session.native_ack(&id, Ok(())),
