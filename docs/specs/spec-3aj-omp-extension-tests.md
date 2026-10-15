@@ -113,7 +113,7 @@ Run after implementation, in this order:
 4. **Mutation check** (the tests cannot be red-first, so show they can fail). Apply each of these one at a time to a temporary copy or in the working tree and revert it, record the failing test names, and show `git diff --stat extension/omp.ts` empty at handoff:
    - change the nack reason cap `.slice(0, 200)` to `.slice(0, 20)`;
    - delete `delete argumentsObject.i;`;
-   - change both `120000` literals to `1`;
+   - change all three `120000` literals (lines 169, 206, 217) to `1`;
    - change the `deliverAs: "aside"` option to `"followUp"`;
    - change `Math.min(backoff * 2, 5000)` to `Math.min(backoff * 2, 50000)`;
    - delete the `if (hasPending && fifo.length > 0) fifo[0].sawPending = true;` line.
@@ -122,3 +122,7 @@ Run after implementation, in this order:
 6. Report the run time of `cargo test --test omp_extension`. It should be under 30 s; if it is not, say which tests dominate and why.
 
 Known flakes: none known for this suite. The tests use real sockets: a failing `waitForFrame` is a real failure, rerun once and report if it passes.
+
+## Amendment 1 (2026-10-15)
+
+Section 9 step 4, third mutation: `extension/omp.ts` has three `120000` literals (lines 169, 206, 217), not two. The mutation replaces all three with `1`. Found by the developer (m_1822); no other rule changes.
