@@ -104,6 +104,7 @@ jobs:
         continue-on-error: true
         env:
           A2AMX_REQUIRE_NODE: "1"
+          A2AMX_JS_LCOV: js.lcov
         run: cargo llvm-cov --locked --no-fail-fast --no-report
       # A test that kills a child mid-write leaves a truncated .profraw that crashes llvm-profdata,
       # so drop the unreadable ones before building the report.

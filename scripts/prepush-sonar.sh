@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 # and returned last so a red suite is never hidden behind a green gate.
 tests=0
 # A missing Node must fail the push gate, not skip the OMP extension tests.
-A2AMX_REQUIRE_NODE=1 cargo llvm-cov --locked --no-fail-fast --no-report || tests=$?
+A2AMX_REQUIRE_NODE=1 A2AMX_JS_LCOV=js.lcov cargo llvm-cov --locked --no-fail-fast --no-report || tests=$?
 
 # A test that kills a child mid-write leaves a truncated .profraw that crashes llvm-profdata.
 profdata="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"

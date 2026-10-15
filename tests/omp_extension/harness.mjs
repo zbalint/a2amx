@@ -9,10 +9,11 @@ const realSetTimeout = globalThis.setTimeout;
 const root = path.dirname(fileURLToPath(import.meta.url));
 const fakeBridge = path.join(root, "fake_bridge.mjs");
 
+// The module is imported once: the default export is a factory and keeps its state per call.
 export async function loadExtension() {
   const filename = process.env.A2AMX_TEST_EXTENSION;
   if (!filename) throw new Error("A2AMX_TEST_EXTENSION is not set");
-  const module = await import(`${pathToFileURL(filename).href}?${Date.now()}-${Math.random()}`);
+  const module = await import(pathToFileURL(filename).href);
   return module.default;
 }
 
