@@ -5,6 +5,12 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The README is now a short landing page with an example and a quick start; the command,
+  team-file, harness and installation reference moved to `docs/` (`cli.md`, `teams.md`,
+  `harnesses.md`, `install.md`, `using-with-agents.md`, `roadmap.md`).
+
 ## [0.1.0] - 2026-10-15
 
 ### Added

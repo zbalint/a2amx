@@ -1,404 +1,101 @@
 # A2AMX
 
-`master`: [![Quality gate status (master)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=master&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=master)
-&nbsp;&nbsp;`develop`: [![Quality gate status (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
+[![CI (master)](https://github.com/zbalint/a2amx/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/zbalint/a2amx/actions/workflows/ci.yml)
+[![CI (develop)](https://github.com/zbalint/a2amx/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/zbalint/a2amx/actions/workflows/ci.yml)
+[![Quality gate (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
+[![Coverage (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=coverage)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
+[![Security rating (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
+[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-orange?logo=rust)](https://github.com/zbalint/a2amx/blob/develop/Cargo.toml)
+[![Platform Linux](https://img.shields.io/badge/platform-Linux-blue?logo=linux)](https://github.com/zbalint/a2amx)
+[![License AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](https://spdx.org/licenses/AGPL-3.0-or-later.html)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/zbalint/a2amx/badge)](https://securityscorecards.dev/viewer/?uri=github.com/zbalint/a2amx)
 
-**Agent-to-Agent Message eXchange**
+A2AMX hosts Claude Code, OMP, and Codex sessions under PTYs and lets the agents message one another through native harness channels.
 
-> **Not the A2A protocol.** A2AMX is an independent project and has no affiliation with
-> the [Agent2Agent (A2A) protocol](https://github.com/a2aproject/A2A), an open protocol
-> for communication between agentic applications. A2AMX does not implement that protocol.
-> It is a terminal multiplexer and message exchange for local agent harness sessions.
+**Status:** alpha. The Linux single-machine daemon, terminal sessions, durable messaging, team management, and three native delivery profiles work today; cross-host support and agent-initiated launch are not built.
 
-A terminal multiplexer and message exchange for communication between AI agent sessions.
+> **Not the A2A protocol.** A2AMX is independent of the [Agent2Agent (A2A) protocol](https://github.com/a2aproject/A2A). It is a local terminal multiplexer and message exchange for agent sessions.
 
-## Status
+## The problem
 
-The terminal core is implemented: a local daemon that owns PTY sessions, keeps
-their screen state while detached, and lets one human attach, detach, switch, and
-scroll from a client that redraws from the terminal model. The single-machine
-messaging core is implemented too: durable SQLite messages, per-session tokens, a
-stdio MCP server, and delivery into a session's composer that protects an unfinished
-human draft. For Claude Code, a prompt-submit hook adds submission receipts and a
-safety net that blocks a prompt mixing a peer message with a human draft.
-Claude Code sessions receive messages through a channel, OMP through an
-extension, and Codex through a private app-server. Sessions have names, a status
-line shows quota, and `a2amx team` starts and stops a team of sessions. Agent-initiated
-launch, a prompt-submit hook safety net for Codex and OMP (their native channels already record receipts), and
-cross-host support are not built yet. Everything in the design documents beyond
-these slices is still a proposal unless identified as a requirement.
+Agents running in different harnesses cannot use each harness's built-in peer messaging. Typing a message into a terminal can destroy a human's half-written draft, and a session dies when its terminal closes.
 
-The implementation direction is **Rust on Linux**, with communication and session
-management across multiple hosts from the outset.
+A2AMX owns the sessions under PTYs, delivers through each supported harness's native channel, and keeps the human's draft protected. The daemon keeps detached sessions running and persists accepted messages on the local machine.
 
-## The idea
+## Example
 
-Interactive agent harnesses expose a terminal input path. A2AMX launches them
-under pseudoterminals (PTYs) and lets people switch between their sessions. It
-delivers messages from other agents through each harness's native channel where one
-exists (Claude Code, OMP, Codex), and by typing into the terminal otherwise.
+This run used a temporary state directory and a freshly installed build.
 
-Each agent has an MCP server for sending messages. Claude Code also has a hook for
-observing prompt submission; OMP and Codex report receipts through their channels. The local daemon routes and persists messages on one host and
-owns local PTYs, keeping sessions running when a client disconnects. Routing across
-hosts is proposed, not implemented.
-
-For example, a planning agent on `host-a` could message a reviewing agent on
-`host-b`. The recipient's host would queue the message until delivery is permitted,
-deliver a clearly attributed message, and report a receipt when the harness provides
-one.
-
-Claude Code and Codex can already message parallel sessions of their own kind, but
-not sessions of a different harness. A2AMX targets that gap, and also sessions on
-other hosts and in containers.
-
-Writing bytes to a PTY does not prove that the harness submitted a prompt. A hook
-receipt does not prove that a model processed it. Those distinctions, and protecting
-unfinished human input, are central design constraints.
-
-## Scope
-
-A2AMX is intended to provide:
-
-- PTY ownership, terminal state, and human session switching across Linux hosts.
-- Durable messages, routing, session identity, and submission receipts.
-- Serialized input with explicit protection for human composition.
-- A small per-agent MCP interface: `list_agents` (address, state, activity, attached,
-  quota, harness, and spawn `cwd`), `send_message`, `message_status`, and `reset_session`.
-- Hosting of arbitrary interactive commands, with tested delivery profiles for
-  supported harnesses. The target harnesses are Claude Code, Codex, and OMP,
-  including harnesses running inside containers.
-- Remote launch: a central daemon can direct the daemon on any connected host to
-  start a session there.
-- Mid-turn delivery: an agent in the middle of a long turn can receive a message
-  without waiting for the turn to end.
-- A human experience in an attached session equivalent to starting the harness
-  directly, without loss of function.
-
-It is not an agent planner, an LLM orchestration framework, a memory system, or a
-container management platform. It has no planned LLM of its own. Arbitrary command
-hosting does not imply safe automatic message delivery into every terminal program.
-
-## Design documents
-
-| Document | Read it when working on |
-| --- | --- |
-| [Architecture](docs/architecture.md) | Scope, topology, ownership, trust, terminal behavior, or unresolved architectural choices |
-| [Delivery](docs/delivery.md) | Input arbitration, message evidence, hooks, retry, ordering, or failure recovery |
-| [Validation plan](docs/validation-plan.md) | The checks each implementation slice must pass |
-| [Backlog](docs/backlog.md) | Open known items, issues, untested behavior, and ideas |
-
-The terminal-core, messaging-core, and Claude Code hook slices are done; their locked
-specs are [spec 1](docs/specs/spec-1-terminal-core.md),
-[spec 2](docs/specs/spec-2-messaging.md),
-[spec 2b](docs/specs/spec-2b-hooks-receipts.md), and
-[spec 2c](docs/specs/spec-2c-delivery-robustness.md). The Claude channel, OMP extension, and Codex app-server delivery profiles
-followed as specs 2e to 2g and later. The next milestones are prompt-submit hooks for
-Codex and OMP, then cross-host support. The checks each slice
-must pass, and the results recorded so far, are in the validation plan.
-
-## Building and trying it
+Start the daemon in one terminal:
 
 ```sh
-cargo build
-cargo test
-a2amx daemon start [--foreground]  # start the daemon; detached by default
-a2amx daemon status               # show daemon state, build version and session counts
-a2amx daemon stop [--yes] [--now] # graceful by default; --now skips Ctrl-D
-a2amx new --watch developer --heartbeat 30m -- sh # digest watched peers after idle
-a2amx list [--details]
-a2amx attach <id|name> [--force]
-a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
-a2amx kill --exited              # remove every exited session without prompting
-a2amx reset <id|name>               # type the configured reset sequence
-a2amx screen <id|name> [--rows N]   # read visible screen text without attaching
-a2amx team status [--file F]                         # read-only wanted-session state
-a2amx team up --dry-run [--file F]                   # print the launch plan, do not start
-a2amx team up [--file F] [--detach] [NAME=EXE ...]   # a2amx.toml or bare executables
-a2amx team down [--file F] [--now] [NAME ...]
-a2amx team reset [--file F | NAME ...] [--except NAME]... [--include-attached] [--yes]
-a2amx daemon start --host-name host-a  # names this host in addresses (name@host-a)
-# --harness is inferred from the command name when omitted (claude, codex, omp)
-a2amx new --name agent-plan --harness claude -- claude
-a2amx new --name agent-review --harness omp -- omp
-a2amx messages [--session <id>] [--state pending]
-a2amx cancel <message-id>
+$ a2amx daemon start
+listening on 127.0.0.1:34613
 ```
 
-`kill`, `team down`, and `daemon stop` use graceful Ctrl-D by default; pass `--now`
-to skip it and use the immediate HUP/KILL path.
+Start each session in its own terminal; `a2amx new` attaches the terminal, so use two more terminals:
 
-`a2amx kill --exited` removes every exited session and never prompts; running sessions are
-untouched. It prints `removed NAME-or-ID` for each removed session, or `no exited sessions`
-when there is nothing to remove. The `--exited` form cannot be combined with a session
-reference, `--yes`, or `--now`.
-
-Commands that take a session accept its name or its id.
-Without `--name`, `new` generates a name such as `soggy-walrus`, prints it on stderr, and treats it like an explicit name.
-
-`--harness claude` wires the MCP server and the prompt-submit hook into Claude Code
-and delivers messages automatically; `--harness generic` (inferred for unrecognised commands) holds them, and
-`--deliver auto` opts a generic session in to blind delivery. `a2amx mcp` is the stdio
-MCP server that harnesses start; it reads `A2AMX_ADDR` and `A2AMX_TOKEN` from its
-environment. `a2amx hook` is the Claude Code `UserPromptSubmit` hook, installed through
-an inline `--settings` argument; a user `--settings` in the command is merged with this
-hook rather than replaced. It reads the harness payload on stdin, always exits 0, and
-prints output only when it blocks a prompt.
-
-Claude delivery uses a Claude Code channel by default, preserving any composer draft.
-`--harness claude --no-channel` keeps terminal delivery. Channel startup auto-accepts
-Claude's development-channel dialog; this research preview needs a claude.ai or Console
-login. A successful write has `write_complete` evidence until the prompt hook confirms
-`native_receipt`; a missing receipt never triggers a resend.
-
-`--harness omp` writes the A2AMX extension into the state directory, loads it into OMP
-with `-e` and a per-session `--config` overlay, and delivers messages natively without
-typing into the terminal.
-
-The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,
-then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
-`A2AMX_PREFIX` to change it). After the prefix: `d` detach, `w` session picker, `[`
-scroll mode, `s` toggles the status line, `r` releases the session's message hold, and the prefix twice sends a
-literal prefix. The picker accepts PageUp/PageDown and Home/End and scrolls when sessions do not fit. When teams
-exist it groups sessions into foldable sections: `Space`/`Enter` fold or unfold a selected header, `h`/`l` and
-`Left`/`Right` fold or unfold its section, and `/` starts a case-insensitive filter that `Esc` clears and exits.
-When more than two teams exist, other teams start folded; the current session's team starts open.
-While a session has not turned on mouse reporting, the mouse wheel scrolls it (three lines a step) and
-enters scroll mode; hold Shift to select text with the mouse. Scrollback in the real terminal after you detach is not
-kept. The status line takes the terminal's last row, keeps a thin rule above it, and shows the session address, optional activity,
-low-quota, role and team, and harness details, pending-message count, and a HELD alert with the hold reason and (for
-releasable holds) a prefix-key hint for `r`; `s` hides both the status line and separator. In `a2amx list`, ATTACHED means a human client is attached, not that
-the session is reachable: a detached session still receives messages. ACTIVITY is `idle`, `working`, or `busy` for running sessions, and `-` for exited sessions. UPTIME is how long the session has existed (`-` when exited), and IN-STATE is how long its current ACTIVITY has lasted (`-` when ACTIVITY is `-`). Both are floored and shown as `Ns`, `Nm` or `Nh`, at one-second sampling resolution, starting when the daemon starts. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the reason a real hold is stopping delivery (`-` when clear); a sustained Codex `no_thread` or `waiting_on_approval` signal is shown as `needs_input`, while a sustained Claude screen heuristic is shown as `input?`. Both labels are display-only warnings: A2AMX never sends a key to dismiss a dialog. `input?` is deliberately hedged because the same two markers can appear in ordinary menus or search results, and the label appears only after ten seconds of a continuous signal. A session that looks idle with
-an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or
-Codex status line last said about remaining quota (5h and weekly percent left). For OMP it shows
-the 5-hour and weekly percentages left when `omp usage --json` works; the daemon polls about once
-every five minutes from the running session's own executable only when its file name is `omp`.
-Values older than 15 minutes are dropped. These account-level values use the smallest value across
-providers and accounts, so that is what is shown. The poll may refresh provider credentials as the
-interactive `omp usage` does; a bare `omp`
-uses the daemon's `PATH`, and an OMP session running nothing costs nothing because no OMP session
-means no poll. The screen's `usage_limit_reached` error appends `limit`. It is empty when no quota
-signal is recognised.
-
-When any session has a team, `a2amx list` inserts a TEAM column after NAME; a private
-team is shown as `NAME (private)`, and ungrouped sessions show `-`. `--team NAME` filters
-by team; `--as NAME` keeps sessions visible to that named session and the named session
-itself. The filters combine with AND and do not affect the picker, which remains the unfiltered
-operator view; picker `/` filtering is local to the open picker.
-Sessions outside a
-private visibility boundary are omitted from `list_agents`/`list` and return `unknown
-recipient` when addressed by an agent. Ungrouped (hand-started) sessions and
-`private = false` teams see everything and are seen by everyone, so a team is protected
-only from other private teams. Team metadata is not OS-user or process isolation.
-
-`a2amx reset <id|name>` types `/clear` by default, or the ordered `--reset` sequence
-configured for the session. Each step is bracketed-pasted, submitted with one Enter,
-and waits for the harness to become ready before the next step. A reset fails fast on
-an active draft, a held or non-ready session, a write error, or a 30-second per-step
-timeout; one reset runs at a time. Session-token callers need the target's
-`control_from` consent.
-
-### Teams
-
-`a2amx team status`, `team up` (file form), `team down`, and `team reset` use
-`a2amx.toml` in the invoking directory when it exists. Otherwise they use
-`<state home>/team.toml` as a global fallback. A global file gets its team name
-from the invoking directory: the final directory component is lowercased,
-non-alphanumeric runs become `-`, and the result is limited to 40 bytes. A
-global file must not set `team`; it may set `private` and `allow`, which apply
-to the derived team. Relative session `cwd` values (including `cwd = "."`) are
-resolved against the invoking directory for a global file. The fallback refuses
-the filesystem root, home directories, hidden or user-data directories under
-home, the daemon state and system trees, and top-level/container or Windows
-home directories. A local `a2amx.toml` or explicit `--file` always overrides
-the fallback and the guard. Two project directories with the same final
-component therefore share a derived team name and its sessions; this is a
-known limitation.
-A team file looks like:
-
-```toml
-team = "myproject"
-# private = false # teams are private by default
-# allow = ["other-team"] # file-level allow: mutual private-team consent by team name
-[[session]]
-name = "architect"
-command = ["claude"]
-attach = true
-role = "architect"
-allow = ["other-team/architect"] # session-level allow: mutual consent by final agent name
-reset = ["/clear", "/prewalk restart"]
-control_from = ["developer"]
-watch = ["developer"]
-heartbeat = "30m" # digest watched peers after 30 minutes of idle time
-# Reference forms: bare local "developer", explicit "other-team/architect", global "/hand".
-
-[[session]]
-name = "developer"
-command = ["omp"]
-cwd = "."
-role = "developer"
+```sh
+$ a2amx new --name planner -- claude
 ```
 
-The file-level `team` prefixes every session name (`architect` becomes `myproject-architect`).
-Teams are private by default; file-level `allow` names teams, and naming a public team changes nothing.
-Private teams can see ungrouped sessions and public teams, but two private teams need mutual
-file-level `allow` entries. A session-level `allow` uses the same key with `team/agent`
-entries such as `other-team/architect`; both named sessions must list each other. It adds
-that pair to the team-level visibility rule, still needs a private team, and does not expose
-the rest of either team. Changing a running session's list changes its scope and is a
-`team-mismatch`; take the team down with `a2amx team down` before the next `team up`.
-Sessions outside a private visibility boundary are omitted from
-`list_agents`/`list` and return `unknown recipient` when addressed by an agent. Team metadata
-is not OS-user or process isolation. The flag form has no team. Each `command` element is one
-argument, so use `["claude", "--model",
-"opus"]`, not `["claude --model opus"]`; an executable path containing a space
-is not accepted.
+```sh
+$ a2amx new --name reviewer -- omp
+```
 
-`reset` is optional; omitting it uses `/clear`. If present it must contain one to
-eight slash commands, each at most 200 bytes and without control characters.
-`control_from` lists named sessions allowed to invoke this session's reset through
-the MCP tool; the CLI/admin token is always allowed. `watch` lists named sessions
-whose natural exit sends this session one daemon message. A `heartbeat` such as
-`"30m"` sends an additional digest after that session is ready, unheld, not resetting,
-and unchanged for the interval; it requires a non-empty `watch` list and accepts
-positive `s`, `m`, or `h` values from 1 second through 24 hours. The digest is skipped
-when every live watched peer has `idle` activity and an empty queue. A daemon-ended
-session (for example through `kill`, `team down`, or `daemon stop`) sends no exit event.
+Detach each with Ctrl-B d, then inspect the sessions from any terminal:
 
-A cross-team `control_from` entry such as `other-team/agent` works only when the
-two sessions can already see each other. Mutual session-level `allow` lets one
-architect reset the other when the target lists that architect in `control_from`.
+```text
+$ a2amx list
+ID  NAME      HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA          SIZE
+s1  planner   claude   running  3s      working   3s        no        0        -     -              80x24
+s2  reviewer  omp      running  3s      working   3s        no        0        -     5h 81% wk 54%  80x24
+```
 
-`role` is an optional label of at most 64 characters, shown only to that session in
-its system prompt for Claude, OMP, and Codex. It grants no authority, is ignored for
-other commands, and is not visible to peers or in `list`. When set, it is appended
-to the same injected operator text as the peer-authorization line, including when
-`--no-authorize-peers` is used.
+The planner agent calls `send_message` to `reviewer`; the reviewer receives it as an attributed peer message.
 
-Within a `[[session]]` table, `name` may be omitted when `role` is set; the role is then used as the name and must itself be a valid name (otherwise set `name` explicitly). An explicit `name` always wins.
+## What you get
 
-A copy to start from is in `a2amx.toml.example`; your own `a2amx.toml` is gitignored.
+- **Persistent sessions:** detach and reattach to PTY-backed Claude Code, OMP, Codex, or generic commands.
+- **Cross-harness messaging:** agents send durable messages through an authenticated MCP interface.
+- **Native delivery:** Claude Code uses a channel, OMP an extension, and Codex a private app-server.
+- **Draft protection:** delivery holds when automatic input could mix with a human's unfinished composition.
+- **Operator controls:** attach, switch, scroll, inspect, reset, and stop sessions from the CLI.
+- **Teams and status:** group sessions with visibility rules, roles, watches, heartbeats, and quota status.
 
-Use `--file` for another file; relative `cwd` values are relative to that file's
-directory, while an omitted `cwd` uses the invoking directory. `up` skips and reports
-running sessions. An exited session holding a requested name stops the whole team
-before any spawn; remove it with `a2amx kill NAME` first. A live team name with different
-private/allow settings (file-level or session-level) is a conflict; run `a2amx team down` before changing those settings.
-If a later spawn fails, already-started sessions remain and no further session starts.
+## Quick start
 
-Without a file, `a2amx team up architect=claude developer=omp` accepts bare
-executables only and has no team; commands with arguments need the file's argv
-arrays. The file may select one session to attach; the flag form attaches the
-first. `--detach` suppresses attachment, and nonterminal invocation never attaches.
-`a2amx team down` kills the file's named sessions, running or exited; explicit
-names select full session names directly, including any team-prefixed name. It uses the
-same graceful Ctrl-D default as `kill`; pass `--now` to use the immediate HUP/KILL
-path. Missing names are reported without failing; explicit missing names also print
-a stderr hint to use full names from `a2amx list`, while file-derived missing names
-are silent.
+Install the release copy, put its `bin` directory on `PATH`, and start the daemon:
 
-`a2amx team reset [--file F | NAME ...] [--except NAME]... [--include-attached] [--yes]`
-clears the configured reset sequence for each selected session, in file order or NAME
-argument order. It asks for confirmation before the first reset; pass `--yes` for
-noninteractive use. Use `--except` to leave selected sessions untouched (an excepted name
-that was not selected is ignored). Sessions with a human attachment are skipped by default
-when selected from the file, because reset clears the conversation that person is viewing;
-name a session explicitly or pass `--include-attached` to opt in. Missing sessions print
-`no session`, exited sessions print a skip line, and a busy or drafting session is skipped
-by the daemon, reported as `failed`, and followed by the remaining sessions. The command
-exits 1 if any reset failed and 0 when every running session reset or was legitimately
-skipped.
+```sh
+scripts/install.sh
+export PATH="$HOME/.a2amx/bin:$PATH"
+a2amx daemon start
+```
 
-Resets are sequential and preserve selection order. Each reset step settles for at least
-1.5 seconds, and a step that never becomes ready can take up to the 30-second timeout, so
-a five-session team can take roughly ten to twenty seconds when all sessions are ready.
-The command does not detect whether its caller is one of the selected agents; the state
-directory is the trust boundary. Use `--except` for the session running the command.
+Then start the two sessions from [the example above](#example). See [Installation](docs/install.md) for install details.
 
-`a2amx team status` also needs a running daemon and prints one `NAME TEAM STATE NOTE`
-row per wanted session in file order. `TEAM` is the configured team name, with a
-` (private)` suffix for private teams, or `-` when ungrouped. `STATE` is `missing`,
-`running`, `exited`, or `team-mismatch`; `running` means only that the name and team
-scope match, not that the command, cwd, role, or other settings are current. It exits
-0 when `team up` would proceed (including missing sessions) and 1 when `team up` would
-refuse because of a conflict. A conflict note uses the same remediation text as
-`team up`; status returns that exit code directly without an `a2amx:` error line.
+## Compatibility and limits
 
-`a2amx team up --dry-run` uses the same daemon list and conflict preflight, then prints
-`would start`/`already running` rows and the resolved harness, cwd, team visibility and
-allow list, role, attachment, watch, controller, heartbeat, and redacted command for
-each session that would start. It needs a running daemon, exits 1 on the same conflicts,
-and never starts or attaches a session; OMP extension installation is explicitly skipped.
-The command keeps `argv[0]`, flag names, and UTF-8 byte counts, but redacts every value
-and every non-flag argument (including everything after `--`) because settings and
-injected prompts can contain secrets. `--dry-run` cannot be combined with `--detach` or
-inline `NAME=EXECUTABLE` items.
+- Linux only; build requires Rust 1.88 or newer.
+- Claude Code, OMP, and Codex have native delivery profiles. Other commands are held unless explicitly opted into blind delivery.
+- The daemon currently owns one machine; cross-host routing and remote launch are not built.
+- Agents cannot launch other sessions. Teams provide visibility and coordination, not OS-user or process isolation.
+- PTY bytes do not prove prompt submission. Receipts report harness evidence, not model processing.
+- A2AMX is not an agent planner, an LLM orchestration framework, a memory system, or a container management platform, and has no LLM of its own.
 
-After `team up`, `team status`, or a dry run, the command may print
-`note: N message(s) to this team were lost in a daemon restart; see a2amx messages
---state undeliverable` when retained undeliverable messages have detail
-`daemon_restarted` for one of the wanted names. The note is best-effort and does not
-change the command's result; messages are retained for the existing seven-day window.
-`--file` cannot be combined with inline session items or names.
-
-## Using it with agents
-
-- Tell your agents how to treat peer messages. The envelope says only where a message
-  came from. A line in your agent instructions saying that a peer message is a request
-  from an authorized peer, not from you; that scoped, reversible work is fine; and that
-  pushing, production access, deleting data, and secrets still need you, removes the
-  guesswork. `--harness claude` and `--harness omp` add an operator line that tells
-  the agent to act on peer messages; a team `role`, when set, is added to that same
-  injected operator text. `--no-authorize-peers` leaves the peer line out.
-- Keep credentials out of message bodies. A prompt hook, transcript, or memory tool
-  attached to the harness sees the full message, and some keep it with no way to
-  delete it.
-- Claude Code escapes its own paste-wrapper tag when it appears in pasted text, and
-  A2AMX models that behavior on Claude Code 2.1.286, so a body containing the tag
-  text remains matchable there. A sender can still avoid writing the wrapper tag in
-  a message body when practical.
-- A sender's `accepted` means the daemon took the message, not that it was delivered.
-  Check `message_status` when the reply matters.
-
-## Dev build versus live install
-
-Build and test from the repository with `cargo build` and `cargo test`. Install a release
-copy with `scripts/install.sh`, then run the daemon from `~/.a2amx/bin/a2amx` and point
-your `amx` alias or launcher at that installed binary. `A2AMX_INSTALL_DIR` overrides the
-install directory; the state directory remains separate.
-
-Never run the daemon from `target/`: development builds replace that executable and can
-break the MCP command of a later Codex session. Install freely; the atomic install leaves
-a running daemon using its old image. Restart deliberately to pick up the new version,
-because restarting the daemon ends all sessions. The script leaves PATH, aliases, services,
-and daemon start or stop to the operator.
-
-Each build carries its git description (`a2amx --version`), and the running daemon reports
-the same value in `a2amx daemon status`. A `-dirty` suffix marks a build from a modified
-source tree. Status writes a warning to stderr when the daemon was built from a different
-version and recommends a restart; restarting ends all sessions. A source tarball without
-git metadata reports `0.0.0`, which cannot be compared for a mismatch.
-
-## Contributing
-
-Design feedback and reproducible, sanitized compatibility findings are welcome.
-Identify whether a suggestion changes a requirement, a proposal, or an open
-question. Before sending a change, `cargo test`, `cargo clippy --all-targets -- -D
-warnings`, and `cargo fmt --check` must pass; see [AGENTS.md](AGENTS.md).
-
-This is a public repository. Use fictional identities and example hosts in docs
-and fixtures. Keep credentials, personal infrastructure details, private agent
-conversations, and local memory exports out of files, issues, commits, and pull
-requests. Keep runtime databases and logs outside the checkout; review any proposed
-diagnostic attachment before publishing it. Ignore rules are not a substitute for
-reviewing staged content.
-
-## Contributing and security
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report issues and build the project, and
-[SECURITY.md](SECURITY.md) for how to report a vulnerability. Changes are listed in the
-[changelog](CHANGELOG.md).
-
-## License
-
-See [LICENSE](LICENSE) for the repository's license terms.
+## Documentation
+- [CLI reference](docs/cli.md) — commands, attachment controls, list columns, quota, and reset.
+- [Teams](docs/teams.md) — configure team files, visibility, watches, heartbeats, and team commands.
+- [Harnesses and delivery](docs/harnesses.md) — choose profiles and interpret channels, hooks, and receipts.
+- [Installation](docs/install.md) — separate development builds from the live installed binary.
+- [Using with agents](docs/using-with-agents.md) — peer-message instructions and credential hygiene.
+- [Roadmap](docs/roadmap.md) — what is implemented, deferred, proposed, or dropped.
+- [Architecture](docs/architecture.md) — topology, scope, authority, and terminal behavior.
+- [Delivery](docs/delivery.md) — input arbitration, evidence, retries, ordering, and recovery.
+- [Validation plan](docs/validation-plan.md) — implementation-slice checks and recorded results.
+- [Backlog](docs/backlog.md) — open gaps, issues, untested behavior, and ideas.
+- [Contributing](CONTRIBUTING.md) — setup, checks, and public-repository rules.
+- [Security](SECURITY.md) — private vulnerability reporting and security scope.
+- [Changelog](CHANGELOG.md) — user-visible changes.
+- [License](LICENSE) — AGPL-3.0-or-later terms.
