@@ -186,6 +186,16 @@ Kill the temp daemon and sessions and delete the temp directory afterwards. The 
 (`a2amx list` and the message as received) goes into the README, with fictional session names
 (`planner`, `reviewer`) and no paths, tokens or host names from this machine.
 
+## Amendment 1 (architect, after m_1851)
+
+The real model exchange could not be produced: in a temp `A2AMX_HOME` the Claude session reports
+`server:a2amx · no MCP server configured with that name`, and in an empty cwd it stops at the
+workspace-trust dialog. §2.3 and the provenance rule are amended: the example shows the install,
+the daemon start, the two session commands and the real `a2amx list` output of the temp run, and
+one plain sentence that the planner calls `send_message` to `reviewer` and the reviewer receives it
+as an attributed message. It contains no received-message transcript and no `a2amx messages` output
+holding a message, because none was captured. The gap is disclosed in the report. The rest stands.
+
 ## 9. Acceptance
 
 The post-implementation checks (these need the new files, so they are run only after the change):
