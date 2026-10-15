@@ -175,12 +175,23 @@ impl HookCase {
     }
 }
 
+/// The hook binary must see none of the session's environment, except the coverage target: without
+/// `LLVM_PROFILE_FILE` an instrumented child writes its profile to `default_*.profraw` in the
+/// working directory, where the coverage report never finds it.
+fn clean_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_a2amx"));
+    command.env_clear();
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
+    command
+}
+
 async fn run_hook(payload: &str, address: Option<SocketAddr>, token: Option<String>) -> Output {
     let payload = payload.as_bytes().to_vec();
     tokio::task::spawn_blocking(move || {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_a2amx"));
+        let mut command = clean_command();
         command
-            .env_clear()
             .arg("hook")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -234,8 +245,7 @@ async fn hook_exact_wrapped_envelope_records_receipt_and_cli_detail() {
     let cli = tokio::task::spawn_blocking({
         let home = case.dir.path().to_owned();
         move || {
-            Command::new(env!("CARGO_BIN_EXE_a2amx"))
-                .env_clear()
+            clean_command()
                 .args(["--home", home.to_str().unwrap(), "messages"])
                 .output()
                 .unwrap()
