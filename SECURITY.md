@@ -2,8 +2,7 @@
 
 ## Supported versions
 
-A2AMX has no releases yet (version `0.0.0`). Only the latest commit on the default
-branch is supported.
+Only the latest release and the latest commit on the default branch are supported.
 
 ## Reporting a vulnerability
 

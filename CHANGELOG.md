@@ -1,10 +1,11 @@
 # Changelog
 
 All notable user-visible changes are listed here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). There are no releases yet;
-the full history is in `git log`.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The full history is in `git log`.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-10-15
 
 ### Added
 
