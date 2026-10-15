@@ -1,8 +1,7 @@
 # A2AMX
 
-[![CI (master)](https://github.com/zbalint/a2amx/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/zbalint/a2amx/actions/workflows/ci.yml)
-[![CI (develop)](https://github.com/zbalint/a2amx/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/zbalint/a2amx/actions/workflows/ci.yml)
-[![Quality gate (master)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=master&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=master)
+[![CI (master)](https://img.shields.io/github/actions/workflow/status/zbalint/a2amx/ci.yml?branch=master&label=CI%20(master))](https://github.com/zbalint/a2amx/actions/workflows/ci.yml)
+[![CI (develop)](https://img.shields.io/github/actions/workflow/status/zbalint/a2amx/ci.yml?branch=develop&label=CI%20(develop))](https://github.com/zbalint/a2amx/actions/workflows/ci.yml)
 [![Quality gate (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
 [![Coverage (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=coverage)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
 [![Security rating (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
