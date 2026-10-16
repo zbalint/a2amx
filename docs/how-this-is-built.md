@@ -12,7 +12,9 @@ practices a good human team does:
 | Practice in a human team | How it is done here | Where to look |
 | --- | --- | --- |
 | Design review before coding | A consultant reviews each specification before it is locked | [`docs/specs/`](specs/) |
-| Independent QA | A tester, on a different model than the developer, checks every non-trivial diff | spec amendments, CI |
+| Independent QA | A tester, on a different model than the developer, checks non-trivial diffs under the current process | spec amendments, CI |
+| Speaking up when the plan is wrong | A developer who finds the specification contradicts the code must stop and report it; any agent may refuse a request that breaks the owner's rules | spec amendments, e.g. Amendment 1 of [3al](specs/spec-3al-sonar-open-issues.md) |
+| Hiring the right person for each role | Each role has its own model, chosen for what the role needs; the models are listed [below](#the-roles) | the roles section |
 | Test-first development | The convention in `AGENTS.md` | [`AGENTS.md`](../AGENTS.md), `tests/` |
 | Static-analysis gate | `clippy`, `rustfmt`, SonarQube and a blocking pre-push scan | CI, `scripts/prepush-sonar.sh` |
 | Institutional memory | Specs, `AGENTS.md`, the backlog and a private persistent memory | the repository |
