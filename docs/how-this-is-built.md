@@ -4,6 +4,23 @@ A2AMX is an experiment: can AI agents, working under human direction, produce an
 real project as carefully as a human team would? This page says how the work is organised, so
 that you can judge the code for yourself.
 
+The idea behind it is that quality comes from the engineering around the code, not from who
+types it. People write bad code, skip tests, cut corners and let static-analysis findings pile
+up too, and teams defend against that with practices. A2AMX asks its agents to follow the same
+practices a good human team does:
+
+| Practice in a human team | How it is done here | Where to look |
+| --- | --- | --- |
+| Design review before coding | A consultant reviews each specification before it is locked | [`docs/specs/`](specs/) |
+| Independent QA | A tester, on a different model than the developer, checks every non-trivial diff | spec amendments, CI |
+| Test-first development | The convention in `AGENTS.md` | [`AGENTS.md`](../AGENTS.md), `tests/` |
+| Static-analysis gate | `clippy`, `rustfmt`, SonarQube and a blocking pre-push scan | CI, `scripts/prepush-sonar.sh` |
+| Institutional memory | Specs, `AGENTS.md`, the backlog and a private persistent memory | the repository |
+| Someone accountable for direction | The human owner | [What is and is not human](#what-is-and-is-not-human) |
+
+The one real difference is memory. A person keeps years of context in their head, and an agent
+session starts empty, so the project writes the context down instead.
+
 ## What is and is not human
 
 - **All code, tests and documentation are written by AI agents.** No human writes or
@@ -129,7 +146,7 @@ that it is lower than in a comparable human-written project; that comparison has
 
 - It does not show that agent-written code is as reliable as human-written code. That is the
   question the experiment asks, and one project cannot answer it.
-- Agents share blind spots, and models from the same family share them most. A specification
+- Reviewers share blind spots, human or agent, and models from the same family share them most. A specification
   can pass both the architect and the consultant and still be wrong, as the example shows.
 - The checks find what they are written to find. Tests, static analysis and agent review are
   not a proof of correctness or a security audit.
