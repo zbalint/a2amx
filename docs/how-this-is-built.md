@@ -74,6 +74,27 @@ model watch each step.
    The reviews themselves (the consultant's and the tester's reports) are in the agents'
    message logs and are not published.
 
+## How the agents keep context and quality
+
+An agent session starts with no memory of the last one, so the project writes things down.
+
+- **Written context.** [`AGENTS.md`](../AGENTS.md) holds the conventions every session reads. The
+  specifications in [`docs/specs/`](specs/) record why each change was made, and
+  The pages under `docs/` describe the architecture and behaviour. The backlog records what is known to
+  be missing or wrong.
+- **Persistent memory.** The agents also keep a memory of decisions, resolved bugs and
+  constraints across sessions, so a lesson learned in one session reaches the next. That memory
+  is private working state and is not part of this repository.
+- **Test first.** The convention in `AGENTS.md` is to write the failing test first and then the
+  minimum code to pass it, through public interfaces. Refactors get tests that pin the current
+  behaviour before the code changes. The convention is stated and the history is open to
+  inspection; this page does not claim every commit followed it.
+- **Documentation.** The agents write the documentation alongside the code. The README
+  rewrite (spec 3ak) was checked statement by statement against the code, and the checks found
+  and fixed three false statements carried over from the old README.
+- **Static analysis.** `clippy` with warnings denied, `rustfmt`, SonarQube, `cargo-deny`,
+  `gitleaks` and workflow linting run against the code.
+
 ## An example
 
 Spec [3al](specs/spec-3al-sonar-open-issues.md) cleared the open Sonar findings. Before it was
@@ -86,6 +107,23 @@ confirmed it, added Amendment 1 (in the spec), and the work resumed. The tester 
 the full suite, `clippy`, `fmt` and the extension tests five times without a finding. The
 Sonar gate on `develop` read OK with no open issues after the push. The consultant's and
 tester's reports are not in the repository.
+
+## Technical debt
+
+Technical debt grows in every project, whoever writes it, and an agent-written project can
+accumulate it faster if nobody looks. A2AMX tracks it in the open:
+
+- **Deliberate corners** are marked in the code. The convention in `AGENTS.md` is a
+  `// shortcut:` comment naming the ceiling and the trigger to upgrade it. On 2026-10-16 there were 62 of them in 20 files under `src/`,
+  `tests/`, `extension/` and `scripts/`.
+- **Known gaps and issues** are in [`docs/backlog.md`](backlog.md): 25 open items and 44 closed
+  ones on that date, each with the evidence for how its state was learned.
+- **Static analysis findings** are worked down, not left to pile up. On 2026-10-16 the SonarQube
+  quality gate on `develop` was OK with no open issues, after a pass that fixed 12 findings and
+  dismissed 6 as false positives.
+
+These numbers are a snapshot, not a promise. They show that debt is visible and managed, not
+that it is lower than in a comparable human-written project; that comparison has not been made.
 
 ## What this does not give you
 
