@@ -71,6 +71,13 @@ The project follows [Semantic Versioning 2.0.0](https://semver.org/). `version` 
   it; a developer's spec scope does not include the changelog.
 - Release tags are `vMAJOR.MINOR.PATCH`, created on the default branch.
 
+## Dependency updates
+
+Dependabot opens weekly update pull requests against `develop` for Cargo and for the pinned
+GitHub Actions. The architect treats each like any change: CI and the Sonar gate must pass, and
+an update that changes behavior or the public interface gets a spec first. The Rust toolchain
+pinned in `rust-toolchain.toml` is not updated by Dependabot; change it on purpose.
+
 ## Tests
 
 - Test through public interfaces at agreed seams; do not test private functions or
