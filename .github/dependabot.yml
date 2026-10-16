@@ -6,6 +6,9 @@ updates:
     target-branch: develop
     schedule:
       interval: weekly
+    # A malicious release is usually caught and pulled within days; wait a week before proposing it.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(deps)"
     groups:
@@ -17,6 +20,8 @@ updates:
     target-branch: develop
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(ci)"
     groups:

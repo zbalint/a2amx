@@ -19,4 +19,4 @@ else
 fi
 cargo deny --locked check --hide-inclusion-graph
 actionlint
-zizmor --no-progress .github/workflows
+zizmor --no-progress .github
