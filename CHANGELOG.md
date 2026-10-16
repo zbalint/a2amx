@@ -5,6 +5,8 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-16
+
 ### Added
 
 - Signed releases: pushing a version tag on `master` builds a Linux x86_64 archive in CI, signs it
