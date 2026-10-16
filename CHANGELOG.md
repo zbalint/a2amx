@@ -5,6 +5,12 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Signed releases: pushing a version tag on `master` builds a Linux x86_64 archive in CI, signs it
+  and its checksums with Sigstore, attests its build provenance and publishes a GitHub release
+  with notes from this changelog (`docs/releasing.md`, `docs/install.md`).
+
 ### Changed
 
 - The README is now a short landing page with an example and a quick start; the command,

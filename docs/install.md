@@ -11,6 +11,25 @@ scripts/install.sh
 ~/.a2amx/bin/a2amx --version
 ```
 
+## Install a release
+
+Download the archive, `SHA256SUMS`, and both Sigstore bundles from the GitHub release. Releases
+support Linux x86_64 with glibc 2.35 or newer:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+cosign verify-blob --bundle a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sigstore.json \
+  --certificate-identity "https://github.com/zbalint/a2amx/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+gh attestation verify a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz --repo zbalint/a2amx
+tar -xzf a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 a2amx-vX.Y.Z-x86_64-unknown-linux-gnu/a2amx ~/.a2amx/bin/a2amx
+```
+
+The build-from-source route above is unchanged. Start the installed binary from
+`~/.a2amx/bin/a2amx`, not from `target/`.
+
 ## Dev build versus live install
 
 Build and test from the repository with `cargo build` and `cargo test`. Install a release

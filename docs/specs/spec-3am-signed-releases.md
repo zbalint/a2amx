@@ -102,3 +102,22 @@ git diff --stat
 
 - `build.rs` runs `git describe`; a shallow checkout would stamp the wrong version, hence `fetch-depth: 0`.
 - A mistake here cannot be fixed by a retry that overwrites the tag; the workflow is deliberately strict in step 2. If a step fails after the release exists, report it instead of re-running.
+
+## Review record
+
+**Models.** Architect: Claude Sonnet 5.5. Consultant: Claude Opus 5.5. Developer: reported planner and worker `gpt-5.6-luna`; its advisor model is not exposed to the session. Tester: reported planner and worker `gpt-6.1-sol` (the tester's config assigns a GLM model to its working slot, so this report and the config disagree; unresolved). **BLOCKED/amend cycles:** 0.
+
+| Found in | Found by | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant | A prerelease tag (`-rc.1`) could not pass the version and changelog checks, though the trial plan used one | Compare the tag's base version; one changelog section for rc and final |
+| Draft review | Consultant | `--version` check needed the exact string (`a2amx vX.Y.Z`) and the local dry run cannot match it | Exact test added; local dry run documented as dirty |
+| Draft review | Consultant | "Toolchain as in ci.yml" invited copying the cache action, which zizmor flags in a publishing workflow | "No cache action" added |
+| Draft review | Consultant | Changelog extraction could stop at `### Added` and produce empty notes | Start and end of the section defined; fixed-string match |
+| Draft review | Consultant | Tagging before moving `master` fails the run and cannot be retried | Checklist order: push `master`, wait for CI, then tag |
+| Draft review | Consultant | Offline zizmor does not catch a mistyped action SHA | SHA existence check added to acceptance |
+| Draft review | Consultant | Claims about Scorecard Packaging and the `v0.1.0` release were wrong or misleading | Removed; `v0.1.0` limit stated |
+| Implementation | Developer (advisor) | Checklist order in `docs/releasing.md` put the tag before the version commit; artifact names used a real version | Order fixed; placeholders used |
+| Tester pass | Tester | `docs/how-this-is-built.md` still said the CI Sonar result does not fail the run, stale since commit `8237e05` | Corrected by the architect |
+| Architect review | Architect | The README sentence about the Sonar gate was incomplete after the same change | Corrected by the architect |
+| After the push | not yet known | The workflow has not run; real signing, attestation and publishing are unproven until the first prerelease | Architect verifies the assets after the first prerelease and records it here |
+
