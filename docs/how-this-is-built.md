@@ -14,7 +14,7 @@ practices a good human team does:
 | Design review before coding | A consultant reviews each specification before it is locked | [`docs/specs/`](specs/) |
 | Independent QA | A tester, on a different model than the developer, checks non-trivial diffs under the current process | spec amendments, CI |
 | Speaking up when the plan is wrong | A developer who finds the specification contradicts the code must stop and report it; any agent may refuse a request that breaks the owner's rules | spec amendments, e.g. Amendment 1 of [3al](specs/spec-3al-sonar-open-issues.md) |
-| Hiring the right person for each role | Each role has its own model, chosen for what the role needs; the models are listed [below](#the-roles) | the roles section |
+| Hiring the right person for each role | Each role has its own model; the reasoning is in [the roles section](#the-roles) | the roles section |
 | Test-first development | The convention in `AGENTS.md` | [`AGENTS.md`](../AGENTS.md), `tests/` |
 | Static-analysis gate | `clippy`, `rustfmt`, SonarQube and a blocking pre-push scan | CI, `scripts/prepush-sonar.sh` |
 | Institutional memory | Specs, `AGENTS.md`, the backlog and a private persistent memory | the repository |
@@ -67,6 +67,14 @@ checker are not the same model. As of 2026-10-16:
 
 The OMP-based roles plan with one model, do the work with a smaller one, and have an advisor
 model watch each step.
+
+The choices follow two assumptions of the owner's, which the project has not measured:
+
+- **Different models tend to make different mistakes**, so a checker on another model is more
+  likely to catch what the implementer's model would miss.
+- **Planning, architecture and specification review need the stronger models.** Following a
+  strict, locked specification step by step is work a smaller model does about as well, so the
+  developer and tester execute on smaller ones.
 
 ## How a change moves
 
