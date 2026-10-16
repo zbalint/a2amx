@@ -65,7 +65,9 @@ The project follows [Semantic Versioning 2.0.0](https://semver.org/). `version` 
   version.
 - Only the architect changes `version`, when cutting a release, in the commit that moves
   the changelog's Unreleased entries under the new heading. A feature or fix does not bump it.
-  After a release, `develop` carries the next version.
+  Between releases `develop` keeps the last released version; `a2amx --version` shows the commits since
+  then from `git describe`. The release workflow requires a tag's version (without any `-rc.N`
+  suffix) to equal `version` in `Cargo.toml`, so the release commit sets it before the tag.
 - A change that breaks the public interface says so in its spec and in its changelog entry.
   The architect adds a line under Unreleased for each user-visible change when committing
   it; a developer's spec scope does not include the changelog.
