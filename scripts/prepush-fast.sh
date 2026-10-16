@@ -10,8 +10,9 @@ for tool in gitleaks cargo-deny actionlint zizmor; do
   command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 2; }
 done
 
-# Only the commits about to be pushed; the whole history when there is no upstream (CI checkout).
-if upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
+# Locally only the commits about to be pushed. In CI the whole history: actions/checkout sets the
+# branch to track origin/<branch>, so upstream..HEAD would be empty on a push and scan nothing.
+if [ -z "${GITHUB_ACTIONS:-}" ] && upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
   gitleaks git --redact --no-banner --log-opts="${upstream}..HEAD" .
 else
   gitleaks git --redact --no-banner .
