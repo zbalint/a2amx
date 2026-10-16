@@ -27,7 +27,9 @@ tar -xzf a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 install -Dm755 a2amx-vX.Y.Z-x86_64-unknown-linux-gnu/a2amx ~/.a2amx/bin/a2amx
 ```
 
-The build-from-source route above is unchanged. Start the installed binary from
+`gh attestation verify` needs a recent GitHub CLI (the `attestation` subcommand is missing from
+older packaged versions, for example 2.46). Without it, the `cosign` check above still verifies the
+signature and the workflow identity. The build-from-source route above is unchanged. Start the installed binary from
 `~/.a2amx/bin/a2amx`, not from `target/`.
 
 ## Dev build versus live install

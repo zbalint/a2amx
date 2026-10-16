@@ -119,5 +119,6 @@ git diff --stat
 | Implementation | Developer (advisor) | Checklist order in `docs/releasing.md` put the tag before the version commit; artifact names used a real version | Order fixed; placeholders used |
 | Tester pass | Tester | `docs/how-this-is-built.md` still said the CI Sonar result does not fail the run, stale since commit `8237e05` | Corrected by the architect |
 | Architect review | Architect | The README sentence about the Sonar gate was incomplete after the same change | Corrected by the architect |
-| After the push | not yet known | The workflow has not run; real signing, attestation and publishing are unproven until the first prerelease | Architect verifies the assets after the first prerelease and records it here |
+| After the push | Architect | First prerelease `v0.1.1-rc.1` (run 38847380931, 2m19s) published a prerelease with the archive, `SHA256SUMS` and both `.sigstore.json` bundles. Checks: `sha256sum -c` OK; both bundles verify with the documented identity and issuer using sigstore-python (`cosign` itself was not installed); one build attestation exists in the GitHub API; the extracted binary reports `a2amx v0.1.1-rc.1`; the release notes match the changelog section | None needed for the workflow |
+| After the push | Architect | `gh attestation verify` could not be run: the packaged `gh` 2.46 has no `attestation` subcommand | Note added to `docs/install.md`; the command stays unproven locally |
 
