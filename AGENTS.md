@@ -82,6 +82,28 @@ The project follows [Semantic Versioning 2.0.0](https://semver.org/). `version` 
 - Integration tests start a real daemon in a temp state dir on port 0
   (`tests/common`); no shared ports, no fixed paths.
 
+## Review record
+
+The project measures how well its review process works, so every accepted spec carries a
+record of what the review found. The architect appends a `## Review record` section to the
+spec in the commit that accepts the implementation:
+
+- A line naming the models used: architect, consultant, and for the developer and tester the
+  planning, working and advisor models. The developer and tester state theirs in their
+  report; the architect states its own and the consultant's.
+- The number of BLOCKED/amend cycles.
+- One table row per problem found after the first draft: where it was found (draft review,
+  implementation, tester pass, architect review, or after the push), by which role and model,
+  the problem in one line, and how it was resolved. A problem is anything that changed the
+  spec or the diff, or a claim in the spec that turned out false.
+- The text "no problems found" when there were none. An empty record is not the same as a
+  missing one.
+
+A problem found after the push is added to its spec's record in a later commit, with the
+commit that fixed it. The record describes the process, not individuals: do not rank agents
+by it, and do not use it to decide that a check can be dropped without a measured run of
+specs showing it found nothing.
+
 ## Modules
 
 | Module | Owns |

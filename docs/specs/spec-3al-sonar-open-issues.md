@@ -97,3 +97,23 @@ Mutation check: this spec has no new tests, so the rule for new tests does not a
 The developer reported BLOCKED on section 5 and is right: `waitForFrame` and `waitForNewFrame` are method properties of the object `startServer` returns (`tests/omp_extension/harness.mjs:93-`), so a bare `waitForFrame(..)` inside `waitForNewFrame` is a `ReferenceError`. The same object already delegates with a receiver (`this.waitForBridgeExit(..)` at line 174).
 
 Section 5 now reads: `waitForNewFrame` reduces to `return this.waitForFrame(connection, predicate, start);` with its default `start = connection.frames.length` kept. Every caller reaches both methods through the server object (`server.`, `earlyServer.`, `timeoutServer.`, `syncServer.`; `rg 'waitFor(New)?Frame' tests/omp_extension` finds no destructured or detached use), so `this` is bound. Do not extract a helper and do not change any caller. Nothing else in the spec changes: scope, acceptance and section 6 stand, and the section 5 sentences about frame ordering and `start = 0` still hold. The developer's Rust edits and the `waitForFrame` signature change already made are unaffected; the `extension/omp.ts` edits restart from the clean file.
+
+## Review record
+
+**Models.** Architect: Claude Sonnet 5.5. Consultant: Claude Opus 5.5. Developer: plans with GPT-6.1, works and is watched by an advisor on GPT-5.6. Tester: plans with GPT-6.1, works and is watched by an advisor on GLM-5.3 (flash). **BLOCKED/amend cycles:** 1.
+
+| Found in | Found by | Problem | Resolution |
+| --- | --- | --- | --- |
+| Before the spec (triage) | Consultant | The architect's first triage accepted `waitForNewFrame` as an intentional polling loop; it duplicates `waitForFrame` and can be merged | Moved to the fix list (section 5) |
+| Draft review | Consultant | Section 9's old-form grep also matched out-of-scope lines and could never pass | Pattern pinned to the exact old text |
+| Draft review | Consultant | Section 6 cited a test for the subject check that covers a different check | Cited `tests/prop_messaging.rs:111` instead |
+| Draft review | Consultant | Mutation check could pass vacuously; the promised failure was not guaranteed | Reworded to report the result either way |
+| Draft review | Consultant | Guard line anchors in `serve` were off by two | Corrected to 1744-1746 |
+| Draft review | Consultant | Caller count wrong (14 for 17) and `lifecycle_tools.test.mjs` missing | Corrected; the file added to section 6 |
+| Draft review | Consultant | Context id differed between the spec and the brief | Spec aligned to the brief |
+| Draft review | Consultant | One `serve` extraction left zero complexity margin | A second guard extraction added (section 3.5) |
+| Implementation | Developer (advisor) | Bare `waitForFrame(...)` inside `waitForNewFrame` is a `ReferenceError`: both are object methods | Amendment 1: `this.waitForFrame(...)` |
+| Implementation | Developer | Section 6 said the invalid-UTF-8 `Detached` branch had no test; `tests/wire.rs:369` covers it | Corrected at acceptance |
+| Tester pass | Tester | Same stale section 6 remark (already known) | Noted; no new problem |
+| Architect review | Architect | Moving three functions out left stray blank lines in `extension/omp.ts` | Removed by the architect |
+| After the push | none by 2026-10-16 | CI success for `d306de2`; Sonar gate OK, 0 open issues on `develop` | none needed |
