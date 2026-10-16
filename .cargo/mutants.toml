@@ -1,0 +1,17 @@
+# cargo-mutants configuration. Only the pure modules are examined; the daemon, session and
+# client code needs real PTYs and processes, so mutating it would mostly produce timeouts.
+# Run it with plain `cargo mutants` (it works in a temporary copy, never in this tree).
+# Surviving mutants are input for new tests, not a gate or a score.
+examine_globs = [
+    "src/wire.rs",
+    "src/prefix.rs",
+    "src/messaging.rs",
+    "src/names.rs",
+    "src/picker.rs",
+]
+# Only the test binaries that exercise those modules directly: the example tests and the
+# property tests. Everything else is slow and does not reach these functions.
+additional_cargo_test_args = [
+    "--test", "wire", "--test", "prefix", "--test", "messaging", "--test", "names", "--test", "picker",
+    "--test", "prop_wire", "--test", "prop_prefix", "--test", "prop_messaging", "--test", "prop_names", "--test", "prop_picker",
+]
