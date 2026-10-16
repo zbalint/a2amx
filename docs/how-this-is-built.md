@@ -56,7 +56,8 @@ directly, without a specification.
 | Consultant | Answers one bounded question from the architect, such as a pre-lock specification review | Write code, specifications or files |
 
 The roles run on different models, from more than one provider, so the implementer and its
-checker are not the same model. As of 2026-10-16:
+checker are not the same model. As configured on 2026-10-16 (the agents' own reports of their
+models have not always matched the configuration, which the review records note):
 
 | Role | Model |
 | --- | --- |
@@ -94,8 +95,9 @@ The choices follow two assumptions of the owner's, which the project has not mea
    suite under coverage and a SonarQube scan that blocks on a failing quality gate. After the
    push, CI runs `cargo fmt`, `cargo clippy -D warnings` and `cargo test` on every push, a
    build on the declared minimum Rust version, secret, dependency and workflow checks, and a
-   SonarQube analysis for `develop` and `master`. The Sonar result in CI is reported on
-   SonarCloud and does not fail the CI run. [OpenSSF Scorecard](https://securityscorecards.dev)
+   SonarQube analysis for `develop` and `master`. Since 2026-10-16 a failing SonarQube quality
+   gate fails the CI run (the scan waits for the gate result). CI runs after the push, so it
+   reports a problem; it does not stop a push. [OpenSSF Scorecard](https://securityscorecards.dev)
    tracks the repository's supply-chain hygiene.
 5. **Record.** Specifications, amendments, backlog items and commits stay in the repository.
    The reviews themselves (the consultant's and the tester's reports) are in the agents'

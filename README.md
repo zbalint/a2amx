@@ -86,7 +86,7 @@ Then start the two sessions from [the example above](#example). See [Installatio
 
 ## How this project is built
 
-All code, tests and documentation are written by AI agents; no human writes or hand-edits them (apart from a GitHub-generated initial commit and the OpenSSF Scorecard workflow template). Specifications, implementation, testing and review are done by separate agent roles on different models. Every push is checked in CI by `cargo test`, `clippy` and `rustfmt`, and the architect runs a blocking SonarQube quality gate locally before pushing. A human sets the project's direction and decides what is released, but does not review every change line by line, and there has been no independent security audit. See [How A2AMX is built](docs/how-this-is-built.md).
+All code, tests and documentation are written by AI agents; no human writes or hand-edits them (apart from a GitHub-generated initial commit and the OpenSSF Scorecard workflow template). Specifications, implementation, testing and review are done by separate agent roles on different models. Every push is checked in CI by `cargo test`, `clippy` and `rustfmt`, and CI fails when the SonarQube quality gate fails; the architect also runs the same gate locally before pushing, because CI runs after the push and does not stop it. A human sets the project's direction and decides what is released, but does not review every change line by line, and there has been no independent security audit. See [How A2AMX is built](docs/how-this-is-built.md).
 
 ## Documentation
 - [CLI reference](docs/cli.md) — commands, attachment controls, list columns, quota, and reset.
