@@ -1,6 +1,7 @@
 //! Claude dialogs can enable bracketed paste. Readiness therefore inspects visible
 //! composer cells independently of terminal damage and paste-mode support.
 
+use std::ffi::OsStr;
 use std::path::Path;
 
 use anyhow::{Context, anyhow};
@@ -51,7 +52,7 @@ impl Harness {
         match command
             .first()
             .and_then(|word| Path::new(word).file_name())
-            .and_then(|name| name.to_str())
+            .and_then(OsStr::to_str)
         {
             Some("claude") => Self::Claude,
             Some("codex") => Self::Codex,

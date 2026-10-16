@@ -493,9 +493,7 @@ impl ServerFrame {
                 let code = i32::from_be_bytes([body[0], body[1], body[2], body[3]]);
                 Ok(Self::Exit(code))
             }
-            0x03 => Ok(Self::Detached(
-                String::from_utf8(body.to_vec()).map_err(anyhow::Error::new)?,
-            )),
+            0x03 => Ok(Self::Detached(String::from_utf8(body.to_vec())?)),
             0x04 => {
                 if body.len() > MAX_SERVER_DATA_LEN {
                     bail!("server status payload exceeds maximum {MAX_SERVER_DATA_LEN}");

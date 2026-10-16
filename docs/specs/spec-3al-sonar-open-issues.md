@@ -51,7 +51,7 @@ Same responses, same messages byte for byte, same order of checks, same control 
 
 - `tests/daemon.rs:878` asserts the `"session has exited"` response through a real daemon (covers section 3.4).
 - `tests/omp_extension/delivery_receipts.test.mjs` (covers 4.4 and the deferred receipt branches), `startup_state.test.mjs` and `lifecycle_tools.test.mjs` (cover 5).
-- `tests/harness_infer.rs` (covers `infer`), `tests/prop_messaging.rs:111` (the subject control-character rejection; `tests/daemon_cli.rs:877` covers a different check, the reset step) and `tests/wire.rs:268,307` (the `Detached` frame round trip). The invalid-UTF-8 error branch of `Detached` has no test; the change there only drops a redundant conversion and keeps the error type's message path, so no test is added.
+- `tests/harness_infer.rs` (covers `infer`), `tests/prop_messaging.rs:111` (the subject control-character rejection; `tests/daemon_cli.rs:877` covers a different check, the reset step) and `tests/wire.rs:268,307` (the `Detached` frame round trip). `tests/wire.rs:369` (`detached_reason_must_be_utf8`) already covers the invalid-UTF-8 branch of `Detached` (corrected at acceptance; the draft wrongly said it had no test).
 
 There is no red phase: these are refactors guarded by tests that already pass.
 

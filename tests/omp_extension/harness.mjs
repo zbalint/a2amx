@@ -104,19 +104,13 @@ export async function startServer() {
       }
       throw new Error(`timed out waiting for bridge connection ${number}`);
     },
-    async waitForFrame(connection, predicate) {
-      const found = connection.frames.find(predicate);
+    async waitForFrame(connection, predicate, start = 0) {
+      const found = connection.frames.slice(start).find(predicate);
       if (found) return found;
       return Promise.race([new Promise((resolve) => connection.waiters.push({ predicate, resolve })), timeout("timed out waiting for bridge frame")]);
     },
     async waitForNewFrame(connection, predicate, start = connection.frames.length) {
-      const started = process.hrtime.bigint();
-      while (Number(process.hrtime.bigint() - started) < 5_000_000_000) {
-        const found = connection.frames.slice(start).find(predicate);
-        if (found) return found;
-        await new Promise((resolve) => realSetTimeout(resolve, 5));
-      }
-      throw new Error("timed out waiting for new bridge frame");
+      return this.waitForFrame(connection, predicate, start);
     },
     async shutdown() {
       for (const connection of connections) connection.socket.destroy();

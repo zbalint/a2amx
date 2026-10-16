@@ -370,7 +370,7 @@ pub fn validate_message(subject: &str, message: &str) -> std::result::Result<(),
     if message.len() > MAX_MESSAGE_BYTES {
         return Err(invalid(code::TOO_LARGE, "message exceeds the byte limit"));
     }
-    if subject.chars().any(|character| character.is_control()) {
+    if subject.chars().any(char::is_control) {
         return Err(invalid(
             code::INVALID_CONTENT,
             "subject contains a control character",

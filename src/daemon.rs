@@ -1741,9 +1741,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
     };
     response(&mut connection, Response::Ok).await?;
     while let Some(bytes) = connection.recv().await? {
-        if let Role::Session(id) = &role
-            && !lookup(&runtime, id).is_some_and(|(_, session)| session.exit_code().is_none())
-        {
+        if session_has_exited(&runtime, &role) {
             response(
                 &mut connection,
                 Response::Error {
@@ -1767,7 +1765,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 continue;
             }
         };
-        if matches!(&role, Role::Session(_)) && !session_token_permitted(&request) {
+        if session_request_denied(&role, &request) {
             response(
                 &mut connection,
                 Response::Error {
@@ -1860,6 +1858,14 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
         response(&mut connection, result).await?;
     }
     Ok(())
+}
+
+fn session_has_exited(runtime: &Runtime, role: &Role) -> bool {
+    matches!(role, Role::Session(id) if !lookup(runtime, id).is_some_and(|(_, session)| session.exit_code().is_none()))
+}
+
+fn session_request_denied(role: &Role, request: &Request) -> bool {
+    matches!(role, Role::Session(_)) && !session_token_permitted(request)
 }
 
 async fn authenticate_hello(

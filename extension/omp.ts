@@ -4,7 +4,33 @@ const PROTOCOL = 1;
 const KEEPALIVE_MS = 30000;
 const TOOLS = [/* a2amx:tools */];
 
-export default function (pi) {
+function firstContentText(content) {
+  const first = Array.isArray(content) ? content[0] : undefined;
+  if (typeof first === "string") return first;
+  if (typeof first?.text === "string") return first.text;
+  return String(first ?? "");
+}
+
+function receiptText(message) {
+  if (message?.role !== "user" || message.attribution !== "agent") {
+    return null;
+  }
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return null;
+  let text = "";
+  for (const part of message.content) {
+    if (part?.type === "text" && typeof part.text === "string") {
+      text += part.text;
+    }
+  }
+  return text;
+}
+
+function parseStderr(state, chunk) {
+  state.stderrTail = Buffer.concat([state.stderrTail, Buffer.from(chunk)]).subarray(-2048);
+}
+
+export default function a2amxExtension(pi) {
   let ctx = null;
   let initialized = false;
   let shuttingDown = false;
@@ -99,13 +125,6 @@ export default function (pi) {
     }
   }
 
-  function firstContentText(content) {
-    const first = Array.isArray(content) ? content[0] : undefined;
-    if (typeof first === "string") return first;
-    if (typeof first?.text === "string") return first.text;
-    return String(first ?? "");
-  }
-
   function handleMcpResponse(response) {
     if (!response) return;
     const id = response.id;
@@ -128,21 +147,6 @@ export default function (pi) {
   function sendReceipt(id) {
     const state = bridge;
     if (state) sendFrame(state, { type: "receipt", id });
-  }
-
-  function receiptText(message) {
-    if (!message || message.role !== "user" || message.attribution !== "agent") {
-      return null;
-    }
-    if (typeof message.content === "string") return message.content;
-    if (!Array.isArray(message.content)) return null;
-    let text = "";
-    for (const part of message.content) {
-      if (part?.type === "text" && typeof part.text === "string") {
-        text += part.text;
-      }
-    }
-    return text;
   }
 
   function drainDeferredReceipts() {
@@ -176,9 +180,10 @@ export default function (pi) {
       }
     }
     if (delivering) {
-      if (fifo.length > 0 && text === fifo[0].envelope) {
-        deferredReceipts.push(text);
-      } else if (fifo.length === 0 && delivering.envelope === text) {
+      if (
+        (fifo.length > 0 && text === fifo[0].envelope) ||
+        (fifo.length === 0 && delivering.envelope === text)
+      ) {
         deferredReceipts.push(text);
       }
       return;
@@ -355,10 +360,6 @@ export default function (pi) {
     }
   }
 
-  function parseStderr(state, chunk) {
-    state.stderrTail = Buffer.concat([state.stderrTail, Buffer.from(chunk)]).subarray(-2048);
-  }
-
   function failedStartNotice() {
     failedStarts += 1;
     if (failedStarts < 10) return;
@@ -491,7 +492,7 @@ export default function (pi) {
     if (!bridgeReady || !isCurrentBridge(bridge)) {
       throw new Error("A2AMX is not connected");
     }
-    const argumentsObject = { ...(params || {}) };
+    const argumentsObject = { ...params };
     delete argumentsObject.i;
     const id = nextRequestId;
     nextRequestId += 1;
