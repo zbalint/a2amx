@@ -122,9 +122,9 @@ jobs:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
-      # Skipped on other branches and on fork pull requests, which have no SONAR_TOKEN.
+      # Skipped on other branches and on fork and Dependabot pull requests, which have no SONAR_TOKEN.
       - name: SonarQube Scan
-        if: github.ref_name == 'master' || github.ref_name == 'develop' || github.event.pull_request.head.repo.full_name == github.repository
+        if: (github.ref_name == 'master' || github.ref_name == 'develop' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]'
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
