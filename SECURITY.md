@@ -31,7 +31,10 @@ project does not claim to defend against that.
 
 ## How the project is built
 
-Most of the code is written by AI coding agents working from reviewed specifications,
-with separate developer, tester, and architect roles and a human owner. Its checks
-(`cargo test`, `cargo clippy`, `cargo fmt`, SonarQube) are described in
-[AGENTS.md](AGENTS.md) and run in CI.
+All code, tests and documentation are written by AI coding agents (apart from a
+GitHub-generated initial commit and the OpenSSF Scorecard workflow template) working from reviewed
+specifications, with separate architect, developer, tester and consultant roles and a human
+owner who sets direction and approves releases. There has been no independent security audit.
+How a change is specified, checked and gated is in
+[docs/how-this-is-built.md](docs/how-this-is-built.md); the checks themselves (`cargo test`,
+`cargo clippy`, `cargo fmt`, SonarQube) run in CI.

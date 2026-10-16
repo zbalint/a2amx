@@ -84,6 +84,10 @@ Then start the two sessions from [the example above](#example). See [Installatio
 - PTY bytes do not prove prompt submission. Receipts report harness evidence, not model processing.
 - A2AMX is not an agent planner, an LLM orchestration framework, a memory system, or a container management platform, and has no LLM of its own.
 
+## How this project is built
+
+All code, tests and documentation are written by AI agents; no human writes or hand-edits them (apart from a GitHub-generated initial commit and the OpenSSF Scorecard workflow template). Specifications, implementation, testing and review are done by separate agent roles on different models. Every push is checked in CI by `cargo test`, `clippy` and `rustfmt`, and the architect runs a blocking SonarQube quality gate locally before pushing. A human sets the project's direction and decides what is released, but does not review every change line by line, and there has been no independent security audit. See [How A2AMX is built](docs/how-this-is-built.md).
+
 ## Documentation
 - [CLI reference](docs/cli.md) — commands, attachment controls, list columns, quota, and reset.
 - [Teams](docs/teams.md) — configure team files, visibility, watches, heartbeats, and team commands.
@@ -91,6 +95,7 @@ Then start the two sessions from [the example above](#example). See [Installatio
 - [Installation](docs/install.md) — separate development builds from the live installed binary.
 - [Using with agents](docs/using-with-agents.md) — peer-message instructions and credential hygiene.
 - [Roadmap](docs/roadmap.md) — what is implemented, deferred, proposed, or dropped.
+- [How A2AMX is built](docs/how-this-is-built.md) — who writes and checks the code, and what that does and does not show.
 - [Architecture](docs/architecture.md) — topology, scope, authority, and terminal behavior.
 - [Delivery](docs/delivery.md) — input arbitration, evidence, retries, ordering, and recovery.
 - [Validation plan](docs/validation-plan.md) — implementation-slice checks and recorded results.
