@@ -7,7 +7,8 @@ messaging core includes the Claude Code hook, native channels for Claude Code, O
 Codex, session names, `a2amx team`, and quota reporting. Parts of the sections below
 that are written as proposals (local TCP IPC with session tokens, the stdio MCP
 server) are built in the single-machine case; the implemented sections say which.
-Everything cross-host is a proposal, and no compatibility results are implied.
+Everything cross-host is a proposal, and no compatibility results are implied; the
+[roadmap](roadmap.md) plans it for 0.4.0 and 0.5.0.
 
 This document owns topology and scope. [Delivery](delivery.md) owns input and
 receipt semantics; [validation](validation-plan.md) defines how to test them.
@@ -115,10 +116,11 @@ terminal must not starve receipt processing or another session's input.
 
 The network transport, framing, protocol version negotiation, credential format,
 and revocation mechanism are open decisions. Every host must be authenticated and
-explicitly authorized. Confidentiality is the operator's responsibility: A2AMX does
-not encrypt traffic in the MVP, and the documentation tells operators to run it over
-a trusted network such as a Tailscale overlay. Authentication uses challenge-response,
-so a credential is never sent over the wire.
+explicitly authorized. Decision (owner, 2026-10-18): every connection between hosts
+is authenticated and encrypted with the keys exchanged at pairing, so A2AMX does not
+depend on the operator providing a trusted network; a credential is never sent over
+the wire. Session connections to a host's own daemon stay unencrypted, on loopback or
+whatever address the operator configures; only connections between hosts are encrypted.
 
 Proposal: enroll a host by pairing. The host daemon prints a one-time code carrying
 its public key, and the operator enters the code at the central daemon to authorize
@@ -166,9 +168,10 @@ Security posture: A2AMX ships secure and safe defaults and leaves the rest to th
 operator. The defaults are a loopback bind, owner-only permissions on the database,
 configuration, and credential files, random per-session tokens, a sender always
 derived from the token, escaped agent payloads, and no destructive input without a
-human. A2AMX does not solve transport encryption, what a configured bind address
-exposes, a hostile process running as the same OS user, or multi-tenant isolation.
-The documentation names these limits so that operators can decide.
+human. A2AMX does not encrypt session connections to a host's own daemon, and does
+not solve what a configured bind address exposes, a hostile process running as the
+same OS user, or multi-tenant isolation. The documentation names these limits so that
+operators can decide.
 
 Visibility of delivered messages: a message is delivered by pasting it into the
 harness composer, so to the harness it is an ordinary prompt. Every prompt hook,

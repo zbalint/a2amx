@@ -95,7 +95,7 @@ All code, tests and documentation are written by AI agents; no human writes or h
 - [Installation](docs/install.md) — separate development builds from the live installed binary.
 - [Releasing](docs/releasing.md) — how releases are cut, signed and verified.
 - [Using with agents](docs/using-with-agents.md) — peer-message instructions and credential hygiene.
-- [Roadmap](docs/roadmap.md) — what is implemented, deferred, proposed, or dropped.
+- [Roadmap](docs/roadmap.md) — what is implemented, the planned milestones, and what is not planned.
 - [How A2AMX is built](docs/how-this-is-built.md) — who writes and checks the code, and what that does and does not show.
 - [Architecture](docs/architecture.md) — topology, scope, authority, and terminal behavior.
 - [Delivery](docs/delivery.md) — input arbitration, evidence, retries, ordering, and recovery.
