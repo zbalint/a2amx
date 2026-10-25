@@ -230,6 +230,12 @@ export default function a2amxExtension(pi) {
       queue: fifo.length,
       host_pending: hasPending === true,
     };
+    try {
+      const provider = ctx?.model?.provider;
+      if (typeof provider === "string") value.provider = provider;
+    } catch {
+      // OMP can unload the model while changing sessions; omit provider until it is available.
+    }
     if (
       !force &&
       lastState &&
@@ -238,6 +244,7 @@ export default function a2amxExtension(pi) {
       lastState.draft === value.draft &&
       lastState.queue === value.queue &&
       lastState.host_pending === value.host_pending &&
+      lastState.provider === value.provider &&
       now - lastSentAt < KEEPALIVE_MS
     ) {
       return;

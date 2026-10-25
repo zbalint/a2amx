@@ -1,6 +1,9 @@
 //! Reads remaining quota from harness status lines and OMP conversation errors or command output.
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
+
+use serde_json::Value;
 
 use crate::emulator::Screen;
 use crate::harness::Harness;
@@ -14,6 +17,8 @@ struct OmpUsage {
 
 #[derive(Debug, Deserialize)]
 struct OmpReport {
+    #[serde(default)]
+    provider: Option<Value>,
     #[serde(default)]
     limits: Vec<OmpLimit>,
 }
@@ -67,11 +72,20 @@ pub fn read(screen: &Screen, harness: Harness) -> Option<QuotaInfo> {
     }
 }
 
-/// Parses OMP's redacted usage report for the remaining 5-hour and weekly windows.
-pub fn parse_omp_usage(json: &str) -> Option<QuotaInfo> {
+/// Parses OMP's redacted usage report for the remaining 5-hour and weekly windows by provider.
+pub fn parse_omp_usage(json: &str) -> Option<BTreeMap<String, QuotaInfo>> {
     let usage = serde_json::from_str::<OmpUsage>(json).ok()?;
-    let mut info = QuotaInfo::default();
+    let mut by_provider = BTreeMap::new();
     for report in usage.reports {
+        let Some(provider) = report
+            .provider
+            .and_then(|value| value.as_str().map(str::to_owned))
+        else {
+            continue;
+        };
+        let info = by_provider
+            .entry(provider)
+            .or_insert_with(QuotaInfo::default);
         for limit in report.limits {
             let (Some(window), Some(amount)) = (limit.window, limit.amount) else {
                 continue;
@@ -91,7 +105,8 @@ pub fn parse_omp_usage(json: &str) -> Option<QuotaInfo> {
             }
         }
     }
-    (info.five_hour.is_some() || info.weekly.is_some()).then_some(info)
+    by_provider.retain(|_, info| info.five_hour.is_some() || info.weekly.is_some());
+    (!by_provider.is_empty()).then_some(by_provider)
 }
 
 /// Formats quota information as the compact list/status cell.

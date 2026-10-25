@@ -75,7 +75,7 @@ struct Runtime {
     address: String,
     state_dir: PathBuf,
     exe: PathBuf,
-    omp_usage: Mutex<Option<(Instant, QuotaInfo)>>,
+    omp_usage: Mutex<Option<(Instant, BTreeMap<String, QuotaInfo>)>>,
     omp_usage_attempt: Mutex<Option<Instant>>,
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     new_session_gate: tokio::sync::Mutex<()>,
@@ -228,17 +228,14 @@ fn failed(code: &str, message: &str) -> Response {
 }
 
 impl Runtime {
-    fn omp_usage(&self) -> Option<QuotaInfo> {
+    fn omp_usage(&self) -> Option<BTreeMap<String, QuotaInfo>> {
         let cache = self
             .omp_usage
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let (at, quota) = (*cache)?;
-        (at.elapsed() < OMP_USAGE_STALE).then_some(quota)
+        let (at, quota) = cache.as_ref()?;
+        (at.elapsed() < OMP_USAGE_STALE).then_some(quota.clone())
     }
-
-    // shortcut: account-level minima apply to every OMP session; match providers per session
-    // through the OMP extension when it can report usage without spawning a command.
 
     fn omp_usage_command(&self) -> Option<(String, Option<PathBuf>)> {
         self.sessions
@@ -953,7 +950,7 @@ impl Runtime {
                             .hold_reason()
                             .map(str::to_owned)
                     },
-                    recipient_quota: session_quota(&recipient, self.omp_usage())
+                    recipient_quota: session_quota(&recipient, self.omp_usage().as_ref())
                         .and_then(|quota| quota.exhausted())
                         .map(|window| format!("{window} quota exhausted")),
                 }
@@ -1286,7 +1283,7 @@ async fn run_omp_usage(
     argv0: &str,
     cwd: Option<&Path>,
     stopping: &mut watch::Receiver<bool>,
-) -> Result<QuotaInfo, &'static str> {
+) -> Result<BTreeMap<String, QuotaInfo>, &'static str> {
     let mut command = Command::new(argv0);
     command
         .args(["usage", "--json", "--no-extensions", "--redact"])
@@ -1921,7 +1918,7 @@ async fn list_sessions(runtime: &Runtime) -> anyhow::Result<Response> {
             let hold_reason = AnyChannel::for_session(session.clone())
                 .hold_reason()
                 .or(session.needs_input());
-            let quota = session_quota(session, omp_usage);
+            let quota = session_quota(session, omp_usage.as_ref());
             let state = session.lock();
             let (uptime_secs, activity_secs) = if state.exit_code.is_none() {
                 (Some(session.started().elapsed().as_secs()), activity_secs)
@@ -2001,7 +1998,7 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
                 you: viewer
                     .as_ref()
                     .is_some_and(|viewer| session.id() == viewer.id()),
-                quota: session_quota(session, omp_usage),
+                quota: session_quota(session, omp_usage.as_ref()),
                 harness: session.harness(),
                 cwd: session
                     .cwd()
@@ -2175,11 +2172,17 @@ async fn bridge(
                         pending,
                         queue,
                         host_pending,
+                        provider,
                     } => {
                         // OMP holds next-turn reminders while idle; an empty extension queue means a2amx has nothing in flight.
                         let waiting_for_turn =
                             idle && queue == Some(0) && host_pending == Some(true);
-                        session.native_state(idle, draft, pending && !waiting_for_turn);
+                        session.native_state(
+                            idle,
+                            draft,
+                            pending && !waiting_for_turn,
+                            provider,
+                        );
                         session.native_diagnostics(queue, host_pending);
                     }
                     BridgeUp::Ack { id } => session.native_ack(&id, Ok(())),
@@ -2207,7 +2210,10 @@ async fn bridge(
 }
 
 /// The quota a running Claude, Codex or OMP session reports.
-fn session_quota(session: &Session, omp_usage: Option<QuotaInfo>) -> Option<QuotaInfo> {
+fn session_quota(
+    session: &Session,
+    omp_usage: Option<&BTreeMap<String, QuotaInfo>>,
+) -> Option<QuotaInfo> {
     let harness = session.harness();
     if session.exit_code().is_some()
         || !matches!(harness, Harness::Claude | Harness::Codex | Harness::Omp)
@@ -2219,7 +2225,10 @@ fn session_quota(session: &Session, omp_usage: Option<QuotaInfo>) -> Option<Quot
         return screen;
     }
     let limit_reached = screen.is_some_and(|quota| quota.limit_reached);
-    match (omp_usage, limit_reached) {
+    let omp_quota = session
+        .native_provider()
+        .and_then(|provider| omp_usage.and_then(|usage| usage.get(&provider).cloned()));
+    match (omp_quota, limit_reached) {
         (Some(quota), true) => Some(QuotaInfo {
             limit_reached: true,
             ..quota
@@ -2310,7 +2319,7 @@ async fn attachment_status(
             .map(str::to_owned),
         harness: Some(session.harness()),
         activity: session_activity(session),
-        quota: session_quota(session, runtime.omp_usage()),
+        quota: session_quota(session, runtime.omp_usage().as_ref()),
         team: session.team().cloned(),
         role: session.role().map(str::to_owned),
     })

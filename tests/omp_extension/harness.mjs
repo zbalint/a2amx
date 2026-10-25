@@ -51,6 +51,7 @@ export function makeCtx(overrides = {}) {
     },
     agent: { kind: overrides.kind ?? "main" },
   };
+  if (Object.hasOwn(overrides, "model")) ctx.model = overrides.model;
   if (overrides.missing) {
     for (const name of overrides.missing) {
       if (name === "getEditorText") delete ctx.ui.getEditorText;

@@ -33,6 +33,7 @@ fn state(draft: bool, pending: bool) -> BridgeUp {
         draft,
         queue: None,
         host_pending: None,
+        provider: None,
     }
 }
 
@@ -452,6 +453,7 @@ async fn an_idle_host_with_queued_next_turn_messages_does_not_block_delivery() {
         draft: false,
         queue: Some(0),
         host_pending: Some(true),
+        provider: None,
     })
     .await
     .unwrap();
@@ -476,6 +478,7 @@ async fn a_non_empty_extension_queue_still_blocks_delivery() {
         draft: false,
         queue: Some(1),
         host_pending: Some(true),
+        provider: None,
     })
     .await
     .unwrap();
@@ -498,6 +501,7 @@ async fn a_busy_host_with_queued_messages_still_blocks_delivery() {
         draft: false,
         queue: Some(0),
         host_pending: Some(true),
+        provider: None,
     })
     .await
     .unwrap();
@@ -520,6 +524,7 @@ async fn an_extension_without_diagnostics_keeps_blocking_delivery() {
         draft: false,
         queue: None,
         host_pending: None,
+        provider: None,
     })
     .await
     .unwrap();
@@ -542,6 +547,7 @@ async fn an_inconsistent_state_report_keeps_blocking_delivery() {
         draft: false,
         queue: Some(0),
         host_pending: Some(false),
+        provider: None,
     })
     .await
     .unwrap();
@@ -834,6 +840,7 @@ fn bridge_frames_serialize_to_the_documented_json() {
                 draft: false,
                 queue: Some(2),
                 host_pending: Some(true),
+                provider: None,
             },
             r#"{"type":"state","idle":true,"pending":true,"draft":false,"queue":2,"host_pending":true}"#,
         ),

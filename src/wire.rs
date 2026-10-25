@@ -206,6 +206,8 @@ pub enum BridgeUp {
         queue: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host_pending: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
     },
     Ack {
         id: String,

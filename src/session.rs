@@ -114,6 +114,7 @@ pub(crate) struct NativeSlot {
     in_flight: bool,
     idle_since: Option<Instant>,
     reported_at: Option<Instant>,
+    provider: Option<String>,
     diagnostics: Option<(u32, bool)>,
     link: Option<mpsc::UnboundedSender<BridgeDown>>,
     waiting: Option<(String, oneshot::Sender<Result<(), String>>)>,
@@ -622,18 +623,29 @@ impl Session {
         self.message_notify.notify_one();
     }
 
-    pub(crate) fn native_state(&self, idle: bool, draft: bool, pending: bool) {
+    pub(crate) fn native_state(
+        &self,
+        idle: bool,
+        draft: bool,
+        pending: bool,
+        provider: Option<String>,
+    ) {
         let mut state = self.lock();
         let now = Instant::now();
         if state.native.idle_since.is_none() || state.native.idle != idle {
             state.native.idle_since = Some(now);
         }
         state.native.reported_at = Some(now);
+        state.native.provider = provider;
         state.native.idle = idle;
         state.native.draft = draft;
         state.native.in_flight = pending;
         drop(state);
         self.message_notify.notify_one();
+    }
+
+    pub(crate) fn native_provider(&self) -> Option<String> {
+        self.lock().native.provider.clone()
     }
 
     pub(crate) fn native_diagnostics(&self, queue: Option<u32>, host_pending: Option<bool>) {

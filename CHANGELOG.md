@@ -5,6 +5,14 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The quota shown for an OMP session now follows the provider of the model it is using, instead
+  of the smallest value across all providers on the account. The OMP extension reports the
+  current provider on each state frame (additive field `provider`), so a switch between
+  providers changes the quota shown on the next list. A session whose provider is unknown shows
+  `-` instead of another provider's quota (`docs/cli.md`).
+
 ## [0.1.1] - 2026-10-16
 
 ### Added

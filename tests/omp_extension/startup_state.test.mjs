@@ -128,3 +128,24 @@ test("6 poll detects draft changes and keepalive repeats at 30000ms", async (t) 
   await keepalive;
   assert.equal(connection.frames.length, keepaliveStart + 1);
 });
+
+test("7 reports the current model provider and clears it when unavailable", async (t) => {
+  const server = await startServer();
+  const h = await startExtension({ server, ctx: makeCtx({ model: { provider: "openai-codex" } }) });
+  t.after(async () => h.teardown());
+  const { connection } = await ready(h, server);
+  assert.equal(connection.frames.at(-1).provider, "openai-codex");
+
+  const afterFirst = connection.frames.length;
+
+  h.ctx.model = { provider: "opencode-go" };
+  const second = server.waitForNewFrame(connection, (frame) => frame.type === "state" && frame.provider === "opencode-go");
+  await h.pi.emit("turn_start", {}, h.ctx);
+  await second;
+  assert.equal(connection.frames.length, afterFirst + 1);
+
+  h.ctx.model = undefined;
+  const cleared = server.waitForNewFrame(connection, (frame) => frame.type === "state" && frame.provider === undefined);
+  await h.pi.emit("turn_start", {}, h.ctx);
+  await cleared;
+});

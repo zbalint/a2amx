@@ -1650,6 +1650,7 @@ async fn reset_diagnostic_busy_names_native_flags() {
             draft: false,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -1668,6 +1669,7 @@ async fn reset_diagnostic_busy_names_native_flags() {
             draft: false,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -1761,6 +1763,7 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
             draft: false,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -1784,6 +1787,7 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
             draft: false,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -1803,6 +1807,7 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
             draft: false,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -1853,6 +1858,7 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
             draft: true,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -1873,6 +1879,7 @@ async fn reset_diagnostic_native_timing_survives_reconnect() {
             draft: false,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -1902,6 +1909,7 @@ async fn reset_diagnostic_draft_names_native_flag() {
             draft: true,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -1930,6 +1938,7 @@ async fn reset_diagnostic_hold_names_human_draft() {
             draft: true,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -1976,6 +1985,7 @@ async fn reset_stale_omp_draft_hold_clears_after_margin() {
             draft: true,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -2012,6 +2022,7 @@ async fn reset_stale_omp_draft_hold_clears_after_margin() {
             draft: false,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -2034,6 +2045,7 @@ async fn reset_real_omp_draft_hold_survives_margin_then_clears() {
             draft: true,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -2080,6 +2092,7 @@ async fn reset_real_omp_draft_hold_survives_margin_then_clears() {
             draft: false,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();
@@ -2159,6 +2172,7 @@ async fn reset_rejects_an_in_flight_native_delivery_as_busy() {
             draft: false,
             queue: None,
             host_pending: None,
+            provider: None,
         })
         .await
         .unwrap();

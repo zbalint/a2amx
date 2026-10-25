@@ -2,11 +2,12 @@
 
 mod common;
 
-use a2amx::client::Client;
+use a2amx::client::{BridgeLink, Client};
 use a2amx::emulator::{Emulator, Size};
 use a2amx::harness::{Deliver, Harness};
 use a2amx::quota;
-use a2amx::wire::{QuotaInfo, Request, Response, SessionSummary};
+use a2amx::wire::{BridgeDown, BridgeUp, QuotaInfo, Request, Response, SessionSummary};
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -281,10 +282,21 @@ async fn quota_of(admin: &mut Client, id: &str) -> QuotaInfo {
     .expect("status line is read")
 }
 
-const OMP_USAGE_FIXTURE: &str = r#"{"reports":[{"limits":[
+const OMP_USAGE_FIXTURE: &str = r#"{"reports":[{"provider":"openai-codex","limits":[
     {"window":{"id":"5h"},"amount":{"remainingFraction":0.97}},
     {"window":{"id":"7d"},"amount":{"remainingFraction":0.05}}
 ]}]}"#;
+
+const OMP_USAGE_MULTI_FIXTURE: &str = r#"{"reports":[
+    {"provider":"openai-codex","limits":[
+        {"window":{"id":"5h"},"amount":{"remainingFraction":0.97}},
+        {"window":{"id":"7d"},"amount":{"remainingFraction":0.05}}
+    ]},
+    {"provider":"opencode-go","limits":[
+        {"window":{"id":"5h"},"amount":{"remainingFraction":0.0}},
+        {"window":{"id":"7d"},"amount":{"remainingFraction":0.0}}
+    ]}
+]}"#;
 
 fn fake_executable(dir: &Path, name: &str, usage_body: &str) -> PathBuf {
     let path = dir.join(name);
@@ -293,6 +305,87 @@ fn fake_executable(dir: &Path, name: &str, usage_body: &str) -> PathBuf {
     fs::write(&path, script).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
     path
+}
+
+fn bridged_fake_executable(dir: &Path, usage: &str) -> PathBuf {
+    let path = dir.join("omp");
+    let script = format!(
+        "#!/bin/sh\nif [ \"$1\" = usage ]; then\nprintf '%s\\n' '{usage}'; exit 0\nelse\nprintf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > \"$OUT\"\nprintf '\\033[?2004h'\ncat\nfi\n"
+    );
+    fs::write(&path, script).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    path
+}
+
+async fn bridged_omp_session(
+    admin: &mut Client,
+    daemon_address: std::net::SocketAddr,
+    name: &str,
+    executable: &Path,
+    cwd: &Path,
+    output: &Path,
+    provider: &str,
+) -> (String, BridgeLink) {
+    let response = admin
+        .request(Request::NewSession {
+            argv: vec![executable.to_string_lossy().into_owned()],
+            cols: 169,
+            rows: 51,
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            env: vec![("OUT".into(), output.to_string_lossy().into_owned())],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            heartbeat: None,
+            team: None,
+            role: None,
+            name: Some(name.into()),
+            harness: Harness::Omp,
+            deliver: Some(Deliver::Hold),
+        })
+        .await
+        .unwrap();
+    let Response::Created { session } = response else {
+        panic!("session creation failed: {response:?}");
+    };
+    let token = common::eventually(|| async {
+        let text = fs::read_to_string(output).ok()?;
+        let mut lines = text.lines();
+        let token = lines.next()?.to_owned();
+        let _address = lines.next()?;
+        (token.len() == 64).then_some(token)
+    })
+    .await;
+    let mut bridge = Client::connect_addr(daemon_address, &token)
+        .await
+        .unwrap()
+        .bridge()
+        .await
+        .unwrap();
+    bridge
+        .send(BridgeUp::Hello {
+            protocol: 1,
+            omp_version: "18.4.5".into(),
+            missing: vec![],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        bridge.recv().await.unwrap(),
+        Some(BridgeDown::Ready)
+    ));
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: false,
+            draft: false,
+            queue: Some(0),
+            host_pending: Some(false),
+            provider: Some(provider.to_owned()),
+        })
+        .await
+        .unwrap();
+    (session, bridge)
 }
 
 async fn direct_omp_session(
@@ -568,31 +661,78 @@ fn cell_preserves_screen_limit_with_windows() {
 fn parses_omp_usage_windows() {
     assert_eq!(
         quota::parse_omp_usage(
-            r#"{"reports":[{"limits":[
+            r#"{"reports":[{"provider":"openai-codex","limits":[
                 {"window":{"id":"5h"},"amount":{"remainingFraction":0.97}},
                 {"window":{"id":"7d"},"amount":{"remainingFraction":0.05}}
             ]}]}"#
         ),
-        info(Some(97), Some(5))
+        Some(BTreeMap::from([(
+            "openai-codex".to_owned(),
+            QuotaInfo {
+                five_hour: Some(97),
+                weekly: Some(5),
+                ..Default::default()
+            },
+        )]))
     );
 }
 
 #[test]
-fn parses_the_most_pessimistic_omp_report() {
+fn keeps_omp_usage_providers_separate() {
     assert_eq!(
         quota::parse_omp_usage(
             r#"{"reports":[
-                {"limits":[
-                    {"window":{"id":"5h"},"amount":{"remainingFraction":0.97}},
-                    {"window":{"id":"7d"},"amount":{"remainingFraction":0.95}}
+                {"provider":"openai-codex","limits":[
+                    {"window":{"id":"5h"},"amount":{"remainingFraction":1.0}},
+                    {"window":{"id":"7d"},"amount":{"remainingFraction":0.85}}
                 ]},
-                {"limits":[
-                    {"window":{"id":"5h"},"amount":{"remainingFraction":0.40}},
-                    {"window":{"id":"7d"},"amount":{"remainingFraction":0.50}}
+                {"provider":"opencode-go","limits":[
+                    {"window":{"id":"5h"},"amount":{"remainingFraction":1.0}},
+                    {"window":{"id":"7d"},"amount":{"remainingFraction":0.0}}
                 ]}
             ]}"#
         ),
-        info(Some(40), Some(50))
+        Some(BTreeMap::from([
+            (
+                "openai-codex".to_owned(),
+                QuotaInfo {
+                    five_hour: Some(100),
+                    weekly: Some(85),
+                    ..Default::default()
+                },
+            ),
+            (
+                "opencode-go".to_owned(),
+                QuotaInfo {
+                    five_hour: Some(100),
+                    weekly: Some(0),
+                    ..Default::default()
+                },
+            ),
+        ]))
+    );
+}
+
+#[test]
+fn merges_omp_usage_reports_for_one_provider() {
+    assert_eq!(
+        quota::parse_omp_usage(
+            r#"{"reports":[
+                {"provider":"openai-codex","limits":[
+                    {"window":{"id":"7d"},"amount":{"remainingFraction":0.85}}
+                ]},
+                {"provider":"openai-codex","limits":[
+                    {"window":{"id":"7d"},"amount":{"remainingFraction":0.40}}
+                ]}
+            ]}"#
+        ),
+        Some(BTreeMap::from([(
+            "openai-codex".to_owned(),
+            QuotaInfo {
+                weekly: Some(40),
+                ..Default::default()
+            },
+        )]))
     );
 }
 
@@ -600,23 +740,37 @@ fn parses_the_most_pessimistic_omp_report() {
 fn rounds_and_clamps_omp_percentages() {
     assert_eq!(
         quota::parse_omp_usage(
-            r#"{"reports":[{"limits":[
+            r#"{"reports":[{"provider":"openai-codex","limits":[
                 {"window":{"id":"5h"},"amount":{"remainingFraction":0.004}},
                 {"window":{"id":"7d"},"amount":{"remainingFraction":0.005}},
                 {"window":{"id":"30d"},"amount":{"remainingFraction":1.5}},
                 {"window":{"id":"ignored"},"amount":{"remainingFraction":-0.2}}
             ]}]}"#
         ),
-        info(Some(0), Some(1))
+        Some(BTreeMap::from([(
+            "openai-codex".to_owned(),
+            QuotaInfo {
+                five_hour: Some(0),
+                weekly: Some(1),
+                ..Default::default()
+            },
+        )]))
     );
     assert_eq!(
         quota::parse_omp_usage(
-            r#"{"reports":[{"limits":[
+            r#"{"reports":[{"provider":"openai-codex","limits":[
                 {"window":{"id":"5h"},"amount":{"remainingFraction":1.5}},
                 {"window":{"id":"7d"},"amount":{"remainingFraction":-0.2}}
             ]}]}"#
         ),
-        info(Some(100), Some(0))
+        Some(BTreeMap::from([(
+            "openai-codex".to_owned(),
+            QuotaInfo {
+                five_hour: Some(100),
+                weekly: Some(0),
+                ..Default::default()
+            },
+        )]))
     );
 }
 
@@ -624,22 +778,30 @@ fn rounds_and_clamps_omp_percentages() {
 fn omp_usage_may_report_one_window() {
     assert_eq!(
         quota::parse_omp_usage(
-            r#"{"reports":[{"limits":[
+            r#"{"reports":[{"provider":"openai-codex","limits":[
                 {"window":{"id":"5h"},"amount":{"remainingFraction":0.40}}
             ]}]}"#
         ),
-        info(Some(40), None)
+        Some(BTreeMap::from([(
+            "openai-codex".to_owned(),
+            QuotaInfo {
+                five_hour: Some(40),
+                ..Default::default()
+            },
+        )]))
     );
 }
 
 #[test]
-fn omp_usage_without_supported_windows_is_none() {
+fn omp_usage_without_supported_windows_or_provider_is_none() {
     for json in [
         "",
         "not json",
         "{}",
         r#"{"reports":[]}"#,
-        r#"{"reports":[{"limits":[{"window":{"id":"30d"},"amount":{"remainingFraction":0.5}}]}]}"#,
+        r#"{"reports":[{"provider":"openai-codex","limits":[{"window":{"id":"30d"},"amount":{"remainingFraction":0.5}}]}]}"#,
+        r#"{"reports":[{"limits":[{"window":{"id":"5h"},"amount":{"remainingFraction":0.5}}]}]}"#,
+        r#"{"reports":[{"provider":42,"limits":[{"window":{"id":"5h"},"amount":{"remainingFraction":0.5}}]}]}"#,
     ] {
         assert_eq!(quota::parse_omp_usage(json), None, "fixture: {json:?}");
     }
@@ -659,18 +821,34 @@ fn omp_usage_ignores_identity_fields() {
                 ]}]
             }"#
         ),
-        info(Some(97), Some(5))
+        Some(BTreeMap::from([(
+            "fictional-provider".to_owned(),
+            QuotaInfo {
+                five_hour: Some(97),
+                weekly: Some(5),
+                ..Default::default()
+            },
+        )]))
     );
 }
 
 #[tokio::test]
 async fn list_and_list_agents_report_omp_usage_percentages() {
     let fake_dir = tempdir().unwrap();
-    let usage_body = format!("printf '%s\\n' '{OMP_USAGE_FIXTURE}'; exit 0");
-    let executable = fake_executable(fake_dir.path(), "omp", &usage_body);
+    let output = fake_dir.path().join("bridge-state");
+    let executable = bridged_fake_executable(fake_dir.path(), OMP_USAGE_FIXTURE);
     let (dir, daemon) = common::start_daemon().await;
     let mut admin = Client::connect(dir.path()).await.unwrap();
-    let id = direct_omp_session(&mut admin, "agent-omp-usage", &executable, fake_dir.path()).await;
+    let (id, mut bridge) = bridged_omp_session(
+        &mut admin,
+        daemon.addrs()[0],
+        "agent-omp-usage",
+        &executable,
+        fake_dir.path(),
+        &output,
+        "openai-codex",
+    )
+    .await;
 
     let quota = quota_of(&mut admin, &id).await;
     assert_eq!(
@@ -689,6 +867,125 @@ async fn list_and_list_agents_report_omp_usage_percentages() {
         .find(|agent| agent.address.starts_with("agent-omp-usage@"))
         .unwrap();
     assert_eq!(agent.quota, Some(quota));
+
+    bridge
+        .send(BridgeUp::State {
+            idle: true,
+            pending: false,
+            draft: false,
+            queue: Some(0),
+            host_pending: Some(false),
+            provider: None,
+        })
+        .await
+        .unwrap();
+    let mut cleared = false;
+    for _ in 0..100 {
+        if summary(&mut admin, &id).await.quota.is_none() {
+            cleared = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(cleared, "provider omission did not clear List quota");
+    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+        panic!("list_agents failed");
+    };
+    let agent = agents
+        .iter()
+        .find(|agent| agent.address.starts_with("agent-omp-usage@"))
+        .unwrap();
+    assert_eq!(agent.quota, None);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn send_message_uses_recipient_omp_provider_quota() {
+    let fake_dir = tempdir().unwrap();
+    let executable = bridged_fake_executable(fake_dir.path(), OMP_USAGE_MULTI_FIXTURE);
+    let open_output = fake_dir.path().join("open-bridge-state");
+    let glm_output = fake_dir.path().join("glm-bridge-state");
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (open_id, _open_bridge) = bridged_omp_session(
+        &mut admin,
+        daemon.addrs()[0],
+        "agent-omp-open",
+        &executable,
+        fake_dir.path(),
+        &open_output,
+        "openai-codex",
+    )
+    .await;
+    let (glm_id, _glm_bridge) = bridged_omp_session(
+        &mut admin,
+        daemon.addrs()[0],
+        "agent-omp-glm",
+        &executable,
+        fake_dir.path(),
+        &glm_output,
+        "opencode-go",
+    )
+    .await;
+    assert_eq!(
+        quota_of(&mut admin, &open_id).await,
+        QuotaInfo {
+            five_hour: Some(97),
+            weekly: Some(5),
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        quota_of(&mut admin, &glm_id).await,
+        QuotaInfo {
+            five_hour: Some(0),
+            weekly: Some(0),
+            ..Default::default()
+        }
+    );
+
+    let (_, sender_token, sender_address) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("agent-omp-sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let mut sender = Client::connect_addr(sender_address, &sender_token)
+        .await
+        .unwrap();
+
+    let Response::Accepted {
+        recipient_quota: open_quota,
+        ..
+    } = sender
+        .request(Request::SendMessage {
+            to: "agent-omp-open@host-a".into(),
+            subject: "s".into(),
+            message: "m".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected healthy recipient acceptance");
+    };
+    let Response::Accepted {
+        recipient_quota: glm_quota,
+        ..
+    } = sender
+        .request(Request::SendMessage {
+            to: "agent-omp-glm@host-a".into(),
+            subject: "s".into(),
+            message: "m".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected exhausted recipient acceptance");
+    };
+    assert_eq!(open_quota, None);
+    assert_eq!(glm_quota.as_deref(), Some("5h and weekly quota exhausted"));
     daemon.shutdown().await.unwrap();
 }
 

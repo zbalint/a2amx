@@ -90,3 +90,16 @@ The developer also checks the one assumption nothing here can prove from the rep
 ## 8. Out of scope
 
 Per-model (not per-provider) quota, hosts whose OMP sessions use different accounts or configs of the same provider (the daemon runs `omp usage` once, from one session, so the map assumes one account set per host), a faster `omp usage` cadence, showing several providers in one cell, and Claude or Codex harness quota.
+
+## Review record
+
+**Models.** Architect: Claude Sonnet 5.5. Consultant: a Claude Code session, model not exposed to the architect. Developer and tester: OMP sessions reporting `openai-codex/gpt-5.6-luna`; their planning, working and advisor slot models are not exposed to the sessions. **BLOCKED/amend cycles:** 0.
+
+| Found in | Found by | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Architect (gate) | Scope missed `src/channel.rs`, `tests/bridge.rs` and `tests/broker.rs` (literals of the changed frame), and the existing tests that pinned the single-minimum behavior were not listed | Added to scope; section 3 lists the tests to rewrite |
+| Draft review | Consultant | `docs/architecture.md` quota paragraph not in scope; serde attributes for the new field unpinned (the JSON in `tests/bridge.rs` is exact); parser return type and the empty-map case unstated; only the definition of `session_quota` named, not its four callers; stale `shortcut:` comment | All fixed before lock (D3, D4, D5, D6, scope) |
+| Draft review | Consultant | Several accounts per host share one `omp usage` run, so the map assumes one account set per host | Stated as out of scope |
+| Draft review | Consultant | Wording "within one 500 ms sample" ignored the early return while a delivery is in flight | "On the next state frame" |
+| Tester pass | Tester | The test for "provider cleared when a later frame omits it" survived a Some-only mutant, because it switched to a provider absent from the cache before omitting | Test changed to omit while the cached provider is still present; red against the mutant, green on the diff |
+| Tester pass | Tester | Cache preservation after a failed poll (D4) is covered by code reading only, not a test | Accepted by the architect on a read of `poll_omp_usage`, which writes the cache only on success |
