@@ -108,6 +108,34 @@ impl FrameDecoder {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityWatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_after: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_after: Option<u64>,
+}
+
+impl ActivityWatch {
+    pub fn validate(&self, has_watch: bool) -> Result<()> {
+        if !has_watch {
+            bail!("activity needs a non-empty watch");
+        }
+        if self.working_after.is_none() && self.idle_after.is_none() {
+            bail!("activity needs at least one duration");
+        }
+        for (seconds, label) in [
+            (self.working_after, "activity working_after"),
+            (self.idle_after, "activity idle_after"),
+        ] {
+            if let Some(seconds) = seconds {
+                crate::messaging::parse_interval(&format!("{seconds}s"), label)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 // shortcut: requests are short-lived and not stored in bulk; box the NewSession fields if Request is ever held in a hot collection.
 #[allow(clippy::large_enum_variant)]
@@ -127,6 +155,8 @@ pub enum Request {
         control_from: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         watch: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity: Option<ActivityWatch>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         heartbeat: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

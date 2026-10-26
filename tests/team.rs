@@ -670,6 +670,7 @@ cwd = "."
                 control_from: Vec::new(),
                 watch: Vec::new(),
                 heartbeat: None,
+                activity: None,
                 role: Some("architect".into()),
                 allow: Vec::new(),
                 team: None,
@@ -683,6 +684,7 @@ cwd = "."
                 control_from: Vec::new(),
                 watch: Vec::new(),
                 heartbeat: None,
+                activity: None,
                 role: None,
                 allow: Vec::new(),
                 team: None,
@@ -1102,6 +1104,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 control_from: Vec::new(),
                 watch: Vec::new(),
                 heartbeat: None,
+                activity: None,
                 role: None,
                 allow: Vec::new(),
                 team: None,
@@ -1115,6 +1118,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 control_from: Vec::new(),
                 watch: Vec::new(),
                 heartbeat: None,
+                activity: None,
                 role: None,
                 allow: Vec::new(),
                 team: None,
@@ -1433,6 +1437,7 @@ attach = true
 watch = ["other"]
 control_from = ["other"]
 heartbeat = "5s"
+activity = { working_after = "2m", idle_after = "30s" }
 [[session]]
 name = "generic"
 command = ["sh", "-c", "echo generic"]
@@ -1463,6 +1468,7 @@ command = ["omp", "--secret"]
     assert!(stdout.contains("  watch: other\n"));
     assert!(stdout.contains("  control_from: other\n"));
     assert!(stdout.contains("  heartbeat: 5s\n"));
+    assert!(stdout.contains("  activity: working_after 2m, idle_after 30s\n"));
     assert!(stdout.contains("  command: claude "));
     assert!(stdout.contains("--mcp-config "));
     assert!(stdout.contains("--settings "));
@@ -2162,4 +2168,106 @@ heartbeat = "30m"
             "{value}: {error:#}"
         );
     }
+}
+
+#[test]
+fn activity_team_entry_requires_watch_duration_and_validates_fields() {
+    let parsed = team::parse(
+        r#"
+[[session]]
+name = "architect"
+command = ["sh"]
+watch = ["developer"]
+activity = { working_after = "2m", idle_after = "30s" }
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        parsed[0]
+            .activity
+            .as_ref()
+            .and_then(|activity| activity.working_after.as_deref()),
+        Some("2m")
+    );
+
+    for (text, expected) in [
+        (
+            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nactivity = { idle_after = \"30s\" }",
+            "activity needs a non-empty watch",
+        ),
+        (
+            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"developer\"]\nactivity = {}",
+            "activity needs at least one duration",
+        ),
+        (
+            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"developer\"]\nactivity = { idle_after = \"25h\" }",
+            "invalid activity idle_after",
+        ),
+        (
+            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"developer\"]\nactivity = { nope = \"30s\" }",
+            "unknown field",
+        ),
+    ] {
+        let error = team::parse(text).unwrap_err();
+        assert!(
+            format!("{error:#}").contains(expected),
+            "{expected}: {error:#}"
+        );
+    }
+}
+
+#[test]
+fn activity_team_cycles_are_rejected_in_file_order() {
+    let mutual = team::parse(
+        r#"
+[[session]]
+name = "a"
+command = ["sh"]
+watch = ["b"]
+activity = { idle_after = "30s" }
+[[session]]
+name = "b"
+command = ["sh"]
+watch = ["a"]
+activity = { working_after = "2m" }
+"#,
+    )
+    .unwrap_err();
+    assert!(format!("{mutual:#}").contains("activity notices would loop between a and b"));
+
+    let ring = team::parse(
+        r#"
+[[session]]
+name = "a"
+command = ["sh"]
+watch = ["b"]
+activity = { idle_after = "30s" }
+[[session]]
+name = "b"
+command = ["sh"]
+watch = ["c"]
+activity = { idle_after = "30s" }
+[[session]]
+name = "c"
+command = ["sh"]
+watch = ["a"]
+activity = { idle_after = "30s" }
+"#,
+    )
+    .unwrap_err();
+    assert!(format!("{ring:#}").contains("activity notices would loop between a, b and c"));
+
+    team::parse(
+        r#"
+[[session]]
+name = "a"
+command = ["sh"]
+watch = ["b"]
+activity = { idle_after = "30s" }
+[[session]]
+name = "b"
+command = ["sh"]
+"#,
+    )
+    .unwrap();
 }

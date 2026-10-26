@@ -338,6 +338,18 @@ heartbeat before inserting another, and drops a `QueueFull` result. PTY delivery
 output refreshes the receiving session's activity clock; native delivery does not
 write to that clock. Heartbeats never send input to or otherwise act on a watched peer.
 
+**Activity notices.** A watcher may configure `activity` with `working_after` and/or
+`idle_after` thresholds. The daemon samples every live watched peer once per second,
+debounces each direction independently, and queues one sorted system message when a
+settled state differs from the last announced or baseline state. The first settled state
+is silent; a pending or delivering activity message suppresses another insert, but
+trackers continue observing every tick and acknowledge changes only after a successful
+insert. The ordinary delivery gates still decide when the watcher receives it, so the
+body is frozen at insertion. Working means not-ready or screen output within ten seconds;
+holds and resets do not change it. Exited peers are forgotten silently, and a restarted
+session gets a new baseline. Team plans reject activity-watch cycles; hand-started mutual
+watches can loop and should be avoided.
+
 **Not implemented.** Hooks for harnesses other than Claude Code and cross-host routing.
 Native in-harness delivery exists for Claude Code (channel), OMP (extension) and Codex
 (app-server).

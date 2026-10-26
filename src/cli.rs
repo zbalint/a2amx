@@ -60,6 +60,12 @@ pub enum Command {
         /// Session names whose exit this session is told about.
         #[arg(long)]
         watch: Vec<String>,
+        /// Notify this session when watched peers become working after this duration.
+        #[arg(long)]
+        activity_working_after: Option<String>,
+        /// Notify this session when watched peers become idle after this duration.
+        #[arg(long)]
+        activity_idle_after: Option<String>,
         /// Send this session a digest of its watched peers when it has been idle this long, for example 30m.
         #[arg(long)]
         heartbeat: Option<String>,

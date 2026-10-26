@@ -5,6 +5,16 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Activity notices: a session started with `activity` (team file `activity = { working_after =
+  "2m", idle_after = "30s" }`, or `a2amx new --activity-working-after 2m --activity-idle-after
+  30s`) is told when a watched peer starts or stops working. Each direction is debounced
+  separately, the first settled state is silent, and the notice is one ordinary daemon message
+  per watcher at a time. `team up` rejects teams whose watchers would notify each other in a
+  loop. New optional field on the `new` request and the team file; older files and clients keep
+  working (`docs/teams.md`, `docs/cli.md`).
+
 ### Fixed
 
 - The quota shown for an OMP session now follows the provider of the model it is using, instead

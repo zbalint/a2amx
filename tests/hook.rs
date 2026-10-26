@@ -72,6 +72,7 @@ impl HookCase {
                 harness: Harness::Claude,
                 deliver: Some(Deliver::Auto),
                 heartbeat: None,
+                activity: None,
                 team: None,
                 role: None,
             })

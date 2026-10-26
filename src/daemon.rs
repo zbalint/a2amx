@@ -19,6 +19,7 @@ use tokio::process::Command;
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
+use crate::activity::{Thresholds, Tracker};
 use crate::client::Framed;
 use crate::codex;
 use crate::delivery::{AnyChannel, Channel};
@@ -171,6 +172,18 @@ fn heartbeat_body(interval: Duration, peers: &[HeartbeatPeer]) -> String {
     body
 }
 
+fn activity_body(changes: &[(String, String, bool)]) -> String {
+    let mut body = String::from("peer activity:\n");
+    for (_, name, state) in changes {
+        body.push_str(&format!(
+            "- {name}: {} (was {})\n",
+            if *state { "working" } else { "idle" },
+            if *state { "idle" } else { "working" },
+        ));
+    }
+    body
+}
+
 enum Role {
     Admin,
     Session(String),
@@ -316,6 +329,7 @@ impl Runtime {
             reset,
             control_from,
             watch,
+            activity,
             heartbeat,
             name,
             harness,
@@ -340,7 +354,7 @@ impl Runtime {
             return Ok(Response::Error { message });
         }
         let heartbeat = match heartbeat
-            .map(|seconds| messaging::parse_interval(&format!("{seconds}s")))
+            .map(|seconds| messaging::parse_interval(&format!("{seconds}s"), "heartbeat"))
             .transpose()
         {
             Ok(heartbeat) => heartbeat,
@@ -356,6 +370,13 @@ impl Runtime {
                     "session {}: heartbeat needs a non-empty watch",
                     name.as_deref().unwrap_or("unnamed")
                 ),
+            });
+        }
+        if let Some(activity) = &activity
+            && let Err(error) = activity.validate(!watch.is_empty())
+        {
+            return Ok(Response::Error {
+                message: format!("session {}: {error}", name.as_deref().unwrap_or("unnamed")),
             });
         }
 
@@ -415,6 +436,7 @@ impl Runtime {
                     reset,
                     control_from,
                     watch,
+                    activity,
                     heartbeat,
                     team,
                     role,
@@ -608,6 +630,9 @@ impl Runtime {
                 self.clone().heartbeat(session.clone(), interval),
             ));
         }
+        if session.activity().is_some() {
+            tasks.push(tokio::spawn(self.clone().activity(session.clone())));
+        }
         if channel {
             tasks.push(tokio::spawn(accept_channel_dialog(session.clone())));
         }
@@ -734,6 +759,112 @@ impl Runtime {
         }
     }
 
+    async fn activity(self: Arc<Self>, session: Arc<Session>) {
+        let Some(config) = session.activity().cloned() else {
+            return;
+        };
+        let thresholds = Thresholds {
+            working_after: config.working_after.map(Duration::from_secs),
+            idle_after: config.idle_after.map(Duration::from_secs),
+        };
+        let mut ticker = tokio::time::interval(HEARTBEAT_POLL);
+        let mut trackers = HashMap::<String, Tracker>::new();
+        loop {
+            ticker.tick().await;
+            if session.exit_code().is_some() {
+                return;
+            }
+            let now = Instant::now();
+            let peers = self.live_watched_peers(&session);
+            let live_ids = peers
+                .iter()
+                .map(|peer| peer.id().0.clone())
+                .collect::<HashSet<_>>();
+            trackers.retain(|id, _| live_ids.contains(id));
+            let mut changes = Vec::new();
+            for peer in peers {
+                let Some(working) = session_working(&peer) else {
+                    continue;
+                };
+                let id = peer.id().0.clone();
+                let name = peer.name().unwrap_or(&peer.id().0).to_owned();
+                let tracker = trackers
+                    .entry(id.clone())
+                    .or_insert_with(|| Tracker::new(thresholds));
+                if let Some(state) = tracker.observe(now, working) {
+                    changes.push((id, name, state));
+                }
+            }
+            if changes.is_empty() {
+                continue;
+            }
+            changes.sort_by(|left, right| left.1.cmp(&right.1));
+            self.send_activity(&session, changes, &mut trackers).await;
+        }
+    }
+
+    async fn send_activity(
+        &self,
+        session: &Arc<Session>,
+        changes: Vec<(String, String, bool)>,
+        trackers: &mut HashMap<String, Tracker>,
+    ) {
+        let open = match self
+            .store
+            .open_system_message(&self.boot, &session.id().0, messaging::ACTIVITY_SUBJECT)
+            .await
+        {
+            Ok(open) => open,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    recipient = %session.id().0,
+                    "activity state lookup failed"
+                );
+                return;
+            }
+        };
+        if open {
+            return;
+        }
+        let message = NewMessage {
+            boot: self.boot.clone(),
+            sender_session: "daemon".into(),
+            sender_address: messaging::address(
+                Some(messaging::SYSTEM_SENDER),
+                messaging::SYSTEM_SENDER,
+                &self.host_name,
+            ),
+            recipient_session: session.id().0.clone(),
+            recipient_address: messaging::address(session.name(), &session.id().0, &self.host_name),
+            subject: messaging::ACTIVITY_SUBJECT.into(),
+            body: activity_body(&changes),
+        };
+        match self.store.insert_message(message).await {
+            Ok(_) => {
+                for (id, _, state) in changes {
+                    if let Some(tracker) = trackers.get_mut(&id) {
+                        tracker.announced(state);
+                    }
+                }
+                session.message_notify().notify_one();
+            }
+            Err(InsertError::QueueFull) => {
+                tracing::warn!(
+                    recipient = %session.id().0,
+                    "activity message queue is full"
+                );
+            }
+            Err(InsertError::Internal(error)) => {
+                tracing::error!(
+                    %error,
+                    recipient = %session.id().0,
+                    "activity message acceptance failed"
+                );
+            }
+        }
+    }
+
     fn live_watched_peers(&self, session: &Arc<Session>) -> Vec<Arc<Session>> {
         let watched = session.watch().to_vec();
         let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
@@ -781,7 +912,7 @@ impl Runtime {
     ) -> Option<Vec<HeartbeatPeer>> {
         let open = match self
             .store
-            .open_system_heartbeat(&self.boot, &session.id().0)
+            .open_system_message(&self.boot, &session.id().0, messaging::HEARTBEAT_SUBJECT)
             .await
         {
             Ok(open) => open,
@@ -2242,7 +2373,7 @@ fn session_quota(
     }
 }
 
-fn session_activity(session: &Arc<Session>) -> Option<Activity> {
+fn session_working(session: &Arc<Session>) -> Option<bool> {
     if session.exit_code().is_some() {
         return None;
     }
@@ -2258,13 +2389,18 @@ fn session_activity(session: &Arc<Session>) -> Option<Activity> {
             state.last_change,
         )
     };
+    Some(!ready || now.saturating_duration_since(last_change) < ACTIVITY_QUIET)
+}
+
+fn session_activity(session: &Arc<Session>) -> Option<Activity> {
+    let working = session_working(session)?;
     if AnyChannel::for_session(session.clone())
         .hold_reason()
         .is_some()
         || session.resetting()
     {
         Some(Activity::Busy)
-    } else if !ready || now.saturating_duration_since(last_change) < ACTIVITY_QUIET {
+    } else if working {
         Some(Activity::Working)
     } else {
         Some(Activity::Idle)

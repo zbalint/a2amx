@@ -251,17 +251,17 @@ proptest! {
 
     #[test]
     fn seconds_intervals_parse_exactly(n in 1..=86400u64) {
-        prop_assert_eq!(parse_interval(&format!("{n}s")).unwrap_or_default(), Duration::from_secs(n));
+        prop_assert_eq!(parse_interval(&format!("{n}s"), "heartbeat").unwrap_or_default(), Duration::from_secs(n));
     }
 
     #[test]
     fn minute_intervals_parse_exactly(n in 1..=1440u64) {
-        prop_assert_eq!(parse_interval(&format!("{n}m")).unwrap_or_default(), Duration::from_secs(60 * n));
+        prop_assert_eq!(parse_interval(&format!("{n}m"), "heartbeat").unwrap_or_default(), Duration::from_secs(60 * n));
     }
 
     #[test]
     fn hour_intervals_parse_exactly(n in 1..=24u64) {
-        prop_assert_eq!(parse_interval(&format!("{n}h")).unwrap_or_default(), Duration::from_secs(3600 * n));
+        prop_assert_eq!(parse_interval(&format!("{n}h"), "heartbeat").unwrap_or_default(), Duration::from_secs(3600 * n));
     }
 }
 
@@ -276,6 +276,9 @@ fn malformed_or_out_of_range_intervals_are_rejected() {
     for value in [
         "0s", "0m", "0h", "86401s", "1441m", "25h", "", "s", "5", "5x", "-5s", "1.5s", " 5s",
     ] {
-        assert!(parse_interval(value).is_err(), "{value:?} was accepted");
+        assert!(
+            parse_interval(value, "heartbeat").is_err(),
+            "{value:?} was accepted"
+        );
     }
 }

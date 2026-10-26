@@ -12,6 +12,15 @@ use crate::wire::SessionSummary;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TeamActivity {
+    #[serde(default)]
+    pub working_after: Option<String>,
+    #[serde(default)]
+    pub idle_after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TeamSession {
     pub name: String,
     pub command: Vec<String>,
@@ -25,6 +34,8 @@ pub struct TeamSession {
     pub control_from: Vec<String>,
     #[serde(default)]
     pub watch: Vec<String>,
+    #[serde(default)]
+    pub activity: Option<TeamActivity>,
     #[serde(default)]
     pub heartbeat: Option<String>,
     #[serde(default)]
@@ -628,6 +639,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             reset: None,
             control_from: Vec::new(),
             watch: Vec::new(),
+            activity: None,
             heartbeat: None,
             role: None,
             allow: Vec::new(),
@@ -669,6 +681,91 @@ pub fn plan(
             EntryState::Conflict { .. } => unreachable!("conflicts returned above"),
         })
         .collect())
+}
+
+fn validate_activity(session: &TeamSession) -> anyhow::Result<()> {
+    let Some(activity) = &session.activity else {
+        return Ok(());
+    };
+    if session.watch.is_empty() {
+        bail!("session {}: activity needs a non-empty watch", session.name);
+    }
+    if activity.working_after.is_none() && activity.idle_after.is_none() {
+        bail!(
+            "session {}: activity needs at least one duration",
+            session.name
+        );
+    }
+    if let Some(value) = &activity.working_after {
+        parse_interval(value, "activity working_after")
+            .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
+    }
+    if let Some(value) = &activity.idle_after {
+        parse_interval(value, "activity idle_after")
+            .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
+    }
+    Ok(())
+}
+
+fn activity_cycle(sessions: &[TeamSession]) -> Option<Vec<&str>> {
+    let names = sessions
+        .iter()
+        .map(|session| session.name.as_str())
+        .collect::<HashSet<_>>();
+    let mut edges = HashMap::<&str, Vec<&str>>::new();
+    for session in sessions.iter().filter(|session| session.activity.is_some()) {
+        for watched in &session.watch {
+            if names.contains(watched.as_str()) {
+                edges
+                    .entry(watched.as_str())
+                    .or_default()
+                    .push(session.name.as_str());
+            }
+        }
+    }
+    fn visit<'a>(
+        node: &'a str,
+        edges: &HashMap<&'a str, Vec<&'a str>>,
+        state: &mut HashMap<&'a str, u8>,
+        stack: &mut Vec<&'a str>,
+    ) -> Option<Vec<&'a str>> {
+        match state.get(node).copied() {
+            Some(1) => {
+                let start = stack.iter().position(|entry| *entry == node)?;
+                Some(stack[start..].to_vec())
+            }
+            Some(2) => None,
+            _ => {
+                state.insert(node, 1);
+                stack.push(node);
+                for next in edges.get(node).into_iter().flatten() {
+                    if let Some(cycle) = visit(next, edges, state, stack) {
+                        return Some(cycle);
+                    }
+                }
+                stack.pop();
+                state.insert(node, 2);
+                None
+            }
+        }
+    }
+    let mut state = HashMap::new();
+    let mut stack = Vec::new();
+    let mut cycle = None;
+    for session in sessions {
+        if let Some(found) = visit(session.name.as_str(), &edges, &mut state, &mut stack) {
+            cycle = Some(found);
+            break;
+        }
+    }
+    let mut cycle = cycle?;
+    cycle.sort_by_key(|name| {
+        sessions
+            .iter()
+            .position(|session| session.name == *name)
+            .unwrap_or(usize::MAX)
+    });
+    Some(cycle)
 }
 
 fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
@@ -731,13 +828,25 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
                     session.name
                 );
             }
-            parse_interval(value)
+            parse_interval(value, "heartbeat")
                 .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
         }
+        validate_activity(session)?;
         if let Some(role) = &session.role {
             validate_role(role)
                 .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
         }
+    }
+    if let Some(cycle) = activity_cycle(sessions) {
+        let mut names = cycle.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let message = if names.len() == 2 {
+            format!("{} and {}", names[0], names[1])
+        } else if let Some(last) = names.pop() {
+            format!("{} and {last}", names.join(", "))
+        } else {
+            return Ok(());
+        };
+        bail!("activity notices would loop between {message}");
     }
     Ok(())
 }

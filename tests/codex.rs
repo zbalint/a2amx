@@ -123,6 +123,7 @@ impl Case {
                         harness: Harness::Codex,
                         deliver: None,
                         heartbeat: None,
+                        activity: None,
                         team: None,
                         role: None,
                     })

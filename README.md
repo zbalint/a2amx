@@ -61,7 +61,7 @@ The planner agent calls `send_message` to `reviewer`; the reviewer receives it a
 - **Native delivery:** Claude Code uses a channel, OMP an extension, and Codex a private app-server.
 - **Draft protection:** delivery holds when automatic input could mix with a human's unfinished composition.
 - **Operator controls:** attach, switch, scroll, inspect, reset, and stop sessions from the CLI.
-- **Teams and status:** group sessions with visibility rules, roles, watches, heartbeats, and quota status.
+- **Teams and status:** group sessions with visibility rules, roles, watches, heartbeats, activity transition notices, and quota status.
 
 ## Quick start
 
@@ -90,7 +90,7 @@ All code, tests and documentation are written by AI agents; no human writes or h
 
 ## Documentation
 - [CLI reference](docs/cli.md) — commands, attachment controls, list columns, quota, and reset.
-- [Teams](docs/teams.md) — configure team files, visibility, watches, heartbeats, and team commands.
+- [Teams](docs/teams.md) — configure team files, visibility, watches, heartbeats, activity notices, and team commands.
 - [Harnesses and delivery](docs/harnesses.md) — choose profiles and interpret channels, hooks, and receipts.
 - [Installation](docs/install.md) — separate development builds from the live installed binary.
 - [Releasing](docs/releasing.md) — how releases are cut, signed and verified.

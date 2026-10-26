@@ -92,6 +92,7 @@ async fn create(client: &mut Client, argv: &[&str], env: Vec<(String, String)>) 
             harness: a2amx::harness::Harness::Generic,
             deliver: None,
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -292,6 +293,7 @@ async fn new_session_validation_messages_and_precedence() {
                 control_from: control_from.into_iter().map(str::to_owned).collect(),
                 watch: watch.into_iter().map(str::to_owned).collect(),
                 heartbeat,
+                activity: None,
                 name: Some(name.into()),
                 harness: a2amx::harness::Harness::Generic,
                 deliver: None,
@@ -326,6 +328,7 @@ async fn create_claude(client: &mut Client, command: &str) -> String {
             harness: a2amx::harness::Harness::Claude,
             deliver: Some(a2amx::harness::Deliver::Auto),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -1043,6 +1046,7 @@ async fn failed_spawns_and_zero_sizes_leave_no_sessions() {
                     harness: a2amx::harness::Harness::Generic,
                     deliver: None,
                     heartbeat: None,
+                    activity: None,
                     team: None,
                     role: None,
                 })
@@ -1542,6 +1546,7 @@ async fn cwd_environment_and_argument_boundaries_reach_the_child() {
             harness: a2amx::harness::Harness::Generic,
             deliver: None,
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -1848,6 +1853,7 @@ async fn large_final_snapshot_is_split_at_the_data_limit_and_precedes_exit() {
             harness: a2amx::harness::Harness::Generic,
             deliver: None,
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -1958,6 +1964,7 @@ async fn opted_in_attachments_receive_initial_and_changed_status_only() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })

@@ -119,6 +119,7 @@ pub async fn new_team_agent(
             team,
             role: None,
             heartbeat: None,
+            activity: None,
         })
         .await
         .expect("create credential session");

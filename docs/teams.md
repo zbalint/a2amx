@@ -34,6 +34,7 @@ reset = ["/clear", "/prewalk restart"]
 control_from = ["developer"]
 watch = ["developer"]
 heartbeat = "30m" # digest watched peers after 30 minutes of idle time
+activity = { working_after = "2m", idle_after = "30s" } # notices on peer transitions
 # Reference forms: bare local "developer", explicit "other-team/architect", global "/hand".
 
 [[session]]
@@ -82,6 +83,17 @@ and unchanged for the interval; it requires a non-empty `watch` list and accepts
 positive `s`, `m`, or `h` values from 1 second through 24 hours. The digest is skipped
 when every live watched peer has `idle` activity and an empty queue. A daemon-ended
 session (for example through `kill`, `team down`, or `daemon stop`) sends no exit event.
+
+`activity = { working_after = "2m", idle_after = "30s" }` enables transition notices
+for watched peers. Either direction may be omitted, but at least one is required. A
+direction with no threshold settles silently and advances the baseline. The first
+settled state is always silent; later transitions are debounced and enter the ordinary
+message queue, with at most one open activity message per watcher. The message body is
+sorted by peer name and keeps the state from the last announcement. With `working_after`
+unset, even a short output echo can eventually produce an idle notice; because working
+ends ten seconds after output stops, use `idle_after = "30s"` or longer. Team plans reject
+mutual or larger activity-watch cycles (`activity notices would loop ...`); manually
+started sessions are not checked, so avoid enabling activity in both directions.
 
 A cross-team `control_from` entry such as `other-team/agent` works only when the
 two sessions can already see each other. Mutual session-level `allow` lets one

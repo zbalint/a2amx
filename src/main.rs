@@ -360,6 +360,27 @@ async fn run_stop(home: PathBuf, yes: bool, now: bool) -> anyhow::Result<()> {
     write_stdout(b"stopped\n".to_vec()).await
 }
 
+fn parse_activity_watch(
+    working_after: Option<&str>,
+    idle_after: Option<&str>,
+) -> anyhow::Result<Option<a2amx::wire::ActivityWatch>> {
+    let working_after = working_after
+        .map(|value| a2amx::messaging::parse_interval(value, "activity working_after"))
+        .transpose()?
+        .map(|duration| duration.as_secs());
+    let idle_after = idle_after
+        .map(|value| a2amx::messaging::parse_interval(value, "activity idle_after"))
+        .transpose()?
+        .map(|duration| duration.as_secs());
+    Ok(match (working_after, idle_after) {
+        (None, None) => None,
+        (working_after, idle_after) => Some(a2amx::wire::ActivityWatch {
+            working_after,
+            idle_after,
+        }),
+    })
+}
+
 async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<()> {
     let Command::New {
         detach,
@@ -371,15 +392,24 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         reset,
         control_from,
         watch,
+        activity_working_after,
+        activity_idle_after,
         heartbeat,
         command,
     } = options
     else {
         return Err(anyhow!("expected new session options"));
     };
+    let activity = parse_activity_watch(
+        activity_working_after.as_deref(),
+        activity_idle_after.as_deref(),
+    )?;
+    if let Some(activity) = &activity {
+        activity.validate(!watch.is_empty())?;
+    }
     let heartbeat = heartbeat
         .as_deref()
-        .map(a2amx::messaging::parse_interval)
+        .map(|value| a2amx::messaging::parse_interval(value, "heartbeat"))
         .transpose()?
         .map(|duration| duration.as_secs());
     if heartbeat.is_some() && watch.is_empty() {
@@ -420,6 +450,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             reset,
             control_from,
             watch,
+            activity,
             heartbeat,
             command,
             cwd: std::env::current_dir()?,
@@ -452,6 +483,7 @@ struct NewOptions {
     reset: Vec<String>,
     control_from: Vec<String>,
     watch: Vec<String>,
+    activity: Option<a2amx::wire::ActivityWatch>,
     heartbeat: Option<u64>,
     command: Vec<String>,
     cwd: PathBuf,
@@ -534,6 +566,7 @@ async fn create_session(
         reset,
         control_from,
         watch,
+        activity,
         heartbeat,
         command,
         cwd,
@@ -551,7 +584,10 @@ async fn create_session(
         if watch.is_empty() {
             return Err(anyhow!("heartbeat needs a non-empty watch"));
         }
-        a2amx::messaging::parse_interval(&format!("{seconds}s"))?;
+        a2amx::messaging::parse_interval(&format!("{seconds}s"), "heartbeat")?;
+    }
+    if let Some(activity) = &activity {
+        activity.validate(!watch.is_empty())?;
     }
     let harness = harness.unwrap_or_else(|| Harness::infer(&command));
     let command = wired_command(
@@ -595,6 +631,7 @@ async fn create_session(
             reset,
             control_from,
             watch,
+            activity,
             name,
             harness,
             deliver,
@@ -939,6 +976,16 @@ async fn dry_run_report(
                 if let Some(heartbeat) = &session.heartbeat {
                     output.push_str(&format!("  heartbeat: {heartbeat}\n"));
                 }
+                if let Some(activity) = &session.activity {
+                    let mut directions = Vec::new();
+                    if let Some(value) = &activity.working_after {
+                        directions.push(format!("working_after {value}"));
+                    }
+                    if let Some(value) = &activity.idle_after {
+                        directions.push(format!("idle_after {value}"));
+                    }
+                    output.push_str(&format!("  activity: {}\n", directions.join(", ")));
+                }
                 output.push_str(&format!("  command: {}\n", redact_argv(&command)));
                 if harness == Harness::Omp {
                     output.push_str("omp extension install skipped (dry run)\n");
@@ -961,9 +1008,17 @@ async fn start_planned_session(
     let heartbeat = session
         .heartbeat
         .as_deref()
-        .map(a2amx::messaging::parse_interval)
+        .map(|value| a2amx::messaging::parse_interval(value, "heartbeat"))
         .transpose()?
         .map(|duration| duration.as_secs());
+    let activity = session
+        .activity
+        .as_ref()
+        .map(|value| {
+            parse_activity_watch(value.working_after.as_deref(), value.idle_after.as_deref())
+        })
+        .transpose()?
+        .flatten();
     let name = session.name;
     let result = create_session(
         home,
@@ -979,6 +1034,7 @@ async fn start_planned_session(
             reset: session.reset.unwrap_or_default(),
             control_from: session.control_from,
             watch: session.watch,
+            activity,
             heartbeat,
             command: session.command,
             cwd: session

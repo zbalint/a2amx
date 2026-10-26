@@ -250,6 +250,7 @@ async fn status_line_session_sized(
             harness,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -337,6 +338,7 @@ async fn bridged_omp_session(
             control_from: vec![],
             watch: vec![],
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
             name: Some(name.into()),
@@ -405,6 +407,7 @@ async fn direct_omp_session(
             control_from: vec![],
             watch: vec![],
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
             name: Some(name.into()),

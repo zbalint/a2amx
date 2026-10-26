@@ -483,6 +483,7 @@ async fn picker_clips_long_cwd_to_narrow_terminal() -> anyhow::Result<()> {
             harness: Harness::Generic,
             deliver: None,
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -1241,6 +1242,7 @@ gate.recv(1)
                 harness: Harness::Generic,
                 deliver: Some(Deliver::Hold),
                 heartbeat: None,
+                activity: None,
                 team: None,
                 role: None,
             })

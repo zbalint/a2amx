@@ -120,6 +120,7 @@ fn request_json_uses_exact_tagged_shapes() {
         harness: a2amx::harness::Harness::Generic,
         deliver: None,
         heartbeat: None,
+        activity: None,
         team: None,
         role: None,
     };
@@ -155,6 +156,97 @@ fn request_json_uses_exact_tagged_shapes() {
         serde_json::from_str::<Request>(&screen_json).ok(),
         Some(screen)
     );
+}
+
+#[test]
+fn activity_watch_round_trips_on_new_session() {
+    let request = Request::NewSession {
+        argv: vec!["sh".into()],
+        cols: 40,
+        rows: 10,
+        cwd: None,
+        env: Vec::new(),
+        reset: Vec::new(),
+        control_from: Vec::new(),
+        watch: vec!["peer".into()],
+        activity: Some(a2amx::wire::ActivityWatch {
+            working_after: Some(120),
+            idle_after: Some(30),
+        }),
+        heartbeat: None,
+        name: Some("watcher".into()),
+        harness: a2amx::harness::Harness::Generic,
+        deliver: None,
+        team: None,
+        role: None,
+    };
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["activity"]["working_after"], 120);
+    assert_eq!(value["activity"]["idle_after"], 30);
+    assert_eq!(serde_json::from_value::<Request>(value).unwrap(), request);
+}
+
+#[test]
+fn activity_watch_validation_uses_literal_bounds_and_errors() {
+    use a2amx::wire::ActivityWatch;
+
+    let no_watch = ActivityWatch {
+        working_after: Some(1),
+        idle_after: None,
+    };
+    assert_eq!(
+        no_watch.validate(false).unwrap_err().to_string(),
+        "activity needs a non-empty watch"
+    );
+    let no_duration = ActivityWatch {
+        working_after: None,
+        idle_after: None,
+    };
+    assert_eq!(
+        no_duration.validate(true).unwrap_err().to_string(),
+        "activity needs at least one duration"
+    );
+    for (watch, expected) in [
+        (
+            ActivityWatch {
+                working_after: Some(0),
+                idle_after: None,
+            },
+            "invalid activity working_after \"0s\": expected a number followed by s, m or h, from 1s to 24h",
+        ),
+        (
+            ActivityWatch {
+                working_after: Some(86_401),
+                idle_after: None,
+            },
+            "invalid activity working_after \"86401s\": expected a number followed by s, m or h, from 1s to 24h",
+        ),
+        (
+            ActivityWatch {
+                working_after: None,
+                idle_after: Some(86_401),
+            },
+            "invalid activity idle_after \"86401s\": expected a number followed by s, m or h, from 1s to 24h",
+        ),
+    ] {
+        assert_eq!(watch.validate(true).unwrap_err().to_string(), expected);
+    }
+    for watch in [
+        ActivityWatch {
+            working_after: Some(1),
+            idle_after: None,
+        },
+        ActivityWatch {
+            working_after: Some(86_400),
+            idle_after: Some(1),
+        },
+        ActivityWatch {
+            working_after: None,
+            idle_after: Some(86_400),
+        },
+    ] {
+        assert!(watch.validate(true).is_ok());
+    }
 }
 
 #[test]
@@ -409,6 +501,7 @@ fn messaging_control_variants_round_trip() {
             harness: a2amx::harness::Harness::Claude,
             deliver: Some(a2amx::harness::Deliver::Auto),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         },
@@ -748,6 +841,7 @@ fn team_fields_round_trip_and_old_new_session_defaults_are_compatible() {
         harness: a2amx::harness::Harness::Generic,
         deliver: None,
         heartbeat: None,
+        activity: None,
         team: Some(TeamScope {
             name: "demo".into(),
             private: true,

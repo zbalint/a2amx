@@ -301,10 +301,16 @@ impl Store {
             .await
     }
 
-    pub(crate) async fn open_system_heartbeat(&self, boot: &str, session: &str) -> Result<bool> {
+    pub(crate) async fn open_system_message(
+        &self,
+        boot: &str,
+        session: &str,
+        subject: &str,
+    ) -> Result<bool> {
         let boot = boot.to_owned();
         let session = session.to_owned();
-        self.run(move |connection, _| open_system_heartbeat(connection, &boot, &session))
+        let subject = subject.to_owned();
+        self.run(move |connection, _| open_system_message(connection, &boot, &session, &subject))
             .await
     }
 
@@ -808,7 +814,12 @@ fn open_counts(connection: &mut Connection, boot: &str) -> Result<HashMap<String
     Ok(counts)
 }
 
-fn open_system_heartbeat(connection: &mut Connection, boot: &str, session: &str) -> Result<bool> {
+fn open_system_message(
+    connection: &mut Connection,
+    boot: &str,
+    session: &str,
+    subject: &str,
+) -> Result<bool> {
     let open = connection.query_row(
         "SELECT EXISTS (
             SELECT 1
@@ -819,7 +830,7 @@ fn open_system_heartbeat(connection: &mut Connection, boot: &str, session: &str)
                AND subject = ?3
                AND state IN ('pending', 'delivering')
         )",
-        params![boot, session, crate::messaging::HEARTBEAT_SUBJECT],
+        params![boot, session, subject],
         |row| row.get(0),
     )?;
     Ok(open)

@@ -218,6 +218,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -254,6 +255,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         },
@@ -365,6 +367,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
                 harness: Harness::Generic,
                 deliver: Some(Deliver::Hold),
                 heartbeat: None,
+                activity: None,
                 team: None,
                 role: None,
             })
@@ -386,6 +389,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -432,6 +436,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -471,6 +476,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -498,6 +504,7 @@ async fn list_agents_reports_harness_and_spawn_directory() {
             harness: Harness::Omp,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -696,6 +703,7 @@ async fn limit_edge_exact_body_is_delivered_and_submitted() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -1059,6 +1067,7 @@ async fn recipient_exit_cancelling_and_filtering() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -1219,6 +1228,7 @@ async fn reset_authorizes_controller_and_rejects_unlisted_or_self() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Hold),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -1429,6 +1439,7 @@ async fn reset_holds_message_delivery_until_sequence_finishes() {
             harness: Harness::Generic,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+            activity: None,
             team: None,
             role: None,
         })
@@ -1540,6 +1551,7 @@ async fn omp_reset_target(
             harness: Harness::Omp,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+                activity: None,
             team: None,
             role: None,
         })
@@ -2132,6 +2144,7 @@ async fn reset_rejects_an_in_flight_native_delivery_as_busy() {
             harness: Harness::Omp,
             deliver: Some(Deliver::Auto),
             heartbeat: None,
+                activity: None,
             team: None,
             role: None,
         })

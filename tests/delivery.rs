@@ -66,6 +66,7 @@ impl Case {
                 harness: Harness::Claude,
                 deliver: Some(deliver),
                 heartbeat: None,
+                activity: None,
                 team: None,
                 role: None,
             })

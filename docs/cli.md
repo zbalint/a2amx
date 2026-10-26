@@ -11,6 +11,7 @@ a2amx daemon start [--foreground]  # start the daemon; detached by default
 a2amx daemon status               # show daemon state, build version and session counts
 a2amx daemon stop [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx new --watch developer --heartbeat 30m -- sh # digest watched peers after idle
+a2amx new --watch developer --activity-working-after 2m --activity-idle-after 30s -- sh # notices on peer transitions
 a2amx list [--details]
 a2amx attach <id|name> [--force]
 a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
@@ -37,6 +38,13 @@ reference, `--yes`, or `--now`.
 
 Commands that take a session accept its name or its id.
 Without `--name`, `new` generates a name such as `soggy-walrus`, prints it on stderr, and treats it like an explicit name.
+
+`--activity-working-after` and `--activity-idle-after` enable daemon activity notices for
+the named `--watch` peers. Each value accepts `s`, `m`, or `h` from 1 second through
+24 hours; at least one direction and a non-empty watch list are required. Working means
+the peer is not ready or changed within ten seconds; idle notices therefore arrive at
+least ten seconds after the peer's last output. The first settled state is silent, and
+each direction is debounced independently. Prefer 30 seconds or more for `idle-after`.
 
 ## State directory and attachment
 

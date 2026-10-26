@@ -136,3 +136,23 @@ Contract tests that pass on the old code: the existing heartbeat tests and the `
 ## 7. Out of scope
 
 Per-peer thresholds, a richer `watch`, hooks or extension feeds, screen lines in messages (backlog F6 and F12), a rate cap, any change to the heartbeat's behavior, and notices about `busy`.
+
+## Review record
+
+**Models.** Architect: Claude Sonnet 5.5. Consultant: a Claude Code session, model not exposed to the architect. Developer and tester: OMP sessions reporting `openai-codex/gpt-5.6-luna`; their planning, working and advisor slot models are not exposed to the sessions. **BLOCKED/amend cycles:** 0.
+
+| Found in | Found by | Problem | Resolution |
+| --- | --- | --- | --- |
+| Design review | Consultant | Two watchers with `activity` on each other loop forever through notices, and each lap costs quota | Cycle check in team plans (D9) plus a documented warning |
+| Design review | Consultant | `Busy` means held or resetting, not work | Debounce on the work part of the activity function (D3) |
+| Draft review | Consultant | With a disabled direction the enabled one fired only once: the silent settle did not move the reference state | One reference state, advanced by baseline, announcement and silent settle (D4) |
+| Draft review | Consultant | The end-to-end example could not pass: a generic session never reads ready without bracketed paste, and the final count was timing-dependent | Script and wait rewritten; test moved to `tests/daemon_cli.rs` and added to scope |
+| Draft review | Consultant | D5 and D6 disagreed about feeding trackers while a message is open; the observe/announce contract, plan text, cycle placement and error format, tracker key and `TeamActivity` were unspecified | All fixed before lock |
+| Implementation | Developer (mutation work in the checkout) | Mutation checks ran in the shared checkout after the completion report while the tester read it; the tree changed under the tester | Tester told to treat copies as suspect and rehash; developer told to mutate only on copies; recorded as an issue |
+| Implementation | Developer | The CLI-side heartbeat watch check was dropped while adding activity | Restored; the CLI-side activity check was later restored through a shared `ActivityWatch::validate` |
+| Tester pass | Developer, tester | The spec claimed `a2amx messages` shows message bodies; it does not. The developer exposed bodies through `MessageInfo.detail` for the activity subject, an interface change the spec did not authorize | Architect error; exposure removed and the tests read the watcher's screen like the heartbeat tests |
+| Architect review | Architect | Unrelated field reorder and deleted blank lines; validation duplicated in three places; `validate_sessions` grew a nested search and an `unreachable!()`; the activity task was one long function | Reverted; one `ActivityWatch::validate`; `validate_activity` and `activity_cycle`; `activity_body` and `send_activity` extracted |
+| Tester pass | Tester | The daemon's own validation of an `activity` request was untested because the CLI and the team file reject bad values first | Unit tests in `tests/wire.rs` and a `Client`-level request test; five mutants killed |
+| Tester pass | Tester | `a2amx new --activity-working-after 2m` with no daemon running reported a connection error instead of the missing-watch error | Validation before connecting, with a no-daemon test |
+| Tester pass | Tester | Three mutants survive: debounce clocks stalling while a message is open, acknowledging before the insert, and a name-keyed tracker. The cycle edge direction is unobservable | Accepted as known gaps (no safe seam for fault injection or a restart test); backlog F24 |
+| Architect review | Architect | Appending a period to the cycle error text survives: the tests use `contains` on the rendered error chain | Accepted; low value |

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_SUBJECT_BYTES: usize = 200;
 pub const SYSTEM_SENDER: &str = "a2amx-daemon";
 pub const HEARTBEAT_SUBJECT: &str = "heartbeat";
+pub const ACTIVITY_SUBJECT: &str = "activity";
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 pub const HEARTBEAT_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 // shortcut: delivery uses one fixed 400 ms paste gap; the threshold was not bisected below 300 ms.
@@ -327,10 +328,10 @@ pub fn local_part<'a>(to: &'a str, host: &str) -> Option<&'a str> {
     (target_host == host).then_some(local)
 }
 
-pub fn parse_interval(value: &str) -> anyhow::Result<Duration> {
+pub fn parse_interval(value: &str, label: &str) -> anyhow::Result<Duration> {
     let invalid = || {
         anyhow::anyhow!(
-            "invalid heartbeat {value:?}: expected a number followed by s, m or h, from 1s to 24h"
+            "invalid {label} {value:?}: expected a number followed by s, m or h, from 1s to 24h"
         )
     };
     let (number, multiplier) = if let Some(number) = value.strip_suffix('s') {
@@ -587,7 +588,10 @@ mod tests {
     #[test]
     fn heartbeat_interval_accepts_units_and_rejects_invalid_ranges() {
         for (value, seconds) in [("90s", 90), ("30m", 1800), ("2h", 7200), ("24h", 86400)] {
-            assert_eq!(parse_interval(value).unwrap(), Duration::from_secs(seconds));
+            assert_eq!(
+                parse_interval(value, "heartbeat").unwrap(),
+                Duration::from_secs(seconds)
+            );
         }
         for value in [
             "0s",
@@ -603,11 +607,21 @@ mod tests {
             "18446744073709551616s",
         ] {
             assert_eq!(
-                parse_interval(value).unwrap_err().to_string(),
+                parse_interval(value, "heartbeat").unwrap_err().to_string(),
                 format!(
                     "invalid heartbeat {value:?}: expected a number followed by s, m or h, from 1s to 24h"
                 )
             );
         }
+    }
+
+    #[test]
+    fn activity_interval_errors_include_direction_label() {
+        assert_eq!(
+            parse_interval("25h", "activity working_after")
+                .unwrap_err()
+                .to_string(),
+            "invalid activity working_after \"25h\": expected a number followed by s, m or h, from 1s to 24h"
+        );
     }
 }

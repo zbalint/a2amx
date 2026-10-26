@@ -71,6 +71,7 @@ async fn exit_session(admin: &mut Client, name: &str, team: TeamScope) -> String
             team: Some(team),
             role: None,
             heartbeat: None,
+            activity: None,
         })
         .await
         .unwrap();
@@ -343,6 +344,7 @@ async fn live_team_settings_are_consistent_until_the_first_member_exits() {
             team: Some(scope("a", false, &[])),
             role: None,
             heartbeat: None,
+            activity: None,
         })
         .await
         .unwrap();
@@ -368,6 +370,7 @@ async fn live_team_settings_are_consistent_until_the_first_member_exits() {
             team: Some(scope("a", true, &[])),
             role: None,
             heartbeat: None,
+            activity: None,
         })
         .await
         .unwrap();
@@ -411,6 +414,7 @@ async fn live_team_settings_are_consistent_until_the_first_member_exits() {
             team: Some(scope("a", false, &[])),
             role: None,
             heartbeat: None,
+            activity: None,
         })
         .await
         .unwrap();
@@ -652,6 +656,7 @@ fn new_session_request(name: &str, team: TeamScope) -> Request {
         team: Some(team),
         role: None,
         heartbeat: None,
+        activity: None,
     }
 }
 

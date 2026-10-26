@@ -44,6 +44,7 @@ pub struct SessionSpec {
     pub reset: Vec<String>,
     pub control_from: Vec<String>,
     pub watch: Vec<String>,
+    pub activity: Option<crate::wire::ActivityWatch>,
     pub heartbeat: Option<Duration>,
     pub team: Option<messaging::TeamScope>,
     pub role: Option<String>,
@@ -63,6 +64,7 @@ pub struct Session {
     reset: Vec<String>,
     control_from: Vec<String>,
     watch: Vec<String>,
+    activity: Option<crate::wire::ActivityWatch>,
     heartbeat: Option<Duration>,
     team: Option<messaging::TeamScope>,
     role: Option<String>,
@@ -368,6 +370,7 @@ impl Session {
             reset: spec.reset,
             control_from: spec.control_from,
             watch: spec.watch,
+            activity: spec.activity,
             heartbeat: spec.heartbeat,
             team: spec.team,
             role: spec.role,
@@ -423,6 +426,9 @@ impl Session {
     }
     pub(crate) fn watch(&self) -> &[String] {
         &self.watch
+    }
+    pub(crate) fn activity(&self) -> Option<&crate::wire::ActivityWatch> {
+        self.activity.as_ref()
     }
     pub(crate) fn heartbeat(&self) -> Option<Duration> {
         self.heartbeat
