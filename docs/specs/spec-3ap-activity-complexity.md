@@ -189,3 +189,22 @@ git status --short   # only src/team.rs, src/main.rs, tests/team.rs
 | `command = [""]` passes `validate_sessions` but `flag_sessions` rejects it | `src/team.rs:630` | read by the consultant; out of scope, backlog note |
 | `validate_sessions` callers | `src/team.rs:463` (`parse_with`), `:649` (`flag_sessions`) | grepped |
 | Baseline `cargo test --test team` is 78 passed | the command in section 0 | run at `241dd2d`, exit 0 |
+
+## Review record
+
+**Models.** Architect: Claude Sonnet 5.5. Consultant: a Claude Code session, model not exposed to the architect.
+Developer and tester: OMP sessions reporting `openai-codex/gpt-5.6-luna`; their planning, working and advisor
+slot models are not exposed to the architect. **BLOCKED/amend cycles:** 0.
+
+| Found in | Found by | Problem | Resolution |
+| --- | --- | --- | --- |
+| After the push of spec 3ao | CI SonarQube gate | `validate_sessions` and `dry_run_report` were at cognitive complexity 35 (limit 30) after 3ao; the architect's 3ao review asked for part of the code to be split out but did not count the total, and the local `prepush-sonar.sh` scan did not report them because Sonar anchors the issue on the unchanged `fn` line | This spec; the hand count per function is now part of acceptance; backlog F25 for a local proxy |
+| Draft review | Consultant | Scope said to place the helpers "before `validate_activity`", which precedes `validate_sessions` in the file | Helpers go at the end of the file |
+| Draft review | Consultant | Name before duplicate is an equivalent pair: no team fails both, so the precedence row and the swap mutant could not exist | Row and mutant dropped, reason stated in section 4 |
+| Draft review | Consultant | The dry-run order test omitted the `team` line, so a `team`/`role` swap would survive | Team line required, with the construction rules |
+| Draft review | Consultant | The architect's worked example (`command = [""]`) is accepted by `validate_sessions`, so it does not show the command message | Example replaced; the `[""]` gap went to backlog F26 |
+| Draft review | Consultant | Missing rows: `control_from` before `watch`, heartbeat's empty-watch check before its interval check; cross-session row needed construction rules | Rows and rules added |
+| Tester pass | Tester | Indenting the OMP notice line still passed: the existing test matched a substring | Architect changed the assertion to `\nomp extension install skipped (dry run)\n` |
+| Tester pass | Tester | One precedence row failed only one check, so it tested no pair | Row removed (architect); the message keeps its own test |
+| Design read | Consultant | The precedence test repeated the assertion loop; rows had no labels; ten tests were named after private helpers; two dry-run tests did not assert the exit status | One developer round, tests only; names follow the `parse_characterizes_*` convention |
+| Design read | Consultant | Style notes on the unchanged production shape (let-else in two helpers, `command.first()`, "links" against the codebase's "references", six repeated session-context `map_err`s) | Not changed; backlog F27 |

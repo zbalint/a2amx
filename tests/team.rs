@@ -1473,7 +1473,7 @@ command = ["omp", "--secret"]
     assert!(stdout.contains("--mcp-config "));
     assert!(stdout.contains("--settings "));
     assert!(stdout.contains("--append-system-prompt "));
-    assert!(stdout.contains("omp extension install skipped (dry run)\n"));
+    assert!(stdout.contains("\nomp extension install skipped (dry run)\n"));
     assert!(!stdout.contains("UNIQUE-SECRET"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("UNIQUE-SECRET"));
     assert!(!dir.path().join("omp").exists());
@@ -2131,6 +2131,248 @@ control_from = ["controller"]
         denied,
         Response::Failed { code, .. } if code == "not_permitted"
     ));
+}
+
+fn assert_validation_error(label: &str, text: &str, expected: &str) {
+    let error = match team::parse(text) {
+        Ok(_) => panic!("expected {label} error containing {expected:?}"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains(expected), "{label}: {expected}: {error}");
+}
+
+#[test]
+fn parse_characterizes_invalid_session_name() {
+    assert_validation_error(
+        "invalid session name",
+        "[[session]]\nname = 'Bad'\ncommand = ['cat']",
+        "session 1 (Bad): invalid name \"Bad\"",
+    );
+}
+
+#[test]
+fn parse_characterizes_empty_command() {
+    assert_validation_error(
+        "empty command",
+        "[[session]]\nname = 'worker'\ncommand = []",
+        "session worker: command must not be empty",
+    );
+}
+
+#[test]
+fn parse_characterizes_command_whitespace() {
+    assert_validation_error(
+        "command whitespace",
+        "[[session]]\nname = 'worker'\ncommand = ['bad cmd']",
+        "contains whitespace; give each argument as its own array element",
+    );
+}
+
+#[test]
+fn parse_characterizes_second_attach() {
+    assert_validation_error(
+        "second attach",
+        "[[session]]\nname = 'first'\ncommand = ['cat']\nattach = true\n[[session]]\nname = 'second'\ncommand = ['cat']\nattach = true",
+        "session second: at most one session can attach",
+    );
+}
+
+#[test]
+fn parse_characterizes_empty_reset() {
+    assert_validation_error(
+        "empty reset",
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\nreset = []",
+        "session worker: reset must contain at least one step",
+    );
+}
+
+#[test]
+fn parse_characterizes_invalid_reset_step() {
+    assert_validation_error(
+        "invalid reset step",
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\nreset = ['not-a-control-key']",
+        "session worker: reset step 1 must start with '/'",
+    );
+}
+
+#[test]
+fn parse_characterizes_invalid_control_from() {
+    assert_validation_error(
+        "invalid control_from",
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\ncontrol_from = ['Bad']",
+        "session worker control_from entry \"Bad\": invalid name",
+    );
+}
+
+#[test]
+fn parse_characterizes_invalid_watch() {
+    assert_validation_error(
+        "invalid watch",
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['Bad']",
+        "session worker watch entry \"Bad\": invalid name",
+    );
+}
+
+#[test]
+fn parse_characterizes_invalid_heartbeat() {
+    assert_validation_error(
+        "invalid heartbeat interval",
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['other']\nheartbeat = '0s'",
+        "session worker: invalid heartbeat",
+    );
+}
+
+#[test]
+fn parse_characterizes_invalid_role() {
+    assert_validation_error(
+        "invalid role",
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\nrole = ' '",
+        "session worker: role must not have leading or trailing whitespace",
+    );
+}
+
+#[test]
+fn parse_characterizes_check_precedence() {
+    let cases = [
+        (
+            "duplicate precedes command",
+            "[[session]]\nname = 'same'\ncommand = ['cat']\n[[session]]\nname = 'same'\ncommand = []",
+            "session same: duplicate name",
+        ),
+        (
+            "command precedes attach",
+            "[[session]]\nname = 'first'\ncommand = ['cat']\nattach = true\n[[session]]\nname = 'second'\ncommand = []\nattach = true",
+            "session second: command must not be empty",
+        ),
+        (
+            "attach precedes reset",
+            "[[session]]\nname = 'first'\ncommand = ['cat']\nattach = true\n[[session]]\nname = 'second'\ncommand = ['cat']\nattach = true\nreset = []",
+            "session second: at most one session can attach",
+        ),
+        (
+            "reset precedes links",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nreset = []\ncontrol_from = ['Bad']",
+            "session worker: reset must contain at least one step",
+        ),
+        (
+            "control_from precedes watch",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\ncontrol_from = ['Bad']\nwatch = ['Bad']\nheartbeat = '0s'",
+            "session worker control_from entry \"Bad\": invalid name",
+        ),
+        (
+            "heartbeat precedes activity",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['other']\nheartbeat = '0s'\nactivity = {}",
+            "session worker: invalid heartbeat",
+        ),
+        (
+            "activity precedes role",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['other']\nactivity = {}\nrole = ' '",
+            "session worker: activity needs at least one duration",
+        ),
+        (
+            "empty watch precedes heartbeat interval",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nheartbeat = '0s'",
+            "session worker: heartbeat needs a non-empty watch",
+        ),
+        (
+            "session 1 role precedes session 2 name",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nrole = ' '\n[[session]]\nname = 'Bad'\ncommand = ['cat']",
+            "session worker: role must not have leading or trailing whitespace",
+        ),
+    ];
+    for (label, text, expected) in cases {
+        assert_validation_error(label, text, expected);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_prints_exact_all_optional_details_in_order() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("dry-all.toml"),
+        r#"
+team = "t"
+[[session]]
+name = "worker"
+command = ["cat"]
+cwd = "/"
+role = "developer"
+attach = true
+watch = ["other"]
+control_from = ["other"]
+heartbeat = "5s"
+activity = { working_after = "2m", idle_after = "30s" }
+[[session]]
+name = "other"
+command = ["cat"]
+cwd = "/"
+"#,
+    )
+    .unwrap();
+    let output = run_binary(
+        dir.path(),
+        &["team", "up", "--dry-run", "--file", "dry-all.toml"],
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  role: developer\n  attach: true\n  watch: t-other\n  control_from: t-other\n  heartbeat: 5s\n  activity: working_after 2m, idle_after 30s\n  command: cat\nwould start t-other\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  command: cat\n",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_prints_working_only_activity_detail() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("dry-working.toml"),
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['other']\nactivity = { working_after = '2m' }\n[[session]]\nname = 'other'\ncommand = ['cat']",
+    )
+    .unwrap();
+    let output = run_binary(
+        dir.path(),
+        &["team", "up", "--dry-run", "--file", "dry-working.toml"],
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("  activity: working_after 2m\n")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_prints_idle_only_activity_detail() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(
+        dir.path().join("dry-idle.toml"),
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['other']\nactivity = { idle_after = '30s' }\n[[session]]\nname = 'other'\ncommand = ['cat']",
+    )
+    .unwrap();
+    let output = run_binary(
+        dir.path(),
+        &["team", "up", "--dry-run", "--file", "dry-idle.toml"],
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("  activity: idle_after 30s\n")
+    );
 }
 
 #[test]

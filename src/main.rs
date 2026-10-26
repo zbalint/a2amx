@@ -936,64 +936,88 @@ async fn dry_run_report(
                 output.push_str(&format!("already running {name} {id}\n"));
             }
             team::Action::Start(session) => {
-                let harness = Harness::infer(&session.command);
-                let resolved_cwd = session
-                    .cwd
-                    .as_deref()
-                    .map_or_else(|| cwd.to_owned(), |path| file_dir.join(path));
-                let command = wired_command(
-                    home,
-                    session.command.clone(),
-                    harness,
-                    &resolved_cwd,
-                    session.role.as_deref(),
-                    false,
-                    false,
-                    false,
-                )
-                .await?;
-                output.push_str(&format!("would start {}\n", session.name));
-                output.push_str(&format!("  harness: {}\n", harness.as_str()));
-                output.push_str(&format!("  cwd: {}\n", resolved_cwd.display()));
-                if let Some(team) = team_detail(session.team.as_ref()) {
-                    output.push_str(&format!("  team: {team}\n"));
-                }
-                if let Some(role) = &session.role {
-                    output.push_str(&format!("  role: {role}\n"));
-                }
-                if session.attach {
-                    output.push_str("  attach: true\n");
-                }
-                if !session.watch.is_empty() {
-                    output.push_str(&format!("  watch: {}\n", session.watch.join(", ")));
-                }
-                if !session.control_from.is_empty() {
-                    output.push_str(&format!(
-                        "  control_from: {}\n",
-                        session.control_from.join(", ")
-                    ));
-                }
-                if let Some(heartbeat) = &session.heartbeat {
-                    output.push_str(&format!("  heartbeat: {heartbeat}\n"));
-                }
-                if let Some(activity) = &session.activity {
-                    let mut directions = Vec::new();
-                    if let Some(value) = &activity.working_after {
-                        directions.push(format!("working_after {value}"));
-                    }
-                    if let Some(value) = &activity.idle_after {
-                        directions.push(format!("idle_after {value}"));
-                    }
-                    output.push_str(&format!("  activity: {}\n", directions.join(", ")));
-                }
-                output.push_str(&format!("  command: {}\n", redact_argv(&command)));
-                if harness == Harness::Omp {
-                    output.push_str("omp extension install skipped (dry run)\n");
-                }
+                output.push_str(&dry_run_start(home, cwd, file_dir, &session).await?);
             }
         }
     }
     Ok(output)
+}
+
+async fn dry_run_start(
+    home: &Path,
+    cwd: &Path,
+    file_dir: &Path,
+    session: &TeamSession,
+) -> anyhow::Result<String> {
+    let harness = Harness::infer(&session.command);
+    let resolved_cwd = session
+        .cwd
+        .as_deref()
+        .map_or_else(|| cwd.to_owned(), |path| file_dir.join(path));
+    let command = wired_command(
+        home,
+        session.command.clone(),
+        harness,
+        &resolved_cwd,
+        session.role.as_deref(),
+        false,
+        false,
+        false,
+    )
+    .await?;
+    let mut output = format!(
+        "would start {}\n  harness: {}\n  cwd: {}\n",
+        session.name,
+        harness.as_str(),
+        resolved_cwd.display()
+    );
+    for (label, value) in session_details(session) {
+        output.push_str(&format!("  {label}: {value}\n"));
+    }
+    output.push_str(&format!("  command: {}\n", redact_argv(&command)));
+    if harness == Harness::Omp {
+        output.push_str("omp extension install skipped (dry run)\n");
+    }
+    Ok(output)
+}
+
+fn session_details(session: &TeamSession) -> Vec<(&'static str, String)> {
+    [
+        team_detail(session.team.as_ref()).map(|value| ("team", value)),
+        session.role.as_ref().map(|value| ("role", value.clone())),
+        session.attach.then(|| ("attach", "true".to_owned())),
+        (!session.watch.is_empty()).then(|| ("watch", session.watch.join(", "))),
+        (!session.control_from.is_empty())
+            .then(|| ("control_from", session.control_from.join(", "))),
+        session
+            .heartbeat
+            .as_ref()
+            .map(|value| ("heartbeat", value.clone())),
+        session
+            .activity
+            .as_ref()
+            .map(|value| ("activity", activity_summary(value))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+fn activity_summary(activity: &team::TeamActivity) -> String {
+    [
+        activity
+            .working_after
+            .as_ref()
+            .map(|value| format!("working_after {value}")),
+        activity
+            .idle_after
+            .as_ref()
+            .map(|value| format!("idle_after {value}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 async fn start_planned_session(

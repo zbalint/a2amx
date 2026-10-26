@@ -775,78 +775,109 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
     let mut names = HashSet::with_capacity(sessions.len());
     let mut attached = false;
     for (index, session) in sessions.iter().enumerate() {
-        validate_name(&session.name).map_err(|error| {
-            anyhow::anyhow!("session {} ({}): {error}", index + 1, session.name)
-        })?;
+        validate_session_name(index, session)?;
         if !names.insert(session.name.as_str()) {
             bail!("session {}: duplicate name", session.name);
         }
-        if session.command.is_empty() {
-            bail!("session {}: command must not be empty", session.name);
-        }
-        if session.command[0].chars().any(char::is_whitespace) {
-            bail!(
-                "session {}: command[0] {:?} contains whitespace; give each argument as its own array element",
-                session.name,
-                session.command[0]
-            );
-        }
+        validate_session_command(session)?;
         if session.attach && attached {
             bail!("session {}: at most one session can attach", session.name);
         }
         attached |= session.attach;
-        if let Some(reset) = &session.reset {
-            if reset.is_empty() {
-                bail!(
-                    "session {}: reset must contain at least one step",
-                    session.name
-                );
-            }
-            validate_reset_steps(reset)
-                .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
-        }
-        for name in &session.control_from {
-            validate_name(name).map_err(|error| {
-                anyhow::anyhow!(
-                    "session {} control_from entry {name:?}: {error}",
-                    session.name
-                )
-            })?;
-        }
-        for name in &session.watch {
-            validate_name(name).map_err(|error| {
-                anyhow::anyhow!("session {} watch entry {name:?}: {error}", session.name)
-            })?;
-            if name == &session.name {
-                bail!("session {} watches itself", session.name);
-            }
-        }
-        if let Some(value) = &session.heartbeat {
-            if session.watch.is_empty() {
-                bail!(
-                    "session {}: heartbeat needs a non-empty watch",
-                    session.name
-                );
-            }
-            parse_interval(value, "heartbeat")
-                .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
-        }
+        validate_session_reset(session)?;
+        validate_session_links(session)?;
+        validate_session_heartbeat(session)?;
         validate_activity(session)?;
-        if let Some(role) = &session.role {
-            validate_role(role)
-                .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
-        }
+        validate_session_role(session)?;
     }
     if let Some(cycle) = activity_cycle(sessions) {
-        let mut names = cycle.into_iter().map(str::to_owned).collect::<Vec<_>>();
-        let message = if names.len() == 2 {
-            format!("{} and {}", names[0], names[1])
-        } else if let Some(last) = names.pop() {
-            format!("{} and {last}", names.join(", "))
-        } else {
-            return Ok(());
-        };
-        bail!("activity notices would loop between {message}");
+        bail!(
+            "activity notices would loop between {}",
+            join_with_and(&cycle)
+        );
     }
     Ok(())
+}
+
+fn validate_session_name(index: usize, session: &TeamSession) -> anyhow::Result<()> {
+    validate_name(&session.name)
+        .map_err(|error| anyhow::anyhow!("session {} ({}): {error}", index + 1, session.name))
+}
+
+fn validate_session_command(session: &TeamSession) -> anyhow::Result<()> {
+    if session.command.is_empty() {
+        bail!("session {}: command must not be empty", session.name);
+    }
+    if session.command[0].chars().any(char::is_whitespace) {
+        bail!(
+            "session {}: command[0] {:?} contains whitespace; give each argument as its own array element",
+            session.name,
+            session.command[0]
+        );
+    }
+    Ok(())
+}
+
+fn validate_session_reset(session: &TeamSession) -> anyhow::Result<()> {
+    if let Some(reset) = &session.reset {
+        if reset.is_empty() {
+            bail!(
+                "session {}: reset must contain at least one step",
+                session.name
+            );
+        }
+        validate_reset_steps(reset)
+            .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
+    }
+    Ok(())
+}
+
+fn validate_session_links(session: &TeamSession) -> anyhow::Result<()> {
+    for name in &session.control_from {
+        validate_name(name).map_err(|error| {
+            anyhow::anyhow!(
+                "session {} control_from entry {name:?}: {error}",
+                session.name
+            )
+        })?;
+    }
+    for name in &session.watch {
+        validate_name(name).map_err(|error| {
+            anyhow::anyhow!("session {} watch entry {name:?}: {error}", session.name)
+        })?;
+        if name == &session.name {
+            bail!("session {} watches itself", session.name);
+        }
+    }
+    Ok(())
+}
+
+fn validate_session_heartbeat(session: &TeamSession) -> anyhow::Result<()> {
+    if let Some(value) = &session.heartbeat {
+        if session.watch.is_empty() {
+            bail!(
+                "session {}: heartbeat needs a non-empty watch",
+                session.name
+            );
+        }
+        parse_interval(value, "heartbeat")
+            .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
+    }
+    Ok(())
+}
+
+fn validate_session_role(session: &TeamSession) -> anyhow::Result<()> {
+    if let Some(role) = &session.role {
+        validate_role(role)
+            .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
+    }
+    Ok(())
+}
+
+fn join_with_and(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => (*only).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
 }
