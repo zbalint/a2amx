@@ -49,7 +49,7 @@ Each build carries its git description (`a2amx --version`), and the running daem
 the same value in `a2amx daemon status`. A `-dirty` suffix marks a build from a modified
 source tree. Status writes a warning to stderr when the daemon was built from a different
 version and recommends a restart; restarting ends all sessions. When a source tarball has
-no git metadata, `build.rs` uses `CARGO_PKG_VERSION` (currently `0.1.1`); only when that
+no git metadata, `build.rs` uses `CARGO_PKG_VERSION` (currently `0.1.2`); only when that
 value is absent or empty does it fall back to `0.0.0`. A package-version fallback cannot be
 compared with a git-described daemon version.
 

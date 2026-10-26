@@ -5,6 +5,8 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-26
+
 ### Added
 
 - Activity notices: a session started with `activity` (team file `activity = { working_after =
@@ -22,6 +24,8 @@ All notable user-visible changes are listed here. The format follows
   current provider on each state frame (additive field `provider`), so a switch between
   providers changes the quota shown on the next list. A session whose provider is unknown shows
   `-` instead of another provider's quota (`docs/cli.md`).
+- Updated `tokio` to 1.53.3 for RUSTSEC-2026-0386 (the safe `AsyncFd` constructors). A2AMX does
+  not call `AsyncFd` directly.
 
 ## [0.1.1] - 2026-10-16
 
