@@ -94,8 +94,8 @@ clearly attributed message, and report a receipt when the harness provides one.
 Work on quality and security that changes no user-visible behavior. It has no version
 and is picked up between milestone items, except where a condition is given.
 
-- A blocking Semgrep gate with the repository's own rules in the pre-push script and CI,
-  and a weekly broad scan, before 0.2.0 starts (F15, F16).
+- A weekly non-blocking broad Semgrep scan, before 0.2.0 starts (F16). The blocking gate with the
+  repository's own rules is done (F15, spec 3aq).
 - Fuzzing of wire framing and message parsing with `cargo-fuzz`, before 0.2.0 starts;
   the property tests for the pure modules already exist (F10).
 - A check of what a malicious dependency's build script could reach in CI, such as the

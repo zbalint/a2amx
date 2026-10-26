@@ -1,0 +1,18 @@
+rules:
+  - id: no-shell-command
+    languages: [rust]
+    severity: ERROR
+    message: Launch commands as argument vectors, not literal shells; keep shell interpretation outside product code.
+    metadata:
+      source: AGENTS.md
+    patterns:
+      - pattern: $P::new($X)
+      - metavariable-pattern:
+          metavariable: $P
+          pattern-either:
+            - pattern: Command
+            - pattern: std::process::Command
+            - pattern: tokio::process::Command
+      - metavariable-regex:
+          metavariable: $X
+          regex: '^"(?:/(?:usr/)?bin/)?(?:sh|bash|dash|zsh|ksh|fish|cmd|cmd\.exe|powershell|pwsh)"$'

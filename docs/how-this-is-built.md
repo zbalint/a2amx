@@ -16,7 +16,7 @@ practices a good human team does:
 | Speaking up when the plan is wrong | A developer who finds the specification contradicts the code must stop and report it; any agent may refuse a request that breaks the owner's rules | spec amendments, e.g. Amendment 1 of [3al](specs/spec-3al-sonar-open-issues.md) |
 | Hiring the right person for each role | Each role has its own model; the reasoning is in [the roles section](#the-roles) | the roles section |
 | Test-first development | The convention in `AGENTS.md` | [`AGENTS.md`](../AGENTS.md), `tests/` |
-| Static-analysis gate | `clippy`, `rustfmt`, SonarQube and a blocking pre-push scan | CI, `scripts/prepush-sonar.sh` |
+| Static-analysis gate | `clippy`, `rustfmt`, SonarQube, repository Semgrep rules and a blocking pre-push scan | CI, `scripts/prepush-sonar.sh` |
 | Institutional memory | Specs, `AGENTS.md`, the backlog and a private persistent memory | the repository |
 | Someone accountable for direction | The human owner | [What is and is not human](#what-is-and-is-not-human) |
 
@@ -122,7 +122,7 @@ An agent session starts with no memory of the last one, so the project writes th
   rewrite (spec 3ak) was checked statement by statement against the code, and the checks found
   and fixed three false statements carried over from the old README.
 - **Static analysis.** `clippy` with warnings denied, `rustfmt`, SonarQube, `cargo-deny`,
-  `gitleaks` and workflow linting run against the code.
+  `gitleaks`, workflow linting and the repository's own Semgrep rules run against the code.
 
 ## An example
 

@@ -32,8 +32,8 @@ jobs:
           test -n "$msrv"
           rustup toolchain install "$msrv" --profile minimal
           cargo "+$msrv" check --locked --all-targets
-  # The same fast checks as scripts/prepush-fast.sh: secrets in history, dependency policy
-  # (deny.toml), and workflow lint and audit. Versions are pinned; bump them on purpose.
+  # The same fast checks as scripts/prepush-fast.sh: secrets in history, dependency policy,
+  # workflow lint and audit, and repository Semgrep rules. Versions are pinned; bump on purpose.
   hygiene:
     permissions:
       contents: read
@@ -45,6 +45,7 @@ jobs:
       ACTIONLINT_VERSION: 1.7.12
       CARGO_DENY_VERSION: 0.20.2
       ZIZMOR_VERSION: 1.30.1
+      SEMGREP_VERSION: 1.181.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,6 +69,13 @@ jobs:
           echo "$bin" >> "$GITHUB_PATH"
       - name: Install zizmor
         run: pipx install "zizmor==${ZIZMOR_VERSION}"
+      - name: Install semgrep
+        env:
+          SEMGREP_ENABLE_VERSION_CHECK: "0"
+          SEMGREP_SEND_METRICS: "off"
+        run: |
+          # pipx pins semgrep but not its transitive dependencies, as with zizmor.
+          pipx install "semgrep==${SEMGREP_VERSION}"
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"

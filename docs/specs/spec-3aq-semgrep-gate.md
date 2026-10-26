@@ -265,3 +265,22 @@ re-run by the tester and by the architect at final review.
 | `.semgrep/` is not compiled by cargo and is not covered by `sonar.coverage.exclusions=tests/**`; Sonar sources default to the repository | `Cargo.toml`; `sonar-project.properties:24`; no `sonar.sources` set | read |
 | SALTMDB's scope table and parallel batches are unnecessary here | SALTMDB `scripts/prepush-fast.sh:19-105` | read |
 | no other file in the repository mentions Semgrep except docs | `rg -n -i semgrep` over `.github`, `scripts`, `AGENTS.md`, `docs` | probed: only `docs/roadmap.md:97` and `docs/backlog.md` rows F15 to F17 |
+
+## Review record
+
+**Models.** Architect: Claude Sonnet 5.5. Consultant: a Claude Code session, model not exposed to the architect.
+Developer and tester: OMP sessions reporting `openai-codex/gpt-6.1-terra`; their planning, working and advisor
+slot models are not exposed to the architect. **BLOCKED/amend cycles:** 0.
+
+| Found in | Found by | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft | Architect probe | The planned `std::fs`-in-async rule gave a false positive at `src/codex.rs:367-368` and missed `fs::` spellings | Rule dropped; reason recorded in section 1 |
+| Draft | Architect probe | Two rules annotated in one fixture file reported each other's matches as incorrect lines | One fixture per rule |
+| Draft review | Consultant | `paths.exclude: ["src/emulator.rs"]` matches only in a git work tree, so the mutation method (a bare `git archive` copy) failed on the unmutated tree | Scratch copy is `git init`ed and committed first, with a control row |
+| Draft review | Consultant | Zero-test guard: an empty fixture directory prints no `N/M:` line and exits 0; a deleted fixture gave 3/3 passing | A missing line counts as 0; `N` must equal the rule-file count |
+| Draft review | Consultant | The fixture count was printed only on failure although acceptance 1 expects it on success | Output printed on success |
+| Draft review | Consultant | Acceptance 3 expected a clean `git status` while the spec file was untracked | Spec committed before the assignment |
+| Draft review | Consultant | Missing gaps: re-export from the emulator, two Ctrl-C literal edge cases, `env sh`; `--strict` suggested | Gaps listed in 3.1 and `AGENTS.md`; `--strict` adopted |
+| Tester pass | Tester | Survivors: the `tokio::process::Command` alternative (the plain `Command` pattern already matches it), `--strict`, and the `semgrep` prerequisite entry | No change: the first is a redundant alternative, the other two are error branches that need a broken environment to exercise |
+| Architect review | Architect | `AGENTS.md` section has six sentences against the stated limit of five | Accepted as is |
+

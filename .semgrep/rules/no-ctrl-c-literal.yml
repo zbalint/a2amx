@@ -1,0 +1,8 @@
+rules:
+  - id: no-ctrl-c-literal
+    languages: [rust]
+    severity: ERROR
+    message: Never send Ctrl-C to clear a PTY composer draft; preserve human input in product code.
+    metadata:
+      source: AGENTS.md
+    pattern-regex: '(?:b?"[^"\n]*\\(?:x0?3|u\{0*3\})[^"\n]*"|b?''\\(?:x0?3|u\{0*3\})'')'

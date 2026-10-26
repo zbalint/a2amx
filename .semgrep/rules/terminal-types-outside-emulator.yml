@@ -1,0 +1,10 @@
+rules:
+  - id: terminal-types-outside-emulator
+    languages: [rust]
+    severity: ERROR
+    message: Terminal-emulation types belong only in src/emulator.rs; use the emulator boundary elsewhere.
+    metadata:
+      source: AGENTS.md
+    pattern-regex: '\balacritty_terminal\b(?!::tty\b)'
+    paths:
+      exclude: ["src/emulator.rs"]

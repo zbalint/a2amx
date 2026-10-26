@@ -51,6 +51,16 @@ cargo fmt --check
 - Never send input that destroys human work. In particular, never send Ctrl-C to
   clear a composer draft.
 
+## Semgrep rules
+
+Rules live in `.semgrep/rules/`, one per invariant, with a same-named fixture in `.semgrep/tests/`;
+`scripts/prepush-fast.sh` runs them locally and in CI.
+New rules ship with `ruleid:` and `ok:` samples and are first run against the current code.
+Do not add `# nosemgrep`-style suppression comments without the owner's approval.
+Review still covers variable program names, `env sh`, emulator re-exports, `unsafe fn`, and grouped
+`tty` imports in `src/emulator.rs`.
+The Ctrl-C rule also flags an escaped backslash before `x03` and misses `\x03` after an escaped quote.
+
 ## Versioning
 
 The project follows [Semantic Versioning 2.0.0](https://semver.org/). `version` in
