@@ -89,7 +89,7 @@ lag the code.
 | I4 | SonarQube Cloud S3776 (cognitive complexity over 30) on command logic: `src/team.rs` and `src/main.rs` split into helpers, behavior unchanged | specs 3x (`6672971`) and 3y (`9ac581a`) |
 | I5 | Same S3776 finding on the large loops and state machines: `src/picker.rs`, `src/session.rs`, and `src/daemon.rs` `create_session`, `heartbeat`, `report_prompt`, `serve` split into helpers, behavior unchanged | specs 3z, 3aa (`9141e7c`), 3ab (`28cf1b8`), 3ac (`7ee110b`), 3ad (`288e15f`); Sonar scan of `develop` at `457a500` has no open S3776 issue and the gate is `OK` |
 | I10 | SonarQube Cloud `rust:S1612`: all 26 `unwrap_or_else` closures that only call `into_inner` in `src/` now use `PoisonError::into_inner`, behavior unchanged | spec 3ae (`7913a91`); Sonar scan of `develop` at `fd5dca9` has no open issue and the gate is `OK` |
-| I11 | SonarQube Cloud S3776 on `validate_sessions` and `dry_run_report` after spec 3ao: split into named checks and a table of dry-run detail lines, behavior unchanged | spec 3ap |
+| I17 | SonarQube Cloud S3776 on `validate_sessions` and `dry_run_report` after spec 3ao: split into named checks and a table of dry-run detail lines, behavior unchanged | spec 3ap (`c246cd0`); Sonar gate of `develop` is `OK` with no open issue |
 | F4 | Bulk cleanup of exited sessions, for example `a2amx kill --exited` | spec 2z |
 | U5 | Limits at the edges: 50 open messages per recipient, 20 sends per minute per sender, bodies near 32 KiB, recipient exiting with an open message, daemon restart with open messages | spec 3b |
 | C7 | Attach rendering no longer erases a glyph written in the terminal's last column | spec 3c |
