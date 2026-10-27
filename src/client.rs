@@ -119,7 +119,7 @@ impl Client {
         cols: u16,
         rows: u16,
     ) -> anyhow::Result<Attachment> {
-        self.attach_with_status(session, force, cols, rows, false)
+        self.attach_with_status(session, force, cols, rows, false, 0)
             .await
     }
 
@@ -129,8 +129,9 @@ impl Client {
         force: bool,
         cols: u16,
         rows: u16,
+        top_rows: u16,
     ) -> anyhow::Result<Attachment> {
-        self.attach_with_status(session, force, cols, rows, true)
+        self.attach_with_status(session, force, cols, rows, true, top_rows)
             .await
     }
 
@@ -141,6 +142,7 @@ impl Client {
         cols: u16,
         rows: u16,
         status: bool,
+        top_rows: u16,
     ) -> anyhow::Result<Attachment> {
         match self
             .request(Request::Attach {
@@ -149,12 +151,17 @@ impl Client {
                 cols,
                 rows,
                 status,
-                top_rows: 0,
+                top_rows,
             })
             .await?
         {
             Response::Attached => Ok(Attachment {
                 connection: self.connection,
+                top_rows: 0,
+            }),
+            Response::AttachedTop { top_rows } => Ok(Attachment {
+                connection: self.connection,
+                top_rows,
             }),
             Response::Error { message } => bail!(message),
             _ => bail!("unexpected daemon attach response"),
@@ -175,9 +182,14 @@ impl Client {
 
 pub struct Attachment {
     connection: Framed,
+    top_rows: u16,
 }
 
 impl Attachment {
+    pub fn top_rows(&self) -> u16 {
+        self.top_rows
+    }
+
     pub async fn send(&mut self, frame: ClientFrame) -> anyhow::Result<()> {
         match frame {
             ClientFrame::Input(bytes) => {

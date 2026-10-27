@@ -1,6 +1,6 @@
 use crate::harness::Harness;
 use crate::quota;
-use crate::wire::{Activity, QuotaInfo, StatusInfo};
+use crate::wire::{Activity, QuotaInfo, StatusInfo, TeamMember};
 
 const BAR_FOREGROUND: &str = "\x1b[38;5;252m";
 const BAR_BACKGROUND: &str = "\x1b[38;5;252;48;5;236m";
@@ -9,6 +9,7 @@ const NAME_CLOSE: &str = "\x1b[22m";
 const SEPARATOR_OPEN: &str = "\x1b[38;5;240m";
 const ALERT_OPEN: &str = "\x1b[0m\x1b[1;37;41m";
 
+#[derive(Clone)]
 struct Span {
     open: &'static str,
     text: String,
@@ -35,6 +36,181 @@ impl Span {
     fn len(&self) -> usize {
         self.text.chars().count()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeamRegion {
+    pub first_col: u16,
+    pub last_col: u16,
+    pub target: TeamTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TeamTarget {
+    Session(String),
+    Picker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeamLine {
+    pub bytes: Vec<u8>,
+    pub regions: Vec<TeamRegion>,
+}
+
+/// Bytes that draw the team member line on terminal row 1, leaving the cursor where it was.
+pub fn render_team_line(
+    current_id: &str,
+    team: &str,
+    members: &[TeamMember],
+    cols: u16,
+) -> TeamLine {
+    if cols < 2 {
+        return TeamLine {
+            bytes: Vec::new(),
+            regions: Vec::new(),
+        };
+    }
+    let width = usize::from(cols - 1);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"\x1b7\x1b[1;1H\x1b[0m\x1b[2K");
+    bytes.extend_from_slice(BAR_BACKGROUND.as_bytes());
+    if members.is_empty() {
+        bytes.extend_from_slice(" ".repeat(width).as_bytes());
+        bytes.extend_from_slice(b"\x1b[0m\x1b8");
+        return TeamLine {
+            bytes,
+            regions: Vec::new(),
+        };
+    }
+
+    let label = format!(" team {} ", clipped_name(team));
+    let mut prefix = vec![Span::plain(label.clone())];
+    prefix.extend(detail_prefix());
+    let prefix_len = spans_len(&prefix);
+    let member_spans = members
+        .iter()
+        .map(|member| {
+            let color = if member.exited || member.activity.is_none() {
+                "\x1b[38;5;244m"
+            } else {
+                activity_color(member.activity.unwrap_or(Activity::Idle))
+            };
+            let name = clipped_name(&sanitize(&member.name));
+            let mut spans = vec![Span::styled(color, "●", BAR_FOREGROUND), Span::plain(" ")];
+            if member.id == current_id {
+                spans.push(Span::styled(NAME_OPEN, name, NAME_CLOSE));
+            } else {
+                spans.push(Span::plain(name));
+            }
+            spans.push(Span::plain("  "));
+            spans
+        })
+        .collect::<Vec<_>>();
+    let mut kept = vec![true; members.len()];
+    let mut dropped = 0usize;
+    loop {
+        let members_len = kept
+            .iter()
+            .zip(&member_spans)
+            .filter(|(is_kept, _)| **is_kept)
+            .map(|(_, spans)| spans_len(spans))
+            .sum::<usize>();
+        let suffix_len = if dropped == 0 {
+            0
+        } else {
+            char_len(&format!(" +{dropped} "))
+        };
+        if prefix_len + members_len + suffix_len <= width {
+            break;
+        }
+        let Some(index) = kept
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(index, is_kept)| **is_kept && members[*index].id != current_id)
+            .map(|(index, _)| index)
+        else {
+            break;
+        };
+        kept[index] = false;
+        dropped += 1;
+    }
+
+    let mut content = prefix;
+    let mut regions = Vec::new();
+    add_team_region(&mut regions, 1, prefix_len, TeamTarget::Picker, width);
+    let mut column = prefix_len + 1;
+    for (member, (is_kept, spans)) in members.iter().zip(kept.iter().zip(&member_spans)) {
+        if !*is_kept {
+            continue;
+        }
+        let length = spans_len(spans);
+        add_team_region(
+            &mut regions,
+            column,
+            length,
+            TeamTarget::Session(member.id.clone()),
+            width,
+        );
+        content.extend(spans.iter().cloned());
+        column += length;
+    }
+    if dropped > 0 {
+        let suffix = format!(" +{dropped} ");
+        let suffix_len = char_len(&suffix);
+        add_team_region(&mut regions, column, suffix_len, TeamTarget::Picker, width);
+        content.push(Span::plain(suffix));
+        column += suffix_len;
+    }
+    let rendered = render_spans(&content, width);
+    bytes.extend_from_slice(rendered.as_bytes());
+    if column <= width + 1 {
+        bytes.extend_from_slice(" ".repeat(width.saturating_sub(column - 1)).as_bytes());
+    }
+    bytes.extend_from_slice(b"\x1b[0m\x1b8");
+    TeamLine { bytes, regions }
+}
+
+fn clipped_name(name: &str) -> String {
+    let name = sanitize(name);
+    if name.chars().count() <= 16 {
+        return name;
+    }
+    let mut clipped = name.chars().take(15).collect::<String>();
+    clipped.push('…');
+    clipped
+}
+
+fn add_team_region(
+    regions: &mut Vec<TeamRegion>,
+    first: usize,
+    length: usize,
+    target: TeamTarget,
+    width: usize,
+) {
+    if length == 0 || first > width {
+        return;
+    }
+    let last = (first + length - 1).min(width);
+    regions.push(TeamRegion {
+        first_col: first as u16,
+        last_col: last as u16,
+        target,
+    });
+}
+
+/// Bytes that clear the separator and status bar rows, leaving the cursor where it was.
+pub fn clear_status(cols: u16, rows: u16) -> Vec<u8> {
+    if rows < 3 || cols < 2 {
+        return Vec::new();
+    }
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"\x1b7");
+    if rows >= 4 {
+        bytes.extend_from_slice(format!("\x1b[{};1H\x1b[0m\x1b[2K", rows - 1).as_bytes());
+    }
+    bytes.extend_from_slice(format!("\x1b[{rows};1H\x1b[0m\x1b[2K\x1b8").as_bytes());
+    bytes
 }
 
 /// Bytes that draw the status bar on terminal row `rows`, leaving the cursor where it was.

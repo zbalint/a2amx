@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use a2amx::client::{Attachment, Client};
 use a2amx::emulator::{Emulator, Scroll, Size};
+use a2amx::messaging::TeamScope;
 use a2amx::wire::{ClientFrame, Request, Response, ServerFrame, SessionSummary, encode_frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -548,7 +549,7 @@ async fn claude_needs_input_label_reaches_list_and_attach_status() {
     let mut attachment = Client::connect(dir.path())
         .await
         .unwrap()
-        .attach_status(&id, false, 40, 5)
+        .attach_status(&id, false, 40, 5, 0)
         .await
         .unwrap();
     assert!(matches!(next(&mut attachment).await, ServerFrame::Data(_)));
@@ -2100,7 +2101,7 @@ async fn opted_in_attachments_receive_initial_and_changed_status_only() {
     let mut attachment = Client::connect(dir.path())
         .await
         .unwrap()
-        .attach_status(&id, false, 40, 10)
+        .attach_status(&id, false, 40, 10, 0)
         .await
         .unwrap();
     assert!(matches!(next(&mut attachment).await, ServerFrame::Data(_)));
@@ -2177,5 +2178,145 @@ async fn opted_in_attachments_receive_initial_and_changed_status_only() {
             }
         }
     }).await.expect_err("observation ends at deadline");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn team_attachment_status_lists_sorted_members_and_exited_state() {
+    use a2amx::harness::{Deliver, Harness};
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let team = TeamScope {
+        name: "demo".into(),
+        private: false,
+        allow: Vec::new(),
+        agents: Vec::new(),
+    };
+    let first = common::new_team_agent(
+        &mut admin,
+        dir.path(),
+        Some("zeta"),
+        Harness::Generic,
+        Deliver::Auto,
+        Some(team.clone()),
+        &[],
+        &[],
+    )
+    .await
+    .0;
+    let second = common::new_team_agent(
+        &mut admin,
+        dir.path(),
+        Some("alpha"),
+        Harness::Generic,
+        Deliver::Auto,
+        Some(team.clone()),
+        &[],
+        &[],
+    )
+    .await
+    .0;
+    let other_team = TeamScope {
+        name: "other".into(),
+        private: false,
+        allow: Vec::new(),
+        agents: Vec::new(),
+    };
+    let other = common::new_team_agent(
+        &mut admin,
+        dir.path(),
+        Some("other"),
+        Harness::Generic,
+        Deliver::Auto,
+        Some(other_team),
+        &[],
+        &[],
+    )
+    .await
+    .0;
+    let ungrouped = create(&mut admin, &["sh", "-c", "sleep 30"], vec![]).await;
+    let exited = match admin
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), "exit 0".into()],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: Vec::new(),
+            reset: Vec::new(),
+            control_from: Vec::new(),
+            watch: Vec::new(),
+            activity: None,
+            heartbeat: None,
+            name: Some("dead".into()),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Auto),
+            team: Some(team),
+            role: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        other => panic!("created exited team session: {other:?}"),
+    };
+    eventually_sessions(&mut admin, |sessions| {
+        sessions
+            .iter()
+            .find(|session| session.id == exited)
+            .is_some_and(|session| session.exit_code.is_some())
+    })
+    .await;
+
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&first, false, 40, 8, 0)
+        .await
+        .unwrap();
+    assert!(matches!(next(&mut attachment).await, ServerFrame::Data(_)));
+    let ServerFrame::Status(info) = next(&mut attachment).await else {
+        panic!("initial team status frame");
+    };
+    assert_eq!(
+        info.members
+            .iter()
+            .map(|member| member.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "dead", "zeta"]
+    );
+    assert!(
+        info.members
+            .iter()
+            .all(|member| member.activity.is_some() || member.exited)
+    );
+    assert!(
+        info.members
+            .iter()
+            .any(|member| member.id == exited && member.exited)
+    );
+    assert!(
+        info.members
+            .iter()
+            .any(|member| member.id == second && !member.exited)
+    );
+
+    assert!(
+        !info
+            .members
+            .iter()
+            .any(|member| member.id == other || member.id == ungrouped)
+    );
+
+    let mut plain = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&ungrouped, false, 40, 8, 0)
+        .await
+        .unwrap();
+    assert!(matches!(next(&mut plain).await, ServerFrame::Data(_)));
+    let ServerFrame::Status(info) = next(&mut plain).await else {
+        panic!("initial ungrouped status frame");
+    };
+    assert!(info.members.is_empty());
     daemon.shutdown().await.unwrap();
 }

@@ -68,17 +68,20 @@ pub fn shift_row<'a>(report: &MouseReport<'a>, origin: u16) -> Shifted<'a> {
     if origin > 0 && report.row <= origin {
         return Shifted::Claimed(*report);
     }
-    let mut bytes = report.bytes.to_vec();
-    if origin > 0 {
-        let row = report.row - origin;
-        match report.encoding {
-            Encoding::X10 => bytes[report.row_start] = (row as u8) + 32,
-            Encoding::Sgr => {
-                bytes.truncate(report.row_start);
-                bytes.extend_from_slice(row.to_string().as_bytes());
-                bytes.push(if report.release { b'm' } else { b'M' });
-            }
+    if origin == 0 {
+        return Shifted::Grid(report.bytes.to_vec());
+    }
+    Shifted::Grid(with_row(report, report.row - origin))
+}
+
+pub fn with_row(report: &MouseReport<'_>, row: u16) -> Vec<u8> {
+    let mut bytes = report.bytes[..report.row_start].to_vec();
+    match report.encoding {
+        Encoding::X10 => bytes.push(u8::try_from(row.saturating_add(32)).unwrap_or(u8::MAX)),
+        Encoding::Sgr => {
+            bytes.extend_from_slice(row.to_string().as_bytes());
+            bytes.push(if report.release { b'm' } else { b'M' });
         }
     }
-    Shifted::Grid(bytes)
+    bytes
 }

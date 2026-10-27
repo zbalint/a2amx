@@ -4,14 +4,22 @@ mod common;
 
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use std::time::Duration;
 
 use a2amx::client::Client;
 use a2amx::harness::{Deliver, Harness};
-use a2amx::wire::{Request, Response};
+use a2amx::messaging::TeamScope;
+use a2amx::wire::{
+    Activity, ClientFrame, Request, Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
+};
 use common::pty::PtyHarness;
 use common::{eventually, new_agent};
-
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 const WAIT: Duration = Duration::from_secs(10);
 
 fn cli_args(home: &std::path::Path, command: &[&str]) -> Vec<String> {
@@ -38,6 +46,196 @@ fn run_binary(
         .envs(environment.iter().copied())
         .stdin(Stdio::null());
     Ok(process.output()?)
+}
+
+async fn fake_recv_frame(stream: &mut TcpStream) -> anyhow::Result<Option<Vec<u8>>> {
+    let mut header = [0; 4];
+    match stream.read_exact(&mut header).await {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let length = u32::from_be_bytes(header) as usize;
+    let mut payload = vec![0; length];
+    stream.read_exact(&mut payload).await?;
+    Ok(Some(payload))
+}
+
+async fn fake_send_frame(stream: &mut TcpStream, payload: &[u8]) -> anyhow::Result<()> {
+    stream.write_u32(payload.len() as u32).await?;
+    stream.write_all(payload).await?;
+    Ok(())
+}
+
+fn fake_team() -> TeamScope {
+    TeamScope {
+        name: "demo".into(),
+        private: false,
+        allow: Vec::new(),
+        agents: Vec::new(),
+    }
+}
+
+fn fake_sessions(team: &TeamScope) -> Vec<SessionSummary> {
+    [
+        ("s1", "demo-alpha", "alpha@host-a"),
+        ("s2", "demo-beta", "beta@host-a"),
+    ]
+    .into_iter()
+    .map(|(id, name, address)| SessionSummary {
+        id: id.into(),
+        argv: vec!["sh".into()],
+        cols: 80,
+        rows: 24,
+        exit_code: None,
+        attached: false,
+        name: Some(name.into()),
+        team: Some(team.clone()),
+        address: address.into(),
+        pending: 0,
+        held: false,
+        hold_reason: None,
+        quota: None,
+        harness: Harness::Generic,
+        cwd: None,
+        activity: Some(Activity::Idle),
+        uptime_secs: Some(1),
+        activity_secs: Some(1),
+    })
+    .collect()
+}
+
+fn fake_status(session: &str, team: &TeamScope) -> StatusInfo {
+    let alpha = TeamMember {
+        id: "s1".into(),
+        name: "demo-alpha".into(),
+        activity: Some(Activity::Idle),
+        exited: false,
+    };
+    let beta = TeamMember {
+        id: "s2".into(),
+        name: "demo-beta".into(),
+        activity: Some(Activity::Idle),
+        exited: false,
+    };
+    StatusInfo {
+        address: if session == "s1" {
+            "alpha@host-a".into()
+        } else {
+            "beta@host-a".into()
+        },
+        pending: 0,
+        hold: None,
+        harness: Some(Harness::Generic),
+        activity: Some(Activity::Idle),
+        quota: None,
+        team: Some(team.clone()),
+        role: None,
+        members: vec![alpha, beta],
+    }
+}
+
+async fn fake_connection(
+    mut stream: TcpStream,
+    team: TeamScope,
+    old_open: Arc<AtomicBool>,
+    early_switch: Arc<AtomicBool>,
+    attach_count: Arc<AtomicUsize>,
+    done: Arc<tokio::sync::Notify>,
+) -> anyhow::Result<()> {
+    while let Some(payload) = fake_recv_frame(&mut stream).await? {
+        if let Ok(request) = serde_json::from_slice::<Request>(&payload) {
+            match request {
+                Request::Hello { .. } => {
+                    fake_send_frame(&mut stream, &serde_json::to_vec(&Response::Ok)?).await?;
+                }
+                Request::List => {
+                    let response = Response::Sessions {
+                        sessions: fake_sessions(&team),
+                    };
+                    fake_send_frame(&mut stream, &serde_json::to_vec(&response)?).await?;
+                }
+                Request::Attach { session, .. } => {
+                    let attach_number = attach_count.fetch_add(1, Ordering::SeqCst) + 1;
+                    if session == "s2" && old_open.load(Ordering::SeqCst) {
+                        early_switch.store(true, Ordering::SeqCst);
+                    }
+                    let response = Response::AttachedTop { top_rows: 1 };
+                    fake_send_frame(&mut stream, &serde_json::to_vec(&response)?).await?;
+                    let output = if session == "s1" {
+                        b"\x1b[?1000hALPHA\n".as_slice()
+                    } else {
+                        b"\x1b[?1000hBETA\n".as_slice()
+                    };
+                    fake_send_frame(&mut stream, &ServerFrame::Data(output.to_vec()).encode())
+                        .await?;
+                    fake_send_frame(
+                        &mut stream,
+                        &ServerFrame::Status(fake_status(&session, &team)).encode(),
+                    )
+                    .await?;
+                    if session == "s1" {
+                        old_open.store(true, Ordering::SeqCst);
+                    }
+                    while let Some(payload) = fake_recv_frame(&mut stream).await? {
+                        let frame = ClientFrame::decode(&payload)?;
+                        if !matches!(frame, ClientFrame::Detach) {
+                            continue;
+                        }
+                        if session == "s1" && attach_number == 1 {
+                            fake_send_frame(
+                                &mut stream,
+                                &ServerFrame::Data(b"late old frame".to_vec()).encode(),
+                            )
+                            .await?;
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            old_open.store(false, Ordering::SeqCst);
+                        } else {
+                            fake_send_frame(
+                                &mut stream,
+                                &ServerFrame::Detached("done".into()).encode(),
+                            )
+                            .await?;
+                            done.notify_one();
+                        }
+                        break;
+                    }
+                    return Ok(());
+                }
+                _ => {
+                    let response = Response::Error {
+                        message: "unsupported fake request".into(),
+                    };
+                    fake_send_frame(&mut stream, &serde_json::to_vec(&response)?).await?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_fake_daemon(
+    listener: TcpListener,
+    team: TeamScope,
+    old_open: Arc<AtomicBool>,
+    early_switch: Arc<AtomicBool>,
+    attach_count: Arc<AtomicUsize>,
+    done: Arc<tokio::sync::Notify>,
+) -> anyhow::Result<()> {
+    loop {
+        let (stream, _) = tokio::select! {
+            accepted = listener.accept() => accepted?,
+            _ = done.notified() => return Ok(()),
+        };
+        tokio::spawn(fake_connection(
+            stream,
+            team.clone(),
+            old_open.clone(),
+            early_switch.clone(),
+            attach_count.clone(),
+            done.clone(),
+        ));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1446,5 +1644,247 @@ async fn picker_folds_teams_and_filters() -> anyhow::Result<()> {
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from ", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_line_renders_clicks_switches_and_toggles_for_real_attach() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let team_file = dir.path().join("demo.toml");
+    std::fs::write(
+        &team_file,
+        "team = \"demo\"\n[[session]]\nname = \"alpha\"\ncommand = [\"sh\", \"-c\", \"printf '\\\\033[?1000h\\\\033[?1006h'; printf ALPHA; stty raw -echo; cat -v\"]\n[[session]]\nname = \"beta\"\ncommand = [\"sh\", \"-c\", \"printf BETA; sleep 30\"]\n[[session]]\nname = \"dead\"\ncommand = [\"sh\", \"-c\", \"exit 0\"]\n",
+    )?;
+    let team_file = team_file.to_string_lossy().into_owned();
+    let started = run_binary(
+        dir.path(),
+        &["team", "up", "--detach", "--file", &team_file],
+        &[],
+    )?;
+    assert!(
+        started.status.success(),
+        "team up output: {}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+
+    let small_command = format!(
+        "stty rows 4; exec {} attach demo-alpha",
+        env!("CARGO_BIN_EXE_a2amx")
+    );
+    let small_args = vec!["-c".to_owned(), small_command];
+    let mut small = PtyHarness::spawn_program("sh", &small_args, dir.path(), &[])?;
+    small.wait_for_text("ALPHA", WAIT)?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let small_screen = small.screen_text();
+    assert!(
+        !small_screen
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .contains("team demo"),
+        "small screen: {small_screen:?}"
+    );
+    small.send(&[2, b'd'])?;
+    small.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(small.wait_exit(WAIT)?, 0);
+
+    let mut attached =
+        PtyHarness::spawn(&cli_args(dir.path(), &["attach", "demo-alpha"]), dir.path())?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.wait_for_text("team demo", WAIT)?;
+    assert!(attached.screen_text().contains("demo-alpha"));
+    attached.wait_for_text("demo-beta", WAIT)?;
+    attached.wait_for_text("demo-dead", WAIT)?;
+    attached.send(&[2, b'3'])?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(attached.screen_text().contains("demo-alpha@host-a"));
+
+    attached.send(b"\x1b[<0;30;1M\x1b[<0;30;1m")?;
+    attached.wait_for_text("BETA", WAIT)?;
+    attached.wait_for_text("demo-beta@host-a", WAIT)?;
+
+    attached.send(&[2, b'1'])?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.wait_for_text("demo-alpha@host-a", WAIT)?;
+    attached.send(b"\x1b[M\x20\x3e\x21\x1b[M\x23\x3e\x21")?;
+    attached.wait_for_text("BETA", WAIT)?;
+    attached.wait_for_text("demo-beta@host-a", WAIT)?;
+    attached.send(&[2, b'1'])?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.wait_for_text("demo-alpha@host-a", WAIT)?;
+    attached.send(b"\x1b[<0;18;1M\x1b[<0;18;1m")?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(attached.screen_text().contains("demo-alpha@host-a"));
+
+    attached.send(b"\x1b[<0;18;1M\x1b[<0;10;2m")?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!attached.screen_text().contains("^[[<0;10;1m"));
+
+    attached.send(b"\x1b[<0;10;2M\x1b[<0;10;1m")?;
+    attached.wait_for_text("^[[<0;10;2m", WAIT)?;
+
+    attached.send(&[2, b'2'])?;
+    attached.wait_for_text("BETA", WAIT)?;
+    attached.wait_for_text("demo-beta@host-a", WAIT)?;
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("a2amx sessions:", WAIT)?;
+    attached.send(b"\x1b[<64;18;1M\x1b[<64;18;1m")?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    attached.send(b"\x1b[<0;18;1M\x1b[<0;18;1m")?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    attached.send(b"q")?;
+    attached.wait_for_text("demo-beta@host-a", WAIT)?;
+    attached.send(&[2, b'['])?;
+    attached.send(b"\x1b[<0;18;1M\x1b[<0;18;1m")?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    attached.send(b"q")?;
+    attached.wait_for_text("demo-beta@host-a", WAIT)?;
+
+    attached.send(&[2, b's'])?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let hidden_screen = attached.screen_text();
+    let hidden_first_line = hidden_screen.lines().next().unwrap_or_default();
+    assert!(
+        hidden_first_line.contains("BETA"),
+        "hidden screen: {hidden_screen:?}"
+    );
+    assert!(
+        !hidden_first_line.contains("team demo"),
+        "hidden screen: {hidden_screen:?}"
+    );
+    attached.send(&[2, b's'])?;
+    attached.wait_for_text("team demo", WAIT)?;
+
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s2]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+
+    let (created, code) = run_cli(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "plain",
+            "--",
+            "sh",
+            "-c",
+            "printf PLAIN; sleep 30",
+        ],
+    )?;
+    assert_eq!(code, 0);
+    assert!(!created.is_empty());
+    let mut plain = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "plain"]), dir.path())?;
+    plain.wait_for_text("PLAIN", WAIT)?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!plain.screen_text().contains("team demo"));
+    plain.send(&[2, b'd'])?;
+    plain.wait_for_text("[detached from s4]", WAIT)?;
+    assert_eq!(plain.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_toggle_clears_team_row_without_session_output() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let team_file = dir.path().join("silent.toml");
+    std::fs::write(
+        &team_file,
+        "team = \"silent\"\n[[session]]\nname = \"alpha\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\n",
+    )?;
+    let team_file = team_file.to_string_lossy().into_owned();
+    let started = run_binary(
+        dir.path(),
+        &["team", "up", "--detach", "--file", &team_file],
+        &[],
+    )?;
+    assert!(started.status.success());
+
+    let mut attached = PtyHarness::spawn(
+        &cli_args(dir.path(), &["attach", "silent-alpha"]),
+        dir.path(),
+    )?;
+    attached.wait_for_text("team silent", WAIT)?;
+    attached.send(&[2, b's'])?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let hidden = attached.screen_text();
+    assert!(
+        !hidden
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .contains("team silent"),
+        "hidden screen: {hidden:?}"
+    );
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_toggle_reattaches_to_resize_the_session() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    std::fs::write(dir.path().join("addr"), format!("{address}\n"))?;
+    std::fs::write(dir.path().join("admin.token"), "fake-token\n")?;
+    let old_open = Arc::new(AtomicBool::new(false));
+    let early_switch = Arc::new(AtomicBool::new(false));
+    let attach_count = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(tokio::sync::Notify::new());
+    let server = tokio::spawn(run_fake_daemon(
+        listener,
+        fake_team(),
+        old_open,
+        early_switch,
+        attach_count.clone(),
+        done.clone(),
+    ));
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("alpha@host-a", WAIT)?;
+    attached.send(&[2, b's'])?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(attach_count.load(Ordering::SeqCst), 2);
+    attached.send(&[2, b'd'])?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn switch_waits_for_old_attachment_eof_with_delayed_fake_daemon() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    std::fs::write(dir.path().join("addr"), format!("{address}\n"))?;
+    std::fs::write(dir.path().join("admin.token"), "fake-token\n")?;
+    let old_open = Arc::new(AtomicBool::new(false));
+    let early_switch = Arc::new(AtomicBool::new(false));
+    let attach_count = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(tokio::sync::Notify::new());
+    let server = tokio::spawn(run_fake_daemon(
+        listener,
+        fake_team(),
+        old_open,
+        early_switch.clone(),
+        attach_count.clone(),
+        done.clone(),
+    ));
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("alpha@host-a", WAIT)?;
+    attached.send(b"\x1b[<0;30;1M\x1b[<0;30;1m")?;
+    attached.wait_for_text("BETA", WAIT)?;
+    attached.send(&[2, b'd'])?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    assert!(
+        !early_switch.load(Ordering::SeqCst),
+        "target attach arrived before old stream EOF"
+    );
+    server.abort();
+    let _ = server.await;
     Ok(())
 }

@@ -5,6 +5,15 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Team line: a session in a team shows a row at the top of the attach screen, in the status bar's
+  style, listing the team's members with an activity dot (grey for exited members). A click on a
+  member, or the prefix then `1`-`9`, `n` or `p`, switches to it; a click on the team label opens the
+  picker; the prefix then `s` hides it together with the status bar. It needs a terminal of at least
+  five rows. Additive protocol fields: the attach request's `top_rows`, the `AttachedTop` reply and
+  the status frame's `members`; an older daemon simply shows no line (`docs/cli.md`).
+
 ## [0.1.2] - 2026-10-26
 
 ### Added

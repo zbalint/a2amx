@@ -1,4 +1,4 @@
-use a2amx::mouse::{Shifted, parse_report, shift_row};
+use a2amx::mouse::{Shifted, parse_report, shift_row, with_row};
 
 #[test]
 fn mouse_reports_shift_or_claim_reserved_rows() {
@@ -26,6 +26,15 @@ fn mouse_reports_shift_or_claim_reserved_rows() {
     assert!(release.release);
     let x10 = parse_report(b"\x1b[M\x23\x25\x21", 0).unwrap();
     assert!(x10.release);
+}
+
+#[test]
+fn mouse_reports_can_be_reencoded_at_a_session_row() {
+    let sgr = parse_report(b"\x1b[<0;5;1m", 0).unwrap();
+    assert_eq!(with_row(&sgr, 2), b"\x1b[<0;5;2m");
+    let x10 = parse_report(b"\x1b[M\x23\x25\x21", 0).unwrap();
+    assert_eq!(with_row(&x10, 2), b"\x1b[M\x23\x25\x22");
+    assert_eq!(with_row(&x10, 400), b"\x1b[M\x23\x25\xff");
 }
 
 #[test]

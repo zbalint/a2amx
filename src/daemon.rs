@@ -31,7 +31,7 @@ use crate::session::{AttachmentSlot, NativeGuard, Session, SessionId, SessionSpe
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo,
-    QuotaInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo,
+    QuotaInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
 };
 
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
@@ -2448,6 +2448,29 @@ async fn attachment_status(
     runtime: &Runtime,
 ) -> anyhow::Result<StatusInfo> {
     let counts = runtime.store.open_counts(&runtime.boot).await?;
+    let team_name = session.team().map(|team| team.name.clone());
+    let team_sessions = team_name.as_ref().map_or_else(Vec::new, |team_name| {
+        runtime
+            .sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter(|candidate| candidate.team().is_some_and(|team| team.name == *team_name))
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    let mut members = team_sessions
+        .into_iter()
+        .map(|member| TeamMember {
+            id: member.id().0.clone(),
+            name: member
+                .name()
+                .map_or_else(|| member.id().0.clone(), str::to_owned),
+            activity: session_activity(&member),
+            exited: member.exit_code().is_some(),
+        })
+        .collect::<Vec<_>>();
+    members.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
     Ok(StatusInfo {
         address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
         pending: counts.get(&session.id().0).copied().unwrap_or(0),
@@ -2460,6 +2483,7 @@ async fn attachment_status(
         quota: session_quota(session, runtime.omp_usage().as_ref()),
         team: session.team().cloned(),
         role: session.role().map(str::to_owned),
+        members,
     })
 }
 

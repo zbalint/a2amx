@@ -355,6 +355,10 @@ at exactly three); terminals below three rows hide it and use all rows. Prefix t
 toggles it for the attach process, including across picker switches, and each bar draw
 also draws the separator rule above it. Scroll mode draws its own row, and the session
 picker owns the screen while open.
+Team sessions also reserve the top row when the status line is visible and the terminal has at least five rows.
+That row uses the bar style to show ` team <name> │ ● member ...`; dots encode activity, the attached member is bold,
+and a click or prefix `1`–`9`, `n`, or `p` switches members. A click on the team label opens the picker; exited
+members remain visible in grey but cannot be selected. Prefix `s` hides both rows.
 The client opts in with `Request::Attach.status`; the daemon sends a status frame
 (tag `0x04`) after the initial snapshot and polls once a second, sending only changes.
 Attachments that do not opt in receive no status frames, preserving older clients;
@@ -363,7 +367,8 @@ older daemons ignore the additive request field.
 An attach request can reserve `top_rows` above the session; a daemon that honors
 them acknowledges with `AttachedTop`. The session grid is rendered with that row
 origin, while mouse functions shift reports into session coordinates or claim
-reports on reserved rows.
+reports on reserved rows. The status frame's `members` list contains the team's
+sessions, sorted by name then id, with activity and exited state.
 
 The status payload also carries the optional activity, low-quota, harness, team, role, and hold details
 rendered by the bar; these additive fields preserve old payload decoding, and the daemon still sends

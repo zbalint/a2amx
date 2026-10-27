@@ -438,6 +438,14 @@ pub struct MessageInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMember {
+    pub id: String,
+    pub name: String,
+    pub activity: Option<Activity>,
+    pub exited: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusInfo {
     pub address: String,
     pub pending: u32,
@@ -453,6 +461,8 @@ pub struct StatusInfo {
     pub team: Option<TeamScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<TeamMember>,
 }
 
 /// Server-to-client stream frame.

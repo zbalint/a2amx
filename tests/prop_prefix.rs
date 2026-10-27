@@ -25,6 +25,9 @@ fn biased_input(prefix: u8) -> impl Strategy<Value = Vec<u8>> {
         1 => Just(b'2'),
         1 => Just(b'0'),
         1 => Just(b'1'),
+        1 => Just(b'9'),
+        1 => Just(b'n'),
+        1 => Just(b'p'),
         1 => Just(b'~'),
         1 => Just(b'd'),
         1 => Just(b'w'),
@@ -36,7 +39,7 @@ fn biased_input(prefix: u8) -> impl Strategy<Value = Vec<u8>> {
         prop::collection::vec(any::<u8>(), 0..=12),
         prop::collection::vec(any::<u8>(), 0..=12),
         prop::collection::vec(any::<u8>(), 0..=12),
-        prop::sample::select(vec![b'd', b'w', b'[', b's', b'r']),
+        prop::sample::select(vec![b'd', b'w', b'[', b's', b'r', b'1', b'9', b'n', b'p']),
     )
         .prop_map(move |(before, middle, after, command)| {
             let mut input = before;
@@ -58,7 +61,7 @@ fn biased_paste_body(prefix: u8) -> impl Strategy<Value = Vec<u8>> {
     let random = prop::collection::vec(non_escape_bytes(), 0..=64);
     let spliced = (
         prop::collection::vec(non_escape_bytes(), 0..=20),
-        prop::sample::select(vec![b'd', b'w', b'[', b's', b'r']),
+        prop::sample::select(vec![b'd', b'w', b'[', b's', b'r', b'1', b'9', b'n', b'p']),
         prop::collection::vec(non_escape_bytes(), 0..=20),
     )
         .prop_map(move |(before, command, after)| {
@@ -194,6 +197,10 @@ fn command_table_is_exact_for_each_leading_forward_length() {
             (b'[', Command::ScrollMode),
             (b's', Command::StatusLine),
             (b'r', Command::Release),
+            (b'1', Command::TeamMember(1)),
+            (b'9', Command::TeamMember(9)),
+            (b'n', Command::TeamNext),
+            (b'p', Command::TeamPrev),
         ] {
             let mut input = leading.clone();
             input.extend_from_slice(&[0x02, key]);

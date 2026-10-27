@@ -5,7 +5,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
 use clap::Parser;
@@ -19,7 +19,8 @@ use a2amx::emulator::Scroll;
 use a2amx::harness::{Deliver, Harness};
 use a2amx::hook;
 use a2amx::mcp;
-use a2amx::messaging::{self, TeamScope, display_duration, sgr_mouse_report_len};
+use a2amx::messaging::{self, TeamScope, display_duration};
+use a2amx::mouse::{self, MouseReport, Shifted};
 use a2amx::names;
 use a2amx::picker::{
     EntryState, Outcome, PickerAction, PickerEntry, PickerParser, PickerView, scroll_into_view,
@@ -1519,25 +1520,46 @@ async fn run_attachment(
     cols: u16,
     rows: u16,
 ) -> anyhow::Result<()> {
-    let attachment = client
-        .attach_status(&session, force, cols, pty_rows(rows, true))
+    let in_team = session_in_team(home, &session).await?;
+    let requested_top = team_rows(rows, true, in_team);
+    let mut attachment = client
+        .attach_status(
+            &session,
+            force,
+            cols,
+            pty_rows(rows, true, requested_top),
+            requested_top,
+        )
         .await?;
+    let top_rows = attachment.top_rows();
+    // shortcut: top_rows is fixed at attach, switch and toggle; resize keeps the negotiated origin until another attach.
+    if requested_top > 0 && top_rows == 0 {
+        attachment
+            .send(ClientFrame::Resize {
+                cols,
+                rows: pty_rows(rows, true, 0),
+            })
+            .await?;
+    }
     let output = Output::start()?;
     let mut terminal = TerminalGuard::enter(output.handle()?)?;
     output.send(b"\x1b[?1049h".to_vec())?;
     // shortcut: the outer terminal title is not restored on exit.
     output.send(format!("\x1b]2;a2amx: {session}\x07").into_bytes())?;
 
-    let loop_result = run_attachment_loop(
+    let state = AttachmentState::new(
         attachment,
-        home,
-        prefix,
-        session,
-        cols,
-        rows,
-        output.handle()?,
-    )
-    .await;
+        AttachmentConfig {
+            home: home.to_owned(),
+            prefix,
+            session,
+            cols,
+            rows,
+            in_team,
+            output: output.handle()?,
+        },
+    );
+    let loop_result = run_attachment_loop(state).await;
     let restore_result = terminal.restore().await;
     let finish_result = tokio::task::spawn_blocking(move || output.finish()).await?;
     restore_result?;
@@ -1546,18 +1568,39 @@ async fn run_attachment(
     write_stderr(format!("{}\n", outcome.message).into_bytes()).await
 }
 
-fn pty_rows(rows: u16, visible: bool) -> u16 {
-    if visible && rows >= 4 {
-        rows - 2
+fn pty_rows(rows: u16, visible: bool, top: u16) -> u16 {
+    let status_rows = if visible && rows >= 4 {
+        2
     } else if visible && rows == 3 {
-        rows - 1
+        1
     } else {
-        rows
-    }
+        0
+    };
+    rows.saturating_sub(status_rows).saturating_sub(top).max(1)
+}
+
+fn team_rows(rows: u16, visible: bool, in_team: bool) -> u16 {
+    u16::from(visible && in_team && rows >= 5)
 }
 
 struct AttachOutcome {
     message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MousePress {
+    Team,
+    Grid,
+}
+
+struct AttachmentConfig {
+    home: PathBuf,
+    prefix: u8,
+    session: String,
+    cols: u16,
+    rows: u16,
+    in_team: bool,
+    output: OutputHandle,
 }
 
 struct AttachmentState {
@@ -1566,6 +1609,10 @@ struct AttachmentState {
     session: String,
     cols: u16,
     rows: u16,
+    in_team: bool,
+    top_rows: u16,
+    team_regions: Vec<status::TeamRegion>,
+    mouse_press: Option<MousePress>,
     prefix_machine: PrefixMachine,
     prefix_byte: u8,
     after_prefix: bool,
@@ -1579,21 +1626,27 @@ struct AttachmentState {
 }
 
 impl AttachmentState {
-    fn new(
-        attachment: Attachment,
-        home: &Path,
-        prefix: u8,
-        session: String,
-        cols: u16,
-        rows: u16,
-        output: OutputHandle,
-    ) -> Self {
+    fn new(attachment: Attachment, config: AttachmentConfig) -> Self {
+        let AttachmentConfig {
+            home,
+            prefix,
+            session,
+            cols,
+            rows,
+            in_team,
+            output,
+        } = config;
+        let top_rows = attachment.top_rows();
         Self {
             attachment: Some(attachment),
             home: home.to_owned(),
             session,
             cols,
             rows,
+            in_team,
+            top_rows,
+            team_regions: Vec::new(),
+            mouse_press: None,
             prefix_machine: PrefixMachine::new(prefix),
             prefix_byte: prefix,
             after_prefix: false,
@@ -1607,32 +1660,60 @@ impl AttachmentState {
         }
     }
 
-    fn draw_status(&self) -> anyhow::Result<()> {
-        if self.status_visible && self.picker.is_none() && !self.scroll_mode {
-            self.output.send(status::render(
-                &self.session,
-                self.status.as_ref(),
-                self.prefix_byte,
-                self.cols,
-                self.rows,
-            ))?;
+    fn draw_status(&mut self) -> anyhow::Result<()> {
+        if !self.status_visible || self.picker.is_some() || self.scroll_mode {
+            self.team_regions.clear();
+            return Ok(());
         }
+        let mut bytes = Vec::new();
+        if self.top_rows == 1 {
+            let line = self.status.as_ref().and_then(|info| {
+                info.team.as_ref().map(|team| {
+                    status::render_team_line(&self.session, &team.name, &info.members, self.cols)
+                })
+            });
+            let line =
+                line.unwrap_or_else(|| status::render_team_line(&self.session, "", &[], self.cols));
+            self.team_regions = line.regions;
+            bytes.extend(line.bytes);
+        } else {
+            self.team_regions.clear();
+        }
+        bytes.extend(status::render(
+            &self.session,
+            self.status.as_ref(),
+            self.prefix_byte,
+            self.cols,
+            self.rows,
+        ));
+        self.output.send(bytes)?;
         Ok(())
     }
 
     async fn handle_input(&mut self, bytes: &[u8]) -> anyhow::Result<Option<AttachOutcome>> {
         let mut offset = 0;
         while offset < bytes.len() {
-            let report = if self.session_mouse {
-                None
-            } else {
+            let report = if self.picker.is_some() || self.scroll_mode {
+                (!self.session_mouse)
+                    .then(|| find_mouse_report(bytes, offset))
+                    .flatten()
+            // shortcut: with top_rows > 0 and session_mouse, split input remains unshifted until a complete report is found.
+            } else if self.top_rows > 0 || !self.session_mouse {
                 find_mouse_report(bytes, offset)
+            } else {
+                None
             };
             if let Some((start, end)) = report
                 && start == offset
             {
-                let button = parse_decimal(&bytes[offset + 3..]);
-                self.handle_mouse_button(button).await?;
+                let Some(parsed) = mouse::parse_report(bytes, offset) else {
+                    return Err(anyhow!("mouse report parser lost a report boundary"));
+                };
+                if self.top_rows > 0 && self.picker.is_none() && !self.scroll_mode {
+                    self.handle_mouse_report(parsed).await?;
+                } else {
+                    self.handle_mouse_button(parsed.button).await?;
+                }
                 offset = end;
                 continue;
             }
@@ -1721,25 +1802,24 @@ impl AttachmentState {
                     self.enter_scroll_mode().await?;
                 }
                 Action::Command(PrefixCommand::SessionPicker) => {
-                    let state = PickerState::open(
-                        &self.home,
-                        &self.session,
-                        self.cols,
-                        self.rows,
-                        &self.output,
-                    )
-                    .await?;
-                    self.picker = Some(state);
+                    self.open_picker().await?;
                 }
                 Action::Command(PrefixCommand::StatusLine) => {
-                    self.status_visible = !self.status_visible;
-                    if let Some(attached) = self.attachment.as_mut() {
-                        attached
-                            .send(ClientFrame::Resize {
-                                cols: self.cols,
-                                rows: pty_rows(self.rows, self.status_visible),
-                            })
-                            .await?;
+                    self.toggle_status_line().await?;
+                }
+                Action::Command(PrefixCommand::TeamMember(number)) => {
+                    if let Some(id) = self.member_by_number(number) {
+                        self.select_member(id).await?;
+                    }
+                }
+                Action::Command(PrefixCommand::TeamNext) => {
+                    if let Some(id) = self.next_member(false) {
+                        self.select_member(id).await?;
+                    }
+                }
+                Action::Command(PrefixCommand::TeamPrev) => {
+                    if let Some(id) = self.next_member(true) {
+                        self.select_member(id).await?;
                     }
                 }
                 Action::Command(PrefixCommand::Release) => {
@@ -1750,6 +1830,97 @@ impl AttachmentState {
             }
         }
         Ok(None)
+    }
+
+    async fn open_picker(&mut self) -> anyhow::Result<()> {
+        let state = PickerState::open(
+            &self.home,
+            &self.session,
+            self.cols,
+            self.rows,
+            &self.output,
+        )
+        .await?;
+        self.team_regions.clear();
+        self.picker = Some(state);
+        Ok(())
+    }
+
+    fn member_by_number(&self, number: u8) -> Option<String> {
+        (self.top_rows > 0)
+            .then(|| {
+                self.status
+                    .as_ref()
+                    .and_then(|status| status.members.get(usize::from(number.saturating_sub(1))))
+                    .map(|member| member.id.clone())
+            })
+            .flatten()
+    }
+
+    fn next_member(&self, previous: bool) -> Option<String> {
+        if self.top_rows == 0 {
+            return None;
+        }
+        let members = &self.status.as_ref()?.members;
+        if members.is_empty() {
+            return None;
+        }
+        let current = members.iter().position(|member| member.id == self.session);
+        let start = current.unwrap_or(if previous { 0 } else { members.len() - 1 });
+        for offset in 1..=members.len() {
+            let index = if previous {
+                (start + members.len() - offset) % members.len()
+            } else {
+                (start + offset) % members.len()
+            };
+            if !members[index].exited {
+                return Some(members[index].id.clone());
+            }
+        }
+        None
+    }
+
+    async fn select_member(&mut self, selected: String) -> anyhow::Result<()> {
+        if self.top_rows == 0
+            || selected == self.session
+            || self
+                .status
+                .as_ref()
+                .and_then(|status| status.members.iter().find(|member| member.id == selected))
+                .is_none_or(|member| member.exited)
+        {
+            return Ok(());
+        }
+        self.mouse_press = None;
+        let _ = self.switch_session(selected).await?;
+        Ok(())
+    }
+
+    async fn toggle_status_line(&mut self) -> anyhow::Result<()> {
+        let visible = !self.status_visible;
+        if !visible {
+            if self.top_rows == 1 {
+                let clear = status::render_team_line(&self.session, "", &[], self.cols);
+                self.output.send(clear.bytes)?;
+                self.team_regions.clear();
+            }
+            self.output
+                .send(status::clear_status(self.cols, self.rows))?;
+        }
+        self.status_visible = visible;
+        let desired_top = team_rows(self.rows, visible, self.in_team);
+        if desired_top != self.top_rows {
+            self.mouse_press = None;
+            let _ = self.switch_session(self.session.clone()).await?;
+        } else if let Some(attached) = self.attachment.as_mut() {
+            attached
+                .send(ClientFrame::Resize {
+                    cols: self.cols,
+                    rows: pty_rows(self.rows, visible, self.top_rows),
+                })
+                .await?;
+        }
+        Ok(())
     }
 
     async fn enter_scroll_mode(&mut self) -> anyhow::Result<()> {
@@ -1790,6 +1961,70 @@ impl AttachmentState {
         Ok(())
     }
 
+    async fn handle_mouse_report(&mut self, report: MouseReport<'_>) -> anyhow::Result<()> {
+        match mouse::shift_row(&report, self.top_rows) {
+            Shifted::Claimed(claimed) => {
+                if claimed.release {
+                    match self.mouse_press.take() {
+                        Some(MousePress::Team) => self.team_click(claimed.column).await?,
+                        Some(MousePress::Grid) if self.session_mouse => {
+                            self.send_session_mouse(mouse::with_row(
+                                &claimed,
+                                self.top_rows.saturating_add(1),
+                            ))
+                            .await?;
+                        }
+                        _ => {}
+                    }
+                } else if claimed.button == 0 {
+                    self.mouse_press = Some(MousePress::Team);
+                }
+            }
+            Shifted::Grid(bytes) => {
+                if report.release {
+                    match self.mouse_press.take() {
+                        Some(MousePress::Team) => {}
+                        Some(MousePress::Grid) | None if self.session_mouse => {
+                            self.send_session_mouse(bytes).await?;
+                        }
+                        _ => {}
+                    }
+                } else {
+                    if report.button == 0 {
+                        self.mouse_press = Some(MousePress::Grid);
+                    }
+                    if self.session_mouse {
+                        self.send_session_mouse(bytes).await?;
+                    } else {
+                        self.handle_mouse_button(report.button).await?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn send_session_mouse(&mut self, bytes: Vec<u8>) -> anyhow::Result<()> {
+        if let Some(attached) = self.attachment.as_mut() {
+            attached.send(ClientFrame::Input(bytes)).await?;
+        }
+        Ok(())
+    }
+
+    async fn team_click(&mut self, column: u16) -> anyhow::Result<()> {
+        let target = self
+            .team_regions
+            .iter()
+            .find(|region| region.first_col <= column && column <= region.last_col)
+            .map(|region| region.target.clone());
+        match target {
+            Some(status::TeamTarget::Picker) => self.open_picker().await?,
+            Some(status::TeamTarget::Session(id)) => self.select_member(id).await?,
+            None => {}
+        }
+        Ok(())
+    }
+
     fn scan_session_mouse(&mut self, bytes: &[u8]) -> bool {
         let mut found = false;
         let mut offset = 0;
@@ -1816,22 +2051,41 @@ impl AttachmentState {
         found
     }
 
-    async fn attach_session(&self, session: &str) -> anyhow::Result<Attachment> {
+    async fn attach_session(&self, session: &str) -> anyhow::Result<(Attachment, u16, bool)> {
+        let in_team = session_in_team(&self.home, session).await?;
+        let requested_top = team_rows(self.rows, self.status_visible, in_team);
         let client = Client::connect(&self.home).await?;
-        client
+        let mut attachment = client
             .attach_status(
                 session,
                 false,
                 self.cols,
-                pty_rows(self.rows, self.status_visible),
+                pty_rows(self.rows, self.status_visible, requested_top),
+                requested_top,
             )
-            .await
+            .await?;
+        let top_rows = attachment.top_rows();
+        if requested_top > 0 && top_rows == 0 {
+            attachment
+                .send(ClientFrame::Resize {
+                    cols: self.cols,
+                    rows: pty_rows(self.rows, self.status_visible, 0),
+                })
+                .await?;
+        }
+        Ok((attachment, top_rows, in_team))
     }
 
     async fn restore_current(&mut self) -> anyhow::Result<bool> {
         if self.attachment.is_none() {
             match self.attach_session(&self.session).await {
-                Ok(next) => self.attachment = Some(next),
+                Ok((next, top_rows, in_team)) => {
+                    self.attachment = Some(next);
+                    self.top_rows = top_rows;
+                    self.in_team = in_team;
+                    self.session_mouse = false;
+                    self.mouse_press = None;
+                }
                 Err(error) => {
                     if let Some(state) = self.picker.as_mut() {
                         state.footer = Some(error.to_string());
@@ -1850,29 +2104,57 @@ impl AttachmentState {
     }
 
     async fn switch_session(&mut self, selected: String) -> anyhow::Result<bool> {
+        let current = self.session.clone();
         if let Some(attached) = self.attachment.as_mut() {
             let _ = attached.send(ClientFrame::Detach).await;
-            let _ = tokio::time::timeout(Duration::from_secs(5), attached.recv()).await;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match tokio::time::timeout(remaining, attached.recv()).await {
+                    Ok(Ok(Some(_))) => {}
+                    Ok(Ok(None)) | Ok(Err(_)) | Err(_) => break,
+                }
+            }
         }
         self.attachment = None;
-        match self.attach_session(&selected).await {
-            Ok(next) => {
+        self.mouse_press = None;
+        let result = self.attach_session(&selected).await;
+        match result {
+            Ok((next, top_rows, in_team)) => {
                 self.attachment = Some(next);
                 self.session = selected;
+                self.in_team = in_team;
+                self.top_rows = top_rows;
+                self.session_mouse = false;
                 self.status = None;
+                self.team_regions.clear();
                 self.output
                     .send(format!("\x1b]2;a2amx: {}\x07", self.session).into_bytes())?;
                 self.picker = None;
                 Ok(true)
             }
-            Err(error) => {
-                if let Some(state) = self.picker.as_mut() {
-                    state.footer = Some(error.to_string());
-                    state.refresh().await?;
-                    state.render(&self.output)?;
+            // shortcut: a failed switch is not shown; add a bar notice if asked.
+            Err(error) => match self.attach_session(&current).await {
+                Ok((restored, top_rows, in_team)) => {
+                    self.attachment = Some(restored);
+                    self.top_rows = top_rows;
+                    self.in_team = in_team;
+                    self.session_mouse = false;
+                    self.status = None;
+                    if let Some(state) = self.picker.as_mut() {
+                        state.footer = Some(error.to_string());
+                        state.refresh().await?;
+                        state.render(&self.output)?;
+                    }
+                    Ok(false)
                 }
-                Ok(false)
-            }
+                Err(restore_error) => Err(anyhow!(
+                    "failed to switch to {selected}: {error}; failed to restore {current}: {restore_error}"
+                )),
+            },
         }
     }
 
@@ -1942,32 +2224,21 @@ fn parse_decimal(bytes: &[u8]) -> u16 {
         })
 }
 
-// shortcut: a report split across input chunks is typed input; reassemble only if it proves noisy.
+// shortcut: a report split across input chunks is typed input; reassemble only if it proves noisy; this scan covers SGR and X10.
 fn find_mouse_report(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
     let mut offset = start;
     while offset < bytes.len() {
         if bytes[offset] == 0x1b
-            && bytes.get(offset + 1) == Some(&b'[')
-            && bytes.get(offset + 2) == Some(&b'<')
-            && let Some(end) = sgr_mouse_report_len(bytes, offset)
+            && let Some(report) = mouse::parse_report(bytes, offset)
         {
-            return Some((offset, end));
+            return Some((offset, report.end));
         }
         offset += 1;
     }
     None
 }
 
-async fn run_attachment_loop(
-    attachment: Attachment,
-    home: &Path,
-    prefix: u8,
-    session: String,
-    cols: u16,
-    rows: u16,
-    output: OutputHandle,
-) -> anyhow::Result<AttachOutcome> {
-    let mut state = AttachmentState::new(attachment, home, prefix, session, cols, rows, output);
+async fn run_attachment_loop(mut state: AttachmentState) -> anyhow::Result<AttachOutcome> {
     let (input_tx, mut input_rx) = mpsc::channel::<Option<Vec<u8>>>(8);
     spawn_stdin_reader(input_tx)?;
     let mut sigwinch =
@@ -2008,7 +2279,7 @@ async fn run_attachment_loop(
                         picker.render(&state.output)?;
                     }
                     if let Some(attached) = state.attachment.as_mut() {
-                        attached.send(ClientFrame::Resize { cols: new_cols, rows: pty_rows(new_rows, state.status_visible) }).await?;
+                        attached.send(ClientFrame::Resize { cols: new_cols, rows: pty_rows(new_rows, state.status_visible, state.top_rows) }).await?;
                     }
                 }
             }
@@ -2816,6 +3087,16 @@ async fn resolve_session(home: &Path, reference: &str) -> anyhow::Result<String>
         &request_sessions(&mut client).await?,
         reference,
     ))
+}
+
+async fn session_in_team(home: &Path, reference: &str) -> anyhow::Result<bool> {
+    let mut client = Client::connect(home).await?;
+    let sessions = request_sessions(&mut client).await?;
+    let id = resolve_reference(&sessions, reference);
+    Ok(sessions
+        .iter()
+        .find(|session| session.id == id)
+        .is_some_and(|session| session.team.is_some()))
 }
 
 // shortcut: picker widths use byte/scalar counts rather than terminal cell widths.

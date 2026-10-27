@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-**LOCKED** (2026-10-27; pre-lock gate run against `feature/team-line` at `5afb49f`, which holds spec 3ar; consultant
+**ACCEPTED** (2026-10-27; locked 2026-10-27; pre-lock gate run against `feature/team-line` at `5afb49f`, which holds spec 3ar; consultant
 review `m_4036`, findings adopted).
 Architect-directed, backlog F29 part 2 of 2, context `a2amx-team-line-2026-10-26`. Implementation goes to
 `a2amx-developer` only.
@@ -257,4 +257,19 @@ unchanged (the paths of section 0).
 
 ## 6. Review record
 
-Not yet reviewed.
+Models: architect Claude Sonnet 5.5; consultant Claude (model not reported); developer and tester OMP, working model
+openai-codex/gpt-5.6-luna, advisor slots not exposed. BLOCKED/amend cycles: 0 (one architect-initiated Amendment 1 after
+review, plus a wording fix).
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Claude | `switch_session` waits for one frame after `Detach`, but the daemon never answers it; a same-session re-attach can race into "attached elsewhere"; the spec's claim that a `Detached` reply exists was false | Spec waits for the connection to close; claim row fixed |
+| Draft review | consultant, Claude | The clamped release could not be built in scope (`MouseReport` fields private) | `with_row` added to `src/mouse.rs`, in scope |
+| Draft review | consultant, Claude | Acceptance said a killed member shows `exited: true`; a killed session is removed | Acceptance reworded |
+| Draft review | consultant, Claude | Picker and scroll-mode mouse handling, overflow and empty-members rules, byte literal spaces, `docs/cli.md` anchors, PTY title not observable, complexity of `handle_input` | Spec text fixed; logic split into methods |
+| Tester pass | tester, OMP gpt-5.6-luna | Five survivors: team filter, wait for close after `Detach`, toggle re-attach, X10 scanner, picker/scroll guard | Developer added tests; all killed in the final matrix |
+| Architect review | architect, Claude Sonnet 5.5 | Required `// shortcut:` comments missing; duplicate `session_in_team` lookup; a team press released in the grid reached the session; `as u8` row cast; stray blank line | Fixed in the fix round (Amendment 1) |
+| Tester pass | tester, OMP gpt-5.6-luna | Acceptance 3 said "16+ characters" against section 3.3's "longer than 16" | Acceptance reworded; exact-16 and 17 pinned |
+
+The architect's own fresh checks on the final tree found no further problems: 627 passed, clippy, fmt and
+`prepush-fast.sh` clean, two scratch mutants killed.

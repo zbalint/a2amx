@@ -77,6 +77,21 @@ fn recognizes_each_command() {
         machine.feed(&[0, b'r']),
         vec![Action::Command(Command::Release)]
     );
+    for (key, command) in [
+        (b'1', Command::TeamMember(1)),
+        (b'9', Command::TeamMember(9)),
+        (b'n', Command::TeamNext),
+        (b'p', Command::TeamPrev),
+    ] {
+        assert_eq!(machine.feed(&[0, key]), vec![Action::Command(command)]);
+    }
+}
+
+#[test]
+fn team_member_commands_drop_zero_and_unknown_bytes() {
+    let mut machine = PrefixMachine::new(0);
+    assert!(machine.feed(&[0, b'0']).is_empty());
+    assert!(machine.feed(&[0, b'!']).is_empty());
 }
 
 #[test]

@@ -14,6 +14,9 @@ pub enum Command {
     ScrollMode,
     Release,
     StatusLine,
+    TeamMember(u8),
+    TeamNext,
+    TeamPrev,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,6 +145,18 @@ impl PrefixMachine {
                                 b'r' => {
                                     Self::flush_forward(&mut actions, &mut forwarded);
                                     actions.push(Action::Command(Command::Release));
+                                }
+                                b'1'..=b'9' => {
+                                    Self::flush_forward(&mut actions, &mut forwarded);
+                                    actions.push(Action::Command(Command::TeamMember(byte - b'0')));
+                                }
+                                b'n' => {
+                                    Self::flush_forward(&mut actions, &mut forwarded);
+                                    actions.push(Action::Command(Command::TeamNext));
+                                }
+                                b'p' => {
+                                    Self::flush_forward(&mut actions, &mut forwarded);
+                                    actions.push(Action::Command(Command::TeamPrev));
                                 }
                                 _ => {}
                             }

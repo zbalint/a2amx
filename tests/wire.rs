@@ -1,7 +1,7 @@
 use a2amx::emulator::Scroll;
 use a2amx::wire::{
     Activity, ClientFrame, FrameDecoder, MAX_FRAME_LEN, MessageInfo, Request, Response,
-    ServerFrame, SessionSummary, encode_frame,
+    ServerFrame, SessionSummary, TeamMember, encode_frame,
 };
 
 #[test]
@@ -778,6 +778,7 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
         }),
         team: None,
         role: None,
+        members: vec![],
     };
     let frame = ServerFrame::Status(info);
     let encoded = frame.encode();
@@ -825,6 +826,46 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
             status: false,
             top_rows: 0,
         }
+    );
+}
+
+#[test]
+fn status_members_default_omit_and_round_trip() {
+    let old: a2amx::wire::StatusInfo =
+        serde_json::from_value(serde_json::json!({"address": "a", "pending": 0})).unwrap();
+    assert!(old.members.is_empty());
+
+    let empty = serde_json::to_value(&old).unwrap();
+    assert!(empty.get("members").is_none());
+
+    let status = a2amx::wire::StatusInfo {
+        address: "a".into(),
+        pending: 0,
+        hold: None,
+        harness: None,
+        activity: None,
+        quota: None,
+        team: None,
+        role: None,
+        members: vec![
+            TeamMember {
+                id: "s1".into(),
+                name: "alpha".into(),
+                activity: Some(Activity::Idle),
+                exited: false,
+            },
+            TeamMember {
+                id: "s2".into(),
+                name: "beta".into(),
+                activity: None,
+                exited: true,
+            },
+        ],
+    };
+    let encoded = serde_json::to_value(&status).unwrap();
+    assert_eq!(
+        serde_json::from_value::<a2amx::wire::StatusInfo>(encoded).unwrap(),
+        status
     );
 }
 

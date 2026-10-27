@@ -1,6 +1,6 @@
 use a2amx::harness::Harness;
 use a2amx::status;
-use a2amx::wire::{Activity, QuotaInfo, StatusInfo};
+use a2amx::wire::{Activity, QuotaInfo, StatusInfo, TeamMember};
 
 const PRE: &str = "\x1b7\x1b[23;1H\x1b[0m\x1b[2K\x1b[38;5;240m";
 const BAR: &str = "\x1b[0m\x1b[24;1H\x1b[0m\x1b[38;5;252;48;5;236m";
@@ -16,6 +16,7 @@ fn info(address: &str) -> StatusInfo {
         quota: None,
         team: None,
         role: None,
+        members: vec![],
     }
 }
 fn visible(bytes: &[u8]) -> String {
@@ -358,4 +359,134 @@ fn separator_reserves_a_row_only_above_three_rows() {
         "\x1b7\x1b[3;1H\x1b[0m\x1b[38;5;252;48;5;236m \x1b[1ms1\x1b[22m\x1b[0m\x1b8".as_bytes()
     );
     assert_eq!(status::render("s1", None, 2, 4, 2), Vec::<u8>::new());
+}
+
+fn team_member(id: &str, name: &str, activity: Option<Activity>, exited: bool) -> TeamMember {
+    TeamMember {
+        id: id.into(),
+        name: name.into(),
+        activity,
+        exited,
+    }
+}
+
+#[test]
+fn team_line_matches_the_locked_worked_example() {
+    let line = status::render_team_line(
+        "a",
+        "dev",
+        &[
+            team_member("a", "alpha", Some(Activity::Idle), false),
+            team_member("b", "beta", Some(Activity::Working), false),
+        ],
+        40,
+    );
+    assert_eq!(
+        line.bytes,
+        [
+            b"\x1b7\x1b[1;1H\x1b[0m\x1b[2K\x1b[38;5;252;48;5;236m team dev \x1b[38;5;240m\xe2\x94\x82\x1b[38;5;252m \x1b[38;5;78m\xe2\x97\x8f\x1b[38;5;252m \x1b[1malpha\x1b[22m  \x1b[38;5;221m\xe2\x97\x8f\x1b[38;5;252m beta  ".as_slice(),
+            b"          ",
+            b"\x1b[0m\x1b8",
+        ]
+        .concat()
+    );
+    assert_eq!(
+        line.regions,
+        vec![
+            status::TeamRegion {
+                first_col: 1,
+                last_col: 12,
+                target: status::TeamTarget::Picker,
+            },
+            status::TeamRegion {
+                first_col: 13,
+                last_col: 21,
+                target: status::TeamTarget::Session("a".into()),
+            },
+            status::TeamRegion {
+                first_col: 22,
+                last_col: 29,
+                target: status::TeamTarget::Session("b".into()),
+            },
+        ]
+    );
+}
+
+#[test]
+fn team_line_truncates_names_and_preserves_current_member_on_overflow() {
+    let members = [
+        team_member("a", "alpha", Some(Activity::Idle), false),
+        team_member("b", "beta", Some(Activity::Working), false),
+        team_member("c", "gamma", Some(Activity::Busy), false),
+    ];
+    let truncated = status::render_team_line(
+        "a",
+        "a very long team name",
+        &[team_member(
+            "a",
+            "a very long member name",
+            Some(Activity::Idle),
+            false,
+        )],
+        80,
+    );
+    let truncated_text = String::from_utf8_lossy(&truncated.bytes);
+    assert!(truncated_text.contains("team a very long tea…"));
+    assert!(truncated_text.contains("a very long mem…"));
+    let exact = status::render_team_line(
+        "a",
+        "dev",
+        &[team_member(
+            "a",
+            "1234567890123456",
+            Some(Activity::Idle),
+            false,
+        )],
+        80,
+    );
+    let exact_text = String::from_utf8_lossy(&exact.bytes);
+    assert!(exact_text.contains("1234567890123456"));
+    assert!(!exact_text.contains("1234567890123456…"));
+    let seventeen = status::render_team_line(
+        "a",
+        "dev",
+        &[team_member(
+            "a",
+            "12345678901234567",
+            Some(Activity::Idle),
+            false,
+        )],
+        80,
+    );
+    let seventeen_text = String::from_utf8_lossy(&seventeen.bytes);
+    assert!(seventeen_text.contains("123456789012345…"));
+    assert!(!seventeen_text.contains("12345678901234567"));
+
+    let overflow = status::render_team_line("b", "dev", &members, 30);
+    assert!(
+        overflow
+            .regions
+            .iter()
+            .any(|region| region.target == status::TeamTarget::Session("b".into()))
+    );
+    assert!(
+        overflow
+            .regions
+            .iter()
+            .any(|region| region.target == status::TeamTarget::Picker)
+    );
+    assert!(String::from_utf8_lossy(&overflow.bytes).contains(" +2 "));
+}
+
+#[test]
+fn team_line_clears_empty_members_and_rejects_narrow_columns() {
+    assert_eq!(
+        status::render_team_line("a", "dev", &[], 4).bytes,
+        b"\x1b7\x1b[1;1H\x1b[0m\x1b[2K\x1b[38;5;252;48;5;236m   \x1b[0m\x1b8".to_vec()
+    );
+    assert!(
+        status::render_team_line("a", "dev", &[], 1)
+            .bytes
+            .is_empty()
+    );
 }

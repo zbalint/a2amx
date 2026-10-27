@@ -51,8 +51,9 @@ each direction is debounced independently. Prefer 30 seconds or more for `idle-a
 The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,
 then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
 `A2AMX_PREFIX` to change it). After the prefix: `d` detach, `w` session picker, `[`
-scroll mode, `s` toggles the status line, `r` releases the session's message hold, and the prefix twice sends a
-literal prefix. The picker accepts PageUp/PageDown and Home/End and scrolls when sessions do not fit. When teams
+scroll mode, `s` toggles the status and team lines, `r` releases the session's message hold,
+`1`–`9` select a team member, `n` and `p` select the next or previous non-exited member,
+and the prefix twice sends a literal prefix. The picker accepts PageUp/PageDown and Home/End and scrolls when sessions do not fit. When teams
 exist it groups sessions into foldable sections: `Space`/`Enter` fold or unfold a selected header, `h`/`l` and
 `Left`/`Right` fold or unfold its section, and `/` starts a case-insensitive filter that `Esc` clears and exits.
 When more than two teams exist, other teams start folded; the current session's team starts open.
@@ -60,7 +61,8 @@ While a session has not turned on mouse reporting, the mouse wheel scrolls it (t
 enters scroll mode; hold Shift to select text with the mouse. Scrollback in the real terminal after you detach is not
 kept. The status line takes the terminal's last row, keeps a thin rule above it, and shows the session address, optional activity,
 low-quota, role and team, and harness details, pending-message count, and a HELD alert with the hold reason and (for
-releasable holds) a prefix-key hint for `r`; `s` hides both the status line and separator.
+releasable holds) a prefix-key hint for `r`. Team sessions with a visible status line and at least five rows also show
+the clickable member line at the top; `s` hides both the status and team lines and separator.
 
 ## List columns and quota
 
