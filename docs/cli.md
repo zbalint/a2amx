@@ -62,7 +62,8 @@ enters scroll mode; hold Shift to select text with the mouse. Scrollback in the 
 kept. The status line takes the terminal's last row, keeps a thin rule above it, and shows the session address, optional activity,
 low-quota, role and team, and harness details, pending-message count, and a HELD alert with the hold reason and (for
 releasable holds) a prefix-key hint for `r`. Team sessions with a visible status line and at least five rows also show
-the clickable member line at the top; `s` hides both the status and team lines and separator.
+the clickable member line at the top; terminals with at least six rows add a dim separator rule underneath. `s` hides
+both top rows, the status line, and both separator rules.
 
 ## Selecting and copying text
 

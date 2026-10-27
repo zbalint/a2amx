@@ -29,6 +29,29 @@ fn mouse_reports_shift_or_claim_reserved_rows() {
 }
 
 #[test]
+fn mouse_reports_shift_or_claim_two_reserved_rows() {
+    for input in [
+        b"\x1b[<0;5;1M".as_slice(),
+        b"\x1b[<0;5;2M".as_slice(),
+        b"\x1b[M\x20\x25\x21".as_slice(),
+        b"\x1b[M\x20\x25\x22".as_slice(),
+    ] {
+        let report = parse_report(input, 0).unwrap();
+        assert!(matches!(shift_row(&report, 2), Shifted::Claimed(_)));
+    }
+    for (input, expected) in [
+        (b"\x1b[<0;5;3M".as_slice(), b"\x1b[<0;5;1M".as_slice()),
+        (
+            b"\x1b[M\x20\x25\x23".as_slice(),
+            b"\x1b[M\x20\x25\x21".as_slice(),
+        ),
+    ] {
+        let report = parse_report(input, 0).unwrap();
+        assert_eq!(shift_row(&report, 2), Shifted::Grid(expected.to_vec()));
+    }
+}
+
+#[test]
 fn mouse_reports_can_be_reencoded_at_a_session_row() {
     let sgr = parse_report(b"\x1b[<0;5;1m", 0).unwrap();
     assert_eq!(with_row(&sgr, 2), b"\x1b[<0;5;2m");

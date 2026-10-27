@@ -361,6 +361,19 @@ fn separator_reserves_a_row_only_above_three_rows() {
     assert_eq!(status::render("s1", None, 2, 4, 2), Vec::<u8>::new());
 }
 
+#[test]
+fn team_rule_draws_clears_and_skips_narrow_terminals() {
+    assert_eq!(
+        status::render_team_rule(10, true),
+        "\x1b7\x1b[2;1H\x1b[0m\x1b[2K\x1b[38;5;240m─────────\x1b[0m\x1b8".as_bytes()
+    );
+    assert_eq!(
+        status::render_team_rule(10, false),
+        b"\x1b7\x1b[2;1H\x1b[0m\x1b[2K\x1b8".to_vec()
+    );
+    assert!(status::render_team_rule(1, true).is_empty());
+}
+
 fn team_member(id: &str, name: &str, activity: Option<Activity>, exited: bool) -> TeamMember {
     TeamMember {
         id: id.into(),

@@ -13,6 +13,13 @@ All notable user-visible changes are listed here. The format follows
   picker; the prefix then `s` hides it together with the status bar. It needs a terminal of at least
   five rows. Additive protocol fields: the attach request's `top_rows`, the `AttachedTop` reply and
   the status frame's `members`; an older daemon simply shows no line (`docs/cli.md`).
+- A dim rule under the team line, like the one above the status bar, on terminals of at least six rows
+  (at five rows the line shows without it). A click on the rule does nothing.
+
+### Fixed
+
+- A mouse drag that starts in the session and ends on the team line is forwarded to the session at the
+  grid's first row instead of a row lower.
 
 ## [0.1.2] - 2026-10-26
 

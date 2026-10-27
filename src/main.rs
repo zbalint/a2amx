@@ -1579,8 +1579,19 @@ fn pty_rows(rows: u16, visible: bool, top: u16) -> u16 {
     rows.saturating_sub(status_rows).saturating_sub(top).max(1)
 }
 
+/// Reserves two top rows for a visible team line and its rule at six rows or more,
+/// one row at exactly five rows, and no rows otherwise.
 fn team_rows(rows: u16, visible: bool, in_team: bool) -> u16 {
-    u16::from(visible && in_team && rows >= 5)
+    if !visible || !in_team {
+        return 0;
+    }
+    if rows >= 6 {
+        2
+    } else if rows == 5 {
+        1
+    } else {
+        0
+    }
 }
 
 struct AttachOutcome {
@@ -1590,6 +1601,7 @@ struct AttachOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MousePress {
     Team,
+    Rule,
     Grid,
 }
 
@@ -1666,7 +1678,7 @@ impl AttachmentState {
             return Ok(());
         }
         let mut bytes = Vec::new();
-        if self.top_rows == 1 {
+        if self.top_rows > 0 {
             let line = self.status.as_ref().and_then(|info| {
                 info.team.as_ref().map(|team| {
                     status::render_team_line(&self.session, &team.name, &info.members, self.cols)
@@ -1676,6 +1688,9 @@ impl AttachmentState {
                 line.unwrap_or_else(|| status::render_team_line(&self.session, "", &[], self.cols));
             self.team_regions = line.regions;
             bytes.extend(line.bytes);
+            if self.top_rows == 2 {
+                bytes.extend(status::render_team_rule(self.cols, true));
+            }
         } else {
             self.team_regions.clear();
         }
@@ -1899,9 +1914,13 @@ impl AttachmentState {
     async fn toggle_status_line(&mut self) -> anyhow::Result<()> {
         let visible = !self.status_visible;
         if !visible {
-            if self.top_rows == 1 {
+            if self.top_rows > 0 {
                 let clear = status::render_team_line(&self.session, "", &[], self.cols);
                 self.output.send(clear.bytes)?;
+                if self.top_rows == 2 {
+                    self.output
+                        .send(status::render_team_rule(self.cols, false))?;
+                }
                 self.team_regions.clear();
             }
             self.output
@@ -1966,18 +1985,21 @@ impl AttachmentState {
             Shifted::Claimed(claimed) => {
                 if claimed.release {
                     match self.mouse_press.take() {
-                        Some(MousePress::Team) => self.team_click(claimed.column).await?,
+                        Some(MousePress::Team) if claimed.row == 1 => {
+                            self.team_click(claimed.column).await?
+                        }
                         Some(MousePress::Grid) if self.session_mouse => {
-                            self.send_session_mouse(mouse::with_row(
-                                &claimed,
-                                self.top_rows.saturating_add(1),
-                            ))
-                            .await?;
+                            self.send_session_mouse(mouse::with_row(&claimed, 1))
+                                .await?;
                         }
                         _ => {}
                     }
                 } else if claimed.button == 0 {
-                    self.mouse_press = Some(MousePress::Team);
+                    self.mouse_press = Some(match claimed.row {
+                        1 => MousePress::Team,
+                        2 => MousePress::Rule,
+                        _ => return Ok(()),
+                    });
                 }
             }
             Shifted::Grid(bytes) => {

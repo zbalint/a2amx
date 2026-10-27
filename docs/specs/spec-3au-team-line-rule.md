@@ -127,3 +127,17 @@ All run from the main checkout; each is judged by its own output.
    released on row 2 still calling `team_click`; the forwarded release row left at `top_rows + 1`.
 6. The tester (`a2amx-tester`) attaches with this branch's `target/` binary to an isolated daemon in a temp home (never the
    working daemon) at 24, 6 and 5 rows and reports what each shows.
+
+## 6. Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (model not reported); developer and tester OMP, working model
+openai-codex/gpt-5.6-luna, advisor slots not exposed. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | architect, Claude Sonnet 5.5 | Draft said the session keeps 3 rows at the 6-row minimum; it keeps 2 | Corrected with the owner before the draft was written up |
+| Draft review | consultant, Claude | Forwarded release row `top_rows + 1` is an off-by-origin bug the draft called unchanged; existing test literals only waved at; non-zero-button claimed presses unspecified; docs anchor missed line 64; tester wording clashed with AGENTS.md | Fix folded into the spec, literals named, rules stated, anchors widened, wording fixed |
+| Tester pass | tester, OMP gpt-5.6-luna | Survivor: the claimed-press `button == 0` guard made unconditional; no test failed, and the spec's mutation list omitted it | Developer added a Grid press / row-2 wheel / Grid release PTY step; killed |
+
+The architect's fresh checks: 629 passed, 0 failed, 3 ignored, clippy and fmt clean. The architect ran no mutants of
+its own: the scratch volume filled up; the developer's six and the tester's five stand as the mutation evidence.

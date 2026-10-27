@@ -356,9 +356,10 @@ toggles it for the attach process, including across picker switches, and each ba
 also draws the separator rule above it. Scroll mode draws its own row, and the session
 picker owns the screen while open.
 Team sessions also reserve the top row when the status line is visible and the terminal has at least five rows.
-That row uses the bar style to show ` team <name> │ ● member ...`; dots encode activity, the attached member is bold,
-and a click or prefix `1`–`9`, `n`, or `p` switches members. A click on the team label opens the picker; exited
-members remain visible in grey but cannot be selected. Prefix `s` hides both rows.
+At six rows or more they reserve a second row for a dim separator rule underneath. The first row uses the bar style
+to show ` team <name> │ ● member ...`; dots encode activity, the attached member is bold, and a click or prefix
+`1`–`9`, `n`, or `p` switches members. A click on the team label opens the picker; exited members remain visible in
+grey but cannot be selected. Prefix `s` hides both top rows, the status line, and both separator rules.
 The client opts in with `Request::Attach.status`; the daemon sends a status frame
 (tag `0x04`) after the initial snapshot and polls once a second, sending only changes.
 Attachments that do not opt in receive no status frames, preserving older clients;

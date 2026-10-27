@@ -337,13 +337,7 @@ pub fn render(
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"\x1b7");
     if rows >= 4 {
-        bytes.extend_from_slice(
-            format!("\x1b[{};1H\x1b[0m\x1b[2K{SEPARATOR_OPEN}", rows - 1).as_bytes(),
-        );
-        for _ in 0..width {
-            bytes.extend_from_slice("─".as_bytes());
-        }
-        bytes.extend_from_slice(b"\x1b[0m");
+        bytes.extend_from_slice(render_separator(rows - 1, width).as_slice());
     }
     bytes.extend_from_slice(format!("\x1b[{rows};1H\x1b[0m{BAR_BACKGROUND}").as_bytes());
     bytes.extend_from_slice(left.as_bytes());
@@ -351,6 +345,32 @@ pub fn render(
     bytes.extend_from_slice(pending.as_bytes());
     bytes.extend_from_slice(hold.as_bytes());
     bytes.extend_from_slice(b"\x1b[0m\x1b8");
+    bytes
+}
+
+fn render_separator(row: u16, width: usize) -> Vec<u8> {
+    let mut bytes = format!("\x1b[{row};1H\x1b[0m\x1b[2K{SEPARATOR_OPEN}").into_bytes();
+    for _ in 0..width {
+        bytes.extend_from_slice("─".as_bytes());
+    }
+    bytes.extend_from_slice(b"\x1b[0m");
+    bytes
+}
+
+/// Bytes that draw or clear the team separator on terminal row 2.
+pub fn render_team_rule(cols: u16, drawn: bool) -> Vec<u8> {
+    if cols < 2 {
+        return Vec::new();
+    }
+    let width = usize::from(cols - 1);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"\x1b7");
+    if drawn {
+        bytes.extend(render_separator(2, width));
+    } else {
+        bytes.extend_from_slice(b"\x1b[2;1H\x1b[0m\x1b[2K");
+    }
+    bytes.extend_from_slice(b"\x1b8");
     bytes
 }
 

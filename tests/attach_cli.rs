@@ -169,8 +169,10 @@ async fn fake_connection(mut stream: TcpStream, daemon: FakeDaemon) -> anyhow::R
                     };
                     fake_send_frame(&mut stream, &serde_json::to_vec(&response)?).await?;
                 }
-                Request::Attach { session, .. } => {
-                    return fake_attach(&mut stream, &session, &daemon).await;
+                Request::Attach {
+                    session, top_rows, ..
+                } => {
+                    return fake_attach(&mut stream, &session, top_rows, &daemon).await;
                 }
                 _ => {
                     let response = Response::Error {
@@ -187,20 +189,21 @@ async fn fake_connection(mut stream: TcpStream, daemon: FakeDaemon) -> anyhow::R
 async fn fake_attach(
     stream: &mut TcpStream,
     session: &str,
+    top_rows: u16,
     daemon: &FakeDaemon,
 ) -> anyhow::Result<()> {
     let attach_number = daemon.attach_count.fetch_add(1, Ordering::SeqCst) + 1;
     if session == "s2" && daemon.old_open.load(Ordering::SeqCst) {
         daemon.early_switch.store(true, Ordering::SeqCst);
     }
-    let response = Response::AttachedTop { top_rows: 1 };
+    let response = Response::AttachedTop { top_rows };
     fake_send_frame(stream, &serde_json::to_vec(&response)?).await?;
     let output = if session == "s1" {
-        b"\x1b[?1000hALPHA\n".as_slice()
+        format!("\x1b[{};1H\x1b[?1000hALPHA\n", top_rows.saturating_add(1))
     } else {
-        b"\x1b[?1000hBETA\n".as_slice()
+        format!("\x1b[{};1H\x1b[?1000hBETA\n", top_rows.saturating_add(1))
     };
-    fake_send_frame(stream, &ServerFrame::Data(output.to_vec()).encode()).await?;
+    fake_send_frame(stream, &ServerFrame::Data(output.into_bytes()).encode()).await?;
     fake_send_frame(
         stream,
         &ServerFrame::Status(fake_status(session, &daemon.team)).encode(),
@@ -1701,10 +1704,44 @@ async fn team_line_renders_clicks_switches_and_toggles_for_real_attach() -> anyh
     small.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(small.wait_exit(WAIT)?, 0);
 
+    for (rows, draws_rule) in [(5, false), (6, true)] {
+        let command = format!(
+            "stty rows {rows}; exec {} attach demo-alpha",
+            env!("CARGO_BIN_EXE_a2amx")
+        );
+        let args = vec!["-c".to_owned(), command];
+        let mut sized = PtyHarness::spawn_program("sh", &args, dir.path(), &[])?;
+        sized.wait_for_text("ALPHA", WAIT)?;
+        sized.wait_for_text("team demo", WAIT)?;
+        let lines = sized.screen_text();
+        let rows = lines.lines().collect::<Vec<_>>();
+        assert!(rows[0].contains("team demo"), "screen: {lines:?}");
+        if draws_rule {
+            assert_eq!(rows[1], "─".repeat(79), "screen: {lines:?}");
+            assert!(rows[2].contains("ALPHA"), "screen: {lines:?}");
+        } else {
+            assert_ne!(rows[1], "─".repeat(79), "screen: {lines:?}");
+        }
+        sized.send(&[2, b'd'])?;
+        sized.wait_for_text("[detached from s1]", WAIT)?;
+        assert_eq!(sized.wait_exit(WAIT)?, 0);
+    }
+
     let mut attached =
         PtyHarness::spawn(&cli_args(dir.path(), &["attach", "demo-alpha"]), dir.path())?;
     attached.wait_for_text("ALPHA", WAIT)?;
     attached.wait_for_text("team demo", WAIT)?;
+    let initial_screen = attached.screen_text();
+    let initial_rows = initial_screen.lines().collect::<Vec<_>>();
+    assert_eq!(
+        initial_rows[1],
+        "─".repeat(79),
+        "screen: {initial_screen:?}"
+    );
+    assert!(
+        initial_rows[2].contains("ALPHA"),
+        "screen: {initial_screen:?}"
+    );
     assert!(attached.screen_text().contains("demo-alpha"));
     attached.wait_for_text("demo-beta", WAIT)?;
     attached.wait_for_text("demo-dead", WAIT)?;
@@ -1731,10 +1768,35 @@ async fn team_line_renders_clicks_switches_and_toggles_for_real_attach() -> anyh
 
     attached.send(b"\x1b[<0;18;1M\x1b[<0;10;2m")?;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(!attached.screen_text().contains("^[[<0;10;1m"));
+    let team_to_rule = attached.screen_text();
+    assert!(!team_to_rule.contains("^[[<0;10;1m"));
+    assert!(
+        !team_to_rule.contains("a2amx sessions:"),
+        "screen: {team_to_rule:?}"
+    );
 
-    attached.send(b"\x1b[<0;10;2M\x1b[<0;10;1m")?;
-    attached.wait_for_text("^[[<0;10;2m", WAIT)?;
+    attached.send(b"\x1b[<0;5;2M\x1b[<0;5;1m")?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let rule_to_team = attached.screen_text();
+    assert!(!rule_to_team.contains("^[[<0;5;1m"));
+    assert!(
+        !rule_to_team.contains("a2amx sessions:"),
+        "screen: {rule_to_team:?}"
+    );
+
+    attached.send(b"\x1b[<0;12;2M\x1b[<0;12;2m")?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let rule_click = attached.screen_text();
+    assert!(!rule_click.contains("^[[<0;12;2m"));
+    assert!(
+        !rule_click.contains("a2amx sessions:"),
+        "screen: {rule_click:?}"
+    );
+
+    attached.send(b"\x1b[<0;10;3M\x1b[<0;10;1m")?;
+    attached.wait_for_text("^[[<0;10;1m", WAIT)?;
+    attached.send(b"\x1b[<0;11;3M\x1b[<64;11;2M\x1b[<0;11;3m")?;
+    attached.wait_for_text("^[[<0;11;1m", WAIT)?;
 
     attached.send(&[2, b'2'])?;
     attached.wait_for_text("BETA", WAIT)?;
@@ -1765,8 +1827,19 @@ async fn team_line_renders_clicks_switches_and_toggles_for_real_attach() -> anyh
         !hidden_first_line.contains("team demo"),
         "hidden screen: {hidden_screen:?}"
     );
+    assert_ne!(
+        hidden_screen.lines().nth(1).unwrap_or_default(),
+        "─".repeat(79),
+        "hidden screen: {hidden_screen:?}"
+    );
     attached.send(&[2, b's'])?;
     attached.wait_for_text("team demo", WAIT)?;
+    let restored_screen = attached.screen_text();
+    assert_eq!(
+        restored_screen.lines().nth(1).unwrap_or_default(),
+        "─".repeat(79),
+        "restored screen: {restored_screen:?}"
+    );
 
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s2]", WAIT)?;
@@ -1828,6 +1901,19 @@ async fn status_toggle_clears_team_row_without_session_output() -> anyhow::Resul
             .unwrap_or_default()
             .contains("team silent"),
         "hidden screen: {hidden:?}"
+    );
+    assert_ne!(
+        hidden.lines().nth(1).unwrap_or_default(),
+        "─".repeat(79),
+        "hidden screen: {hidden:?}"
+    );
+    let clear_rule = b"\x1b7\x1b[2;1H\x1b[0m\x1b[2K\x1b8";
+    assert!(
+        attached
+            .raw_output()
+            .windows(clear_rule.len())
+            .any(|window| window == clear_rule),
+        "raw output did not clear row 2: {hidden:?}"
     );
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
