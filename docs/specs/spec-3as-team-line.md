@@ -197,8 +197,8 @@ team; changing the picker; the `a2amx update` work (F28); a CHANGELOG line (the 
    status opt-in on a team session gets a `Status` frame whose `members` lists both team members sorted by name,
    with the activity and `exited: false`; a member whose child exited by itself shows `exited: true` (a killed session is removed from the runtime, so it is absent); a session without a team
    gets an empty list.
-3. **Line.** `tests/status.rs`: the worked example of 3.3 byte for byte and its regions; a 16+ character name is
-   cut to 15 plus `…`; an overflow drops members from the end but keeps the current one and shows ` +N `; `cols < 2`
+3. **Line.** `tests/status.rs`: the worked example of 3.3 byte for byte and its regions; a name longer than 16 characters is
+   cut to 15 plus `…`, and a name of exactly 16 is unchanged; an overflow drops members from the end but keeps the current one and shows ` +N `; `cols < 2`
    gives an empty line.
 4. **Keys.** `tests/prefix.rs`: prefix then `1` and `9` give `TeamMember(1)` and `TeamMember(9)`, `n` and `p`
    `TeamNext` and `TeamPrev`; `0` and other bytes still drop. `tests/prop_prefix.rs` (alphabet at lines 19-31, exact
@@ -251,7 +251,9 @@ section demands (top rows fixed at attach, switch and toggle; failed switch not 
 `top_rows > 0` and `session_mouse`) are required, and the pre-existing `find_mouse_report` shortcut comment is
 extended to say it now also covers X10. `attach_session` returns whether the target is in a team so `switch_session`
 asks the daemon once; `with_row` converts the X10 row with a checked conversion (saturating at the byte maximum),
-not an `as u8` cast. Scope is unchanged (the paths of section 0).
+not an `as u8` cast. Section 5 item 3 reads "longer than 16" (the tester found "16+" contradicted section 3.3; the code's `<= 16` stays whole is
+correct), and `tests/status.rs` pins both an exactly-16 name (unchanged) and a 17-character name (15 plus `…`). Scope is
+unchanged (the paths of section 0).
 
 ## 6. Review record
 
