@@ -236,6 +236,23 @@ team; changing the picker; the `a2amx update` work (F28); a CHANGELOG line (the 
 Not probed: a session's team cannot change while attached; whether Claude Code and Codex turn mouse reporting on
 (with `session_mouse` true and `top_rows > 0` the new path runs for them).
 
+## Amendment 1 (2026-10-27, architect review of the first implementation; no BLOCKED)
+
+Adds to section 3.6 "Mouse": a press that began on the line (`MousePress::Team`) is swallowed with its release even when
+the release lands in the session grid; that release is not sent to the session. A grid release with no remembered
+press is still passed through as before. Adds to section 5 acceptance: (a) `tests/daemon.rs` has a session of a
+different team and a team-less session next to the two members, and the status `members` omits both (cross-team
+leakage test); (b) `tests/attach_cli.rs`: after prefix `s` hides the line the session's output is on screen row 1
+(row origin reset); a click on the member line sent in X10 encoding switches like the SGR one; with the picker open,
+and in scroll mode, a press and release on row 1 switch nothing; (c) a test of the wait for the connection to close
+after `Detach` (a fake daemon that sends frames after `Detach` before closing and sees the second attach only after
+the close), or a stated reason it cannot be built in the existing fixtures. The three `// shortcut:` comments the
+section demands (top rows fixed at attach, switch and toggle; failed switch not shown; split report unshifted with
+`top_rows > 0` and `session_mouse`) are required, and the pre-existing `find_mouse_report` shortcut comment is
+extended to say it now also covers X10. `attach_session` returns whether the target is in a team so `switch_session`
+asks the daemon once; `with_row` converts the X10 row with a checked conversion (saturating at the byte maximum),
+not an `as u8` cast. Scope is unchanged (the paths of section 0).
+
 ## 6. Review record
 
 Not yet reviewed.
