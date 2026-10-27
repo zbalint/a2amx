@@ -64,6 +64,17 @@ low-quota, role and team, and harness details, pending-message count, and a HELD
 releasable holds) a prefix-key hint for `r`. Team sessions with a visible status line and at least five rows also show
 the clickable member line at the top; `s` hides both the status and team lines and separator.
 
+## Selecting and copying text
+
+To copy text out of an attached session, hold Shift while you drag with the mouse (in most terminals, including
+Windows Terminal, Shift bypasses mouse reporting and selects text in the terminal itself). This works whatever the
+session runs, and your terminal's own copy applies.
+
+A plain drag does not select, for two reasons. The attach client takes the mouse for wheel scrolling while the session
+has not turned on mouse reporting (OMP), and a session that has turned it on (Claude Code) gets the drag for its own
+selection. Such a harness may report "copied to clipboard", but a2amx does not forward clipboard writes (OSC 52) to your
+terminal, so nothing reaches the clipboard. Use Shift+drag instead.
+
 ## List columns and quota
 
 In `a2amx list`, ATTACHED means a human client is attached, not that the session is reachable: a detached session still receives messages. ACTIVITY is `idle`, `working`, or `busy` for running sessions, and `-` for exited sessions. UPTIME is how long the session has existed (`-` when exited), and IN-STATE is how long its current ACTIVITY has lasted (`-` when ACTIVITY is `-`). Both are floored and shown as `Ns`, `Nm` or `Nh`, at one-second sampling resolution, starting when the daemon starts. The default list omits each session's working directory and command; `a2amx list --details` adds CWD and COMMAND. HELD shows the reason a real hold is stopping delivery (`-` when clear); a sustained Codex `no_thread` or `waiting_on_approval` signal is shown as `needs_input`, while a sustained Claude screen heuristic is shown as `input?`. Both labels are display-only warnings: A2AMX never sends a key to dismiss a dialog. `input?` is deliberately hedged because the same two markers can appear in ordinary menus or search results, and the label appears only after ten seconds of a continuous signal. A session that looks idle with an empty composer may hold after you typed in it, and `r` clears it. QUOTA shows what a Claude or Codex status line last said about remaining quota (5h and weekly percent left). For OMP it shows the 5-hour and weekly percentages left for the provider of the session's current model when `omp usage --json` works; the extension samples that provider continuously, so changing providers changes the next displayed quota. The daemon polls about once every five minutes from the running session's own executable only when its file name is `omp`. Values older than 15 minutes are dropped. A missing provider or a provider absent from the usage report shows `-`; there is no fallback to another provider's quota. The poll may refresh provider credentials as the interactive `omp usage` does; a bare `omp` uses the daemon's `PATH`, and an OMP session running nothing costs nothing because no OMP session means no poll. The screen's `usage_limit_reached` error appends `limit`. It shows `-` when no quota signal is recognised.
