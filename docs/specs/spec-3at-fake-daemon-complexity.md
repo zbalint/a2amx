@@ -114,3 +114,20 @@ Commands use the form from AGENTS.md. Checks that need the new code run after im
    `develop` after the push): `fake_connection` ≤ 30 and no new `rust:S3776` issue in `tests/attach_cli.rs`. The
    developer reports its own hand count per function next to section 3's table.
 7. No suppression comment, `#[allow]` or lint relaxation is added.
+
+## 6. Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (model not reported); developer and tester OMP, working model
+openai-codex/gpt-5.6-luna, planning and advisor slots not exposed. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| After the push of spec 3as | CI SonarQube gate | `fake_connection` was at cognitive complexity 36 (limit 30); the 3as reviews recorded no hand count for the new helper and the push skipped `scripts/prepush-sonar.sh` | This spec; the 3as record carries the same row |
+| Draft review | consultant, Claude | Mutant "remove `done.notify_one()`" cannot fail either test (both end with `wait_exit` and `server.abort()`), so the spec's "times out" was false | Mutant dropped and listed as a known survivor, with `old_open.store(true)` |
+| Draft review | consultant, Claude | Acceptance 3 (`git status` shows one file) would fail with the spec file untracked; the `fake_serve_detach` count was 8 where Sonar's rules give 7 (the `&&` counted twice); mutants 1 and 3 had the wrong failure mode | Spec committed first; count, margin and mutant wording fixed |
+| Tester pass | tester, OMP gpt-5.6-luna | Own mutant "late first-attach data frame sent as `Detached`" survives both fake-daemon tests: no assertion on the late frame's type or content | Not changed: it is a gap in the 3as tests, outside this behavior-preserving refactor |
+| Design read | consultant, Claude | `fake_attach` ends with `fake_serve_detach(..).await?; Ok(())` where returning the call directly is equivalent | Not changed: optional nit, behavior identical |
+
+The architect's own fresh checks found no further problems: `attach_cli` 30/30, clippy and fmt clean, one mutant (`attach_number == 1`
+to `== 2`) killed by both fake-daemon tests; a second, a `sed` swap of the ALPHA and BETA output, survived because the switch test
+waits for text that is already on screen after the first attach (the tester's own swap was killed).

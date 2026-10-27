@@ -270,6 +270,7 @@ review, plus a wording fix).
 | Tester pass | tester, OMP gpt-5.6-luna | Five survivors: team filter, wait for close after `Detach`, toggle re-attach, X10 scanner, picker/scroll guard | Developer added tests; four were killed outright and the picker/scroll guard was killed in `handle_mouse_button` only. Two exploratory mutants survive and are accepted: the routing condition in `handle_input` that keeps `Claimed` from acting in the picker or scroll mode (a redundant second guard sits behind it), and the deletion of `team_regions.clear` (stale regions are only read after a redraw) |
 | Architect review | architect, Claude Sonnet 5.5 | Required `// shortcut:` comments missing; duplicate `session_in_team` lookup; a team press released in the grid reached the session; `as u8` row cast; stray blank line | Fixed in the fix round (Amendment 1) |
 | Tester pass | tester, OMP gpt-5.6-luna | Acceptance 3 said "16+ characters" against section 3.3's "longer than 16" | Acceptance reworded; exact-16 and 17 pinned |
+| After the push | CI SonarQube gate | `fake_connection` in `tests/attach_cli.rs` was at cognitive complexity 36 (limit 30); no review stage counted it and the push skipped `scripts/prepush-sonar.sh` | Spec 3at |
 
 The architect's own fresh checks on the final tree found no further problems: 627 passed, clippy, fmt and
 `prepush-fast.sh` clean, two scratch mutants killed.

@@ -135,14 +135,28 @@ fn fake_status(session: &str, team: &TeamScope) -> StatusInfo {
     }
 }
 
-async fn fake_connection(
-    mut stream: TcpStream,
+#[derive(Clone)]
+struct FakeDaemon {
     team: TeamScope,
     old_open: Arc<AtomicBool>,
     early_switch: Arc<AtomicBool>,
     attach_count: Arc<AtomicUsize>,
     done: Arc<tokio::sync::Notify>,
-) -> anyhow::Result<()> {
+}
+
+impl FakeDaemon {
+    fn new(team: TeamScope) -> Self {
+        Self {
+            team,
+            old_open: Arc::new(AtomicBool::new(false)),
+            early_switch: Arc::new(AtomicBool::new(false)),
+            attach_count: Arc::new(AtomicUsize::new(0)),
+            done: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+}
+
+async fn fake_connection(mut stream: TcpStream, daemon: FakeDaemon) -> anyhow::Result<()> {
     while let Some(payload) = fake_recv_frame(&mut stream).await? {
         if let Ok(request) = serde_json::from_slice::<Request>(&payload) {
             match request {
@@ -151,56 +165,12 @@ async fn fake_connection(
                 }
                 Request::List => {
                     let response = Response::Sessions {
-                        sessions: fake_sessions(&team),
+                        sessions: fake_sessions(&daemon.team),
                     };
                     fake_send_frame(&mut stream, &serde_json::to_vec(&response)?).await?;
                 }
                 Request::Attach { session, .. } => {
-                    let attach_number = attach_count.fetch_add(1, Ordering::SeqCst) + 1;
-                    if session == "s2" && old_open.load(Ordering::SeqCst) {
-                        early_switch.store(true, Ordering::SeqCst);
-                    }
-                    let response = Response::AttachedTop { top_rows: 1 };
-                    fake_send_frame(&mut stream, &serde_json::to_vec(&response)?).await?;
-                    let output = if session == "s1" {
-                        b"\x1b[?1000hALPHA\n".as_slice()
-                    } else {
-                        b"\x1b[?1000hBETA\n".as_slice()
-                    };
-                    fake_send_frame(&mut stream, &ServerFrame::Data(output.to_vec()).encode())
-                        .await?;
-                    fake_send_frame(
-                        &mut stream,
-                        &ServerFrame::Status(fake_status(&session, &team)).encode(),
-                    )
-                    .await?;
-                    if session == "s1" {
-                        old_open.store(true, Ordering::SeqCst);
-                    }
-                    while let Some(payload) = fake_recv_frame(&mut stream).await? {
-                        let frame = ClientFrame::decode(&payload)?;
-                        if !matches!(frame, ClientFrame::Detach) {
-                            continue;
-                        }
-                        if session == "s1" && attach_number == 1 {
-                            fake_send_frame(
-                                &mut stream,
-                                &ServerFrame::Data(b"late old frame".to_vec()).encode(),
-                            )
-                            .await?;
-                            tokio::time::sleep(Duration::from_millis(300)).await;
-                            old_open.store(false, Ordering::SeqCst);
-                        } else {
-                            fake_send_frame(
-                                &mut stream,
-                                &ServerFrame::Detached("done".into()).encode(),
-                            )
-                            .await?;
-                            done.notify_one();
-                        }
-                        break;
-                    }
-                    return Ok(());
+                    return fake_attach(&mut stream, &session, &daemon).await;
                 }
                 _ => {
                     let response = Response::Error {
@@ -214,27 +184,70 @@ async fn fake_connection(
     Ok(())
 }
 
-async fn run_fake_daemon(
-    listener: TcpListener,
-    team: TeamScope,
-    old_open: Arc<AtomicBool>,
-    early_switch: Arc<AtomicBool>,
-    attach_count: Arc<AtomicUsize>,
-    done: Arc<tokio::sync::Notify>,
+async fn fake_attach(
+    stream: &mut TcpStream,
+    session: &str,
+    daemon: &FakeDaemon,
 ) -> anyhow::Result<()> {
+    let attach_number = daemon.attach_count.fetch_add(1, Ordering::SeqCst) + 1;
+    if session == "s2" && daemon.old_open.load(Ordering::SeqCst) {
+        daemon.early_switch.store(true, Ordering::SeqCst);
+    }
+    let response = Response::AttachedTop { top_rows: 1 };
+    fake_send_frame(stream, &serde_json::to_vec(&response)?).await?;
+    let output = if session == "s1" {
+        b"\x1b[?1000hALPHA\n".as_slice()
+    } else {
+        b"\x1b[?1000hBETA\n".as_slice()
+    };
+    fake_send_frame(stream, &ServerFrame::Data(output.to_vec()).encode()).await?;
+    fake_send_frame(
+        stream,
+        &ServerFrame::Status(fake_status(session, &daemon.team)).encode(),
+    )
+    .await?;
+    if session == "s1" {
+        daemon.old_open.store(true, Ordering::SeqCst);
+    }
+    fake_serve_detach(stream, session, attach_number, daemon).await?;
+    Ok(())
+}
+
+async fn fake_serve_detach(
+    stream: &mut TcpStream,
+    session: &str,
+    attach_number: usize,
+    daemon: &FakeDaemon,
+) -> anyhow::Result<()> {
+    while let Some(payload) = fake_recv_frame(stream).await? {
+        let frame = ClientFrame::decode(&payload)?;
+        if !matches!(frame, ClientFrame::Detach) {
+            continue;
+        }
+        if session == "s1" && attach_number == 1 {
+            fake_send_frame(
+                stream,
+                &ServerFrame::Data(b"late old frame".to_vec()).encode(),
+            )
+            .await?;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            daemon.old_open.store(false, Ordering::SeqCst);
+        } else {
+            fake_send_frame(stream, &ServerFrame::Detached("done".into()).encode()).await?;
+            daemon.done.notify_one();
+        }
+        break;
+    }
+    Ok(())
+}
+
+async fn run_fake_daemon(listener: TcpListener, daemon: FakeDaemon) -> anyhow::Result<()> {
     loop {
         let (stream, _) = tokio::select! {
             accepted = listener.accept() => accepted?,
-            _ = done.notified() => return Ok(()),
+            _ = daemon.done.notified() => return Ok(()),
         };
-        tokio::spawn(fake_connection(
-            stream,
-            team.clone(),
-            old_open.clone(),
-            early_switch.clone(),
-            attach_count.clone(),
-            done.clone(),
-        ));
+        tokio::spawn(fake_connection(stream, daemon.clone()));
     }
 }
 
@@ -1829,24 +1842,14 @@ async fn status_toggle_reattaches_to_resize_the_session() -> anyhow::Result<()> 
     let address = listener.local_addr()?;
     std::fs::write(dir.path().join("addr"), format!("{address}\n"))?;
     std::fs::write(dir.path().join("admin.token"), "fake-token\n")?;
-    let old_open = Arc::new(AtomicBool::new(false));
-    let early_switch = Arc::new(AtomicBool::new(false));
-    let attach_count = Arc::new(AtomicUsize::new(0));
-    let done = Arc::new(tokio::sync::Notify::new());
-    let server = tokio::spawn(run_fake_daemon(
-        listener,
-        fake_team(),
-        old_open,
-        early_switch,
-        attach_count.clone(),
-        done.clone(),
-    ));
+    let daemon = FakeDaemon::new(fake_team());
+    let server = tokio::spawn(run_fake_daemon(listener, daemon.clone()));
 
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
     attached.wait_for_text("alpha@host-a", WAIT)?;
     attached.send(&[2, b's'])?;
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(attach_count.load(Ordering::SeqCst), 2);
+    assert_eq!(daemon.attach_count.load(Ordering::SeqCst), 2);
     attached.send(&[2, b'd'])?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
     server.abort();
@@ -1861,18 +1864,8 @@ async fn switch_waits_for_old_attachment_eof_with_delayed_fake_daemon() -> anyho
     let address = listener.local_addr()?;
     std::fs::write(dir.path().join("addr"), format!("{address}\n"))?;
     std::fs::write(dir.path().join("admin.token"), "fake-token\n")?;
-    let old_open = Arc::new(AtomicBool::new(false));
-    let early_switch = Arc::new(AtomicBool::new(false));
-    let attach_count = Arc::new(AtomicUsize::new(0));
-    let done = Arc::new(tokio::sync::Notify::new());
-    let server = tokio::spawn(run_fake_daemon(
-        listener,
-        fake_team(),
-        old_open,
-        early_switch.clone(),
-        attach_count.clone(),
-        done.clone(),
-    ));
+    let daemon = FakeDaemon::new(fake_team());
+    let server = tokio::spawn(run_fake_daemon(listener, daemon.clone()));
 
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
     attached.wait_for_text("alpha@host-a", WAIT)?;
@@ -1881,7 +1874,7 @@ async fn switch_waits_for_old_attachment_eof_with_delayed_fake_daemon() -> anyho
     attached.send(&[2, b'd'])?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
     assert!(
-        !early_switch.load(Ordering::SeqCst),
+        !daemon.early_switch.load(Ordering::SeqCst),
         "target attach arrived before old stream EOF"
     );
     server.abort();
