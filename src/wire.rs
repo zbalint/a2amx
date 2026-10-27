@@ -180,6 +180,8 @@ pub enum Request {
         rows: u16,
         #[serde(default, skip_serializing_if = "is_default")]
         status: bool,
+        #[serde(default, skip_serializing_if = "is_default")]
+        top_rows: u16,
     },
     Kill {
         session: String,
@@ -275,6 +277,9 @@ pub enum Response {
         lines: Vec<String>,
     },
     Attached,
+    AttachedTop {
+        top_rows: u16,
+    },
     Ok,
     Error {
         message: String,

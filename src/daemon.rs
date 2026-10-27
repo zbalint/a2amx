@@ -1929,6 +1929,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 cols,
                 rows,
                 status,
+                top_rows,
             } => {
                 if cols == 0 || rows == 0 {
                     Response::Error {
@@ -1940,6 +1941,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                         session,
                         force,
                         Size { cols, rows },
+                        top_rows,
                         status.then(|| runtime.clone()),
                     )
                     .await?
@@ -2466,8 +2468,19 @@ async fn attach(
     session: Arc<Session>,
     force: bool,
     size: Size,
+    top_rows: u16,
     status: Option<Arc<Runtime>>,
 ) -> anyhow::Result<bool> {
+    if top_rows > 8 {
+        response(
+            connection,
+            Response::Error {
+                message: "top rows exceed 8".into(),
+            },
+        )
+        .await?;
+        return Ok(false);
+    }
     let (takeover, mut taken_over) = watch::channel(false);
     let (closed, completion) = watch::channel(false);
     let reservation = {
@@ -2516,6 +2529,7 @@ async fn attach(
         if state.pending_attachment != Some(generation) {
             Err(anyhow::anyhow!("attachment was taken over"))
         } else {
+            state.emulator.set_row_origin(top_rows);
             session.resize_locked(&mut state, size).map(|()| {
                 let bytes = state.emulator.render_full();
                 state.dirty = false;
@@ -2542,7 +2556,12 @@ async fn attach(
             return Ok(false);
         }
     };
-    response(connection, Response::Attached).await?;
+    let attached = if top_rows == 0 {
+        Response::Attached
+    } else {
+        Response::AttachedTop { top_rows }
+    };
+    response(connection, attached).await?;
     send_data(connection, &bytes).await?;
     if let Some(code) = exited {
         connection.send(&ServerFrame::Exit(code).encode()).await?;

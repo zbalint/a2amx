@@ -27,6 +27,66 @@ fn row_text(screen: &Screen, row: u16) -> String {
 }
 
 #[test]
+fn default_origin_full_render_preserves_original_bytes() {
+    let mut emulator = Emulator::new(Size { cols: 3, rows: 2 });
+    emulator.feed(b"AB");
+    let render = emulator.render_full();
+    assert!(render.starts_with(
+        b"\x1b[2J\x1b[H\x1b[1;1H\x1b[0mAB\x1b[0m\x1b[K\x1b[2;1H\x1b[0m\x1b[0m\x1b[K\x1b[1;3H\x1b[?25h"
+    ), "render: {render:?}");
+}
+
+#[test]
+fn default_origin_incremental_render_literal() {
+    let mut emulator = Emulator::new(Size { cols: 4, rows: 2 });
+    emulator.feed(b"AB");
+    emulator.render_full();
+    emulator.feed(b"C");
+    assert_eq!(
+        emulator.render_update(),
+        b"\x1b[1;1H\x1b[0mABC\x1b[0m\x1b[K\x1b[1;4H\x1b[?25h"
+    );
+}
+
+#[test]
+fn shifted_origin_full_render_positions_every_row() {
+    let mut emulator = Emulator::new(Size { cols: 3, rows: 2 });
+    emulator.set_row_origin(1);
+    emulator.feed(b"AB");
+    let render = emulator.render_full();
+    assert!(render.starts_with(
+        b"\x1b[2;1H\x1b[J\x1b[2;1H\x1b[0mAB\x1b[0m\x1b[K\x1b[3;1H\x1b[0m\x1b[0m\x1b[K\x1b[2;3H\x1b[?25h"
+    ), "render: {render:?}");
+}
+
+#[test]
+fn first_update_preserves_shifted_origin() {
+    let mut emulator = Emulator::new(Size { cols: 3, rows: 2 });
+    emulator.set_row_origin(1);
+    emulator.feed(b"AB");
+    let render = emulator.render_update();
+    assert!(render.starts_with(
+        b"\x1b[2;1H\x1b[J\x1b[2;1H\x1b[0mAB\x1b[0m\x1b[K\x1b[3;1H\x1b[0m\x1b[0m\x1b[K\x1b[2;3H\x1b[?25h"
+    ), "render: {render:?}");
+}
+
+#[test]
+fn shifted_origin_incremental_render_and_snapshot() {
+    let mut emulator = Emulator::new(Size { cols: 4, rows: 2 });
+    emulator.set_row_origin(1);
+    emulator.feed(b"AB");
+    emulator.render_full();
+    emulator.feed(b"C");
+    assert_eq!(
+        emulator.render_update(),
+        b"\x1b[2;1H\x1b[0mABC\x1b[0m\x1b[K\x1b[2;4H\x1b[?25h"
+    );
+    let mut mirror = Emulator::new(Size { cols: 4, rows: 2 });
+    mirror.feed(&emulator.snapshot());
+    assert_same_screen(&emulator, &mirror);
+}
+
+#[test]
 fn full_render_never_switches_the_client_alternate_screen() {
     let mut emulator = Emulator::new(SIZE);
     emulator.feed(b"main\x1b[?1049halt");

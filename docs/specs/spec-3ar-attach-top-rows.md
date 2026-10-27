@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-**LOCKED** (2026-10-26; pre-lock gate run against develop at `ff40b3f` plus the backlog commit `ab3cf59` on
+**ACCEPTED** (2026-10-27; locked 2026-10-26; pre-lock gate run against develop at `ff40b3f` plus the backlog commit `ab3cf59` on
 `feature/team-line`; consultant review `m_3989`, findings adopted).
 Architect-directed, backlog F29 part 1 of 2, context `a2amx-team-line-2026-10-26`. Implementation goes to
 `a2amx-developer` only. Part 2 (the team line itself) is a separate spec and builds on this one.
@@ -196,4 +196,18 @@ acceptance 1 and 2 stop at the cursor-show for this reason).
 
 ## 6. Review record
 
-Not yet reviewed.
+Models: architect Claude Sonnet 5.5; consultant Claude (model not reported); developer and tester OMP, working
+model openai-codex/gpt-6.1-terra, other slots unreported. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Claude | `tests/attach_cli.rs` and `tests/broker.rs` build `Request::Attach` literals but were outside the scope | Both added to the scope with the `top_rows: 0` literal only |
+| Draft review | consultant, Claude | Claim rule treated row 0 as claimed with no reserved rows, contradicting acceptance 5 | Claim rule requires `origin >= 1` |
+| Draft review | consultant, Claude | Acceptance 2 had the developer derive expected bytes by running the code; "3x2" did not say which number is the columns | Literal bytes and `cols`/`rows` stated |
+| Draft review | consultant, Claude | New client method had no caller or test in this spec (uncovered new code) | Moved to spec 3as |
+| Draft review | consultant, Claude | No origin-0 byte-for-byte test required | Acceptance 1 added a literal origin-0 test |
+| Tester pass | tester, OMP gpt-6.1-terra | Three mutation survivors: the 8-row bound, the `render_update` fallback origin, Resize keeping the origin | Developer added three tests; the tester's rerun and the architect's two mutants killed them |
+| Implementation | developer, OMP gpt-6.1-terra | Full suite failed in `mouse_wheel_scrolls_three_lines_and_q_returns_to_live` (backlog I14), a second failure mode at line 140 | Passed on rerun and in committed-HEAD scratch; dispositioned as the known flake, not fixed here |
+| Implementation | developer and tester | Scratch builds in `/tmp` filled the tmpfs and the machine's memory; the full suite timed out once | Scratch moved to disk, developer and tester run serially |
+
+The architect's review found no problems in the diff: full suite, clippy and fmt re-run fresh, both mutants killed.

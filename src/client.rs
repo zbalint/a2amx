@@ -149,6 +149,7 @@ impl Client {
                 cols,
                 rows,
                 status,
+                top_rows: 0,
             })
             .await?
         {

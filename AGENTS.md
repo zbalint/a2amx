@@ -138,6 +138,7 @@ specs showing it found nothing.
 | `harness` | Harness profiles, command wiring, readiness, and peer authorization |
 | `hook` | The Claude Code `UserPromptSubmit` hook adapter |
 | `messaging` | Message envelopes, validation, limits, states, and rendering |
+| `mouse` | Mouse-report parsing and the row shift or claim for client-reserved top rows (pure) |
 | `names` | Generated session names (pure, ADJECTIVE-NOUN with a seeded picker) |
 | `mcp` | The stdio MCP server and its authenticated agent tools |
 | `omp` | The embedded OMP extension and its launch files |

@@ -360,6 +360,11 @@ The client opts in with `Request::Attach.status`; the daemon sends a status fram
 Attachments that do not opt in receive no status frames, preserving older clients;
 older daemons ignore the additive request field.
 
+An attach request can reserve `top_rows` above the session; a daemon that honors
+them acknowledges with `AttachedTop`. The session grid is rendered with that row
+origin, while mouse functions shift reports into session coordinates or claim
+reports on reserved rows.
+
 The status payload also carries the optional activity, low-quota, harness, team, role, and hold details
 rendered by the bar; these additive fields preserve old payload decoding, and the daemon still sends
 frames only when the complete status changes.

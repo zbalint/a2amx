@@ -189,6 +189,7 @@ impl From<Size> for TermSize {
 
 pub struct Emulator {
     size: Size,
+    row_origin: u16,
     term: term::Term<ReplyListener>,
     parser: vte::ansi::Processor,
     listener: ReplyListener,
@@ -216,6 +217,7 @@ impl Emulator {
         let default_cursor: index::Point = index::Point::default();
         Self {
             size,
+            row_origin: 0,
             term: terminal,
             parser: vte::ansi::Processor::new(),
             listener,
@@ -230,6 +232,10 @@ impl Emulator {
             last_preceding_cells: [None, None],
             rendered: false,
         }
+    }
+
+    pub fn set_row_origin(&mut self, rows: u16) {
+        self.row_origin = rows;
     }
 
     /// Apply PTY output to the screen model. Returns the bytes the emulator answers
@@ -290,12 +296,12 @@ impl Emulator {
     /// the result to a fresh emulator of the same size reproduces `screen()`.
     /// Graphics, hyperlinks, and clipboard writes are deliberately not emitted.
     pub fn snapshot(&self) -> Vec<u8> {
-        self.render_screen(true)
+        self.render_screen(true, 0)
     }
 
     /// Render the complete screen into the client's already-active outer alternate screen.
     pub fn render_full(&mut self) -> Vec<u8> {
-        let render = self.render_screen(false);
+        let render = self.render_screen(false, usize::from(self.row_origin));
         // Advance alacritty's cursor-damage baseline before clearing it.
         let _ = self.term.damage();
         self.term.reset_damage();
@@ -328,10 +334,10 @@ impl Emulator {
 
         let mut render = Vec::new();
         for row in damaged_lines {
-            self.render_line(&mut render, row);
+            self.render_line(&mut render, row, usize::from(self.row_origin));
         }
         if has_damaged_lines || cursor_changed || modes_changed {
-            append_cursor(&mut render, current_cursor);
+            append_cursor(&mut render, current_cursor, usize::from(self.row_origin));
         }
         append_mode_changes(&mut render, self.last_modes, current_modes, false);
 
@@ -455,7 +461,7 @@ impl Emulator {
         lines
     }
 
-    fn render_screen(&self, include_alt_screen: bool) -> Vec<u8> {
+    fn render_screen(&self, include_alt_screen: bool, origin: usize) -> Vec<u8> {
         let mut render = Vec::new();
         let modes = self.current_modes();
         let cursor = self.current_cursor();
@@ -463,17 +469,22 @@ impl Emulator {
         if include_alt_screen && modes.alt_screen {
             render.extend_from_slice(b"\x1b[?1049h");
         }
-        render.extend_from_slice(b"\x1b[2J\x1b[H");
-        for row in 0..usize::from(self.size.rows) {
-            self.render_line(&mut render, row);
+        if origin == 0 {
+            render.extend_from_slice(b"\x1b[2J\x1b[H");
+        } else {
+            append_cursor_position(&mut render, 0, 0, origin);
+            render.extend_from_slice(b"\x1b[J");
         }
-        append_cursor(&mut render, cursor);
+        for row in 0..usize::from(self.size.rows) {
+            self.render_line(&mut render, row, origin);
+        }
+        append_cursor(&mut render, cursor, origin);
         append_mode_changes(&mut render, Modes::default(), modes, true);
         render
     }
 
-    fn render_line(&self, render: &mut Vec<u8>, row: usize) {
-        append_cursor_position(render, row, 0);
+    fn render_line(&self, render: &mut Vec<u8>, row: usize, origin: usize) {
+        append_cursor_position(render, row, 0, origin);
         render.extend_from_slice(b"\x1b[0m");
 
         let cols = usize::from(self.size.cols);
@@ -502,7 +513,7 @@ impl Emulator {
                 continue;
             }
             if output_col != col {
-                append_cursor_position(render, row, col);
+                append_cursor_position(render, row, col, origin);
             }
             let next_style = CellStyle::from_cell(cell);
             if next_style != style {
@@ -725,8 +736,13 @@ fn push_param(params: &mut [usize; 20], count: &mut usize, value: usize) {
     }
 }
 
-fn append_cursor(render: &mut Vec<u8>, cursor: Cursor) {
-    append_cursor_position(render, usize::from(cursor.row), usize::from(cursor.col));
+fn append_cursor(render: &mut Vec<u8>, cursor: Cursor, origin: usize) {
+    append_cursor_position(
+        render,
+        usize::from(cursor.row),
+        usize::from(cursor.col),
+        origin,
+    );
     if cursor.visible {
         render.extend_from_slice(b"\x1b[?25h");
     } else {
@@ -734,9 +750,9 @@ fn append_cursor(render: &mut Vec<u8>, cursor: Cursor) {
     }
 }
 
-fn append_cursor_position(render: &mut Vec<u8>, row: usize, col: usize) {
+fn append_cursor_position(render: &mut Vec<u8>, row: usize, col: usize, origin: usize) {
     render.extend_from_slice(b"\x1b[");
-    push_decimal(render, row + 1);
+    push_decimal(render, row + origin + 1);
     render.push(b';');
     push_decimal(render, col + 1);
     render.push(b'H');

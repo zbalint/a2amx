@@ -143,6 +143,7 @@ fn request_json_uses_exact_tagged_shapes() {
             cols: 120,
             rows: 40,
             status: false,
+            top_rows: 0,
         })
         .unwrap_or_default(),
         r#"{"type":"attach","session":"s1","force":true,"cols":120,"rows":40}"#
@@ -805,6 +806,7 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
         cols: 80,
         rows: 23,
         status: true,
+        top_rows: 0,
     };
     assert_eq!(
         serde_json::to_string(&request).unwrap(),
@@ -820,8 +822,25 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
             force: false,
             cols: 80,
             rows: 23,
-            status: false
+            status: false,
+            top_rows: 0,
         }
+    );
+}
+
+#[test]
+fn attach_top_rows_preserves_old_wire_and_acknowledges_new_wire() {
+    let old = r#"{"type":"attach","session":"s1","force":false,"cols":80,"rows":23}"#;
+    let request: Request = serde_json::from_str(old).unwrap();
+    assert!(matches!(request, Request::Attach { top_rows: 0, .. }));
+    assert_eq!(serde_json::to_string(&request).unwrap(), old);
+    let response = Response::AttachedTop { top_rows: 1 };
+    let json = serde_json::to_string(&response).unwrap();
+    assert_eq!(json, r#"{"type":"attached_top","top_rows":1}"#);
+    assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), response);
+    assert_eq!(
+        serde_json::from_str::<Response>(r#"{"type":"attached"}"#).unwrap(),
+        Response::Attached
     );
 }
 

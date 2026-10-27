@@ -265,6 +265,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             cols: 40,
             rows: 10,
             status: false,
+            top_rows: 0,
         },
         Request::Kill {
             session: sender_id.clone(),

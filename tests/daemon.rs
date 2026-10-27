@@ -105,6 +105,119 @@ async fn create(client: &mut Client, argv: &[&str], env: Vec<(String, String)>) 
 }
 
 #[tokio::test]
+async fn attach_top_rows_acknowledges_and_resets_origin() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut client = Client::connect(dir.path()).await.unwrap();
+    let id = create(&mut client, &["cat"], vec![]).await;
+    let token = std::fs::read_to_string(dir.path().join("admin.token")).unwrap();
+    for top_rows in [Some(9), Some(8), Some(1), Some(0), None] {
+        let mut socket = TcpStream::connect(daemon.addrs()[0]).await.unwrap();
+        socket
+            .write_all(
+                &encode_frame(
+                    &serde_json::to_vec(&Request::Hello {
+                        token: token.clone(),
+                    })
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(raw_response(&mut socket).await, Response::Ok);
+        let mut request =
+            serde_json::json!({"type":"attach","session":id,"force":true,"cols":40,"rows":5});
+        if let Some(top_rows) = top_rows {
+            request["top_rows"] = top_rows.into();
+        }
+        socket
+            .write_all(&encode_frame(&serde_json::to_vec(&request).unwrap()).unwrap())
+            .await
+            .unwrap();
+        let response = raw_response(&mut socket).await;
+        if top_rows == Some(9) {
+            assert!(matches!(response, Response::Error { .. }));
+            continue;
+        }
+        if let Some(rows @ 1..=8) = top_rows {
+            assert_eq!(response, Response::AttachedTop { top_rows: rows });
+        } else {
+            assert_eq!(response, Response::Attached);
+        }
+        let length = socket.read_u32().await.unwrap();
+        let mut frame = vec![0; length as usize];
+        socket.read_exact(&mut frame).await.unwrap();
+        let ServerFrame::Data(bytes) = ServerFrame::decode(&frame).unwrap() else {
+            panic!("expected data")
+        };
+        if top_rows == Some(1) {
+            assert!(bytes.starts_with(b"\x1b[2;1H\x1b[J"));
+        } else if top_rows == Some(8) {
+            assert!(bytes.starts_with(b"\x1b[9;1H\x1b[J"));
+        } else {
+            assert!(bytes.starts_with(b"\x1b[2J\x1b[H"));
+        }
+    }
+    daemon.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn resize_and_redraw_preserve_top_rows_origin() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut client = Client::connect(dir.path()).await.unwrap();
+    let id = create(&mut client, &["cat"], vec![]).await;
+    let token = std::fs::read_to_string(dir.path().join("admin.token")).unwrap();
+    let mut socket = TcpStream::connect(daemon.addrs()[0]).await.unwrap();
+    socket
+        .write_all(&encode_frame(&serde_json::to_vec(&Request::Hello { token }).unwrap()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(raw_response(&mut socket).await, Response::Ok);
+    let request = Request::Attach {
+        session: id,
+        force: false,
+        cols: 40,
+        rows: 5,
+        status: false,
+        top_rows: 1,
+    };
+    socket
+        .write_all(&encode_frame(&serde_json::to_vec(&request).unwrap()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        raw_response(&mut socket).await,
+        Response::AttachedTop { top_rows: 1 }
+    );
+    let length = socket.read_u32().await.unwrap();
+    let mut initial = vec![0; length as usize];
+    socket.read_exact(&mut initial).await.unwrap();
+    assert!(matches!(
+        ServerFrame::decode(&initial).unwrap(),
+        ServerFrame::Data(_)
+    ));
+    for request in [
+        ClientFrame::Resize { cols: 42, rows: 6 },
+        ClientFrame::Redraw,
+    ] {
+        socket
+            .write_all(&encode_frame(&request.encode()).unwrap())
+            .await
+            .unwrap();
+        let length = socket.read_u32().await.unwrap();
+        let mut frame = vec![0; length as usize];
+        socket.read_exact(&mut frame).await.unwrap();
+        let ServerFrame::Data(bytes) = ServerFrame::decode(&frame).unwrap() else {
+            panic!("expected data after {request:?}");
+        };
+        assert!(
+            bytes.starts_with(b"\x1b[2;1H\x1b[J"),
+            "after {request:?}: {bytes:?}"
+        );
+    }
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn new_session_validation_messages_and_precedence() {
     let (dir, daemon) = common::start_daemon().await;
     let mut client = Client::connect(dir.path()).await.unwrap();
@@ -696,6 +809,7 @@ async fn serve_control_validation_messages_and_attachment_precedence() {
                 cols: 40,
                 rows: 5,
                 status: false,
+                top_rows: 0,
             },
             "unknown session s999",
         ),
@@ -706,6 +820,7 @@ async fn serve_control_validation_messages_and_attachment_precedence() {
                 cols: 0,
                 rows: 5,
                 status: false,
+                top_rows: 0,
             },
             "attachment dimensions must be nonzero",
         ),
@@ -716,6 +831,7 @@ async fn serve_control_validation_messages_and_attachment_precedence() {
                 cols: 40,
                 rows: 0,
                 status: false,
+                top_rows: 0,
             },
             "attachment dimensions must be nonzero",
         ),
@@ -1595,6 +1711,7 @@ async fn malformed_stream_frame_disconnects_without_killing_the_session() {
                     cols: 40,
                     rows: 5,
                     status: false,
+                    top_rows: 0,
                 })
                 .unwrap(),
             )
@@ -1637,6 +1754,7 @@ async fn failed_attach_leaves_the_control_connection_usable() {
                 cols: 40,
                 rows: 5,
                 status: false,
+                top_rows: 0,
             })
             .await
             .unwrap(),

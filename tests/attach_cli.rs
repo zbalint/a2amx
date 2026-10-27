@@ -1270,6 +1270,7 @@ gate.recv(1)
                     cols: 512,
                     rows: 512,
                     status: false,
+                    top_rows: 0,
                 },
                 Response::Attached,
             ),
