@@ -139,5 +139,8 @@ openai-codex/gpt-5.6-luna, advisor slots not exposed. BLOCKED/amend cycles: 0.
 | Draft review | consultant, Claude | Forwarded release row `top_rows + 1` is an off-by-origin bug the draft called unchanged; existing test literals only waved at; non-zero-button claimed presses unspecified; docs anchor missed line 64; tester wording clashed with AGENTS.md | Fix folded into the spec, literals named, rules stated, anchors widened, wording fixed |
 | Tester pass | tester, OMP gpt-5.6-luna | Survivor: the claimed-press `button == 0` guard made unconditional; no test failed, and the spec's mutation list omitted it | Developer added a Grid press / row-2 wheel / Grid release PTY step; killed |
 
-The architect's fresh checks: 629 passed, 0 failed, 3 ignored, clippy and fmt clean. The architect ran no mutants of
-its own: the scratch volume filled up; the developer's six and the tester's five stand as the mutation evidence.
+The architect's fresh checks: 629 passed, 0 failed, 3 ignored, clippy and fmt clean. After the push the architect
+ran two mutants of its own on a scratch copy of 8e469d4 (the Team release guard widened to rows 1-2; the rule's
+minimum rows raised from 6 to 7): both were killed by `team_line_renders_clicks_switches_and_toggles_for_real_attach`.
+Before that the scratch volume had filled up, so the architect's mutants ran late; the developer's six and the
+tester's five were the mutation evidence at acceptance.
