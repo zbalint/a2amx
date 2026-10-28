@@ -16,6 +16,11 @@ All notable user-visible changes are listed here. The format follows
 - A dim rule under the team line, like the one above the status bar, on terminals of at least six rows
   (at five rows the line shows without it). A click on the rule does nothing.
 
+### Changed
+
+- The activity dot for a working session is blue instead of yellow, in the status bar and on the team
+  line. Idle stays green, held or resetting stays orange, and exited sessions stay grey.
+
 ### Fixed
 
 - A mouse drag that starts in the session and ends on the team line is forwarded to the session at the

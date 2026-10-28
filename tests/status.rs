@@ -240,7 +240,7 @@ fn styled_bar_bytes_restore_cursor_and_foreground() {
     );
     let mut info = info("a");
     info.activity = Some(Activity::Working);
-    assert_eq!(status::render("s1", Some(&info), 2, 40, 24), format!("{PRE}{}{BAR} \x1b[1ma\x1b[22m \x1b[38;5;240m│\x1b[38;5;252m \x1b[38;5;221m●\x1b[38;5;252m working {}{POST}", "─".repeat(39), " ".repeat(24)).as_bytes());
+    assert_eq!(status::render("s1", Some(&info), 2, 40, 24), format!("{PRE}{}{BAR} \x1b[1ma\x1b[22m \x1b[38;5;240m│\x1b[38;5;252m \x1b[38;5;75m●\x1b[38;5;252m working {}{POST}", "─".repeat(39), " ".repeat(24)).as_bytes());
     info.activity = None;
     info.hold = Some("channel_down".into());
     assert_eq!(
@@ -397,7 +397,7 @@ fn team_line_matches_the_locked_worked_example() {
     assert_eq!(
         line.bytes,
         [
-            b"\x1b7\x1b[1;1H\x1b[0m\x1b[2K\x1b[38;5;252;48;5;236m team dev \x1b[38;5;240m\xe2\x94\x82\x1b[38;5;252m \x1b[38;5;78m\xe2\x97\x8f\x1b[38;5;252m \x1b[1malpha\x1b[22m  \x1b[38;5;221m\xe2\x97\x8f\x1b[38;5;252m beta  ".as_slice(),
+            b"\x1b7\x1b[1;1H\x1b[0m\x1b[2K\x1b[38;5;252;48;5;236m team dev \x1b[38;5;240m\xe2\x94\x82\x1b[38;5;252m \x1b[38;5;78m\xe2\x97\x8f\x1b[38;5;252m \x1b[1malpha\x1b[22m  \x1b[38;5;75m\xe2\x97\x8f\x1b[38;5;252m beta  ".as_slice(),
             b"          ",
             b"\x1b[0m\x1b8",
         ]

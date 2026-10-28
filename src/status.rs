@@ -479,7 +479,7 @@ fn activity_word(activity: Activity) -> &'static str {
 fn activity_color(activity: Activity) -> &'static str {
     match activity {
         Activity::Idle => "\x1b[38;5;78m",
-        Activity::Working => "\x1b[38;5;221m",
+        Activity::Working => "\x1b[38;5;75m",
         Activity::Busy => "\x1b[38;5;209m",
     }
 }
