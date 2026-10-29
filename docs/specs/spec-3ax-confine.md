@@ -82,7 +82,7 @@ Two spikes (unmerged branches `spike/landlock`, `spike/bwrap`) decided the mecha
   flag values resolve against the invoking directory.
 - **Wire: a wrapper request, safe defaults.** `Request::Confine { confine: ConfineRequest, request: Box<Request> }` with
   `ConfineRequest { write: Vec<String>, hide: Vec<String>, unhide: Vec<String>, no_default_hides: bool,
-  allow_containers: bool }`, every field `#[serde(default)]`, so that an absent field is the safe value. The daemon
+  allow_containers: bool, team_file: Option<String> }`, every field `#[serde(default)]`, so that an absent field is the safe value. The daemon
   accepts only a `NewSession` inside it (a nested `Confine` or any other request is an error) and passes `Some(confine)`
   to `create_session`. A `Confine` whose `NewSession` has `cwd: None` is refused. An older daemon answers an unknown
   variant with `invalid control request` (`src/daemon.rs:1889`), so it fails closed; the client maps that answer, for a
@@ -469,3 +469,21 @@ Found by the owner's assistant's review of the locked spec; the architect confir
 
 Scope: the docs already listed in 0 and `tests/confine.rs`. Backlog F32 (`confine check`) may warn about a container
 daemon that is not running yet.
+
+## Amendment 2 (wire shape: the team file to protect)
+
+Raised by the developer (BLOCKED, 2026-10-30) and confirmed by the architect: 2.3 requires the team file the session was
+started from to be read-only when it lies inside a writable path, but `NewSession` carries no source-file metadata and the
+daemon cannot infer a custom `team up --file` path.
+
+1. `ConfineRequest` gains `team_file: Option<String>` (`#[serde(default)]`, absent = `None` = protect nothing extra, which
+   is the safe value for a field that only adds a read-only mount). Section 2.2's wire shape is read with this field.
+2. `team up` sets it to the canonical path of the team file in use (local, `--file`, or global); `a2amx new` and any other
+   caller leave it `None`. There is no CLI flag and no team-file key for it.
+3. The daemon treats it like any other path: at most 4096 bytes, canonicalised, skipped (and listed under `skipped`) when
+   missing, and applied as a protected read-only bind only when the canonical path lies inside a writable path, exactly as
+   2.3 says. A value outside every writable path changes nothing. It can only add a read-only mount, never widen access,
+   so a client-supplied value is not a trust-boundary risk beyond the existing `Confine` client.
+4. Tests: a plan with `team_file` inside the cwd lists it under protected and gives it `--ro-bind` after the writable
+   bind; one outside the writable set is not in the plan; a `ConfineRequest` JSON without the field decodes to `None`.
+   `tests/wire.rs` gets the round trip. Scope: the files already listed in 0.
