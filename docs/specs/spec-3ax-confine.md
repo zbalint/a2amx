@@ -244,7 +244,7 @@ system` errors. `confine::notice(plan: &Plan) -> String` renders the text **from
 Content, in plain words, never naming bubblewrap: the session is confined; the writable locations; the read-only protected
 paths; the hidden locations (a hidden directory looks empty, a hidden file looks empty); everything else is read-only;
 `/tmp` is private to this session and discarded when it ends, and paths under a peer's `/tmp` cannot be read; whether
-container engines are `allowed` or `blocked`; and that a `Read-only file system` error is authoritative where the notice
+container engines are `allowed` or `restricted`; and that a `Read-only file system` error is authoritative where the notice
 and the system disagree. It lists paths only, never reads or quotes file content, skips missing paths, prints at most 20
 entries per category then `and N more`, and the whole notice is capped at 12 KiB. It ends with this fixed constant (owner;
 wording reviewed by the consultant), always present and never trimmed by the caps:
@@ -342,7 +342,7 @@ Line anchors are for `f24a345`.
   `$XDG_RUNTIME_DIR`); the Codex refusal; the always-unset environment variables; the container switch (default: sockets
   hidden and variables unset; allowed: sockets and variables untouched; an unconfined session's environment never changed).
 - Notice and delivery tests: `notice` has literal expected text including the closing sentence (writable, protected,
-  hidden, `/tmp` line, containers blocked and allowed, the 20-entry cap, the 12 KiB cap, missing paths skipped);
+  hidden, `/tmp` line, containers restricted and allowed, the 20-entry cap, the 12 KiB cap, missing paths skipped);
   `append_system_prompt` handles the last occurrence, the `=` form, a flag after `--`, an absent flag, and the Omp
   file-path and Claude `--append-system-prompt-file` refusals; a confined Claude session's launched argv carries the notice
   while `a2amx list` still shows the client's command; an unconfined session's argv is byte-identical to today; a Generic
@@ -455,13 +455,16 @@ Found by the owner's assistant's review of the locked spec; the architect confir
    root, and hiding all of `/run` is too broad, so the spec accepts this. Add it to the residuals list in
    `docs/architecture.md` and `docs/cli.md` with the advice to start container daemons before confined sessions.
    The notice (2.7) does not mention it, because it lists only the plan.
-2. **Pinning test.** `tests/confine.rs` gains one real-bwrap test: with a confined shell running, a file created
-   afterwards in a host tmpfs directory outside every hide is readable inside. It documents the residual, so a future change
-   that fixes it changes the test on purpose. It is a contract test (it passes on the first implementation).
+2. **Pinning test.** `tests/confine.rs` gains one real-bwrap test: with a confined shell running, the test binds a Unix
+   socket in a host tmpfs directory outside every hide and creates a file beside it; inside, `connect()` to the socket
+   succeeds and the file is readable. It documents the residual, so a future change that fixes it changes the test on
+   purpose. It is a contract test (it passes on the first implementation).
 3. **Scope of `--confine-allow-containers`.** `docs/cli.md` and `docs/teams.md` say it lifts only the system socket and
    environment restriction of 2.3 group 4a. Rootless sockets under `$XDG_RUNTIME_DIR` stay hidden because that directory
    is a mandatory hide. One test asserts this: with the flag set, `$XDG_RUNTIME_DIR` is still hidden in the plan.
-4. Claim C34: a file created on the host's `/run` tmpfs after the sandbox started is visible inside it, and a write there
+4. **Notice wording.** The container line of the notice says `restricted`, not `blocked` (2.6), because late-created
+   sockets are not covered. The notice tests assert the word `restricted`.
+5. Claim C34: a file created on the host's `/run` tmpfs after the sandbox started is visible inside it, and a write there
    fails with `Read-only file system` (architect probe 2026-10-29, probed).
 
 Scope: the docs already listed in 0 and `tests/confine.rs`. Backlog F32 (`confine check`) may warn about a container
