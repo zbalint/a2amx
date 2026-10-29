@@ -24,6 +24,7 @@ pub mod names;
 pub mod omp;
 pub mod picker;
 pub mod prefix;
+pub mod privilege;
 pub mod quota;
 pub mod session;
 pub mod status;

@@ -18,6 +18,10 @@ All notable user-visible changes are listed here. The format follows
 
 ### Changed
 
+- **Breaking:** a2amx and its daemon refuse to run when the effective uid is 0 (as root, under `sudo`, or as a
+  root user in a container). The command prints `a2amx: refusing to run as root (effective uid 0): run a2amx
+  as an ordinary user` and exits 1. There is no override. `--help` and `--version` still work. Start it as an
+  ordinary user, and use a non-root user in containers (`docs/install.md`, `SECURITY.md`).
 - The activity dot for a working session is blue instead of yellow, in the status bar and on the team
   line. Idle stays green, held or resetting stays orange, and exited sessions stay grey.
 

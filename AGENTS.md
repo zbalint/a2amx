@@ -21,6 +21,7 @@ cargo fmt --check
   makes a missing Node a failure.
 - Run a working session's daemon from the installed copy (`~/.a2amx/bin/a2amx`), not
   from `target/`; development builds must not replace its executable.
+- Run the test suite as an ordinary user; tests that spawn the `a2amx` binary are refused when run as root.
 
 ## Rust conventions
 
@@ -129,6 +130,7 @@ specs showing it found nothing.
 | --- | --- |
 | `emulator` | Screen model, query replies, snapshot serializer (the only alacritty user) |
 | `prefix` | Prefix-key state machine for the attach client |
+| `privilege` | Refusal to run with effective uid 0 |
 | `wire` | Framing, control JSON, stream frames |
 | `session` | One PTY, its child, its emulator |
 | `daemon` / `client` | TCP server and the client API |

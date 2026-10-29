@@ -47,7 +47,10 @@ async fn main() -> std::process::ExitCode {
         .with_writer(std::io::stderr)
         .init();
     let result = match Cli::try_parse() {
-        Ok(cli) => dispatch(cli).await,
+        Ok(cli) => match a2amx::privilege::ensure_not_root() {
+            Ok(()) => dispatch(cli).await,
+            Err(error) => Err(error),
+        },
         Err(error) if !error.use_stderr() => write_stdout(error.to_string().into_bytes())
             .await
             .map(|_| std::process::ExitCode::SUCCESS),

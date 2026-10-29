@@ -162,3 +162,16 @@ Judge: the commands below; the tester or the architect reads the diff for the si
 
 No new input from a less trusted source. The check reads the process's own effective uid and has no override, so there is
 no attack path to constrain. The abuse case is a user running a2amx as root; section 4 test 2 shows it fails.
+
+## Review record
+
+**Models.** Architect: Claude Sonnet 5.5. Consultant: a Claude Code session, model not exposed to the architect. Developer and tester: OMP sessions reporting `openai-codex/gpt-5.6-luna`; their planning, working and advisor slot models are not exposed to the sessions. **BLOCKED/amend cycles:** 0.
+
+| Found in | Found by | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant | The abuse case `daemon start --foreground` hangs on the old code (it binds a port and waits), so the red run would never end | Case dropped; the background form is used and the reason is stated in section 4 |
+| Draft review | Consultant | Test children could read stdin until EOF, hang, or reach the live daemon through `A2AMX_*` variables | Section 4 requires null stdin, a 10 s timeout, an explicit `--home` and a cleared environment except `PATH` |
+| Draft review | Consultant | Contract test 4 did not name the expected unreachable-daemon text; the `rustix` pin and the AGENTS.md row position were unstated | Fixed before lock (`client::UNREACHABLE`, rustix 1.1.5, row after `prefix`) |
+| Implementation | Developer | The user-namespace capability probe `unshare -Ur true` ran with a bare `.status()`, with no timeout, against section 4's "every child" rule | Caught by the tester (m_4240); probe routed through the bounded runner, skip and `A2AMX_REQUIRE_USERNS=1` behavior kept |
+| Implementation | Developer | The cleanup `daemon stop` after an old-code `daemon start` ignored its status | Developer added an assertion after handoff (m_4231); accepted |
+| Tester pass | Tester | Mutant `geteuid` to `getuid` survives the tests: under `unshare -Ur` the real and effective uid are both 0 | Accepted as equivalent in this setup; a divergent-uid probe needs a setuid binary (spec 5 puts a real-uid check out of scope) |

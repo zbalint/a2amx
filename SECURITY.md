@@ -24,6 +24,7 @@ areas matter most:
 - delivery that destroys a human's unfinished composer draft;
 - state files (tokens, address files, database) readable by other users, or tokens
   appearing in argv, logs, envelopes, or terminal output.
+- a2amx and its daemon refuse to run as root, under `sudo`, or as a root user in a container; there is no override because state-file permissions and agent commands assume an ordinary user.
 
 The design and its stated limits are in [docs/architecture.md](docs/architecture.md).
 In particular, a process that holds a session token can act as that session; the

@@ -32,6 +32,9 @@ older packaged versions, for example 2.46). Without it, the `cosign` check above
 signature and the workflow identity. The build-from-source route above is unchanged. Start the installed binary from
 `~/.a2amx/bin/a2amx`, not from `target/`.
 
+a2amx and its daemon refuse to run as root or under `sudo`; install and run them as an ordinary
+user. There is no override, and containers must use a non-root user too.
+
 ## Dev build versus live install
 
 Build and test from the repository with `cargo build` and `cargo test`. Install a release
