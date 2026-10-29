@@ -513,3 +513,10 @@ entry that equals a listed container socket is an error naming `--confine-allow-
 `confine_unhide`), because a writable bind at that path would replace the container hide. A mandatory hide can never be
 replaced (the write guards already reject it). Tests: write of `~/.ssh` (temp home) drops it from `hidden()` and the notice and
 keeps it in `writable`; write of a container socket path is refused; with `allow_containers` it is accepted.
+
+**Amendment 3, item 5 (claim correction, tester pass).** Section 5's statement that the `/proc` abuse test fails when
+`--unshare-user` is dropped is false on a non-setuid bwrap: an unprivileged bwrap creates the user namespace itself, so
+the real-process denial holds either way (architect probe 2026-10-30, bwrap 0.11.1 without the flag: `uid_map` shows a new
+namespace). The flag matters for a setuid bwrap, which cannot be run here. The mutant "`--unshare-user` dropped" is
+therefore killed by the argv test `wrap_enables_user_ipc_and_pid_namespaces`, not by the real-process test, and the real
+test is not required to fail on it. The flag stays in the base options.
