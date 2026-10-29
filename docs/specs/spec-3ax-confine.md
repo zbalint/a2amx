@@ -505,3 +505,11 @@ daemon cannot infer a custom `team up --file` path.
 read-only mount for the Omp harness only. `check_unhide_allowed` therefore has no exception: any operator unhide that equals,
 contains or lies inside the state directory (`<state>/omp` included) is rejected for every harness. Test: Generic and Claude
 requests with `unhide = [<state>/omp]` fail; an Omp plan still lists `<state>/omp` read-only without any unhide.
+
+**Amendment 3, item 4 (tester source walk, writable versus hidden).** A path named in `confine_write` replaces a default hide
+at the same path (2.3 order), and the plan's lists, the dry-run output and the notice must describe what the mounts do: such a path
+is removed from `hidden` and `default_hidden`, so it is never reported as hidden while it is writable. A `confine_write`
+entry that equals a listed container socket is an error naming `--confine-allow-containers` (the same rule as for
+`confine_unhide`), because a writable bind at that path would replace the container hide. A mandatory hide can never be
+replaced (the write guards already reject it). Tests: write of `~/.ssh` (temp home) drops it from `hidden()` and the notice and
+keeps it in `writable`; write of a container socket path is refused; with `allow_containers` it is accepted.
