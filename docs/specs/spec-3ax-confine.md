@@ -487,3 +487,16 @@ daemon cannot infer a custom `team up --file` path.
 4. Tests: a plan with `team_file` inside the cwd lists it under protected and gives it `--ro-bind` after the writable
    bind; one outside the writable set is not in the plan; a `ConfineRequest` JSON without the field decodes to `None`.
    `tests/wire.rs` gets the round trip. Scope: the files already listed in 0.
+
+## Amendment 3 (two clarifications found by the tester pass; no new field)
+
+1. **Unhide never lifts the container restriction.** 2.3 item 4a says `confine_allow_containers = true` turns the whole item
+   off, so it is the only way. A `confine_unhide` entry that equals or contains a listed container socket, or lies inside
+   one, is an error naming `--confine-allow-containers` (it is not silently ignored). Unhiding a parent such as `~/.docker`
+   still works and the listed sockets inside it stay hidden. Test: unhide of `~/.docker/run/docker.sock` is refused; unhide
+   of `~/.docker` leaves `~/.docker/run/docker.sock` in the container hides; with `allow_containers` neither hide exists.
+2. **Harness data paths pass the write guards.** Each harness data-list path (2.3 item 3), after canonicalisation, goes
+   through `check_write_allowed` and the runtime-directory check, like `confine_write`. A path that resolves to `/`, `$HOME`,
+   or into or over the state or runtime directory (for example `~/.claude/projects` symlinked into the state directory) is a
+   refusal of the session (fail closed), not a silent skip. `ensure_data_dirs` runs after this check, so it never creates or
+   chmods through such a link. Test: a symlinked data directory pointing into the state directory refuses the plan.
