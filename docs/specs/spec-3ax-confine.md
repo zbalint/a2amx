@@ -520,3 +520,25 @@ the real-process denial holds either way (architect probe 2026-10-30, bwrap 0.11
 namespace). The flag matters for a setuid bwrap, which cannot be run here. The mutant "`--unshare-user` dropped" is
 therefore killed by the argv test `wrap_enables_user_ipc_and_pid_namespaces`, not by the real-process test, and the real
 test is not required to fail on it. The flag stays in the base options.
+
+## Amendment 4 (confined sessions died about 10 s after creation)
+
+Found by the tester pass (isolated daemon, scratch binary): five confined `sleep 300` sessions all exited 137 by t=10 s,
+with and without request traffic, while the unconfined control lived. Cause: `Session::spawn` runs in `spawn_blocking`
+(`src/daemon.rs:497`) and bwrap's `--die-with-parent` is `prctl(PR_SET_PDEATHSIG)`, which Linux delivers when the thread
+that forked the child exits, not when the process does. Tokio retires idle blocking-pool threads after 10 s, so the
+kernel SIGKILLed bwrap. The real-bwrap tests missed it because each lives for less than 10 s. Claim C35: PDEATHSIG fires
+on exit of the forking thread (prctl(2): "the parent ... refers to the thread that created this process"), probed by the
+tester's lifetime runs.
+
+1. **`--die-with-parent` stays** in the base options, so a dead daemon never leaves a sandbox running. The fork of a
+   confined child therefore happens on a thread that lives as long as the daemon: `session.rs` owns one named
+   `a2amx-spawn` std thread, started on first use, that receives spawn closures over a channel and returns the result
+   through a oneshot; `Session::spawn` for a confined launch is requested through it (the daemon awaits the reply instead of
+   calling `spawn_blocking` for that call). Unconfined spawns may keep using `spawn_blocking`. Nothing else in the daemon
+   forks a PTY child.
+2. Required test (fails on the old code): with a runtime built with `thread_keep_alive(Duration::from_millis(100))`, create
+   a confined `sleep 300` session through the daemon, force the blocking pool to churn (several short `spawn_blocking`
+   calls, then sleep 1.5 s), and assert the session is still running and `bwrap` is alive. Name the test
+   `confined_session_survives_blocking_pool_thread_retirement`. The tester reruns the 40 s lifetime matrix on the fix.
+3. Docs (`docs/architecture.md`): one sentence stating that confined children are forked from the dedicated thread, and why.
