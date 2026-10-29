@@ -500,3 +500,8 @@ daemon cannot infer a custom `team up --file` path.
    or into or over the state or runtime directory (for example `~/.claude/projects` symlinked into the state directory) is a
    refusal of the session (fail closed), not a silent skip. `ensure_data_dirs` runs after this check, so it never creates or
    chmods through such a link. Test: a symlinked data directory pointing into the state directory refuses the plan.
+
+**Amendment 3, item 3 (added after the tester's source walk).** The `<state>/omp` exposure is the plan's own built-in
+read-only mount for the Omp harness only. `check_unhide_allowed` therefore has no exception: any operator unhide that equals,
+contains or lies inside the state directory (`<state>/omp` included) is rejected for every harness. Test: Generic and Claude
+requests with `unhide = [<state>/omp]` fail; an Omp plan still lists `<state>/omp` read-only without any unhide.
