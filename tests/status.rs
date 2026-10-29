@@ -13,6 +13,7 @@ fn info(address: &str) -> StatusInfo {
         hold: None,
         harness: None,
         activity: None,
+        starting: false,
         quota: None,
         team: None,
         role: None,
@@ -227,6 +228,72 @@ fn low_quota_boundary_resetting_and_held_activity_match_the_bar_contract() {
 }
 
 #[test]
+fn activity_dot_states_cover_starting_resetting_and_precedence() {
+    let mut info = info("a");
+    info.activity = Some(Activity::Busy);
+    info.starting = true;
+    let starting = status::render("s1", Some(&info), 2, 40, 24);
+    assert!(
+        starting
+            .windows(b"\x1b[38;5;221m".len())
+            .any(|window| window == b"\x1b[38;5;221m")
+    );
+    assert!(visible(&starting).starts_with(" a │ ● starting "));
+
+    info.starting = false;
+    let resetting = status::render("s1", Some(&info), 2, 40, 24);
+    assert!(
+        resetting
+            .windows(b"\x1b[38;5;209m".len())
+            .any(|window| window == b"\x1b[38;5;209m")
+    );
+    assert!(visible(&resetting).starts_with(" a │ ● resetting "));
+}
+
+#[test]
+fn team_line_dot_states_cover_held_starting_exited_and_unknown() {
+    let members = [
+        TeamMember {
+            id: "held".into(),
+            name: "held".into(),
+            activity: Some(Activity::Working),
+            exited: false,
+            held: true,
+            starting: true,
+        },
+        TeamMember {
+            id: "starting".into(),
+            name: "starting".into(),
+            activity: Some(Activity::Busy),
+            exited: false,
+            held: false,
+            starting: true,
+        },
+        TeamMember {
+            id: "exited".into(),
+            name: "exited".into(),
+            activity: Some(Activity::Busy),
+            exited: true,
+            held: true,
+            starting: true,
+        },
+        TeamMember {
+            id: "unknown".into(),
+            name: "unknown".into(),
+            activity: None,
+            exited: false,
+            held: true,
+            starting: true,
+        },
+    ];
+    let bytes = status::render_team_line("other", "dev", &members, 200).bytes;
+    assert!(String::from_utf8_lossy(&bytes).contains("\x1b[38;5;203m●\x1b[38;5;252m held"));
+    assert!(String::from_utf8_lossy(&bytes).contains("\x1b[38;5;221m●\x1b[38;5;252m starting"));
+    assert!(String::from_utf8_lossy(&bytes).contains("\x1b[38;5;244m●\x1b[38;5;252m exited"));
+    assert!(String::from_utf8_lossy(&bytes).contains("\x1b[38;5;244m●\x1b[38;5;252m unknown"));
+}
+
+#[test]
 fn styled_bar_bytes_restore_cursor_and_foreground() {
     // B1-B3.
     assert_eq!(
@@ -380,6 +447,8 @@ fn team_member(id: &str, name: &str, activity: Option<Activity>, exited: bool) -
         name: name.into(),
         activity,
         exited,
+        held: false,
+        starting: false,
     }
 }
 

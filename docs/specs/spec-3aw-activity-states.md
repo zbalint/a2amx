@@ -144,3 +144,16 @@ Judge: the commands; the tester or the architect reads the diff.
 
 No new input from a less trusted source; the fields are daemon-computed display data on an authenticated connection. No
 attack path.
+
+## Review record
+
+**Models.** Architect: Claude Sonnet 5.5. Consultant (spec review): a Claude Code session, model not exposed to the architect. Developer and tester: OMP sessions reporting `openai-codex/gpt-5.6-luna`; their planning, working and advisor slot models are not exposed to the sessions. **BLOCKED/amend cycles:** 1 (a fix request of the architect, below).
+
+| Found in | Found by | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant | Items X1-X3 and 1-6 (the attached session's held dot contradicted E17, a generic session could stay Starting for life, readiness was evaluated in two places) | Adopted before lock (section 2) |
+| Implementation | Developer's advisor | `observe_ready` taking the session lock would self-deadlock in `session_working` | The method takes the existing `&State` snapshot instead |
+| Tester pass | Tester | Mutants of the delivery caller and of the 10 s `ACTIVITY_QUIET` boundary survive | Accepted: the spec's static `observe_ready` call-site check covers the first; the second is committed code and became backlog F30 |
+| Tester pass | Tester | `exited_claude_session_never_reports_needs_input` failed once in a full run (11 s child against a 10.2 s sleep and a 1 s poll) | Pre-existing timing flake; passed on rerun |
+| Architect review | Architect (own mutant) | `Session::starting` without the exit guard survives all tests: an exited never-ready session would report `starting` on the wire | Test `exited_never_ready_team_member_is_not_starting` added; the mutant is now killed |
+| Architect review | Developer (BLOCKED) | The architect's fix request required a `StatusInfo` assertion for the exited target, but attach to an exited session never builds a status | Request amended to the `TeamMember` entry seen from a live teammate, which calls the same `Session::starting` |

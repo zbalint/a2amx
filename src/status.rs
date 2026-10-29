@@ -90,11 +90,8 @@ pub fn render_team_line(
     let member_spans = members
         .iter()
         .map(|member| {
-            let color = if member.exited || member.activity.is_none() {
-                "\x1b[38;5;244m"
-            } else {
-                activity_color(member.activity.unwrap_or(Activity::Idle))
-            };
+            let state = dot_state(member.activity, member.held, member.starting, member.exited);
+            let color = activity_color(state);
             let name = clipped_name(&sanitize(&member.name));
             let mut spans = vec![Span::styled(color, "●", BAR_FOREGROUND), Span::plain(" ")];
             if member.id == current_id {
@@ -229,9 +226,10 @@ pub fn render(
     // can misalign on terminals that render ambiguous characters wide.
     let width = usize::from(cols - 1);
     let name = sanitize(info.map_or(session, |info| &info.address));
-    let activity = info
-        .filter(|info| info.hold.is_none())
-        .and_then(|info| info.activity);
+    let activity = info.filter(|info| info.hold.is_none()).and_then(|info| {
+        info.activity
+            .map(|activity| dot_state(Some(activity), false, info.starting, false))
+    });
     let harness = info.and_then(|info| info.harness);
     let role = info
         .and_then(|info| info.role.as_deref())
@@ -412,7 +410,7 @@ fn hold_text(reason: &str, hinted: bool, prefix: u8) -> String {
 
 fn left_spans(
     name: &str,
-    activity: Option<Activity>,
+    activity: Option<DotState>,
     quota: Option<(&str, bool)>,
     role: Option<&str>,
     team: Option<&str>,
@@ -468,19 +466,50 @@ fn detail_prefix() -> [Span; 2] {
     ]
 }
 
-fn activity_word(activity: Activity) -> &'static str {
-    match activity {
-        Activity::Idle => "idle",
-        Activity::Working => "working",
-        Activity::Busy => "resetting",
+#[derive(Clone, Copy)]
+enum DotState {
+    Idle,
+    Working,
+    Starting,
+    Resetting,
+    Held,
+    Exited,
+}
+
+fn dot_state(activity: Option<Activity>, held: bool, starting: bool, exited: bool) -> DotState {
+    if exited || activity.is_none() {
+        DotState::Exited
+    } else if held {
+        DotState::Held
+    } else if starting {
+        DotState::Starting
+    } else {
+        match activity.unwrap_or(Activity::Idle) {
+            Activity::Idle => DotState::Idle,
+            Activity::Working => DotState::Working,
+            Activity::Busy => DotState::Resetting,
+        }
     }
 }
 
-fn activity_color(activity: Activity) -> &'static str {
-    match activity {
-        Activity::Idle => "\x1b[38;5;78m",
-        Activity::Working => "\x1b[38;5;75m",
-        Activity::Busy => "\x1b[38;5;209m",
+fn activity_word(state: DotState) -> &'static str {
+    match state {
+        DotState::Idle => "idle",
+        DotState::Working => "working",
+        DotState::Starting => "starting",
+        DotState::Resetting => "resetting",
+        DotState::Held | DotState::Exited => "",
+    }
+}
+
+fn activity_color(state: DotState) -> &'static str {
+    match state {
+        DotState::Idle => "\x1b[38;5;78m",
+        DotState::Working => "\x1b[38;5;75m",
+        DotState::Starting => "\x1b[38;5;221m",
+        DotState::Resetting => "\x1b[38;5;209m",
+        DotState::Held => "\x1b[38;5;203m",
+        DotState::Exited => "\x1b[38;5;244m",
     }
 }
 

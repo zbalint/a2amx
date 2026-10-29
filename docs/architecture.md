@@ -357,9 +357,10 @@ also draws the separator rule above it. Scroll mode draws its own row, and the s
 picker owns the screen while open.
 Team sessions also reserve the top row when the status line is visible and the terminal has at least five rows.
 At six rows or more they reserve a second row for a dim separator rule underneath. The first row uses the bar style
-to show ` team <name> │ ● member ...`; dots encode activity, the attached member is bold, and a click or prefix
+to show ` team <name> │ ● member ...`; dots encode activity: idle green (256-color 78), working blue (75), starting yellow (221), resetting orange (209), held red (203), and exited grey (244). The attached member is bold, and a click or prefix
 `1`–`9`, `n`, or `p` switches members. A click on the team label opens the picker; exited members remain visible in
 grey but cannot be selected. Prefix `s` hides both top rows, the status line, and both separator rules.
+Newer clients treat omitted held and starting fields as false; older clients ignore these additive fields and keep the old member-dot rules.
 The client opts in with `Request::Attach.status`; the daemon sends a status frame
 (tag `0x04`) after the initial snapshot and polls once a second, sending only changes.
 Attachments that do not opt in receive no status frames, preserving older clients;
@@ -434,7 +435,8 @@ machine; there is no central-versus-host split yet.
   together with a non-empty `watch` list. The daemon starts one one-second polling task
   for that session. Its single `last_change` clock is initialized at creation and
   refreshed by PTY output; activity is `busy` while held or resetting, `working` while
-  not ready or changed within ten seconds, and `idle` otherwise. A digest is eligible only
+  not ready or changed within ten seconds, and `idle` otherwise. The status dot additionally distinguishes
+  starting and held members without changing the list activity words. A digest is eligible only
   when the watcher is ready, unheld, not resetting, and unchanged for the configured interval.
   The task remembers when each watched peer was last seen non-idle, and skips the digest when
   every live watched peer is idle with no pending or delivering messages. Missing or exited

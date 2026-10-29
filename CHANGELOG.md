@@ -22,8 +22,13 @@ All notable user-visible changes are listed here. The format follows
   root user in a container). The command prints `a2amx: refusing to run as root (effective uid 0): run a2amx
   as an ordinary user` and exits 1. There is no override. `--help` and `--version` still work. Start it as an
   ordinary user, and use a non-root user in containers (`docs/install.md`, `SECURITY.md`).
-- The activity dot for a working session is blue instead of yellow, in the status bar and on the team
-  line. Idle stays green, held or resetting stays orange, and exited sessions stay grey.
+- The activity dot follows one colour table, in the status bar and on the team line: idle green, working
+  blue (it was yellow), starting yellow (a Claude, Codex or OMP session that has not been ready yet),
+  resetting orange, held red (a team member waiting on a delivery hold or for input; the attached
+  session's own hold still shows as the red `HELD` alert instead of a dot), and exited grey. The status bar's
+  words are idle, working, starting and resetting. Additive protocol fields: `held` and `starting` on team
+  members and `starting` on the status; an older daemon sends neither, so a newer client draws members by
+  the old rules, and an older client ignores them (`docs/architecture.md`).
 
 ### Fixed
 

@@ -9,7 +9,7 @@ use tokio::sync::Notify;
 use serde_json::json;
 
 use crate::codex::{CallError, Link, Rpc};
-use crate::harness::{self, Deliver, Harness};
+use crate::harness::{Deliver, Harness};
 use crate::messaging::{COOLDOWN, PASTE_GAP, paste_bytes, render_envelope};
 use crate::session::{Delivery, DeliveryOutcome, Hold, Session};
 use crate::store::Store;
@@ -145,11 +145,7 @@ impl Channel for PtyChannel {
 
     fn unready_reason(&self) -> Option<&'static str> {
         let state = self.session.lock();
-        if !harness::ready(
-            self.session.harness(),
-            &state.emulator.screen(),
-            state.emulator.is_scrolled(),
-        ) {
+        if !self.session.observe_ready(&state) {
             Some("not_ready")
         } else if Self::cooldown_running(state.last_submit) {
             Some("cooldown")

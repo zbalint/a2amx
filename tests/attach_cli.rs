@@ -111,12 +111,16 @@ fn fake_status(session: &str, team: &TeamScope) -> StatusInfo {
         name: "demo-alpha".into(),
         activity: Some(Activity::Idle),
         exited: false,
+        held: false,
+        starting: false,
     };
     let beta = TeamMember {
         id: "s2".into(),
         name: "demo-beta".into(),
         activity: Some(Activity::Idle),
         exited: false,
+        held: false,
+        starting: false,
     };
     StatusInfo {
         address: if session == "s1" {
@@ -128,6 +132,7 @@ fn fake_status(session: &str, team: &TeamScope) -> StatusInfo {
         hold: None,
         harness: Some(Harness::Generic),
         activity: Some(Activity::Idle),
+        starting: false,
         quota: None,
         team: Some(team.clone()),
         role: None,

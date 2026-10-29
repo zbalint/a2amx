@@ -771,6 +771,7 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
         hold: Some("human_draft".into()),
         harness: Some(Harness::Claude),
         activity: Some(Activity::Working),
+        starting: true,
         quota: Some(QuotaInfo {
             five_hour: Some(15),
             weekly: None,
@@ -793,7 +794,14 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
     assert_eq!(old_info.hold, None);
     assert_eq!(old_info.harness, None);
     assert_eq!(old_info.activity, None);
+    assert!(!old_info.starting);
     assert_eq!(old_info.quota, None);
+    let old_member: TeamMember = serde_json::from_value(
+        serde_json::json!({"id":"s0","name":"old","activity":"idle","exited":false}),
+    )
+    .unwrap();
+    assert!(!old_member.held);
+    assert!(!old_member.starting);
     assert!(ServerFrame::decode(&[0x04, b'x']).is_err());
     assert!(
         ServerFrame::decode(
@@ -834,9 +842,19 @@ fn status_members_default_omit_and_round_trip() {
     let old: a2amx::wire::StatusInfo =
         serde_json::from_value(serde_json::json!({"address": "a", "pending": 0})).unwrap();
     assert!(old.members.is_empty());
+    assert!(!old.starting);
 
     let empty = serde_json::to_value(&old).unwrap();
     assert!(empty.get("members").is_none());
+    assert!(empty.get("starting").is_none());
+
+    let old_member: TeamMember = serde_json::from_value(
+        serde_json::json!({"id":"old","name":"old","activity":"idle","exited":false}),
+    )
+    .unwrap();
+    let old_member_json = serde_json::to_value(old_member).unwrap();
+    assert!(old_member_json.get("held").is_none());
+    assert!(old_member_json.get("starting").is_none());
 
     let status = a2amx::wire::StatusInfo {
         address: "a".into(),
@@ -845,6 +863,7 @@ fn status_members_default_omit_and_round_trip() {
         harness: None,
         activity: None,
         quota: None,
+        starting: true,
         team: None,
         role: None,
         members: vec![
@@ -853,12 +872,16 @@ fn status_members_default_omit_and_round_trip() {
                 name: "alpha".into(),
                 activity: Some(Activity::Idle),
                 exited: false,
+                held: true,
+                starting: true,
             },
             TeamMember {
                 id: "s2".into(),
                 name: "beta".into(),
                 activity: None,
                 exited: true,
+                held: false,
+                starting: false,
             },
         ],
     };

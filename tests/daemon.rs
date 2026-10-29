@@ -454,6 +454,33 @@ async fn create_claude(client: &mut Client, command: &str) -> String {
     }
 }
 
+async fn create_claude_team(client: &mut Client, command: &str, team: TeamScope) -> String {
+    match client
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), command.into()],
+            cols: 40,
+            rows: 5,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: None,
+            harness: a2amx::harness::Harness::Claude,
+            deliver: Some(a2amx::harness::Deliver::Auto),
+            heartbeat: None,
+            activity: None,
+            team: Some(team),
+            role: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected creation response: {response:?}"),
+    }
+}
+
 async fn list(client: &mut Client) -> Vec<SessionSummary> {
     match client.request(Request::List).await.unwrap() {
         Response::Sessions { sessions } => sessions,
@@ -514,6 +541,141 @@ async fn list_activity_reports_working_then_idle_and_non_ready_working() {
             .and_then(|session| session.activity),
         Some(a2amx::wire::Activity::Idle)
     );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn attach_status_reports_starting_latch_and_generic_never_starting() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let team = TeamScope {
+        name: "activity".into(),
+        private: false,
+        allow: Vec::new(),
+        agents: Vec::new(),
+    };
+    let claude = create_claude_team(
+        &mut admin,
+        r#"sleep 2; printf '\033[2J\033[?2004h\033[2;1H'; i=0; while [ "$i" -lt 40 ]; do printf '─'; i=$((i+1)); done; printf '\033[3;1H❯ \033[4;1H'; i=0; while [ "$i" -lt 40 ]; do printf '─'; i=$((i+1)); done; printf '\033[3;3H\033[?25h'; sleep 3; printf '\033[2J\033[HEnter to confirm · Esc to cancel'; sleep 30"#,
+        team,
+    )
+    .await;
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&claude, false, 40, 5, 0)
+        .await
+        .unwrap();
+    assert!(matches!(next(&mut attachment).await, ServerFrame::Data(_)));
+    let ServerFrame::Status(initial) = next(&mut attachment).await else {
+        panic!("initial status frame");
+    };
+    assert!(initial.starting);
+
+    let mut saw_ready = false;
+    while !saw_ready {
+        match next(&mut attachment).await {
+            ServerFrame::Status(info) => {
+                if !info.starting {
+                    saw_ready = true;
+                }
+            }
+            ServerFrame::Data(_) => {}
+            frame => panic!("unexpected frame while observing status: {frame:?}"),
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(14_500)).await;
+    let mut held_attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&claude, true, 40, 5, 0)
+        .await
+        .unwrap();
+    assert!(matches!(
+        next(&mut held_attachment).await,
+        ServerFrame::Data(_)
+    ));
+    let ServerFrame::Status(held_status) = next(&mut held_attachment).await else {
+        panic!("held status frame");
+    };
+    assert!(held_status.hold.is_some());
+    assert!(!held_status.starting);
+    assert!(
+        held_status
+            .members
+            .iter()
+            .any(|member| member.id == claude && member.held)
+    );
+
+    let generic = create(&mut admin, &["sh", "-c", "sleep 30"], vec![]).await;
+    let mut generic_attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&generic, false, 40, 5, 0)
+        .await
+        .unwrap();
+    assert!(matches!(
+        next(&mut generic_attachment).await,
+        ServerFrame::Data(_)
+    ));
+    let ServerFrame::Status(generic_status) = next(&mut generic_attachment).await else {
+        panic!("generic initial status frame");
+    };
+    assert!(!generic_status.starting);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn exited_never_ready_team_member_is_not_starting() {
+    use a2amx::harness::{Deliver, Harness};
+
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let team = TeamScope {
+        name: "exited-starting".into(),
+        private: false,
+        allow: Vec::new(),
+        agents: Vec::new(),
+    };
+    let exited = create_claude_team(&mut admin, "sleep 0.2", team.clone()).await;
+    eventually_sessions(&mut admin, |sessions| {
+        sessions
+            .iter()
+            .find(|session| session.id == exited)
+            .is_some_and(|session| session.exit_code.is_some())
+    })
+    .await;
+    let live = common::new_team_agent(
+        &mut admin,
+        dir.path(),
+        Some("live"),
+        Harness::Generic,
+        Deliver::Auto,
+        Some(team),
+        &[],
+        &[],
+    )
+    .await
+    .0;
+
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&live, false, 40, 5, 0)
+        .await
+        .unwrap();
+    assert!(matches!(next(&mut attachment).await, ServerFrame::Data(_)));
+    let ServerFrame::Status(status) = next(&mut attachment).await else {
+        panic!("initial status frame");
+    };
+    let member = status
+        .members
+        .iter()
+        .find(|member| member.id == exited)
+        .expect("exited Claude member in team status");
+    assert!(member.exited);
+    assert!(!member.starting);
+    assert!(!member.held);
     daemon.shutdown().await.unwrap();
 }
 

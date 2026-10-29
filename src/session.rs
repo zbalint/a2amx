@@ -81,6 +81,7 @@ pub struct Session {
     daemon_ended: AtomicBool,
     // shortcut: Codex in-flight delivery is not gated; add a Codex in-flight flag to Session if a message lands inside a reset.
     resetting: AtomicBool,
+    ready_latched: AtomicBool,
 }
 
 struct Shared {
@@ -386,6 +387,7 @@ impl Session {
             child_done,
             daemon_ended: AtomicBool::new(false),
             resetting: AtomicBool::new(false),
+            ready_latched: AtomicBool::new(false),
         })
     }
 
@@ -407,6 +409,24 @@ impl Session {
 
     pub fn harness(&self) -> Harness {
         self.harness
+    }
+
+    pub(crate) fn observe_ready(&self, state: &State) -> bool {
+        let ready = harness::ready(
+            self.harness,
+            &state.emulator.screen(),
+            state.emulator.is_scrolled(),
+        );
+        if ready {
+            self.ready_latched.store(true, Ordering::Release);
+        }
+        ready
+    }
+
+    pub(crate) fn starting(&self) -> bool {
+        self.exit_code().is_none()
+            && !matches!(self.harness, Harness::Generic)
+            && !self.ready_latched.load(Ordering::Acquire)
     }
 
     pub(crate) fn channel(&self) -> bool {

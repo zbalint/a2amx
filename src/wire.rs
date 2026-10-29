@@ -443,6 +443,10 @@ pub struct TeamMember {
     pub name: String,
     pub activity: Option<Activity>,
     pub exited: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub held: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub starting: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -455,6 +459,8 @@ pub struct StatusInfo {
     pub harness: Option<Harness>,
     #[serde(default)]
     pub activity: Option<Activity>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub starting: bool,
     #[serde(default)]
     pub quota: Option<QuotaInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

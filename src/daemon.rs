@@ -2382,14 +2382,7 @@ fn session_working(session: &Arc<Session>) -> Option<bool> {
     let now = Instant::now();
     let (ready, last_change) = {
         let state = session.lock();
-        (
-            harness::ready(
-                session.harness(),
-                &state.emulator.screen(),
-                state.emulator.is_scrolled(),
-            ),
-            state.last_change,
-        )
+        (session.observe_ready(&state), state.last_change)
     };
     Some(!ready || now.saturating_duration_since(last_change) < ACTIVITY_QUIET)
 }
@@ -2461,25 +2454,38 @@ async fn attachment_status(
     });
     let mut members = team_sessions
         .into_iter()
-        .map(|member| TeamMember {
-            id: member.id().0.clone(),
-            name: member
-                .name()
-                .map_or_else(|| member.id().0.clone(), str::to_owned),
-            activity: session_activity(&member),
-            exited: member.exit_code().is_some(),
+        .map(|member| {
+            let activity = session_activity(&member);
+            let held = AnyChannel::for_session(member.clone())
+                .hold_reason()
+                .or(member.needs_input())
+                .is_some();
+            TeamMember {
+                id: member.id().0.clone(),
+                name: member
+                    .name()
+                    .map_or_else(|| member.id().0.clone(), str::to_owned),
+                activity,
+                exited: member.exit_code().is_some(),
+                held,
+                starting: member.starting(),
+            }
         })
         .collect::<Vec<_>>();
     members.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+    let hold = AnyChannel::for_session(session.clone())
+        .hold_reason()
+        .or(session.needs_input())
+        .map(str::to_owned);
+    let activity = session_activity(session);
+    let starting = session.starting();
     Ok(StatusInfo {
         address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
         pending: counts.get(&session.id().0).copied().unwrap_or(0),
-        hold: AnyChannel::for_session(session.clone())
-            .hold_reason()
-            .or(session.needs_input())
-            .map(str::to_owned),
+        hold,
         harness: Some(session.harness()),
-        activity: session_activity(session),
+        activity,
+        starting,
         quota: session_quota(session, runtime.omp_usage().as_ref()),
         team: session.team().cloned(),
         role: session.role().map(str::to_owned),
