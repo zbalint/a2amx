@@ -444,3 +444,25 @@ test (which needs no bwrap) carry the coverage. The Sonar new-code gate is read 
 | C32 | `DaemonConfig` is built in tests through `Daemon::start(DaemonConfig { state_dir, listen, host_name, limits })`, in-process | `tests/common/mod.rs:36-60` | read (consultant) |
 | C33 | From inside the sandbox, an unconfined same-uid process holding a secret file open is unreachable through `/proc`: `fd/N`, `root`, `cwd`, `exe`, `maps`, `environ` give `Permission denied` (only the fd numbers and `cmdline` are readable) without a PID namespace, and the process is invisible with `--unshare-pid`; outside the sandbox every route works | architect probe 2026-10-29, `ptrace_scope=1` | probed |
 | C23 | `~/.claude` and `~/.omp` hold code and scripts outside the settings files the first draft listed (`statusline.sh`, `dev-mods`, OMP `natives`, `puppeteer`) | consultant listing (names only) | read |
+
+## Amendment 1 (docs and one test; no rule changes)
+
+Found by the owner's assistant's review of the locked spec; the architect confirmed the first point by probe.
+
+1. **Late-created paths (residual).** A hide is planned only for a path that exists at launch (2.3). A path created on the
+   host afterwards, for example a container daemon started after the session, is visible and usable inside the sandbox:
+   the read-only bind blocks writes, not `connect()`. bwrap cannot mount over a path that does not exist on a read-only
+   root, and hiding all of `/run` is too broad, so the spec accepts this. Add it to the residuals list in
+   `docs/architecture.md` and `docs/cli.md` with the advice to start container daemons before confined sessions.
+   The notice (2.7) does not mention it, because it lists only the plan.
+2. **Pinning test.** `tests/confine.rs` gains one real-bwrap test: with a confined shell running, a file created
+   afterwards in a host tmpfs directory outside every hide is readable inside. It documents the residual, so a future change
+   that fixes it changes the test on purpose. It is a contract test (it passes on the first implementation).
+3. **Scope of `--confine-allow-containers`.** `docs/cli.md` and `docs/teams.md` say it lifts only the system socket and
+   environment restriction of 2.3 group 4a. Rootless sockets under `$XDG_RUNTIME_DIR` stay hidden because that directory
+   is a mandatory hide. One test asserts this: with the flag set, `$XDG_RUNTIME_DIR` is still hidden in the plan.
+4. Claim C34: a file created on the host's `/run` tmpfs after the sandbox started is visible inside it, and a write there
+   fails with `Read-only file system` (architect probe 2026-10-29, probed).
+
+Scope: the docs already listed in 0 and `tests/confine.rs`. Backlog F32 (`confine check`) may warn about a container
+daemon that is not running yet.
