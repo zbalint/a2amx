@@ -101,3 +101,17 @@ git status --short   # only the four files of section 0
 ## 6. Pre-lock record
 
 Anchors re-read at `cf1e8e4`: `Session::needs_input` (`src/session.rs:592-601`: signal reported after `NEEDS_INPUT_AFTER` and while `exit_code` is `None`), `note_needs_input` (`:581-590`), `sample_activity` (`src/daemon.rs:801-`, a `tokio` interval ticking at start), the heartbeat loop and its sort (`src/daemon.rs:860-897`), `activity_body` (`:186-196`, header `peer activity:` and lines `- <name>: <state> (was <state>)`). The wait helper `eventually_sessions` exists at `tests/daemon.rs:631`.  Gate step 7: tests 1-4 are described once in section 1 and once in section 2 with the same facts. Step 13: no trust boundary.
+
+## Amendment 1 (test 3 counts messages, not raw screen text; no scope change)
+
+2026-10-30, after the developer's question `m_4658`. Section 2 item 3 said each of `- a: idle (was working` and
+`- p: idle (was working` occurs "exactly once in the whole text". The developer's loaded run (20 repetitions, third run)
+showed that the text returned by `a2amx screen w` is a terminal viewport: it can begin with the stale tail of a message
+that scrolled partly out, such as a lone `- p: idle (was working)` line before the next `peer activity:` header, so a
+count over the raw string sees two although only one transition was delivered. The intent of the assertion is that each
+transition was delivered once. Therefore item 3 now reads: split the text at each `peer activity:` header and ignore
+everything before the first header; the complete messages are the chunks after a header. Across those chunks, each of
+the four lines (`a` idle, `p` idle, `a` working, `p` working) occurs exactly once; per peer, idle comes before working;
+and in every chunk that contains both `- a: idle` and `- p: idle` (likewise working), `a` precedes `p`. A duplicated
+delivery still fails, because it produces two complete chunks. The developer's implementation of this reading is accepted.
+Gate step 7 re-run: "whole text" appears in section 2 item 3 only as this amendment's quotation of the old wording.
