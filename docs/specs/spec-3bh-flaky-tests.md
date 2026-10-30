@@ -115,3 +115,20 @@ the four lines (`a` idle, `p` idle, `a` working, `p` working) occurs exactly onc
 and in every chunk that contains both `- a: idle` and `- p: idle` (likewise working), `a` precedes `p`. A duplicated
 delivery still fails, because it produces two complete chunks. The developer's implementation of this reading is accepted.
 Gate step 7 re-run: "whole text" appears in section 2 item 3 only as this amendment's quotation of the old wording.
+
+## Amendment 2 (test 3's watcher turns terminal echo off; scope unchanged, test-only)
+
+2026-10-30, after the developer's BLOCKED `m_4660` and evidence `m_4661`; the architect reproduced it on develop with the
+amended test (two of three runs failed, with no background load). The watcher session `w` runs `cat` on a PTY with echo on.
+Each delivered message therefore appears twice on its screen: once as the line discipline's echo of the input and once as
+`cat`'s output. Amendment 1 diagnosed the duplicate as a stale viewport tail; that was only part of the cause, and it was
+wrong that "a duplicated delivery produces two complete chunks" can be told from echo. Section 2 item 3 now also requires:
+the watcher's script becomes `stty -echo; printf '\033[?2004h'; cat` (echo is off before the bracketed-paste marker the
+readiness check waits for, so no message can arrive while echo is on). The test then sees each message once, and the
+exact-once counts and the a-before-p checks of Amendment 1 stay as implemented. Only the script string of the watcher in
+`tests/daemon_cli.rs::activity_notices_report_peer_transitions_once_in_order` changes. The developer's scratch result
+(1/1 pass with this script) is the red-to-green evidence; the test fails on the committed script plus Amendment 1.
+Causal review (two amend cycles): both cycles came from asserting counts on a screen whose content the spec had not
+inspected; this one was found by reading a failing screen instead of the code, which the gate now requires for any spec
+that asserts on terminal output. Gate step 7 re-run: the script string is stated only here; section 2 item 3 does not
+quote it.
