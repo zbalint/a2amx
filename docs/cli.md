@@ -74,7 +74,7 @@ under `$XDG_RUNTIME_DIR` remain hidden. For helpers that an MCP server or hook s
 see [Background processes](harnesses.md#background-processes). These flags require
 `--confine`; path lists accept at most 64 entries and each entry is capped at 4096 bytes.
 
-The session status line adds a dim `[sandbox]` tag immediately after the session name.
+The session status line adds a dim `[confined]` tag immediately after the session name.
 `a2amx team up --dry-run` reports confinement, writable/protected paths, the final hidden
 paths, and missing paths skipped from the launch plan. A socket or file created on the host
 after launch is visible when it is outside every launch-time hide; start container daemons

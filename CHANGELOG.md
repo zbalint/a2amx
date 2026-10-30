@@ -21,7 +21,7 @@ All notable user-visible changes are listed here. The format follows
   (`~/.ssh`, `~/.aws`, the state directory, the session bus, container sockets and others) are hidden;
   `--confine-write`, `--confine-hide`, `--confine-unhide`, `--confine-no-default-hides` and
   `--confine-allow-containers` adjust it, with the same keys in the team file. The agent is told its limits in
-  its system prompt, the status bar shows `[sandbox]`, and `team up --dry-run` prints the effective
+  its system prompt, the status bar shows `[confined]`, and `team up --dry-run` prints the effective
   restrictions. A session never starts unconfined when confinement was requested; Codex sessions are
   refused. It is a safety net for a trusted but fallible agent, not a security boundary. A Ctrl-C in a
   confined Generic session reaches the command, not the sandbox (see Changed). Additive protocol: the

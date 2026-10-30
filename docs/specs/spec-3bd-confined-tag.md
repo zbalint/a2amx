@@ -78,3 +78,13 @@ Gate steps 1-9 run (claims table). Step 5 (content change): the old text `[sandb
 including specs (3ax lines 234 and 325 are historical and stay). Steps 10-11 do not apply; step 12: baseline
 `cargo test --test status` run (17 passed); step 13: no trust boundary. No consultant review: the change is one
 literal, one test and two doc lines, and the claims are greps recorded above.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; no consultant review (a one-literal rename, see section 6); developer on the OMP
+harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed); no tester pass.
+BLOCKED/amend cycles: 0.
+
+No problems found. The developer showed the renamed test failing on the unchanged source (`tests/status.rs:52`) before
+the rename, then 697 passed, 0 failed, 3 ignored with a writable HOME; the exact environment shows only the known
+read-only-HOME failure (backlog F40).

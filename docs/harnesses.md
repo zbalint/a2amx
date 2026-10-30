@@ -56,7 +56,7 @@ kernel, the network, and the operator's user account with the host: files are re
 written as you. It does not share the process list; that list is private. Anyone who
 needs that isolation uses a container or a VM.
 
-`--confine` is an opt-in bubblewrap sandbox around the PTY child. Generic, Claude,
+`--confine` is an opt-in bubblewrap confinement of the PTY child. Generic, Claude,
 and OMP sessions may be confined; Codex is refused because its app-server tools run
 outside the PTY process. The plan keeps harness data directories read-only except for
 the documented data allow-list, hides the daemon state and runtime directory, and

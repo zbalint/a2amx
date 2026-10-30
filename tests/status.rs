@@ -44,12 +44,12 @@ fn visible(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn confined_status_shows_dim_sandbox_tag() {
+fn confined_status_shows_dim_confined_tag() {
     let mut status = info("agent-plan@host-a");
     status.confined = true;
     let rendered = status::render("agent-plan", Some(&status), 2, 80, 24);
     let text = String::from_utf8(rendered).expect("utf8 status");
-    assert!(text.contains("\x1b[2m[sandbox]\x1b[22m"));
+    assert!(text.contains("\x1b[2m[confined]\x1b[22m"));
 }
 
 #[test]
