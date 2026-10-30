@@ -53,6 +53,10 @@ resolves `bwrap` from its startup `PATH` and refuses the request when the execut
 or its `--version` probe is unavailable; confinement is opt-in and unconfined sessions
 retain their existing launch behavior.
 
+Confinement is a safety net for a trusted but fallible agent, not a security boundary.
+It does not isolate a malicious agent or dependency; use a container or a VM for that.
+The residuals are documented in [Confinement and harness boundaries](harnesses.md#confinement-and-harness-boundaries).
+
 Confined Generic commands receive Ctrl-C as they would when unconfined: the sandbox
 wrapper ignores SIGINT and the command gets the default disposition back. Claude and
 OMP are unaffected because they run the terminal in raw mode and receive Ctrl-C as the
@@ -62,9 +66,12 @@ byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` a
 The repeatable path flags are `--confine-write PATH`, `--confine-hide PATH`, and
 `--confine-unhide PATH`. Relative paths are resolved against the session cwd.
 `--confine-no-default-hides` disables the optional home hides but never removes the
-mandatory state, runtime, `/proc`, and descriptor restrictions. `--confine-allow-containers`
-allows only the configured system container sockets and related environment; the
-rootless sockets under `$XDG_RUNTIME_DIR` remain hidden. These flags require
+mandatory hides: the state directory, the runtime directory, `/run/WSL` and
+`/mnt/wslg`. The private `/proc` and PID namespace are base options, and descriptor
+restrictions are a daemon property. `--confine-allow-containers` allows only the
+configured system container sockets and related environment; the rootless sockets
+under `$XDG_RUNTIME_DIR` remain hidden. For helpers that an MCP server or hook starts,
+see [Background processes](harnesses.md#background-processes). These flags require
 `--confine`; path lists accept at most 64 entries and each entry is capped at 4096 bytes.
 
 The session status line adds a dim `[sandbox]` tag immediately after the session name.

@@ -180,3 +180,20 @@ nothing. The command is now `rg -n 'host/container' docs/harnesses.md docs/cli.m
 consultant check found the old wording only in `docs/harnesses.md`. Gate step 7 re-run: the old command text appears
 nowhere else in the spec (`rg -n "host/container" docs/specs/spec-3bb-confine-docs.md` lists only the quoted sentence,
 this amendment and the new command), and no other acceptance command searches a path that contains this spec.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5`; developer on the OMP
+harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed). No tester
+pass (prose spec). BLOCKED/amend cycles: 1.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`claude-opus-5-5`) | The draft said the session shares "the process list" with the host; the code unshares the PID namespace (the line was copied from spec 3ax section 1) | Wording changed; 3ax stays as a historical record |
+| Draft review | Consultant | `cli.md` mandatory-hides wording listed `/proc` and the descriptor rule as hides; the code's mandatory hides are four paths | Section 3 item 2 rewritten |
+| Draft review | Consultant | "State directory" would be read as a2amx's own hidden directory; `/tmp` and `$XDG_RUNTIME_DIR` are not shared | Wording and a negative statement added |
+| Draft review | Consultant, architect rerun | The lifetime claim understated the case: a background process also ends when the sandbox's command exits | Claim widened and probed twice |
+| Draft review | Consultant | The descriptor residual read as a hole in a2amx's own hiding; alternation greps could not show "all six present"; two comments checked the wrong thing | Residual reworded; per-term `rg -w` loops |
+| Implementation | Developer (`gpt-5.6-luna`) | `rg 'host/container' docs/` also matched the spec that quotes the old sentence, so "prints nothing" was unsatisfiable (`BLOCKED`, Amendment 1) | Grep scoped to the two docs; the consultant had checked the docs, not the spec's own text |
+| Implementation | Developer | `BLOCKED` claiming the checkout was read-only, inferred from a truncated notice; a `touch` succeeded | Withdrawn by the developer; no change |
+| Architect review | Architect | Keyrings were stated as "reachable" (never probed) and "out of reach" was ambiguous | Reworded to "not covered" and "not protected"; the long first paragraph was rewrapped |
