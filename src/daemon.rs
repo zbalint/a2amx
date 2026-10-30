@@ -340,6 +340,49 @@ impl Runtime {
         }
     }
 
+    /// Resolve bubblewrap and build the mount plan off the async runtime.  `Err` carries the
+    /// message for the client; `Ok(None)` means the session is not confined.
+    async fn plan_confinement(
+        &self,
+        confine_request: Option<confine::ConfineRequest>,
+        harness: Harness,
+        cwd: Option<&str>,
+    ) -> anyhow::Result<Result<Option<Plan>, String>> {
+        let Some(confine_request) = confine_request else {
+            return Ok(Ok(None));
+        };
+        let Some(cwd) = cwd else {
+            return Ok(Err("confinement requires an explicit cwd".into()));
+        };
+        let cwd = PathBuf::from(cwd);
+        let state_dir = self.state_dir.clone();
+        let bwrap_path = self.bwrap_path.clone();
+        let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Plan> {
+            let bwrap = confine::resolve_bwrap(Some(&bwrap_path))?;
+            confine::preflight(&bwrap)?;
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+            let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow::anyhow!("XDG_RUNTIME_DIR is not set"))?;
+            let empty_file = state_dir.join("confine-empty");
+            let host = Host {
+                home: home.clone(),
+                state_dir: state_dir.clone(),
+                runtime_dir,
+                empty_file,
+            };
+            let plan = confine::plan(&confine_request, harness, &cwd, &host)?;
+            confine::ensure_empty_file(&state_dir)?;
+            confine::ensure_data_dirs(harness, &home)?;
+            confine::ensure_data_files(harness, &home)?;
+            Ok(plan.with_bwrap(bwrap))
+        })
+        .await?;
+        Ok(result.map(Some).map_err(|error| error.to_string()))
+    }
+
     async fn create_session(self: &Arc<Self>, request: Request) -> anyhow::Result<Response> {
         let (confine_request, request) = match Self::split_confine(request) {
             Ok(split) => split,
@@ -458,48 +501,12 @@ impl Runtime {
                 Err(message) => return Ok(Response::Error { message }),
             };
         }
-        let confine_plan = if let Some(confine_request) = confine_request {
-            let Some(cwd) = cwd.clone() else {
-                return Ok(Response::Error {
-                    message: "confinement requires an explicit cwd".into(),
-                });
-            };
-            let cwd = PathBuf::from(cwd);
-            let state_dir = self.state_dir.clone();
-            let bwrap_path = self.bwrap_path.clone();
-            let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Plan> {
-                let bwrap = confine::resolve_bwrap(Some(&bwrap_path))?;
-                confine::preflight(&bwrap)?;
-                let home = std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
-                let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
-                    .map(PathBuf::from)
-                    .ok_or_else(|| anyhow::anyhow!("XDG_RUNTIME_DIR is not set"))?;
-                let empty_file = state_dir.join("confine-empty");
-                let host = Host {
-                    home: home.clone(),
-                    state_dir: state_dir.clone(),
-                    runtime_dir,
-                    empty_file,
-                };
-                let plan = confine::plan(&confine_request, harness, &cwd, &host)?;
-                confine::ensure_empty_file(&state_dir)?;
-                confine::ensure_data_dirs(harness, &home)?;
-                confine::ensure_data_files(harness, &home)?;
-                Ok(plan.with_bwrap(bwrap))
-            })
-            .await?;
-            match result {
-                Ok(plan) => Some(plan),
-                Err(error) => {
-                    return Ok(Response::Error {
-                        message: error.to_string(),
-                    });
-                }
-            }
-        } else {
-            None
+        let confine_plan = match self
+            .plan_confinement(confine_request, harness, cwd.as_deref())
+            .await?
+        {
+            Ok(plan) => plan,
+            Err(message) => return Ok(Response::Error { message }),
         };
         let session_spec = SessionSpec {
             argv,
