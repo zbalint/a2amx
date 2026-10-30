@@ -91,3 +91,14 @@ for the empty tmpfs a correct hide produces, so the test never checks that the h
 spec). The spec's claim that the control "guards against weakening the fixture" was false, and the control is removed
 from section 3. Acceptance is otherwise unchanged: the focused command passes with the confined, read-only `HOME`.
 Gate step 7 re-run: "negative control" appears in section 3 (withdrawn) and in this amendment only.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; no consultant review (a two-line fixture move, see section 0); developer on the OMP
+harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed); no tester pass.
+BLOCKED/amend cycles: 1.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Implementation | Developer (`gpt-5.6-luna`) | The spec's negative control (hide a nonexistent path and see an assertion fail) cannot fail on the unchanged test: `contains("hidden")` is satisfied by other markers and `test -e` is true for the empty tmpfs of a correct hide. The architect had not run the control before locking | Amendment 1 withdrew it; backlog F42 for the weak assertions |
+| Architect review | Architect | After the change the confine suite passes with the confined, read-only `HOME` (53 passed, 0 failed) | no further problems found |

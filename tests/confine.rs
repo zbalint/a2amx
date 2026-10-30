@@ -1871,8 +1871,8 @@ async fn real_bwrap_confines_the_session_process() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let state = root.path().join("state");
     let cwd = root.path().join("workspace");
-    let home = PathBuf::from(std::env::var_os("HOME").context("HOME not set")?);
-    let external = tempfile::tempdir_in(&home)?;
+    // Keep this outside the workspace and sandbox-private /tmp so it stays writable with a read-only $HOME.
+    let external = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
     let outside = external.path().join("outside.txt");
     let chmod_target = external.path().join("chmod-target");
     let hidden = external.path().join("hidden");
