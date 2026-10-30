@@ -1558,6 +1558,79 @@ command = ["omp", "--secret"]
     assert!(listed.status.success());
     assert!(!String::from_utf8_lossy(&listed.stdout).contains("claude"));
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_expands_home_relative_confine_paths() {
+    let (state, _daemon) = common::start_daemon().await;
+    let project = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    let runtime_dir = tempfile::tempdir().unwrap();
+    let tool_cache = user_home.path().join(".tool-cache");
+    let tool_hide = user_home.path().join(".tool-hide");
+    let ssh = user_home.path().join(".ssh");
+    std::fs::create_dir(&tool_cache).unwrap();
+    std::fs::create_dir(&tool_hide).unwrap();
+    std::fs::create_dir(&ssh).unwrap();
+    std::fs::write(
+        project.path().join("dry-tilde.toml"),
+        r#"
+[[session]]
+name = "demo"
+command = ["sh", "-c", "echo demo"]
+cwd = "."
+confine = true
+confine_write = ["~/.tool-cache", "~/.missing-tool"]
+confine_hide = ["~/.tool-hide"]
+confine_unhide = ["~/.ssh"]
+"#,
+    )
+    .unwrap();
+    let output = run_binary_in_with_home_and_runtime(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime_dir.path(),
+        &["team", "up", "--dry-run", "--file", "dry-tilde.toml"],
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let writable = std::fs::canonicalize(&tool_cache).unwrap();
+    let hidden = std::fs::canonicalize(&tool_hide).unwrap();
+    let unhidden = std::fs::canonicalize(&ssh).unwrap();
+    let missing = user_home.path().join(".missing-tool");
+    assert!(!stdout.contains(&format!("  hidden: {}\n", unhidden.display())));
+    assert!(stdout.contains(&format!("  writable: {}\n", writable.display())));
+    assert!(stdout.contains(&format!("  hidden: {}\n", hidden.display())));
+    assert!(!stdout.contains("/~/"));
+    assert!(!stdout.contains("~/"));
+    assert!(!stdout.contains(&format!("  writable: {}\n", missing.display())));
+    assert!(stdout.contains(&format!(
+        "  hidden: {} (skipped missing)\n",
+        missing.display()
+    )));
+}
+
+fn run_binary_in_with_home_and_runtime(
+    home: &Path,
+    cwd: &Path,
+    user_home: &Path,
+    runtime_dir: &Path,
+    args: &[&str],
+) -> std::io::Result<Output> {
+    Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .arg("--home")
+        .arg(home)
+        .args(args)
+        .current_dir(cwd)
+        .env("HOME", user_home)
+        .env("XDG_RUNTIME_DIR", runtime_dir)
+        .stdin(Stdio::null())
+        .output()
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dry_run_rejects_existing_relative_omp_prompt_file() {

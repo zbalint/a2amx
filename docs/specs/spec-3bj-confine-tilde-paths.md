@@ -115,3 +115,18 @@ required), docs (spec 3bi), and the changelog.
 | `run_binary_in_with_home` sets `HOME` and `--home` but not `XDG_RUNTIME_DIR` | `tests/team.rs:599-613` | read |
 | No existing test passes a `~` path through the CLI or team layer | consultant `m_4629` (greps of `tests/`), architect `rg -n 'confine_write' tests/team.rs` shows only parse tests | grep |
 | `confine::plan` canonicalises existing paths, so the writable line is the canonical path | spec 3ax 2.3 | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5` (it found the bug during the
+spec 3bi review, `m_4629`; no second consultant pass on this spec); developer and tester on the OMP harness, model
+`openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed to either). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review of spec 3bi | Consultant (`claude-opus-5-5`) | `~` paths in team files and quoted flags were silently skipped: `resolve_confine_paths` joined them to the working directory before the daemon could expand them. The architect had claimed "`~` is expanded" from `expand_home` and spec 3ax without running a documented example through the user-facing path | This spec |
+| Implementation | Developer (`gpt-5.6-luna`) | Section 3 said to run the dry run with the daemon's state directory as the working directory; the existing confinement guard rejects that workspace before any path is resolved | The test uses a separate project directory; behavior under test unchanged |
+| Tester pass | Tester (`gpt-5.6-luna`) | The first test did not exercise `confine_unhide` (mutant 7 survived) and the missing path had no meaningful assertion (mutant 9, trailing slash, survived) | Developer added an unhide case and the exact `(skipped missing)` line; both mutants are killed |
+| Tester pass | Tester | The spec says the function has six call sites; the tree has twelve call expressions (new, dry run, validation, start, each for write, hide and unhide) | No behavior gap, the fix is in the shared function; noted here, spec text left as locked |
+| Tester pass | Tester | The new `new --confine-write` call site, a bare `~` and `~user` are not pinned (mutants 2, 3, 8) | Accepted: backlog F44 covers the audit of path options; bare `~` and `~user` are refinements the spec chose not to pin |
+| Architect review | Architect, own mutants | Early return removed, dry-run hide call reverted, dry-run unhide call joined to the working directory: all killed | no further problems found |

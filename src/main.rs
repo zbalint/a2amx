@@ -593,6 +593,9 @@ fn resolve_confine_paths(base: &Path, paths: &[String]) -> Vec<String> {
     paths
         .iter()
         .map(|path| {
+            if path == "~" || path.starts_with("~/") {
+                return PathBuf::from(path);
+            }
             let path = Path::new(path);
             if path.is_absolute() {
                 path.to_owned()
