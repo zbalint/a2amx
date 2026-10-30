@@ -61,9 +61,8 @@ rg -n 'tempdir_in' tests/confine.rs   # one hit, with CARGO_TARGET_TMPDIR
   point of the change. Use your own `CARGO_HOME`, `RUSTUP_HOME` and `CARGO_TARGET_DIR` as in earlier assignments, and
   `A2AMX_REQUIRE_BWRAP=1` so the test cannot skip. Report the exact-environment full `cargo test` as well: it must now be
   free of the F40 failure (known flaky: backlog I9 and F37, rerun once and record).
-- Show that the test still tests something: on a scratch copy of the final snapshot, change the `confine_hide` path in the
-  test's request to a nonexistent path (or remove `hide:`) and report which assertion fails; restore. This guards
-  against the move silently weakening the fixture.
+- The negative control of the first draft (hide a nonexistent path and see an assertion fail) is withdrawn by Amendment 1:
+  it cannot fail on the unchanged test either.
 
 ## 4. Out of scope
 
@@ -80,3 +79,15 @@ fixture move whose evidence is the passing run under a read-only `HOME` plus the
 | With `tempdir_in(env!("CARGO_TARGET_TMPDIR"))`, a read-only `$HOME` and `A2AMX_REQUIRE_BWRAP=1`, the test passes | architect run, 2026-10-30, scratch `git archive` copy of develop after `9352c1e` with only this change: `1 passed; 0 failed`, 1.09 s | probed |
 | No other test in `tests/` uses `$HOME` for a fixture | `rg -n 'tempdir_in' tests` printed one hit, `tests/confine.rs:1850` | grep |
 | `PathBuf` and `Context` are used elsewhere in `tests/confine.rs` | `rg -c PathBuf tests/confine.rs` printed 26, `rg -c 'Context|\.context\('` printed 16 | grep |
+
+## Amendment 1 (negative control withdrawn; no scope change)
+
+2026-10-30, after the developer's `BLOCKED` (`m_4618`). Section 3 required a scratch-copy negative control: hide a
+nonexistent path and report the assertion that fails. The developer ran it on the final snapshot and the test passed.
+Read of the unchanged test (`tests/confine.rs`, the assertions after `done`): `assert!(result_text.contains("hidden"))`
+is satisfied by the other markers `hidden-write-denied` and `admin-hidden`, and the script's `test -e {hidden}` is true
+for the empty tmpfs a correct hide produces, so the test never checks that the hidden directory is empty. The move to
+`CARGO_TARGET_TMPDIR` does not change this; it is a weakness of the committed test, now backlog F42 (a separate tests-only
+spec). The spec's claim that the control "guards against weakening the fixture" was false, and the control is removed
+from section 3. Acceptance is otherwise unchanged: the focused command passes with the confined, read-only `HOME`.
+Gate step 7 re-run: "negative control" appears in section 3 (withdrawn) and in this amendment only.
