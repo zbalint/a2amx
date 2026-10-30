@@ -673,6 +673,12 @@ cwd = "."
                 activity: None,
                 role: Some("architect".into()),
                 allow: Vec::new(),
+                confine: false,
+                confine_write: Vec::new(),
+                confine_hide: Vec::new(),
+                confine_unhide: Vec::new(),
+                confine_no_default_hides: false,
+                confine_allow_containers: false,
                 team: None,
             },
             TeamSession {
@@ -687,6 +693,12 @@ cwd = "."
                 activity: None,
                 role: None,
                 allow: Vec::new(),
+                confine: false,
+                confine_write: Vec::new(),
+                confine_hide: Vec::new(),
+                confine_unhide: Vec::new(),
+                confine_no_default_hides: false,
+                confine_allow_containers: false,
                 team: None,
             },
         ]
@@ -1107,6 +1119,12 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 activity: None,
                 role: None,
                 allow: Vec::new(),
+                confine: false,
+                confine_write: Vec::new(),
+                confine_hide: Vec::new(),
+                confine_unhide: Vec::new(),
+                confine_no_default_hides: false,
+                confine_allow_containers: false,
                 team: None,
             },
             TeamSession {
@@ -1121,6 +1139,12 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 activity: None,
                 role: None,
                 allow: Vec::new(),
+                confine: false,
+                confine_write: Vec::new(),
+                confine_hide: Vec::new(),
+                confine_unhide: Vec::new(),
+                confine_no_default_hides: false,
+                confine_allow_containers: false,
                 team: None,
             },
         ]
@@ -1142,6 +1166,59 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
     }
     let error = team::flag_sessions(&["a=cat -n".into()]).unwrap_err();
     assert!(error.to_string().contains("team file"));
+}
+
+#[test]
+fn confinement_team_defaults_and_validation_are_explicit() {
+    let sessions = team::parse(
+        r#"
+confine = true
+[[session]]
+name = "worker"
+command = ["cat"]
+confine_write = ["./data"]
+confine_hide = ["./secrets"]
+confine_unhide = ["./public"]
+confine_allow_containers = true
+"#,
+    )
+    .unwrap();
+    assert!(sessions[0].confine);
+    assert_eq!(sessions[0].confine_write, ["./data"]);
+    assert!(sessions[0].confine_allow_containers);
+    let error = team::parse(
+        r#"
+[[session]]
+name = "worker"
+command = ["cat"]
+confine_hide = ["./secrets"]
+"#,
+    )
+    .expect_err("options without confine");
+    assert!(error.to_string().contains("require confine"));
+    let error = team::parse(
+        r#"
+[[session]]
+name = "worker"
+command = ["codex"]
+confine = true
+"#,
+    )
+    .expect_err("codex confinement");
+    assert!(error.to_string().contains("not supported for Codex"));
+}
+#[test]
+fn confined_claude_prompt_file_after_separator_is_ignored() {
+    let sessions = team::parse(
+        r#"
+confine = true
+[[session]]
+name = "worker"
+command = ["claude", "--", "--append-system-prompt-file=prompt.txt"]
+"#,
+    )
+    .expect("post-separator prompt option is not part of the command");
+    assert!(sessions[0].confine);
 }
 
 #[test]
@@ -1483,6 +1560,32 @@ command = ["omp", "--secret"]
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_rejects_existing_relative_omp_prompt_file() {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(dir.path().join("prompt.txt"), "prompt").unwrap();
+    std::fs::write(
+        dir.path().join("invalid-omp.toml"),
+        r#"
+confine = true
+[[session]]
+name = "omp"
+command = ["omp", "--append-system-prompt=prompt.txt"]
+cwd = "."
+"#,
+    )
+    .unwrap();
+    let output = run_binary(
+        dir.path(),
+        &["team", "up", "--dry-run", "--file", "invalid-omp.toml"],
+    )
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("existing file as OMP's append-system-prompt value"));
+    assert!(!stderr.contains("would start omp"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dry_run_prints_exact_private_team_report() {
     let (dir, _daemon) = common::start_daemon().await;
     std::fs::write(
@@ -1502,7 +1605,7 @@ async fn dry_run_prints_exact_private_team_report() {
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  command: cat\n"
+        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  confinement: unconfined\n  command: cat\n"
     );
 }
 
@@ -2321,7 +2424,7 @@ cwd = "/"
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  role: developer\n  attach: true\n  watch: t-other\n  control_from: t-other\n  heartbeat: 5s\n  activity: working_after 2m, idle_after 30s\n  command: cat\nwould start t-other\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  command: cat\n",
+        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  role: developer\n  attach: true\n  watch: t-other\n  control_from: t-other\n  heartbeat: 5s\n  activity: working_after 2m, idle_after 30s\n  confinement: unconfined\n  command: cat\nwould start t-other\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  confinement: unconfined\n  command: cat\n",
     );
 }
 

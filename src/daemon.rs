@@ -1,6 +1,7 @@
 //! The host daemon: owns session runtimes and serves the local TCP protocol.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
@@ -22,12 +23,15 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::activity::{Thresholds, Tracker};
 use crate::client::Framed;
 use crate::codex;
+use crate::confine::{self, Host, Plan};
 use crate::delivery::{AnyChannel, Channel};
 use crate::emulator::Size;
 use crate::harness::{self, Deliver, Harness};
 use crate::messaging::{self, Limits, MessageState, code, display_duration};
 use crate::quota;
-use crate::session::{AttachmentSlot, NativeGuard, Session, SessionId, SessionSpec};
+use crate::session::{
+    AttachmentSlot, NativeGuard, Session, SessionId, SessionSpec, mark_inherited_fds_cloexec,
+};
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo,
@@ -52,6 +56,8 @@ pub struct DaemonConfig {
     pub listen: Vec<SocketAddr>,
     pub host_name: Option<String>,
     pub limits: Limits,
+    /// PATH-style search list used to resolve bubblewrap for confined requests.
+    pub bwrap_path: Option<OsString>,
 }
 
 pub struct Daemon {
@@ -75,6 +81,7 @@ struct Runtime {
     limits: Limits,
     address: String,
     state_dir: PathBuf,
+    bwrap_path: OsString,
     exe: PathBuf,
     omp_usage: Mutex<Option<(Instant, BTreeMap<String, QuotaInfo>)>>,
     omp_usage_attempt: Mutex<Option<Instant>>,
@@ -320,6 +327,17 @@ impl Runtime {
     }
 
     async fn create_session(self: &Arc<Self>, request: Request) -> anyhow::Result<Response> {
+        let (confine_request, request) = match request {
+            Request::Confine { confine, request } => {
+                if matches!(request.as_ref(), Request::Confine { .. }) {
+                    return Ok(Response::Error {
+                        message: "nested confinement requests are not allowed".into(),
+                    });
+                }
+                (Some(confine), *request)
+            }
+            request => (None, request),
+        };
         let Request::NewSession {
             argv,
             cols,
@@ -338,7 +356,9 @@ impl Runtime {
             role,
         } = request
         else {
-            anyhow::bail!("expected new_session");
+            return Ok(Response::Error {
+                message: "expected new_session".into(),
+            });
         };
         if argv.is_empty() || cols == 0 || rows == 0 {
             return Ok(Response::Error {
@@ -392,6 +412,16 @@ impl Runtime {
                 message: error.to_string(),
             });
         }
+        if confine_request.is_some() && harness == Harness::Codex {
+            return Ok(Response::Error {
+                message: "confinement is not supported for Codex sessions yet: its tools run outside the session process".into(),
+            });
+        }
+        if confine_request.is_some() && cwd.is_none() {
+            return Ok(Response::Error {
+                message: "confinement requires an explicit cwd".into(),
+            });
+        }
         let _gate = self.new_session_gate.lock().await;
         if let Some(message) = self.check_team_and_name(team.as_ref(), name.as_deref()) {
             return Ok(Response::Error { message });
@@ -421,31 +451,74 @@ impl Runtime {
                 Err(message) => return Ok(Response::Error { message }),
             };
         }
-        let session = tokio::task::spawn_blocking(move || {
-            Session::spawn(
-                id,
-                SessionSpec {
-                    argv,
-                    cwd: cwd.map(PathBuf::from),
-                    size: Size { cols, rows },
-                    env,
-                    name,
-                    harness,
-                    channel,
-                    deliver: deliver.unwrap_or_else(|| harness.default_deliver()),
-                    reset,
-                    control_from,
-                    watch,
-                    activity,
-                    heartbeat,
-                    team,
-                    role,
-                    token,
-                    codex,
-                },
-            )
-        })
-        .await?;
+        let confine_plan = if let Some(confine_request) = confine_request {
+            let Some(cwd) = cwd.clone() else {
+                return Ok(Response::Error {
+                    message: "confinement requires an explicit cwd".into(),
+                });
+            };
+            let cwd = PathBuf::from(cwd);
+            let state_dir = self.state_dir.clone();
+            let bwrap_path = self.bwrap_path.clone();
+            let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Plan> {
+                let bwrap = confine::resolve_bwrap(Some(&bwrap_path))?;
+                confine::preflight(&bwrap)?;
+                let home = std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+                let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+                    .map(PathBuf::from)
+                    .ok_or_else(|| anyhow::anyhow!("XDG_RUNTIME_DIR is not set"))?;
+                let empty_file = state_dir.join("confine-empty");
+                let host = Host {
+                    home: home.clone(),
+                    state_dir: state_dir.clone(),
+                    runtime_dir,
+                    empty_file,
+                };
+                let plan = confine::plan(&confine_request, harness, &cwd, &host)?;
+                confine::ensure_empty_file(&state_dir)?;
+                confine::ensure_data_dirs(harness, &home)?;
+                confine::ensure_data_files(harness, &home)?;
+                Ok(plan.with_bwrap(bwrap))
+            })
+            .await?;
+            match result {
+                Ok(plan) => Some(plan),
+                Err(error) => {
+                    return Ok(Response::Error {
+                        message: error.to_string(),
+                    });
+                }
+            }
+        } else {
+            None
+        };
+        let session_spec = SessionSpec {
+            argv,
+            cwd: cwd.map(PathBuf::from),
+            size: Size { cols, rows },
+            env,
+            name,
+            harness,
+            channel,
+            deliver: deliver.unwrap_or_else(|| harness.default_deliver()),
+            reset,
+            control_from,
+            watch,
+            activity,
+            heartbeat,
+            team,
+            role,
+            token,
+            codex,
+            confine: confine_plan,
+        };
+        let session = if session_spec.confine.is_some() {
+            Session::spawn_confined(id, session_spec).await
+        } else {
+            tokio::task::spawn_blocking(move || Session::spawn(id, session_spec)).await?
+        };
         match session {
             Ok(session) => {
                 let session = Arc::new(session);
@@ -1544,10 +1617,17 @@ impl Daemon {
     /// Bind every listen address, write the chosen addresses to a file in the
     /// state dir, write the admin token file (mode 0600), and start serving.
     pub async fn start(config: DaemonConfig) -> anyhow::Result<Self> {
+        mark_inherited_fds_cloexec()?;
         let exe = tokio::task::spawn_blocking(current_exe).await??;
+        let bwrap_path = config
+            .bwrap_path
+            .clone()
+            .or_else(|| std::env::var_os("PATH"))
+            .unwrap_or_default();
         let path = config.state_dir.clone();
         let lock = tokio::task::spawn_blocking(move || -> anyhow::Result<File> {
             ensure_state_dir(&path)?;
+            confine::ensure_empty_file(&path)?;
             let lock = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -1623,6 +1703,7 @@ impl Daemon {
             limits: config.limits,
             address: addrs[0].to_string(),
             state_dir: config.state_dir.clone(),
+            bwrap_path,
             exe,
             omp_usage: Mutex::new(None),
             omp_usage_attempt: Mutex::new(None),
@@ -1911,6 +1992,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
             Request::Version => Response::Version {
                 version: crate::VERSION.to_owned(),
             },
+            request @ Request::Confine { .. } => runtime.create_session(request).await?,
             request @ Request::NewSession { .. } => runtime.create_session(request).await?,
             Request::Shutdown { now } => {
                 // Answer first: shutdown closes every connection, this one included.
@@ -2485,6 +2567,7 @@ async fn attachment_status(
         hold,
         harness: Some(session.harness()),
         activity,
+        confined: session.confined(),
         starting,
         quota: session_quota(session, runtime.omp_usage().as_ref()),
         team: session.team().cloned(),

@@ -1,10 +1,12 @@
 //! Pure team configuration and session planning.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use anyhow::{Context, bail};
 use serde::Deserialize;
 
+use crate::harness::Harness;
 use crate::messaging::{
     TeamScope, parse_interval, validate_name, validate_reset_steps, validate_role,
 };
@@ -42,6 +44,18 @@ pub struct TeamSession {
     pub role: Option<String>,
     #[serde(default)]
     pub allow: Vec<String>,
+    #[serde(default)]
+    pub confine: bool,
+    #[serde(default)]
+    pub confine_write: Vec<String>,
+    #[serde(default)]
+    pub confine_hide: Vec<String>,
+    #[serde(default)]
+    pub confine_unhide: Vec<String>,
+    #[serde(default)]
+    pub confine_no_default_hides: bool,
+    #[serde(default)]
+    pub confine_allow_containers: bool,
     #[serde(skip)]
     pub team: Option<TeamScope>,
 }
@@ -57,6 +71,8 @@ struct TeamFile {
     allow: Option<Vec<String>>,
     #[serde(default)]
     prefix: Option<toml::Value>,
+    #[serde(default)]
+    confine: Option<bool>,
     #[serde(default)]
     session: Vec<toml::Table>,
 }
@@ -407,6 +423,7 @@ pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<
         private,
         allow,
         prefix,
+        confine,
         session,
     } = file;
     if team.is_some() && default_team.is_some() {
@@ -417,10 +434,16 @@ pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<
         bail!("prefix was renamed to team; see the README");
     }
     let scope = build_scope(team, private, allow)?;
+    let confine_default = confine.unwrap_or(false);
     let mut sessions: Vec<TeamSession> = session
         .into_iter()
         .enumerate()
-        .map(|(index, table)| session_from_table(index, table))
+        .map(|(index, mut table)| {
+            if !table.contains_key("confine") {
+                table.insert("confine".into(), toml::Value::Boolean(confine_default));
+            }
+            session_from_table(index, table)
+        })
         .collect::<anyhow::Result<_>>()?;
     let base_names: HashSet<String> = sessions
         .iter()
@@ -643,6 +666,12 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             heartbeat: None,
             role: None,
             allow: Vec::new(),
+            confine: false,
+            confine_write: Vec::new(),
+            confine_hide: Vec::new(),
+            confine_unhide: Vec::new(),
+            confine_no_default_hides: false,
+            confine_allow_containers: false,
             team: None,
         });
     }
@@ -788,6 +817,7 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
         validate_session_links(session)?;
         validate_session_heartbeat(session)?;
         validate_activity(session)?;
+        validate_session_confine_options(session)?;
         validate_session_role(session)?;
     }
     if let Some(cycle) = activity_cycle(sessions) {
@@ -795,6 +825,70 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
             "activity notices would loop between {}",
             join_with_and(&cycle)
         );
+    }
+    Ok(())
+}
+
+fn validate_session_confine_options(session: &TeamSession) -> anyhow::Result<()> {
+    let lists = [
+        ("confine_write", &session.confine_write),
+        ("confine_hide", &session.confine_hide),
+        ("confine_unhide", &session.confine_unhide),
+    ];
+    let has_options = session.confine_no_default_hides
+        || session.confine_allow_containers
+        || lists.iter().any(|(_, values)| !values.is_empty());
+    if has_options && !session.confine {
+        bail!(
+            "session {}: confinement options require confine = true",
+            session.name
+        );
+    }
+    for (label, values) in lists {
+        if values.len() > 64 {
+            bail!("session {}: {label} has at most 64 entries", session.name);
+        }
+        if let Some(value) = values.iter().find(|value| value.len() > 4096) {
+            bail!(
+                "session {}: {label} entry exceeds 4096 bytes: {value:?}",
+                session.name
+            );
+        }
+    }
+    if session.confine {
+        let harness = Harness::infer(&session.command);
+        if harness == Harness::Codex {
+            bail!(
+                "session {}: confinement is not supported for Codex sessions yet: its tools run outside the session process",
+                session.name
+            );
+        }
+        if harness == Harness::Claude
+            && session
+                .command
+                .iter()
+                .take_while(|argument| argument.as_str() != "--")
+                .any(|argument| {
+                    argument == "--append-system-prompt-file"
+                        || argument.starts_with("--append-system-prompt-file=")
+                })
+        {
+            bail!(
+                "session {}: confinement cannot be combined with --append-system-prompt-file",
+                session.name
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Validate confinement options that depend on the session's resolved working directory.
+pub fn validate_session_confine(session: &TeamSession, cwd: &Path) -> anyhow::Result<()> {
+    validate_session_confine_options(session)?;
+    if session.confine {
+        let harness = Harness::infer(&session.command);
+        crate::harness::validate_prompt_options(&session.command, harness, cwd)
+            .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;
     }
     Ok(())
 }

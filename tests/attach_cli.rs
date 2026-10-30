@@ -132,6 +132,7 @@ fn fake_status(session: &str, team: &TeamScope) -> StatusInfo {
         hold: None,
         harness: Some(Harness::Generic),
         activity: Some(Activity::Idle),
+        confined: false,
         starting: false,
         quota: None,
         team: Some(team.clone()),
@@ -751,11 +752,14 @@ fn attach_without_terminal_is_rejected_with_status_one() -> anyhow::Result<()> {
 async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Result<()> {
     let (first_dir, _first_daemon) = common::start_daemon().await;
     let second_dir = tempfile::tempdir()?;
+    let bwrap_dir = second_dir.path().join("bwrap-path");
+    std::fs::create_dir_all(&bwrap_dir)?;
     let _second_daemon = a2amx::daemon::Daemon::start(a2amx::daemon::DaemonConfig {
         state_dir: second_dir.path().to_path_buf(),
         listen: vec!["127.0.0.1:0".parse()?],
         host_name: None,
         limits: a2amx::messaging::Limits::default(),
+        bwrap_path: Some(bwrap_dir.into_os_string()),
     })
     .await?;
     let first_home = first_dir.path().to_string_lossy().into_owned();

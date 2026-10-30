@@ -51,6 +51,18 @@ pub enum Command {
         /// Claude only: deliver by typing into the terminal instead of through a channel.
         #[arg(long)]
         no_channel: bool,
+        #[arg(long)]
+        confine: bool,
+        #[arg(long = "confine-write")]
+        confine_write: Vec<String>,
+        #[arg(long = "confine-hide")]
+        confine_hide: Vec<String>,
+        #[arg(long = "confine-unhide")]
+        confine_unhide: Vec<String>,
+        #[arg(long)]
+        confine_no_default_hides: bool,
+        #[arg(long)]
+        confine_allow_containers: bool,
         /// Slash command sequence used by `a2amx reset`; repeatable and ordered.
         #[arg(long)]
         reset: Vec<String>,

@@ -7,9 +7,11 @@
 
 use std::fs::File;
 use std::io::{Read, Write};
+use std::os::fd::BorrowedFd;
 use std::os::unix::process::ExitStatusExt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::tty::{self, ChildEvent, EventedPty};
@@ -31,6 +33,37 @@ const RESET_POLL: Duration = Duration::from_millis(100);
 const RESET_TIMEOUT: Duration = Duration::from_secs(30);
 const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(10);
 const CLAUDE_EXIT_KEY_GAP: Duration = Duration::from_millis(300);
+type SpawnTask = Box<dyn FnOnce() -> anyhow::Result<Session> + Send + 'static>;
+
+struct SpawnJob {
+    task: SpawnTask,
+    reply: oneshot::Sender<anyhow::Result<Session>>,
+}
+
+static SPAWN_JOBS: LazyLock<Result<std_mpsc::Sender<SpawnJob>, String>> = LazyLock::new(|| {
+    let (sender, receiver) = std_mpsc::channel();
+    match std::thread::Builder::new()
+        .name("a2amx-spawn".to_owned())
+        .spawn(move || spawn_worker(receiver))
+    {
+        Ok(_) => Ok(sender),
+        Err(error) => Err(error.to_string()),
+    }
+});
+
+fn spawn_worker(receiver: std_mpsc::Receiver<SpawnJob>) {
+    while let Ok(job) = receiver.recv() {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.task))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("confined spawn worker task panicked")));
+        let _ = job.reply.send(result);
+    }
+}
+
+fn confined_spawn_sender() -> anyhow::Result<&'static std_mpsc::Sender<SpawnJob>> {
+    SPAWN_JOBS
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("cannot start confined spawn worker: {error}"))
+}
 
 pub struct SessionSpec {
     pub argv: Vec<String>,
@@ -50,6 +83,7 @@ pub struct SessionSpec {
     pub role: Option<String>,
     pub token: String,
     pub(crate) codex: Option<Arc<crate::codex::Link>>,
+    pub confine: Option<crate::confine::Plan>,
 }
 
 pub struct Session {
@@ -70,6 +104,7 @@ pub struct Session {
     role: Option<String>,
     token: String,
     codex: Option<Arc<crate::codex::Link>>,
+    confined: bool,
     input_gate: tokio::sync::Mutex<()>,
     message_notify: Notify,
     shared: Arc<Shared>,
@@ -285,9 +320,74 @@ fn exit_code_from_status(status: i32) -> i32 {
     }
 }
 
+pub(crate) fn mark_inherited_fds_cloexec() -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
+        // libc is used because rustix 1.1 has no close_range wrapper.
+        // SAFETY: close_range only changes this process's descriptor flags;
+        // the kernel applies it atomically without dereferencing user pointers.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_close_range,
+                3 as libc::c_uint,
+                libc::c_uint::MAX,
+                CLOSE_RANGE_CLOEXEC,
+            )
+        };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ENOSYS) {
+            return Err(error).context("marking inherited descriptors close-on-exec");
+        }
+        for entry in std::fs::read_dir("/proc/self/fd").context("enumerating descriptors")? {
+            let entry = entry?;
+            let Ok(fd) = entry.file_name().to_string_lossy().parse::<i32>() else {
+                continue;
+            };
+            if fd <= 2 {
+                continue;
+            }
+            // SAFETY: the descriptor was returned by the live `/proc/self/fd`
+            // directory and is borrowed only for these fcntl calls.
+            let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+            let flags = rustix::io::fcntl_getfd(borrowed)?;
+            rustix::io::fcntl_setfd(borrowed, flags | rustix::io::FdFlags::CLOEXEC)?;
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(())
+    }
+}
+
 impl Session {
+    pub(crate) async fn spawn_confined(id: SessionId, spec: SessionSpec) -> anyhow::Result<Self> {
+        let (reply, result) = oneshot::channel();
+        confined_spawn_sender()?
+            .send(SpawnJob {
+                task: Box::new(move || Self::spawn(id, spec)),
+                reply,
+            })
+            .map_err(|_| anyhow::anyhow!("confined spawn worker stopped"))?;
+        result
+            .await
+            .context("confined spawn worker dropped its reply")?
+    }
+
     pub fn spawn(id: SessionId, spec: SessionSpec) -> anyhow::Result<Self> {
-        let Some(program) = spec.argv.first() else {
+        let confined = spec.confine.is_some();
+        let original_argv = spec.argv;
+        let launch_argv = if let Some(plan) = spec.confine.as_ref() {
+            let notice = crate::confine::notice(plan);
+            crate::confine::launch_argv(plan, &notice, original_argv.clone(), spec.harness)?
+        } else {
+            original_argv.clone()
+        };
+        let Some(program) = launch_argv.first() else {
             bail!("session command is empty");
         };
         if spec.size.cols == 0 || spec.size.rows == 0 {
@@ -303,7 +403,7 @@ impl Session {
         env.insert("COLORTERM".into(), "truecolor".into());
         let cwd = spec.cwd.clone();
         let options = tty::Options {
-            shell: Some(tty::Shell::new(program.clone(), spec.argv[1..].to_vec())),
+            shell: Some(tty::Shell::new(program.clone(), launch_argv[1..].to_vec())),
             working_directory: spec.cwd,
             env,
             drain_on_exit: true,
@@ -362,7 +462,7 @@ impl Session {
         Ok(Self {
             id,
             started,
-            argv: spec.argv,
+            argv: original_argv,
             cwd,
             name: spec.name,
             harness: spec.harness,
@@ -377,9 +477,10 @@ impl Session {
             role: spec.role,
             token: spec.token,
             codex: spec.codex,
+            confined,
+            shared,
             input_gate: tokio::sync::Mutex::new(()),
             message_notify: Notify::new(),
-            shared,
             input,
             master,
             pid,
@@ -393,6 +494,10 @@ impl Session {
 
     pub(crate) fn codex(&self) -> Option<&Arc<crate::codex::Link>> {
         self.codex.as_ref()
+    }
+
+    pub fn confined(&self) -> bool {
+        self.confined
     }
 
     pub fn id(&self) -> &SessionId {

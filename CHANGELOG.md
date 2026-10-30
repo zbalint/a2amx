@@ -15,6 +15,18 @@ All notable user-visible changes are listed here. The format follows
   the status frame's `members`; an older daemon simply shows no line (`docs/cli.md`).
 - A dim rule under the team line, like the one above the status bar, on terminals of at least six rows
   (at five rows the line shows without it). A click on the rule does nothing.
+- Opt-in confinement of a session with bubblewrap: `a2amx new --confine` (and `confine = true` in a team
+  file) runs a Claude, OMP or Generic session with a read-only root, a private `/tmp`, its own process list,
+  and writes limited to the workspace, the git directory and the harness's data paths. Secret locations
+  (`~/.ssh`, `~/.aws`, the state directory, the session bus, container sockets and others) are hidden;
+  `--confine-write`, `--confine-hide`, `--confine-unhide`, `--confine-no-default-hides` and
+  `--confine-allow-containers` adjust it, with the same keys in the team file. The agent is told its limits in
+  its system prompt, the status bar shows `[sandbox]`, and `team up --dry-run` prints the effective
+  restrictions. A session never starts unconfined when confinement was requested; Codex sessions are
+  refused. It is a safety net for a trusted but fallible agent, not a security boundary. Known limitation: in
+  a Generic session running a plain shell, one Ctrl-C ends the confined session. Additive protocol: the
+  `Confine` request and `confined` on the status; restart an older daemon to use `--confine`
+  (`docs/cli.md`, `docs/teams.md`, `docs/harnesses.md`).
 
 ### Changed
 

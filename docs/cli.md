@@ -46,6 +46,32 @@ the peer is not ready or changed within ten seconds; idle notices therefore arri
 least ten seconds after the peer's last output. The first settled state is silent, and
 each direction is debounced independently. Prefer 30 seconds or more for `idle-after`.
 
+## Confinement
+
+`a2amx new --confine -- <command>` runs the PTY child under bubblewrap. The daemon
+resolves `bwrap` from its startup `PATH` and refuses the request when the executable
+or its `--version` probe is unavailable; confinement is opt-in and unconfined sessions
+retain their existing launch behavior.
+
+Cooked-mode Generic sessions have this Ctrl-C limitation: one Ctrl-C ends the confined
+session because SIGINT reaches the foreground group, including the sandbox wrapper, so the
+command's INT trap does not run; raw-mode harnesses receive Ctrl-C as input (observed with
+a raw-mode reader, not yet checked with a real Claude or OMP session).
+
+The repeatable path flags are `--confine-write PATH`, `--confine-hide PATH`, and
+`--confine-unhide PATH`. Relative paths are resolved against the session cwd.
+`--confine-no-default-hides` disables the optional home hides but never removes the
+mandatory state, runtime, `/proc`, and descriptor restrictions. `--confine-allow-containers`
+allows only the configured system container sockets and related environment; the
+rootless sockets under `$XDG_RUNTIME_DIR` remain hidden. These flags require
+`--confine`; path lists accept at most 64 entries and each entry is capped at 4096 bytes.
+
+The session status line adds a dim `[sandbox]` tag immediately after the session name.
+`a2amx team up --dry-run` reports confinement, writable/protected paths, the final hidden
+paths, and missing paths skipped from the launch plan. A socket or file created on the host
+after launch is visible when it is outside every launch-time hide; start container daemons
+before a confined session if their socket must be hidden.
+
 ## State directory and attachment
 
 The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,

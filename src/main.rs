@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use a2amx::bridge;
 use a2amx::cli::{Cli, Command, DaemonAction, TeamAction};
 use a2amx::client::{Attachment, Client};
+use a2amx::confine::ConfineRequest;
 use a2amx::daemon::{self, Daemon, DaemonConfig};
 use a2amx::emulator::Scroll;
 use a2amx::harness::{Deliver, Harness};
@@ -173,6 +174,7 @@ async fn run_daemon(
         listen,
         host_name,
         limits: a2amx::messaging::Limits::default(),
+        bwrap_path: None,
     })
     .await?;
     for addr in daemon.addrs() {
@@ -393,6 +395,12 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         deliver,
         no_authorize_peers,
         no_channel,
+        confine,
+        confine_write,
+        confine_hide,
+        confine_unhide,
+        confine_no_default_hides,
+        confine_allow_containers,
         reset,
         control_from,
         watch,
@@ -404,6 +412,14 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     else {
         return Err(anyhow!("expected new session options"));
     };
+    let has_confine_options = !confine_write.is_empty()
+        || !confine_hide.is_empty()
+        || !confine_unhide.is_empty()
+        || confine_no_default_hides
+        || confine_allow_containers;
+    if has_confine_options && !confine {
+        return Err(anyhow!("--confine-* flags require --confine"));
+    }
     let activity = parse_activity_watch(
         activity_working_after.as_deref(),
         activity_idle_after.as_deref(),
@@ -440,6 +456,10 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         }
     };
     let (cols, rows) = terminal_size_with_default()?;
+    let cwd = std::env::current_dir()?;
+    let confine_write = resolve_confine_paths(&cwd, &confine_write);
+    let confine_hide = resolve_confine_paths(&cwd, &confine_hide);
+    let confine_unhide = resolve_confine_paths(&cwd, &confine_unhide);
     let session = create_session(
         &home,
         &mut client,
@@ -451,13 +471,20 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             deliver,
             no_authorize_peers,
             no_channel,
+            confine,
+            confine_write,
+            confine_hide,
+            confine_unhide,
+            confine_no_default_hides,
+            confine_allow_containers,
+            team_file: None,
             reset,
             control_from,
             watch,
             activity,
             heartbeat,
             command,
-            cwd: std::env::current_dir()?,
+            cwd,
             cols,
             rows,
         },
@@ -484,6 +511,13 @@ struct NewOptions {
     deliver: Option<Deliver>,
     no_authorize_peers: bool,
     no_channel: bool,
+    confine: bool,
+    confine_write: Vec<String>,
+    confine_hide: Vec<String>,
+    confine_unhide: Vec<String>,
+    confine_no_default_hides: bool,
+    confine_allow_containers: bool,
+    team_file: Option<PathBuf>,
     reset: Vec<String>,
     control_from: Vec<String>,
     watch: Vec<String>,
@@ -554,6 +588,21 @@ async fn wired_command(
     }
 }
 
+fn resolve_confine_paths(base: &Path, paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| {
+            let path = Path::new(path);
+            if path.is_absolute() {
+                path.to_owned()
+            } else {
+                base.join(path)
+            }
+        })
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
+}
+
 async fn create_session(
     home: &Path,
     client: &mut Client,
@@ -567,6 +616,13 @@ async fn create_session(
         team,
         no_authorize_peers,
         no_channel,
+        confine,
+        confine_write,
+        confine_hide,
+        confine_unhide,
+        confine_no_default_hides,
+        confine_allow_containers,
+        team_file,
         reset,
         control_from,
         watch,
@@ -625,27 +681,46 @@ async fn create_session(
     if harness == Harness::Claude && !no_channel {
         env.push((a2amx::harness::CHANNEL_ENV.to_owned(), "1".to_owned()));
     }
-    let response = client
-        .request(Request::NewSession {
-            argv: command,
-            cols,
-            rows,
-            cwd: Some(cwd),
-            env,
-            reset,
-            control_from,
-            watch,
-            activity,
-            name,
-            harness,
-            deliver,
-            team,
-            role,
-            heartbeat,
-        })
-        .await?;
+    let request = Request::NewSession {
+        argv: command,
+        cols,
+        rows,
+        cwd: Some(cwd),
+        env,
+        reset,
+        control_from,
+        watch,
+        activity,
+        name,
+        harness,
+        deliver,
+        team,
+        role,
+        heartbeat,
+    };
+    let request = if confine {
+        Request::Confine {
+            confine: ConfineRequest {
+                write: confine_write,
+                hide: confine_hide,
+                unhide: confine_unhide,
+                no_default_hides: confine_no_default_hides,
+                allow_containers: confine_allow_containers,
+                team_file: team_file.map(|path| path.to_string_lossy().into_owned()),
+            },
+            request: Box::new(request),
+        }
+    } else {
+        request
+    };
+    let response = client.request(request).await?;
     match response {
         Response::Created { session } => Ok(session),
+        Response::Error { message } if confine && message.contains("invalid control request") => {
+            Err(anyhow!(
+                "the running daemon does not support --confine; restart it"
+            ))
+        }
         Response::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }
@@ -656,6 +731,12 @@ struct TeamSource {
     path: PathBuf,
     dir: PathBuf,
     default_team: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct TeamOrigin<'a> {
+    dir: &'a Path,
+    file: Option<&'a Path>,
 }
 
 async fn resolve_team_file(home: &Path, file: Option<PathBuf>) -> anyhow::Result<TeamSource> {
@@ -930,7 +1011,7 @@ async fn note_lost_messages(home: &Path, wanted: &[TeamSession]) {
 async fn dry_run_report(
     home: &Path,
     cwd: &Path,
-    file_dir: &Path,
+    origin: TeamOrigin<'_>,
     actions: Vec<team::Action>,
 ) -> anyhow::Result<String> {
     let mut output = String::new();
@@ -940,7 +1021,7 @@ async fn dry_run_report(
                 output.push_str(&format!("already running {name} {id}\n"));
             }
             team::Action::Start(session) => {
-                output.push_str(&dry_run_start(home, cwd, file_dir, &session).await?);
+                output.push_str(&dry_run_start(home, cwd, origin, &session).await?);
             }
         }
     }
@@ -950,14 +1031,40 @@ async fn dry_run_report(
 async fn dry_run_start(
     home: &Path,
     cwd: &Path,
-    file_dir: &Path,
+    origin: TeamOrigin<'_>,
     session: &TeamSession,
 ) -> anyhow::Result<String> {
     let harness = Harness::infer(&session.command);
     let resolved_cwd = session
         .cwd
         .as_deref()
-        .map_or_else(|| cwd.to_owned(), |path| file_dir.join(path));
+        .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
+    team::validate_session_confine(session, &resolved_cwd)?;
+    let confine_plan = if session.confine {
+        let host_home = PathBuf::from(std::env::var_os("HOME").context("HOME not set")?);
+        let runtime_dir =
+            PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?);
+        let request = ConfineRequest {
+            write: resolve_confine_paths(&resolved_cwd, &session.confine_write),
+            hide: resolve_confine_paths(&resolved_cwd, &session.confine_hide),
+            unhide: resolve_confine_paths(&resolved_cwd, &session.confine_unhide),
+            no_default_hides: session.confine_no_default_hides,
+            allow_containers: session.confine_allow_containers,
+            team_file: origin.file.map(|path| path.to_string_lossy().into_owned()),
+        };
+        let host = a2amx::confine::Host {
+            home: host_home,
+            state_dir: home.to_owned(),
+            runtime_dir,
+            empty_file: home.join("confine-empty"),
+        };
+        Some(
+            a2amx::confine::plan(&request, harness, &resolved_cwd, &host)?
+                .with_bwrap(PathBuf::from("bwrap")),
+        )
+    } else {
+        None
+    };
     let command = wired_command(
         home,
         session.command.clone(),
@@ -978,11 +1085,73 @@ async fn dry_run_start(
     for (label, value) in session_details(session) {
         output.push_str(&format!("  {label}: {value}\n"));
     }
+    output.push_str(&format!(
+        "  confinement: {}\n",
+        if confine_plan.is_some() {
+            "confined"
+        } else {
+            "unconfined"
+        }
+    ));
+    if let Some(plan) = &confine_plan {
+        for path in plan.writable.iter().filter(|path| **path != resolved_cwd) {
+            output.push_str(&format!("  writable: {}\n", path.display()));
+        }
+        for path in &plan.protected {
+            output.push_str(&format!("  protected: {}\n", path.display()));
+        }
+        for path in plan.hidden_paths() {
+            output.push_str(&format!("  hidden: {}\n", path.display()));
+        }
+        for path in plan.skipped_paths() {
+            output.push_str(&format!("  hidden: {} (skipped missing)\n", path.display()));
+        }
+    }
     output.push_str(&format!("  command: {}\n", redact_argv(&command)));
     if harness == Harness::Omp {
         output.push_str("omp extension install skipped (dry run)\n");
     }
     Ok(output)
+}
+
+fn validate_team_session(
+    home: &Path,
+    cwd: &Path,
+    origin: TeamOrigin<'_>,
+    session: &TeamSession,
+) -> anyhow::Result<()> {
+    let resolved_cwd = session
+        .cwd
+        .as_deref()
+        .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
+    team::validate_session_confine(session, &resolved_cwd)?;
+    if !session.confine {
+        return Ok(());
+    }
+    let host_home = PathBuf::from(std::env::var_os("HOME").context("HOME not set")?);
+    let runtime_dir =
+        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?);
+    let request = ConfineRequest {
+        write: resolve_confine_paths(&resolved_cwd, &session.confine_write),
+        hide: resolve_confine_paths(&resolved_cwd, &session.confine_hide),
+        unhide: resolve_confine_paths(&resolved_cwd, &session.confine_unhide),
+        no_default_hides: session.confine_no_default_hides,
+        allow_containers: session.confine_allow_containers,
+        team_file: origin.file.map(|path| path.to_string_lossy().into_owned()),
+    };
+    let host = a2amx::confine::Host {
+        home: host_home,
+        state_dir: home.to_owned(),
+        runtime_dir,
+        empty_file: home.join("confine-empty"),
+    };
+    a2amx::confine::plan(
+        &request,
+        Harness::infer(&session.command),
+        &resolved_cwd,
+        &host,
+    )?;
+    Ok(())
 }
 
 fn session_details(session: &TeamSession) -> Vec<(&'static str, String)> {
@@ -1029,7 +1198,7 @@ async fn start_planned_session(
     client: &mut Client,
     session: Box<TeamSession>,
     cwd: &Path,
-    file_dir: &Path,
+    origin: TeamOrigin<'_>,
     cols: u16,
     rows: u16,
 ) -> anyhow::Result<(String, String)> {
@@ -1047,6 +1216,14 @@ async fn start_planned_session(
         })
         .transpose()?
         .flatten();
+    let resolved_cwd = session
+        .cwd
+        .as_deref()
+        .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
+    team::validate_session_confine(&session, &resolved_cwd)?;
+    let confine_write = resolve_confine_paths(&resolved_cwd, &session.confine_write);
+    let confine_hide = resolve_confine_paths(&resolved_cwd, &session.confine_hide);
+    let confine_unhide = resolve_confine_paths(&resolved_cwd, &session.confine_unhide);
     let name = session.name;
     let result = create_session(
         home,
@@ -1056,18 +1233,23 @@ async fn start_planned_session(
             harness: None,
             role: session.role,
             team: session.team,
-            deliver: None,
             no_authorize_peers: false,
             no_channel: false,
-            reset: session.reset.unwrap_or_default(),
+            confine: session.confine,
+            confine_write,
+            confine_hide,
+            confine_unhide,
+            confine_no_default_hides: session.confine_no_default_hides,
+            confine_allow_containers: session.confine_allow_containers,
+            team_file: origin.file.map(Path::to_owned),
+            deliver: None,
             control_from: session.control_from,
+            reset: session.reset.unwrap_or_default(),
             watch: session.watch,
             activity,
             heartbeat,
             command: session.command,
-            cwd: session
-                .cwd
-                .map_or_else(|| cwd.to_owned(), |path| file_dir.join(path)),
+            cwd: resolved_cwd,
             cols,
             rows,
         },
@@ -1087,12 +1269,13 @@ async fn run_team_up(
     items: Vec<String>,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
-    let (wanted, file_dir) = if items.is_empty() {
+    let (wanted, file_dir, team_file) = if items.is_empty() {
         let source = resolve_team_file(&home, file).await?;
         let file_dir = source.dir.clone();
-        (read_team(source).await?, file_dir)
+        let team_file = Some(std::fs::canonicalize(&source.path)?);
+        (read_team(source).await?, file_dir, team_file)
     } else {
-        (team::flag_sessions(&items)?, cwd.clone())
+        (team::flag_sessions(&items)?, cwd.clone(), None)
     };
     let attach_name = wanted
         .iter()
@@ -1108,8 +1291,17 @@ async fn run_team_up(
             return Err(anyhow!("team has session conflicts"));
         }
     };
+    let origin = TeamOrigin {
+        dir: &file_dir,
+        file: team_file.as_deref(),
+    };
+    for action in &actions {
+        if let team::Action::Start(session) = action {
+            validate_team_session(&home, &cwd, origin, session)?;
+        }
+    }
     if dry_run {
-        let output = dry_run_report(&home, &cwd, &file_dir, actions).await?;
+        let output = dry_run_report(&home, &cwd, origin, actions).await?;
         write_stdout(output.into_bytes()).await?;
         note_lost_messages(&home, &wanted).await;
         return Ok(());
@@ -1126,8 +1318,7 @@ async fn run_team_up(
                 (name, id)
             }
             team::Action::Start(session) => {
-                start_planned_session(&home, &mut client, session, &cwd, &file_dir, cols, rows)
-                    .await?
+                start_planned_session(&home, &mut client, session, &cwd, origin, cols, rows).await?
             }
         };
         if attach_name == Some(name.as_str()) {

@@ -11,6 +11,8 @@ use crate::emulator::Scroll;
 use crate::harness::{Deliver, Harness};
 use crate::messaging::TeamScope;
 
+pub use crate::confine::ConfineRequest;
+
 /// Largest accepted frame payload. Decoding rejects longer frames.
 pub const MAX_FRAME_LEN: usize = 1 << 20;
 
@@ -142,6 +144,10 @@ impl ActivityWatch {
 pub enum Request {
     Hello {
         token: String,
+    },
+    Confine {
+        confine: ConfineRequest,
+        request: Box<Request>,
     },
     NewSession {
         argv: Vec<String>,
@@ -461,6 +467,8 @@ pub struct StatusInfo {
     pub activity: Option<Activity>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub starting: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub confined: bool,
     #[serde(default)]
     pub quota: Option<QuotaInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

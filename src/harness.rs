@@ -458,6 +458,127 @@ pub fn wire_omp_argv(
     insert_extras(argv, extras)
 }
 
+/// Validate harness prompt-file options against the session's working directory.
+///
+/// The command slice excludes bubblewrap's own arguments. OMP accepts a prompt
+/// string, but an existing file would be read after confinement setup and can
+/// therefore bypass the intended prompt boundary.
+pub fn validate_prompt_options(
+    argv: &[String],
+    harness: Harness,
+    base_dir: &Path,
+) -> anyhow::Result<()> {
+    let command_end = argv
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(argv.len());
+    let argv = &argv[..command_end];
+    if harness == Harness::Claude
+        && argv.iter().any(|argument| {
+            argument == "--append-system-prompt-file"
+                || argument.starts_with("--append-system-prompt-file=")
+        })
+    {
+        return Err(anyhow!(
+            "confinement cannot be combined with --append-system-prompt-file"
+        ));
+    }
+    let mut index = 0;
+    while index < argv.len() {
+        let argument = &argv[index];
+        let value = if argument == "--append-system-prompt" {
+            let value_index = index + 1;
+            if value_index >= argv.len() {
+                return Err(anyhow!("--append-system-prompt is missing its value"));
+            }
+            index = value_index;
+            Some(argv[value_index].as_str())
+        } else {
+            argument.strip_prefix("--append-system-prompt=")
+        };
+        if harness == Harness::Omp
+            && value.is_some_and(|value| {
+                let path = Path::new(value);
+                let path = if path.is_absolute() {
+                    path.to_owned()
+                } else {
+                    base_dir.join(path)
+                };
+                path.is_file()
+            })
+        {
+            return Err(anyhow!(
+                "confinement cannot use an existing file as OMP's append-system-prompt value"
+            ));
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+/// Append a confinement notice to the last system-prompt option before `--`.
+pub fn append_system_prompt(
+    mut argv: Vec<String>,
+    notice: &str,
+    harness: Harness,
+    base_dir: &Path,
+) -> anyhow::Result<Vec<String>> {
+    if matches!(harness, Harness::Generic) {
+        return Ok(argv);
+    }
+    let command_start = argv
+        .iter()
+        .position(|argument| argument == "--")
+        .map_or(0, |index| index + 1);
+    let command_end = argv[command_start..]
+        .iter()
+        .position(|argument| argument == "--")
+        .map_or(argv.len(), |index| command_start + index);
+    validate_prompt_options(&argv[command_start..command_end], harness, base_dir)?;
+
+    let mut last = None;
+    let mut index = command_start;
+    while index < command_end {
+        let argument = &argv[index];
+        if argument == "--append-system-prompt" {
+            let value_index = index + 1;
+            if value_index >= command_end {
+                return Err(anyhow!("--append-system-prompt is missing its value"));
+            }
+            last = Some((index, value_index));
+            index += 2;
+            continue;
+        }
+        if argument.starts_with("--append-system-prompt=") {
+            last = Some((index, index));
+        }
+        index += 1;
+    }
+
+    if let Some((flag_index, value_index)) = last {
+        let value = if flag_index == value_index {
+            argv[flag_index]
+                .strip_prefix("--append-system-prompt=")
+                .unwrap_or_default()
+                .to_owned()
+        } else {
+            argv[value_index].clone()
+        };
+        let combined = format!("{value}\n\n{notice}");
+        if flag_index == value_index {
+            argv[flag_index] = format!("--append-system-prompt={combined}");
+        } else {
+            argv[value_index] = combined;
+        }
+    } else {
+        drop(argv.splice(
+            command_end..command_end,
+            ["--append-system-prompt".to_owned(), notice.to_owned()],
+        ));
+    }
+    Ok(argv)
+}
+
 pub(crate) fn insert_extras(mut argv: Vec<String>, extras: Vec<String>) -> Vec<String> {
     let insertion = argv
         .iter()

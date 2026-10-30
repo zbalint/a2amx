@@ -13,6 +13,7 @@ fn info(address: &str) -> StatusInfo {
         hold: None,
         harness: None,
         activity: None,
+        confined: false,
         starting: false,
         quota: None,
         team: None,
@@ -40,6 +41,15 @@ fn visible(bytes: &[u8]) -> String {
         }
     }
     String::from_utf8_lossy(&text).into_owned()
+}
+
+#[test]
+fn confined_status_shows_dim_sandbox_tag() {
+    let mut status = info("agent-plan@host-a");
+    status.confined = true;
+    let rendered = status::render("agent-plan", Some(&status), 2, 80, 24);
+    let text = String::from_utf8(rendered).expect("utf8 status");
+    assert!(text.contains("\x1b[2m[sandbox]\x1b[22m"));
 }
 
 #[test]

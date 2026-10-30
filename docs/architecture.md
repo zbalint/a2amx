@@ -71,9 +71,11 @@ logical role, not a requirement for a dedicated physical host.
 | Central daemon | Enrollment, directory, authorization, durable message acceptance, routing, global status | Local PTY handles or interpretation of harness keystrokes |
 | Host supervisor | Local processes, session runtimes, reconnect reconciliation, local delivery journal | Global acceptance while disconnected from the central daemon |
 | Session runtime | PTY lifecycle, screen model, input arbiter, writer, resize, delivery execution | MCP tool parsing or global routing |
+| Confinement planner | Canonical path guards, bubblewrap preflight/argv, mount plan, notice | PTY lifecycle or harness-specific delivery |
 | Per-agent MCP server | Small tool interface and authenticated session binding | Direct PTY access or human management authority |
 | Prompt-submit hook | Reporting submitted prompts and applying the supervisor's allow or block verdict | Deciding that the model processed a message |
 | Human CLI/TUI | Session selection, attachment, management requests, pending-message display | Persistent ownership of a running PTY |
+Confined PTY children are forked from the dedicated long-lived `a2amx-spawn` thread because bubblewrap's `--die-with-parent` follows the lifetime of the forking thread.
 
 The host supervisor is the per-host daemon. It accepts launch and management
 requests from the central daemon as well as from local clients. A host supervisor
@@ -346,6 +348,17 @@ states in file order and returns status 1 only when `team up` would refuse. `tea
 and redacted argv without creating sessions or installing the OMP extension. Both
 commands use a separate best-effort messages query to note retained messages lost in a
 daemon restart; the note never changes the command result.
+
+### PTY confinement
+
+`Request::Confine` wraps exactly one `NewSession` request. The daemon resolves and
+preflights bubblewrap, builds the canonical `confine::Plan`, and passes that plan to
+`Session::spawn`; the session keeps the original argv for list/status while launching
+the wrapped argv under bubblewrap. Confinement is opt-in. The plan hides mandatory
+state/runtime/proc/descriptor surfaces, applies explicit writable and read-only mounts,
+and records missing operator paths for dry-run output. A late-created socket outside
+launch-time hides remains visible; start container daemons before a confined session
+when their host sockets must be hidden.
 
 ### Status line
 

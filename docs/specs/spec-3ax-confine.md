@@ -542,3 +542,20 @@ tester's lifetime runs.
    calls, then sleep 1.5 s), and assert the session is still running and `bwrap` is alive. Name the test
    `confined_session_survives_blocking_pool_thread_retirement`. The tester reruns the 40 s lifetime matrix on the fix.
 3. Docs (`docs/architecture.md`): one sentence stating that confined children are forked from the dedicated thread, and why.
+
+## Review record
+
+**Models.** Architect: Claude Sonnet 5.5 for the acceptance review and commit; earlier in the task a Claude session whose model was not recorded. Consultant: a Claude Code session running Opus. Developer and tester: OMP sessions reporting `openai-codex/gpt-5.6-luna`; their planning, working and advisor slot models were not exposed to the sessions. **BLOCKED/amend cycles:** one recorded BLOCKED (Amendment 2); the other three amendments came from reviews and tester passes. The task lost its agents' contexts to a VM crash at the end of the tester pass (the tester's mutation builds had filled the disk), so some intermediate findings are known only from the amendments and the task events.
+
+| Found in | Found by | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (three rounds) and the owner's assistant | Several design gaps before lock (SQLite side files in read-only directories, in-process test daemons sharing `PATH`, readable credential files, same-user signals, descriptor inheritance) | Adopted before lock (sections 2 and 5) |
+| After lock | Owner's assistant | Paths created after session start (a container daemon) are not hidden, and the container switch scope was unclear | Amendment 1: documented residual, pinning test, notice wording |
+| Implementation | Developer (BLOCKED) | The wire carried no team file path, so the team file could not be protected | Amendment 2: `ConfineRequest.team_file` |
+| Tester pass | Tester | Unhide and write entries could lift the container restriction; harness data paths skipped the write guards; a written path was reported hidden; the `--unshare-user` claim in section 5 was false on a non-setuid bwrap | Amendment 3 (items 1-5) |
+| Tester pass | Tester | Confined sessions were killed about 10 s after creation: `--die-with-parent` follows the forking thread and the tokio blocking pool retires it. The developer's tests, which live under 10 s, and the architect's checkpoint review missed it | Amendment 4: a dedicated `a2amx-spawn` thread and `confined_session_survives_blocking_pool_thread_retirement` |
+| Tester pass | Tester | The `Plan::wrap` total argv size check survived a `>` to `==` mutant, because the existing test trips the per-argument limit first | `total_argv_size_checks_sum_arguments_below_per_argument_cap` added |
+| Tester pass | Tester | Removing `catch_unwind` in the spawn thread leaves every test green | Accepted survivor: no public seam reaches it, and the project forbids a test-only seam |
+| Architect review | Architect | A new `#[allow(clippy::too_many_arguments)]` on `start_planned_session` | `file_dir` and the team file path bundled into `TeamOrigin`; allow removed |
+| Tester pass | Tester | One Ctrl-C ends a confined session running a plain shell in cooked mode, with or without `--unshare-pid`; a raw-mode reader gets the byte | Documented limitation in `docs/harnesses.md` and `docs/cli.md`; fix in a follow-up spec |
+| Tester pass | Tester | Mutation builds in per-copy target directories filled the disk and crashed the VM | Process: one shared target directory under the home cache, a disk check before each build |

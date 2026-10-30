@@ -39,12 +39,15 @@ pub async fn start_daemon_in(dir: &Path, host_name: Option<&str>, limits: Limits
     // parallel test inherits the fd until it execs), so retry that one error briefly.
     // shortcut: fixed 5s budget; find who holds the lock if this ever needs more.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let bwrap_dir = dir.join("bwrap-path");
+    std::fs::create_dir_all(&bwrap_dir).expect("bwrap path directory");
     loop {
         let started = Daemon::start(DaemonConfig {
             state_dir: dir.to_path_buf(),
             listen: vec!["127.0.0.1:0".parse().expect("loopback address")],
             host_name: host_name.map(str::to_owned),
             limits,
+            bwrap_path: Some(bwrap_dir.clone().into_os_string()),
         })
         .await;
         match started {

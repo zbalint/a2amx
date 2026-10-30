@@ -107,6 +107,17 @@ to the same injected operator text as the peer-authorization line, including whe
 
 Within a `[[session]]` table, `name` may be omitted when `role` is set; the role is then used as the name and must itself be a valid name (otherwise set `name` explicitly). An explicit `name` always wins.
 
+### Confinement settings
+
+Set `confine = true` on a session, or at the team-file top level to default it for
+sessions that do not override the key. `confine_write`, `confine_hide`, and
+`confine_unhide` are repeatable string arrays; relative paths are resolved against the
+resolved session cwd. `confine_no_default_hides` and `confine_allow_containers` are
+booleans. Options are rejected when `confine = false`, and each path list accepts at
+most 64 entries of at most 4096 bytes. Codex sessions cannot be confined. The
+`--confine-allow-containers` behavior leaves rootless sockets under
+`$XDG_RUNTIME_DIR` hidden.
+
 A copy to start from is in [a2amx.toml.example](../a2amx.toml.example); your own `a2amx.toml` is gitignored.
 
 Use `--file` for another file; relative `cwd` values are relative to that file's
@@ -157,13 +168,11 @@ refuse because of a conflict. A conflict note uses the same remediation text as
 
 `a2amx team up --dry-run` uses the same daemon list and conflict preflight, then prints
 `would start`/`already running` rows and the resolved harness, cwd, team visibility and
-allow list, role, attachment, watch, controller, heartbeat, and redacted command for
+allow list, role, attachment, watch, controller, heartbeat, confinement, writable and
+protected paths, final hidden paths, skipped missing paths, and redacted command for
 each session that would start. It needs a running daemon, exits 1 on the same conflicts,
-and never starts or attaches a session; OMP extension installation is explicitly skipped.
-The command keeps `argv[0]`, flag names, and UTF-8 byte counts, but redacts every value
-and every non-flag argument (including everything after `--`) because settings and
-injected prompts can contain secrets. `--dry-run` cannot be combined with `--detach` or
-inline `NAME=EXECUTABLE` items.
+and never creates sessions or installs the OMP extension. `--dry-run` cannot be combined
+with `--detach` or inline `NAME=EXECUTABLE` items.
 
 After `team up`, `team status`, or a dry run, the command may print
 `note: N message(s) to this team were lost in a daemon restart; see a2amx messages

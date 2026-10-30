@@ -46,3 +46,25 @@ typing into the terminal.
 `--harness codex` hosts a private app-server and delivers through it, rather than typing into the terminal.
 
 For input arbitration and failure semantics, see [Delivery](delivery.md).
+
+## Confinement and harness boundaries
+
+`--confine` is an opt-in bubblewrap boundary around the PTY child. Generic, Claude,
+and OMP sessions may be confined; Codex is refused because its app-server tools run
+outside the PTY process. The plan keeps harness data directories read-only except for
+the documented data allow-list, hides the daemon state and runtime directory, and
+unsets host/container environment variables unless `--confine-allow-containers` is
+selected. That switch exposes only the configured system container sockets; rootless
+sockets under `$XDG_RUNTIME_DIR` remain hidden.
+
+The Claude and OMP confined launch notices are appended to an existing system prompt.
+Claude refuses `--append-system-prompt-file`; OMP refuses an existing file used as the
+append-prompt value. Generic sessions receive no notice. A socket created after launch
+outside every launch-time hide is intentionally visible, so start container daemons
+before the confined session when their host socket must be restricted.
+
+There is one cooked-mode limitation: in a Generic session running a plain shell or script, one
+Ctrl-C ends the confined session because the terminal sends SIGINT to the whole foreground
+group, including the sandbox wrapper, so the command's INT trap does not run. Harnesses that put
+the terminal in raw mode receive Ctrl-C as ordinary input; this was observed with a raw-mode
+reader but not yet checked with a real Claude or OMP session.

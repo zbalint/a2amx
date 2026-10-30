@@ -12,6 +12,7 @@ mod channel;
 pub mod cli;
 pub mod client;
 pub mod codex;
+pub mod confine;
 pub mod daemon;
 mod delivery;
 pub mod emulator;

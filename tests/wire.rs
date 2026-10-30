@@ -771,6 +771,7 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
         hold: Some("human_draft".into()),
         harness: Some(Harness::Claude),
         activity: Some(Activity::Working),
+        confined: false,
         starting: true,
         quota: Some(QuotaInfo {
             five_hour: Some(15),
@@ -863,6 +864,7 @@ fn status_members_default_omit_and_round_trip() {
         harness: None,
         activity: None,
         quota: None,
+        confined: false,
         starting: true,
         team: None,
         role: None,
@@ -962,4 +964,56 @@ fn team_fields_round_trip_and_old_new_session_defaults_are_compatible() {
     };
     assert_eq!(team, None);
     assert_eq!(role, None);
+}
+
+#[test]
+fn confine_request_round_trips_and_defaults_missing_fields() {
+    let request = Request::Confine {
+        confine: a2amx::confine::ConfineRequest {
+            write: vec!["workspace".into()],
+            hide: vec!["secret".into()],
+            unhide: vec![],
+            no_default_hides: true,
+            allow_containers: false,
+            team_file: Some("/workspace/team.toml".into()),
+        },
+        request: Box::new(Request::NewSession {
+            argv: vec!["sh".into()],
+            cols: 40,
+            rows: 10,
+            cwd: Some("/workspace".into()),
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            activity: None,
+            heartbeat: None,
+            name: None,
+            harness: a2amx::harness::Harness::Generic,
+            deliver: None,
+            team: None,
+            role: None,
+        }),
+    };
+    let encoded = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        serde_json::from_value::<Request>(encoded.clone()).unwrap(),
+        request
+    );
+    assert_eq!(
+        encoded["confine"]["team_file"],
+        serde_json::json!("/workspace/team.toml")
+    );
+    let mut old = encoded;
+    old["confine"]
+        .as_object_mut()
+        .expect("confine object")
+        .remove("team_file");
+    let Request::Confine { confine, .. } = serde_json::from_value(old).unwrap() else {
+        panic!("confine request tag");
+    };
+    assert_eq!(confine.team_file, None);
+    let absent: a2amx::confine::ConfineRequest =
+        serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(absent, a2amx::confine::ConfineRequest::default());
 }

@@ -2466,11 +2466,14 @@ async fn daemon_refuses_a_future_database_schema() {
     let database = rusqlite::Connection::open(dir.path().join("messages.db")).unwrap();
     database.pragma_update(None, "user_version", 3).unwrap();
     drop(database);
+    let bwrap_dir = dir.path().join("bwrap-path");
+    std::fs::create_dir_all(&bwrap_dir).unwrap();
     let error = a2amx::daemon::Daemon::start(a2amx::daemon::DaemonConfig {
         state_dir: dir.path().to_owned(),
         listen: vec!["127.0.0.1:0".parse().unwrap()],
         host_name: Some("host-a".into()),
         limits: Limits::default(),
+        bwrap_path: Some(bwrap_dir.into_os_string()),
     })
     .await
     .err()
