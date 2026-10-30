@@ -2474,6 +2474,7 @@ async fn daemon_refuses_a_future_database_schema() {
         host_name: Some("host-a".into()),
         limits: Limits::default(),
         bwrap_path: Some(bwrap_dir.into_os_string()),
+        env_path: None,
     })
     .await
     .err()

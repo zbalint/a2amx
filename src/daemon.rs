@@ -58,6 +58,9 @@ pub struct DaemonConfig {
     pub limits: Limits,
     /// PATH-style search list used to resolve bubblewrap for confined requests.
     pub bwrap_path: Option<OsString>,
+    /// `env` program probed by the Generic confinement preflight; `None` means `confine::ENV_PATH`.
+    /// Only the probe uses it: the launched argv always names `confine::ENV_PATH`.
+    pub env_path: Option<PathBuf>,
 }
 
 pub struct Daemon {
@@ -82,6 +85,7 @@ struct Runtime {
     address: String,
     state_dir: PathBuf,
     bwrap_path: OsString,
+    env_path: PathBuf,
     exe: PathBuf,
     omp_usage: Mutex<Option<(Instant, BTreeMap<String, QuotaInfo>)>>,
     omp_usage_attempt: Mutex<Option<Instant>>,
@@ -357,10 +361,11 @@ impl Runtime {
         let cwd = PathBuf::from(cwd);
         let state_dir = self.state_dir.clone();
         let bwrap_path = self.bwrap_path.clone();
+        let env_path = self.env_path.clone();
         let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Plan> {
             let bwrap = confine::resolve_bwrap(Some(&bwrap_path))?;
             if matches!(harness, Harness::Generic) {
-                confine::preflight_env(Path::new(confine::ENV_PATH))?;
+                confine::preflight_env(&env_path)?;
             }
             confine::preflight(&bwrap)?;
             let home = std::env::var_os("HOME")
@@ -1641,6 +1646,10 @@ impl Daemon {
             .clone()
             .or_else(|| std::env::var_os("PATH"))
             .unwrap_or_default();
+        let env_path = config
+            .env_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(confine::ENV_PATH));
         let path = config.state_dir.clone();
         let lock = tokio::task::spawn_blocking(move || -> anyhow::Result<File> {
             ensure_state_dir(&path)?;
@@ -1721,6 +1730,7 @@ impl Daemon {
             address: addrs[0].to_string(),
             state_dir: config.state_dir.clone(),
             bwrap_path,
+            env_path,
             exe,
             omp_usage: Mutex::new(None),
             omp_usage_attempt: Mutex::new(None),

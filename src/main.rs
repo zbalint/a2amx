@@ -175,6 +175,7 @@ async fn run_daemon(
         host_name,
         limits: a2amx::messaging::Limits::default(),
         bwrap_path: None,
+        env_path: None,
     })
     .await?;
     for addr in daemon.addrs() {

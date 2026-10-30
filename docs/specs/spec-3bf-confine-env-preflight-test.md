@@ -143,3 +143,18 @@ Section 3 item 1 now specifies a `bwrap` stub that exits 0 when its first argume
 section 5 lists the variable swap as mutant 5. Gate step 7 re-run: `probe_fail_stub_path_dir` appears in this spec only in
 section 3 item 1 (as the stub not to use), in this amendment and in the claims table, where the row now describes it as
 rejected for this test. Only `tests/confine.rs` changes; scope is unchanged.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5`; developer and tester on
+the OMP harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed to
+either). BLOCKED/amend cycles: 0 `BLOCKED` reports; 1 amendment after the mutation passes.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`claude-opus-5-5`) | The draft put the new field on `Daemon`; `plan_confinement` is a `Runtime` method and reads `Runtime` fields | Field moved to `Runtime`; scope lists the `Runtime` literal and `Daemon::start` |
+| Draft review | Consultant | The acceptance count of `env_path: None` literals was ten in seven files; it is nine in five, because the `tests/confine.rs` literal moves into the helper; `rg -c` prints per file | Count and command corrected |
+| Draft review | Consultant | `stub_path_dir(0)` as `bwrap` lets a "probe after bwrap" mutant survive and spawns a real session on some mutants | Switched to `probe_fail_stub_path_dir` (see the next row for its flaw) |
+| Draft review | Consultant | Mutants 2 and 2b depend on the host `env` supporting the signal flags; mutant 3 duplicates mutant 1 | Both stated in section 5 |
+| Architect mutants, tester pass | Architect and tester (`gpt-5.6-luna`), independently | Mutant 5 (`preflight_env(&bwrap)` instead of the configured path) survived: `probe_fail_stub_path_dir` exits 42 for everything but `--version`, so run as `env` it fails with the same message. The architect's spec chose it on the consultant's advice | Amendment 1 (`8b8c7cd`): a `bwrap` stub that passes the `env` probe and fails only the bubblewrap probe; mutant 5 added to section 5; the developer fixed the test |
+| Architect review | Architect | After the fix, five mutants (call removed, hardcoded `ENV_PATH`, config ignored, wrong path, probe after bwrap) were all killed on the final snapshot; the developer's three mutants had not included the variable swap | no further problems found |

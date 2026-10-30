@@ -760,6 +760,7 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
         host_name: None,
         limits: a2amx::messaging::Limits::default(),
         bwrap_path: Some(bwrap_dir.into_os_string()),
+        env_path: None,
     })
     .await?;
     let first_home = first_dir.path().to_string_lossy().into_owned();

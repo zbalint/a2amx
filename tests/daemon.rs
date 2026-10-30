@@ -187,6 +187,7 @@ async fn session_tokens_cannot_confine_and_admin_confine_rejects_invalid_targets
         host_name: Some("host-a".into()),
         limits: Limits::default(),
         bwrap_path: Some(bwrap_dir.into_os_string()),
+        env_path: None,
     })
     .await
     .unwrap();
@@ -1336,6 +1337,7 @@ async fn state_is_owner_only_and_exclusively_locked() {
         host_name: None,
         limits: a2amx::messaging::Limits::default(),
         bwrap_path: Some(dir.path().join("bwrap-path").into_os_string()),
+        env_path: None,
     })
     .await;
     assert_eq!(
@@ -1841,6 +1843,7 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
             host_name: None,
             limits: a2amx::messaging::Limits::default(),
             bwrap_path: Some(bwrap_dir.clone().into_os_string()),
+            env_path: None,
         })
         .await
         .is_err()
@@ -1860,6 +1863,7 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
         host_name: None,
         limits: a2amx::messaging::Limits::default(),
         bwrap_path: Some(bwrap_dir.into_os_string()),
+        env_path: None,
     })
     .await
     .unwrap();
@@ -2139,6 +2143,7 @@ fn newly_created_parents_are_private_even_with_a_restrictive_umask() {
                 host_name: None,
                 limits: a2amx::messaging::Limits::default(),
                 bwrap_path: Some(bwrap_dir.clone().into_os_string()),
+                env_path: None,
             }))
             .unwrap();
         std::fs::create_dir_all(&bwrap_dir).unwrap();

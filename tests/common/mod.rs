@@ -48,6 +48,7 @@ pub async fn start_daemon_in(dir: &Path, host_name: Option<&str>, limits: Limits
             host_name: host_name.map(str::to_owned),
             limits,
             bwrap_path: Some(bwrap_dir.clone().into_os_string()),
+            env_path: None,
         })
         .await;
         match started {

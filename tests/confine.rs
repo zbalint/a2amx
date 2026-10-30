@@ -93,17 +93,42 @@ fn probe_fail_stub_path_dir() -> TempDir {
     dir
 }
 
+fn bwrap_probe_fail_stub_path_dir() -> TempDir {
+    let dir = tempfile::tempdir().expect("bwrap probe stub directory");
+    let path = dir.path().join("bwrap");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\ncase \"$1\" in\n--version|--ignore-signal*) exit 0 ;;\n*) exit 42 ;;\nesac\n",
+    )
+    .expect("bwrap probe stub");
+    let mut permissions = std::fs::metadata(&path)
+        .expect("bwrap probe stub metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).expect("bwrap probe stub permissions");
+    dir
+}
+
 fn require_bwrap() -> bool {
     std::env::var_os("A2AMX_REQUIRE_BWRAP").is_some_and(|value| value == "1")
 }
 
 async fn start_confine_daemon(state: &Path, bwrap_dir: &Path) -> anyhow::Result<Daemon> {
+    start_confine_daemon_with_env(state, bwrap_dir, None).await
+}
+
+async fn start_confine_daemon_with_env(
+    state: &Path,
+    bwrap_dir: &Path,
+    env_path: Option<PathBuf>,
+) -> anyhow::Result<Daemon> {
     Daemon::start(DaemonConfig {
         state_dir: state.to_owned(),
         listen: vec!["127.0.0.1:0".parse()?],
         host_name: Some("host-a".into()),
         limits: Limits::default(),
         bwrap_path: Some(OsString::from(bwrap_dir)),
+        env_path,
     })
     .await
     .context("start test daemon")
@@ -2166,6 +2191,37 @@ async fn missing_bwrap_path_refuses_confined_session() -> anyhow::Result<()> {
         ))
         .await?;
     assert!(matches!(response, Response::Error { .. }));
+    assert!(!cwd.join("marker").exists());
+    daemon.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn confined_generic_session_is_refused_when_env_lacks_the_signal_flags() -> anyhow::Result<()>
+{
+    let root = tempfile::tempdir()?;
+    let state = root.path().join("state");
+    let cwd = root.path().join("workspace");
+    std::fs::create_dir_all(&cwd)?;
+    let bwrap_dir = bwrap_probe_fail_stub_path_dir();
+    let env_dir = stub_path_dir(42);
+    let daemon =
+        start_confine_daemon_with_env(&state, bwrap_dir.path(), Some(env_dir.path().join("bwrap")))
+            .await?;
+    let mut client = Client::connect(&state).await?;
+    let response = client
+        .request(confined_shell_request(
+            &cwd,
+            "printf ran > marker",
+            vec![],
+            ConfineRequest::default(),
+        ))
+        .await?;
+    let Response::Error { message } = response else {
+        panic!("expected confinement preflight error");
+    };
+    assert!(message.contains("--ignore-signal"));
+    assert!(message.contains("--default-signal"));
     assert!(!cwd.join("marker").exists());
     daemon.shutdown().await?;
     Ok(())
