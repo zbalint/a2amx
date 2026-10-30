@@ -60,8 +60,12 @@ chose this over dropping the test).
 `confined_generic_session_is_refused_when_env_lacks_the_signal_flags` in `tests/confine.rs`, `#[tokio::test(flavor =
 "multi_thread", worker_threads = 2)]`, in the style of `missing_bwrap_path_refuses_confined_session`:
 
-1. The probe-failing stub `probe_fail_stub_path_dir()` (`tests/confine.rs:80`: `--version` exits 0, every other call exits
-   42) is the daemon's `bwrap_path`. It needs no real bubblewrap, so the test never skips, and on every mutant the request
+1. The daemon's `bwrap_path` is a directory holding a `bwrap` stub that this test (or a new private helper next to
+   `probe_fail_stub_path_dir`) writes: a `/bin/sh` script that exits 0 for `--version`, exits 0 when its first argument starts
+   with `--ignore-signal` (so it passes the `env` probe if the daemon ever runs it as `env`), and exits 42 otherwise (so it
+   fails the bubblewrap probe). Do not use `probe_fail_stub_path_dir()` itself: it exits 42 for every call but `--version`,
+   so it would also fail the `env` probe and the test could not tell the configured `env` path from the `bwrap` path
+   (Amendment 1). It needs no real bubblewrap, so the test never skips, and on every mutant the request
    stops at `confine::preflight` with an error that does not name the flags, before `HOME` and `XDG_RUNTIME_DIR` are read
    or any session is spawned. (`stub_path_dir(0)` would let a mutant that probes `env` after `bwrap` survive and would
    spawn a real session on some mutants.) A failing `env` stub (`stub_path_dir(42)`, its `bwrap` file used as the env program, as
@@ -97,11 +101,13 @@ git status --short                         # only the files of section 0
   1. remove the `preflight_env` call from `plan_confinement` (the F36 mutant);
   2. keep the call but probe `Path::new(confine::ENV_PATH)` instead of the configured path;
   3. change the guard `matches!(harness, Harness::Generic)` so the probe never runs (same effect as 1; a cheap extra check,
-     not separate evidence).
+     not separate evidence);
+  5. pass the `bwrap` path to `preflight_env` instead of `env_path` (the variable swap): killed because the `bwrap` stub then
+     passes the `env` probe and the request fails later at the bubblewrap probe, without the flag names.
   Mutant 2, and a mutant that makes `Daemon::start` ignore `config.env_path`, are killed only if the host's `/usr/bin/env`
   supports `--ignore-signal` (GNU coreutils 8.31 or newer, or uutils): the tester records `env --version`, and a survivor
-  on an older `env` is reported, not a fix request. The tester also runs two mutants of its own (for example: probe after
-  `confine::preflight(&bwrap)`, which the probe-failing stub kills), and reports survivors. A survivor in this diff's scope is a fix request.
+  on an older `env` is reported, not a fix request. The tester also runs mutants of its own (for example: probe after
+  `confine::preflight(&bwrap)`, which the bubblewrap probe failure kills), and reports survivors. A survivor in this diff's scope is a fix request.
 
 ## 6. Out of scope
 
@@ -121,9 +127,19 @@ field). `CHANGELOG.md`. Every other test and file.
 | `stub_path_dir(n)` writes an executable `bwrap` script that exits `n` | `tests/confine.rs:69-78` | read |
 | `preflight_env_refuses_an_env_without_the_flags` uses the stub's `bwrap` file as the env program and expects both flag names in the message | `tests/confine.rs:2369-2375` | read |
 | `missing_bwrap_path_refuses_confined_session` is the model for the daemon-level test (client request, `Response::Error`, marker absent) | `tests/confine.rs:2152-2172` | read |
-| `probe_fail_stub_path_dir` answers `--version` with 0 and everything else with 42, as `bwrap` | `tests/confine.rs:80-94` | read |
+| `probe_fail_stub_path_dir` answers `--version` with 0 and everything else with 42; run as `env` it fails the probe, so it cannot serve as this test's `bwrap` | `tests/confine.rs:80-94` | read; survivor of mutant 5 (architect and tester) |
 | `plan_confinement` is a `Runtime` method that reads `self.bwrap_path` (a `Runtime` field); `Daemon` has no `bwrap_path` | `src/daemon.rs:74-92`, `:345`, `:359` | read (consultant `m_4586`) |
 | `DaemonConfig` does not derive `Default` and no literal uses `..` | `src/daemon.rs:52` | read (consultant) |
 | With the call removed, a stub bwrap that exits 0 lets the create proceed and no env error appears | not run | to confirm by the tester's mutant 1 |
 | A failed plan reaches the client as `Response::Error` with `error.to_string()`; the `preflight_env` error text starts with the requirement naming both flags | `src/daemon.rs:386`, `src/confine.rs:1247-1249` | read |
 | `DaemonConfig` is not part of the public interface of `AGENTS.md` (CLI, config and team files, wire protocol, database schema, MCP tools) | `AGENTS.md`, Versioning | read |
+
+## Amendment 1 (the bwrap stub must pass the env probe; no scope change)
+
+2026-10-30, after the architect's and the tester's mutation passes (`m_4602`). Mutant 5 (probing the `bwrap` path instead of
+`env_path`) survived the first implementation: section 3 told the developer to use `probe_fail_stub_path_dir()` as
+`bwrap`, which exits 42 for every call except `--version`, so run as `env` it fails the `env` probe with the same message.
+Section 3 item 1 now specifies a `bwrap` stub that exits 0 when its first argument starts with `--ignore-signal`, and
+section 5 lists the variable swap as mutant 5. Gate step 7 re-run: `probe_fail_stub_path_dir` appears in this spec only in
+section 3 item 1 (as the stub not to use), in this amendment and in the claims table, where the row now describes it as
+rejected for this test. Only `tests/confine.rs` changes; scope is unchanged.
