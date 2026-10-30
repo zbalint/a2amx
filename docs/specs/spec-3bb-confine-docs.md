@@ -126,7 +126,7 @@ git diff --stat                     # only docs/harnesses.md and docs/cli.md
 git diff --check
 rg -n 'a2amx new --confine' docs/cli.md                       # still present
 rg -n -i 'ctrscm|saltmdb' docs/harnesses.md docs/cli.md       # must print nothing (public repo rule)
-rg -n 'host/container' docs/                                  # must print nothing (the old env sentence is gone)
+rg -n 'host/container' docs/harnesses.md docs/cli.md        # must print nothing (the old env sentence is gone)
 for v in DBUS_SESSION_BUS_ADDRESS SSH_AUTH_SOCK GPG_AGENT_INFO WSL_INTEROP DISPLAY WAYLAND_DISPLAY; do rg -q -w "$v" docs/harnesses.md || echo "missing $v"; done   # must print nothing
 for v in /run/WSL /mnt/wslg; do rg -q -F "$v" docs/cli.md || echo "missing $v"; done                                                                      # must print nothing
 for v in 'What confinement does not cover' 'Background processes'; do rg -q -F "$v" docs/harnesses.md || echo "missing $v"; done                          # must print nothing
@@ -171,3 +171,12 @@ Gate steps 1-9 run (claims table above); step 7 re-run after the consultant's ed
 once in section 2 item 1 and once in the claims table, both saying it is private). Steps 10-11 do not apply; step 12:
 the acceptance commands are `rg`, `git` and the repo's own baseline commands, and the `rg` loops were run on the
 current tree for the "must print nothing" cases; step 13: no trust boundary is crossed (prose only).
+
+## Amendment 1 (acceptance grep scope; no rule changes)
+
+2026-10-30, after the developer's `BLOCKED` (`m_4558`). The acceptance command `rg -n 'host/container' docs/` in section 5
+also matches this spec, which quotes the old sentence (section 2 item 2 and the command itself), so it could never print
+nothing. The command is now `rg -n 'host/container' docs/harnesses.md docs/cli.md`, the two files in scope; the earlier
+consultant check found the old wording only in `docs/harnesses.md`. Gate step 7 re-run: the old command text appears
+nowhere else in the spec (`rg -n "host/container" docs/specs/spec-3bb-confine-docs.md` lists only the quoted sentence,
+this amendment and the new command), and no other acceptance command searches a path that contains this spec.
