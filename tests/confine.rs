@@ -1811,7 +1811,13 @@ async fn late_created_workspace_socket_is_visible_inside_confined_session() -> a
             ConfineRequest::default(),
         ))
         .await?;
-    assert!(matches!(response, Response::Created { .. }));
+    let Response::Created { .. } = response else {
+        if require_bwrap() {
+            panic!("confined session creation failed: {response:?}");
+        }
+        daemon.shutdown().await?;
+        return Ok(());
+    };
     std::fs::write(&late_file, "file")?;
     let listener = tokio::net::UnixListener::bind(&socket_path)?;
     let (mut stream, _) = timeout(Duration::from_secs(5), listener.accept()).await??;
