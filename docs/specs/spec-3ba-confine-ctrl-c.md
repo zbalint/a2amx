@@ -206,3 +206,20 @@ Claude, Omp and Codex launch vectors, `Plan::wrap`, `src/session.rs`, the confin
 | The attach stream carries input as `ClientFrame::Input(Vec<u8>)` | `src/wire.rs:493` | grep (anchor corrected by the consultant) |
 | `tests/confine.rs` has no attach helper and no `mod common;`; the pattern is `Client::attach` then `ClientFrame::Input` | `src/client.rs:115`, `tests/daemon.rs:867`, `tests/common/mod.rs:67` | consultant read; architect did not re-read |
 | The changelog's Unreleased section still states the limitation | `CHANGELOG.md:27` | consultant read; the architect edits it (out of the developer's scope) |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness (model name not exposed to the architect);
+developer and tester on the OMP harness, model `openai-codex/gpt-5.6-luna` (the advisor model was not exposed to
+either). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant | Several line anchors and the claim about the test helper (`mod common;`, attach pattern) were off or unread | Anchors corrected, the helper pattern named in the spec |
+| Draft review | Architect (Claude Sonnet 5.5) | Section 8 called the by-hand check one against the "installed binary"; the installed daemon predates the change, so it would show the old behavior | Assignment says the built `target/debug` binary with an isolated daemon |
+| Implementation | Developer | Edited the tree after its REPORT, so the tester's hash no longer matched | Freeze rule: a REPORT means the tree is frozen; the tester reran against the new hash |
+| Implementation | Developer | The Generic arm of `launch_argv` was longer than the spec's target | Extracted the private `ctrl_c_wrapper` the spec allowed; no semantic change |
+| Tester pass | Tester (gpt-5.6-luna) | Mutant (f), dropping the nested `env` call in `preflight_env`, survived the first test | Architect fix request m_4511: the test uses a recording stub and asserts the four argv literals; the rerun kills it |
+| Tester pass | Tester (gpt-5.6-luna) | Mutant (e), removing the daemon's `preflight_env` call, survives the suite | Not fixed here; backlog F36 |
+| Architect review | Architect | A full run during the tester's mutant builds failed one test through the shared `CARGO_TARGET_DIR`; the developer saw the same once | Not a defect; the rerun with no concurrent build passed 695/0/3. Mutation runs and checkout runs should not overlap |
+| Architect review | Architect, own mutants | none survived (deleting either env flag push was killed by three tests each) | none needed |

@@ -359,6 +359,9 @@ impl Runtime {
         let bwrap_path = self.bwrap_path.clone();
         let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Plan> {
             let bwrap = confine::resolve_bwrap(Some(&bwrap_path))?;
+            if matches!(harness, Harness::Generic) {
+                confine::preflight_env(Path::new(confine::ENV_PATH))?;
+            }
             confine::preflight(&bwrap)?;
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)

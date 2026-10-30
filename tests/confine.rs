@@ -1,4 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
+mod common;
+
 use anyhow::Context as _;
 use std::ffi::OsString;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -9,7 +11,7 @@ use a2amx::confine::{self, ConfineRequest, Host};
 use a2amx::daemon::{Daemon, DaemonConfig};
 use a2amx::harness::Harness;
 use a2amx::messaging::Limits;
-use a2amx::wire::{Request, Response};
+use a2amx::wire::{ClientFrame, Request, Response};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{Duration, timeout};
@@ -2061,4 +2063,244 @@ async fn missing_bwrap_path_refuses_confined_session() -> anyhow::Result<()> {
     assert!(!cwd.join("marker").exists());
     daemon.shutdown().await?;
     Ok(())
+}
+
+async fn run_ctrl_c_case(
+    state: &Path,
+    cwd: &Path,
+    script: String,
+    ready: &Path,
+    marker: Option<&Path>,
+    expected_exit: i32,
+) -> anyhow::Result<bool> {
+    let bwrap_dir = bwrap_path_dir(Path::new("/usr/bin/bwrap"));
+    let daemon = match start_confine_daemon(state, bwrap_dir.path()).await {
+        Ok(daemon) => daemon,
+        Err(_error) if !require_bwrap() => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let mut client = Client::connect(state).await.context("connect client")?;
+    let response = client
+        .request(confined_shell_request(
+            cwd,
+            &script,
+            vec![],
+            ConfineRequest::default(),
+        ))
+        .await
+        .context("create confined session")?;
+    let session_id = match response {
+        Response::Created { session } => session,
+        response => {
+            daemon.shutdown().await?;
+            if !require_bwrap() {
+                return Ok(false);
+            }
+            anyhow::bail!("confined session creation failed: {response:?}");
+        }
+    };
+
+    common::eventually(|| async { ready.exists().then_some(()) }).await;
+    let mut attachment = Client::connect(state)
+        .await
+        .context("connect attach client")?
+        .attach(&session_id, false, 80, 24)
+        .await
+        .context("attach confined session")?;
+    attachment
+        .send(ClientFrame::Input(vec![0x03]))
+        .await
+        .context("send Ctrl-C input")?;
+    drop(attachment);
+
+    if let Some(marker) = marker {
+        common::eventually(|| async { marker.exists().then_some(()) }).await;
+    }
+    let state_for_poll = state.to_owned();
+    let session_id_for_poll = session_id.clone();
+    let summary = common::eventually(|| {
+        let state = state_for_poll.clone();
+        let session_id = session_id_for_poll.clone();
+        async move {
+            let mut poll_client = Client::connect(&state).await.ok()?;
+            let Response::Sessions { sessions } = poll_client.request(Request::List).await.ok()?
+            else {
+                return None;
+            };
+            sessions.into_iter().find(|session| {
+                session.id == session_id && session.exit_code == Some(expected_exit)
+            })
+        }
+    })
+    .await;
+    assert_eq!(summary.exit_code, Some(expected_exit));
+    daemon.shutdown().await?;
+    Ok(true)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ctrl_c_runs_the_trap_of_a_confined_shell() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let state = root.path().join("state");
+    let cwd = root.path().join("workspace");
+    std::fs::create_dir_all(&cwd)?;
+    let ready = cwd.join("trap-ready");
+    let marker = cwd.join("trap-marker");
+    let script = format!(
+        "trap 'echo got-int > {}; exit 7' INT; echo ready > {}; while :; do sleep 0.2; done",
+        marker.display(),
+        ready.display()
+    );
+    if !run_ctrl_c_case(&state, &cwd, script, &ready, Some(&marker), 7).await? {
+        return Ok(());
+    }
+    assert_eq!(std::fs::read_to_string(marker)?, "got-int\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ctrl_c_does_not_end_a_confined_command_that_ignores_it() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let state = root.path().join("state");
+    let cwd = root.path().join("workspace");
+    std::fs::create_dir_all(&cwd)?;
+    let ready = cwd.join("ignore-ready");
+    let marker = cwd.join("ignore-marker");
+    let script = format!(
+        "trap '' INT; echo ready > {}; sleep 2; echo survived > {}",
+        ready.display(),
+        marker.display()
+    );
+    if !run_ctrl_c_case(&state, &cwd, script, &ready, Some(&marker), 0).await? {
+        return Ok(());
+    }
+    assert_eq!(std::fs::read_to_string(marker)?, "survived\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ctrl_c_still_ends_a_confined_command_without_a_trap() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let state = root.path().join("state");
+    let cwd = root.path().join("workspace");
+    std::fs::create_dir_all(&cwd)?;
+    let ready = cwd.join("sleep-ready");
+    let script = format!("echo ready > {}; sleep 30", ready.display());
+    if !run_ctrl_c_case(&state, &cwd, script, &ready, None, 130).await? {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ctrl_c_reaches_a_confined_raw_mode_reader_as_input() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let state = root.path().join("state");
+    let cwd = root.path().join("workspace");
+    std::fs::create_dir_all(&cwd)?;
+    let ready = cwd.join("raw-ready");
+    let marker = cwd.join("raw-marker");
+    let script = format!(
+        "stty raw -echo; echo ready > {}; head -c1 > {}",
+        ready.display(),
+        marker.display()
+    );
+    if !run_ctrl_c_case(&state, &cwd, script, &ready, Some(&marker), 0).await? {
+        return Ok(());
+    }
+    assert_eq!(std::fs::read(marker)?, [0x03]);
+    Ok(())
+}
+
+#[test]
+fn launch_argv_prefixes_generic_with_env_wrappers() {
+    let fixture = Fixture::new();
+    let plan = |harness| {
+        confine::plan(
+            &ConfineRequest::default(),
+            harness,
+            &fixture.cwd,
+            &fixture.host(),
+        )
+        .expect("plan")
+        .with_bwrap(PathBuf::from("/usr/bin/bwrap"))
+    };
+    let generic = confine::launch_argv(
+        &plan(Harness::Generic),
+        "",
+        vec!["sh".into(), "-c".into(), "true".into()],
+        Harness::Generic,
+    )
+    .expect("generic launch argv");
+    assert_eq!(generic[0], "/usr/bin/env");
+    assert_eq!(generic[1], "--ignore-signal=INT");
+    assert_eq!(generic[2], "/usr/bin/bwrap");
+    assert!(generic.windows(4).any(|window| {
+        window
+            .iter()
+            .map(String::as_str)
+            .eq(["--", "/usr/bin/env", "--default-signal=INT", "sh"])
+    }));
+
+    for harness in [Harness::Claude, Harness::Omp] {
+        let argv = confine::launch_argv(
+            &plan(harness),
+            "",
+            vec!["sh".into(), "-c".into(), "true".into()],
+            harness,
+        )
+        .expect("harness launch argv");
+        assert_eq!(argv.first().map(String::as_str), Some("/usr/bin/bwrap"));
+        assert!(
+            !argv
+                .iter()
+                .any(|argument| argument == "--default-signal=INT")
+        );
+    }
+}
+
+#[test]
+fn preflight_env_refuses_an_env_without_the_flags() {
+    let failing = stub_path_dir(42);
+    let failing_env = failing.path().join("bwrap");
+    let error = confine::preflight_env(&failing_env).expect_err("failing env probe");
+    let message = error.to_string();
+    assert!(message.contains("--ignore-signal"));
+    assert!(message.contains("--default-signal"));
+
+    let passing = stub_path_dir(0);
+    assert!(confine::preflight_env(&passing.path().join("bwrap")).is_ok());
+
+    let recorder = tempfile::tempdir().expect("env recorder directory");
+    let recorder_script = recorder.path().join("env");
+    std::fs::write(
+        &recorder_script,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\n",
+    )
+    .expect("env recorder script");
+    let mut permissions = std::fs::metadata(&recorder_script)
+        .expect("env recorder metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&recorder_script, permissions).expect("env recorder permissions");
+    confine::preflight_env(&recorder_script).expect("recording env probe");
+    let recorded = std::fs::read_to_string(recorder.path().join("args"))
+        .expect("env recorder output")
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let recorder_path = recorder_script.to_string_lossy().into_owned();
+    assert_eq!(
+        recorded,
+        vec![
+            "--ignore-signal=INT".to_owned(),
+            recorder_path.clone(),
+            "--default-signal=INT".to_owned(),
+            recorder_path,
+        ]
+    );
+
+    let missing = Path::new("/definitely/missing/a2amx-env");
+    let error = confine::preflight_env(missing).expect_err("missing env probe");
+    assert!(error.to_string().contains("a2amx-env"));
 }

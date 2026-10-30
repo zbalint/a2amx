@@ -63,8 +63,8 @@ append-prompt value. Generic sessions receive no notice. A socket created after 
 outside every launch-time hide is intentionally visible, so start container daemons
 before the confined session when their host socket must be restricted.
 
-There is one cooked-mode limitation: in a Generic session running a plain shell or script, one
-Ctrl-C ends the confined session because the terminal sends SIGINT to the whole foreground
-group, including the sandbox wrapper, so the command's INT trap does not run. Harnesses that put
-the terminal in raw mode receive Ctrl-C as ordinary input; this was observed with a raw-mode
-reader but not yet checked with a real Claude or OMP session.
+Confined Generic commands receive Ctrl-C as they would when unconfined: the sandbox
+wrapper ignores SIGINT and the command gets the default disposition back. Claude and
+OMP are unaffected because they run the terminal in raw mode and receive Ctrl-C as the
+byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` and
+`--default-signal` (GNU coreutils 8.31 or newer, or uutils).

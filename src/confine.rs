@@ -22,6 +22,7 @@ const MAX_ARG_BYTES: usize = 128 * 1024;
 const MAX_ARGV_BYTES: usize = 256 * 1024;
 const NOTICE_LIMIT: usize = 12 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const ENV_PATH: &str = "/usr/bin/env";
 
 pub const CLOSING_NOTICE: &str = "Do not try to get around these limits, whether through other programs, services or sockets, through other agents, or by editing configuration to loosen them. If your task needs access they do not allow, stop that part and tell the person running this session which path or access you need and why. Other errors, such as a missing file or a failing build or test, are ordinary: handle them as usual.";
 
@@ -1234,6 +1235,20 @@ pub fn preflight(bwrap: &Path) -> Result<()> {
     command_with_timeout(&bwrap, &probe)
 }
 
+/// Verify that `env` supports the signal-disposition flags used for Generic sessions.
+pub fn preflight_env(env: &Path) -> Result<()> {
+    let env_path = env.to_string_lossy().into_owned();
+    let probe = vec![
+        "--ignore-signal=INT".into(),
+        env_path.clone(),
+        "--default-signal=INT".into(),
+        env_path,
+    ];
+    let requirement = "confinement of a Generic session needs env with --ignore-signal and --default-signal: \
+         GNU coreutils 8.31 or newer, or uutils";
+    command_with_timeout(env, &probe).map_err(|error| anyhow!("{requirement}: {error:#}"))
+}
+
 /// Create the host-side empty regular file used for hidden files.
 pub fn ensure_empty_file(state_dir: &Path) -> Result<PathBuf> {
     fs::create_dir_all(state_dir)?;
@@ -1311,6 +1326,15 @@ pub fn notice(plan: &Plan) -> String {
     truncate_before_closing(text)
 }
 
+fn ctrl_c_wrapper(wrapped_inner: Vec<String>) -> Vec<String> {
+    let mut wrapped = Vec::with_capacity(wrapped_inner.len() + 2);
+    wrapped.push(ENV_PATH.to_owned());
+    wrapped.push("--ignore-signal=INT".into());
+    // shortcut: the fixed outer prefix is 33 bytes with NULs, far below ARG_MAX; no second size check.
+    wrapped.extend(wrapped_inner);
+    wrapped
+}
+
 /// Build a wrapped command and, where the harness has a system prompt channel,
 /// append the notice.  Generic sessions intentionally receive no notice.
 pub fn launch_argv(
@@ -1319,12 +1343,18 @@ pub fn launch_argv(
     argv: Vec<String>,
     harness: Harness,
 ) -> Result<Vec<String>> {
-    let wrapped = plan.wrap(argv)?;
     match harness {
+        Harness::Generic => {
+            let mut inner = Vec::with_capacity(argv.len() + 2);
+            inner.push(ENV_PATH.to_owned());
+            inner.push("--default-signal=INT".into());
+            inner.extend(argv);
+            Ok(ctrl_c_wrapper(plan.wrap(inner)?))
+        }
         Harness::Claude | Harness::Omp => {
+            let wrapped = plan.wrap(argv)?;
             crate::harness::append_system_prompt(wrapped, notice, harness, &plan.cwd)
         }
-        Harness::Generic => Ok(wrapped),
         Harness::Codex => bail!(
             "confinement is not supported for Codex sessions yet: its tools run outside the session process"
         ),

@@ -23,13 +23,18 @@ All notable user-visible changes are listed here. The format follows
   `--confine-allow-containers` adjust it, with the same keys in the team file. The agent is told its limits in
   its system prompt, the status bar shows `[sandbox]`, and `team up --dry-run` prints the effective
   restrictions. A session never starts unconfined when confinement was requested; Codex sessions are
-  refused. It is a safety net for a trusted but fallible agent, not a security boundary. Known limitation: in
-  a Generic session running a plain shell, one Ctrl-C ends the confined session. Additive protocol: the
+  refused. It is a safety net for a trusted but fallible agent, not a security boundary. A Ctrl-C in a
+  confined Generic session reaches the command, not the sandbox (see Changed). Additive protocol: the
   `Confine` request and `confined` on the status; restart an older daemon to use `--confine`
   (`docs/cli.md`, `docs/teams.md`, `docs/harnesses.md`).
 
 ### Changed
 
+- In a confined Generic session, Ctrl-C now reaches the command inside the sandbox instead of ending the
+  session, so a shell, a Python REPL or a running command behaves as it does unconfined. Confining a Generic
+  session now needs an `env` with `--ignore-signal` and `--default-signal` (GNU coreutils 8.31 or newer, or
+  uutils); an older `env` is refused with a message and the session does not start. Claude and OMP sessions
+  are unchanged (`docs/harnesses.md`, `docs/cli.md`).
 - **Breaking:** a2amx and its daemon refuse to run when the effective uid is 0 (as root, under `sudo`, or as a
   root user in a container). The command prints `a2amx: refusing to run as root (effective uid 0): run a2amx
   as an ordinary user` and exits 1. There is no override. `--help` and `--version` still work. Start it as an

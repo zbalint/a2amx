@@ -53,10 +53,11 @@ resolves `bwrap` from its startup `PATH` and refuses the request when the execut
 or its `--version` probe is unavailable; confinement is opt-in and unconfined sessions
 retain their existing launch behavior.
 
-Cooked-mode Generic sessions have this Ctrl-C limitation: one Ctrl-C ends the confined
-session because SIGINT reaches the foreground group, including the sandbox wrapper, so the
-command's INT trap does not run; raw-mode harnesses receive Ctrl-C as input (observed with
-a raw-mode reader, not yet checked with a real Claude or OMP session).
+Confined Generic commands receive Ctrl-C as they would when unconfined: the sandbox
+wrapper ignores SIGINT and the command gets the default disposition back. Claude and
+OMP are unaffected because they run the terminal in raw mode and receive Ctrl-C as the
+byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` and
+`--default-signal` (GNU coreutils 8.31 or newer, or uutils).
 
 The repeatable path flags are `--confine-write PATH`, `--confine-hide PATH`, and
 `--confine-unhide PATH`. Relative paths are resolved against the session cwd.
