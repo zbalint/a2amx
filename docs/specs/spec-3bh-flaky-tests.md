@@ -132,3 +132,17 @@ Causal review (two amend cycles): both cycles came from asserting counts on a sc
 inspected; this one was found by reading a failing screen instead of the code, which the gate now requires for any spec
 that asserts on terminal output. Gate step 7 re-run: the script string is stated only here; section 2 item 3 does not
 quote it.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5` (analysis `m_4593`; no second pass); developer and tester on the OMP harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed to either). BLOCKED/amend cycles: 2.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Architect and consultant (`claude-opus-5-5`) | Test 3 asserted exact counts on raw `a2amx screen` text, which can start with the stale tail of a scrolled message; neither checked what the screen output can contain | Amendment 1: count over complete messages after each `peer activity:` header |
+| Implementation | Developer (`gpt-5.6-luna`) | Loaded run 3 of 20 saw a duplicate line; the developer asked before changing the contract | Amendment 1 |
+| Implementation | Developer | Test 3 still failed unloaded (2 of 3 runs): the watcher `cat` runs on a PTY with echo on, so each delivered message appears twice. Amendment 1 had explained only part of the cause | Amendment 2: the watcher script starts with `stty -echo`; found by the developer's evidence-first BLOCKED and reproduced by the architect |
+| Tester pass | Tester (`gpt-5.6-luna`) | Mutant (b) fails at the existing first scroll-indicator wait, so the kill does not prove the new wait | Accepted: the named test still catches a missing indicator; the new wait only removes the read race |
+| Tester pass | Tester | A restore command used a relative path while a temporary shell was reported; possible write to the checkout | Checked by tester and architect with hashes, `git status` and `git diff -- src`: no tracked content changed |
+| Report | Developer | Test 1's 20/20 loaded run predates Amendment 2 (the final rerun was stopped on request) | Accepted: Amendment 2 touched test 3 only |
+| Architect review | Architect, own mutants | Test 4 timeout branch (script that never connects), and the activity sort removed (3 of 3 runs fail): both killed | no further problems found |

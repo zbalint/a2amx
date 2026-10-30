@@ -2252,7 +2252,7 @@ fn activity_notices_report_peer_transitions_once_in_order() {
             "--",
             "sh",
             "-c",
-            "printf '\\033[?2004h'; cat",
+            "stty -echo; printf '\\033[?2004h'; cat",
         ],
     );
     assert!(watcher.status.success(), "stderr: {}", stderr(&watcher));
@@ -2308,14 +2308,27 @@ fn activity_notices_report_peer_transitions_once_in_order() {
         ],
     );
     assert!(third.status.success(), "stderr: {}", stderr(&third));
+    let idle_a = "- a: idle (was working";
+    let idle_p = "- p: idle (was working";
+    let working_a = "- a: working (was idle";
+    let working_p = "- p: working (was idle";
     let deadline = Instant::now() + Duration::from_secs(30);
     let messages = loop {
         let output = run(&home, &["screen", "w"]);
         let text = stdout(&output);
-        if text.contains("- a: idle (was working)")
-            && text.contains("- p: idle (was working)")
-            && text.contains("- a: working (was idle)")
-            && text.contains("- p: working (was idle)")
+        let complete_messages = text.split("peer activity:").skip(1).collect::<Vec<_>>();
+        if complete_messages
+            .iter()
+            .any(|message| message.contains(idle_a))
+            && complete_messages
+                .iter()
+                .any(|message| message.contains(idle_p))
+            && complete_messages
+                .iter()
+                .any(|message| message.contains(working_a))
+            && complete_messages
+                .iter()
+                .any(|message| message.contains(working_p))
         {
             break output;
         }
@@ -2326,17 +2339,54 @@ fn activity_notices_report_peer_transitions_once_in_order() {
     };
     assert!(messages.status.success(), "stderr: {}", stderr(&messages));
     let text = stdout(&messages);
-    let idle_a = text.find("- a: idle (was working)").expect(&text);
-    let idle_p = text.find("- p: idle (was working)").expect(&text);
-    let working_a = text.find("- a: working (was idle)").expect(&text);
-    let working_p = text.find("- p: working (was idle)").expect(&text);
-    assert!(idle_a < idle_p, "{text}");
-    assert!(working_a < working_p, "{text}");
-    assert!(idle_p < working_p, "{text}");
-    assert!(text.contains("- a: idle (was working"), "{text}");
-    assert!(text.contains("- p: idle (was working"), "{text}");
-    assert!(text.contains("- a: working (was idle"), "{text}");
-    assert!(text.contains("- p: working (was idle"), "{text}");
+    let messages = text.split("peer activity:").skip(1).collect::<Vec<_>>();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.matches(idle_a).count())
+            .sum::<usize>(),
+        1,
+        "{text}"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.matches(idle_p).count())
+            .sum::<usize>(),
+        1,
+        "{text}"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.matches(working_a).count())
+            .sum::<usize>(),
+        1,
+        "{text}"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.matches(working_p).count())
+            .sum::<usize>(),
+        1,
+        "{text}"
+    );
+    let message_text = messages.join("peer activity:");
+    let idle_a_position = message_text.find(idle_a).expect(&text);
+    let idle_p_position = message_text.find(idle_p).expect(&text);
+    let working_a_position = message_text.find(working_a).expect(&text);
+    let working_p_position = message_text.find(working_p).expect(&text);
+    assert!(idle_a_position < working_a_position, "{text}");
+    assert!(idle_p_position < working_p_position, "{text}");
+    for message in &messages {
+        if let (Some(a), Some(p)) = (message.find("- a: idle"), message.find("- p: idle")) {
+            assert!(a < p, "{message}");
+        }
+        if let (Some(a), Some(p)) = (message.find("- a: working"), message.find("- p: working")) {
+            assert!(a < p, "{message}");
+        }
+    }
     assert!(!text.contains("third:"), "{text}");
 }
 

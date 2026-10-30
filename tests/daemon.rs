@@ -940,11 +940,12 @@ async fn claude_needs_input_clears_when_dialog_marker_disappears() {
 async fn exited_claude_session_never_reports_needs_input() {
     let (dir, daemon) = common::start_daemon().await;
     let mut admin = Client::connect(dir.path()).await.unwrap();
-    let id = create_claude(
-        &mut admin,
-        r#"printf '\033[2J\033[H Enter to confirm · Esc to cancel'; sleep 11"#,
-    )
-    .await;
+    let release = dir.path().join("release");
+    let command = format!(
+        "printf '\\033[2J\\033[H Enter to confirm · Esc to cancel'; while [ ! -e {} ]; do sleep 0.05; done",
+        release.display()
+    );
+    let id = create_claude(&mut admin, &command).await;
     tokio::time::sleep(Duration::from_millis(10_200)).await;
     eventually_sessions(&mut admin, |sessions| {
         sessions
@@ -953,6 +954,7 @@ async fn exited_claude_session_never_reports_needs_input() {
             .is_some_and(|session| session.hold_reason.as_deref() == Some("input?"))
     })
     .await;
+    std::fs::write(&release, []).unwrap();
     eventually_sessions(&mut admin, |sessions| {
         sessions
             .iter()

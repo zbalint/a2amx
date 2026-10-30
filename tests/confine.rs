@@ -2057,16 +2057,63 @@ async fn late_created_workspace_socket_is_visible_inside_confined_session() -> a
             ConfineRequest::default(),
         ))
         .await?;
-    let Response::Created { .. } = response else {
-        if require_bwrap() {
-            panic!("confined session creation failed: {response:?}");
+    let session_id = match response {
+        Response::Created { session } => session,
+        response => {
+            if require_bwrap() {
+                panic!("confined session creation failed: {response:?}");
+            }
+            daemon.shutdown().await?;
+            return Ok(());
         }
-        daemon.shutdown().await?;
-        return Ok(());
     };
     std::fs::write(&late_file, "file")?;
     let listener = tokio::net::UnixListener::bind(&socket_path)?;
-    let (mut stream, _) = timeout(Duration::from_secs(5), listener.accept()).await??;
+    let accepted = tokio::select! {
+        accepted = timeout(Duration::from_secs(10), listener.accept()) => match accepted {
+            Ok(result) => Some(result?),
+            Err(_) => None,
+        },
+        exited = async {
+            loop {
+                let sessions = match client.request(Request::List).await? {
+                    Response::Sessions { sessions } => sessions,
+                    response => anyhow::bail!("unexpected list response: {response:?}"),
+                };
+                if let Some(summary) = sessions
+                    .into_iter()
+                    .find(|summary| summary.id == session_id && summary.exit_code.is_some())
+                {
+                    break Ok::<_, anyhow::Error>(summary);
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        } => {
+            let summary = exited?;
+            panic!(
+                "confined session {session_id} exited before accepting socket: exit_code={:?}",
+                summary.exit_code
+            );
+        }
+    };
+    let (mut stream, _) = match accepted {
+        Some(accepted) => accepted,
+        None => {
+            let summary = match client.request(Request::List).await? {
+                Response::Sessions { sessions } => sessions
+                    .into_iter()
+                    .find(|summary| summary.id == session_id),
+                response => anyhow::bail!("unexpected list response: {response:?}"),
+            };
+            let exit_code = summary.as_ref().and_then(|summary| summary.exit_code);
+            let hold_reason = summary
+                .as_ref()
+                .and_then(|summary| summary.hold_reason.as_deref());
+            panic!(
+                "confined session {session_id} did not accept socket: exit_code={exit_code:?}, hold_reason={hold_reason:?}"
+            );
+        }
+    };
     let mut received = [0; 1];
     stream.read_exact(&mut received).await?;
     assert_eq!(received, [b'x']);

@@ -370,7 +370,7 @@ async fn mouse_wheel_scrolls_three_lines_and_q_returns_to_live() -> anyhow::Resu
     assert!(!attached.screen_text().contains("line-100"));
     attached.send(b"\x1b[<65;10;5M")?;
     attached.wait_for_text("line-100", WAIT)?;
-    assert!(attached.screen_text().contains("[scroll: q to exit]"));
+    attached.wait_for_text("[scroll: q to exit]", WAIT)?;
     attached.send(b"q")?;
     attached.wait_for_text("@host-a", WAIT)?;
     assert!(!attached.screen_text().contains("[scroll: q to exit]"));
