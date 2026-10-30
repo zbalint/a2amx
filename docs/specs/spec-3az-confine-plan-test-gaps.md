@@ -88,3 +88,18 @@ Production code, the two other tests of spec 3ay that already exist, renames, fi
 | The existing unhide test uses `~/.aws` | `tests/confine.rs`, `plan_skips_missing_and_unhides_existing_home_secrets_read_only` | read |
 | The fixture home has `.aws` and `.ssh/config`, and `plan.default_hidden` and `plan.hidden` are public fields | `Fixture::new` (`tests/confine.rs:36-38`), `Plan` (`src/confine.rs:121-136`) | read |
 | `~/.aws` is a default hide | `DEFAULT_HIDES` (`src/confine.rs:62-87`) | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness (model name not exposed to the architect);
+developer and tester on the OMP harness, model `openai-codex/gpt-5.6-luna` (the advisor model was not exposed to
+either). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Architect (Claude Sonnet 5.5) | The draft claimed the four mutants "survive on the code before spec 3ay too"; the tester ran them only after spec 3ay, so the claim was reasoned from identical lines, never run. A claims row also said "not yet read" for the fixture | Wording changed to say read, not run; the fixture and `DEFAULT_HIDES` were read before locking |
+| Draft review | Consultant | Line anchor for the two home-relative container entries was 58-59, the lines are 59-60 | Corrected |
+| Draft review | Consultant | Test 4 compared a raw `fixture.home.join(".aws")` path; `plan` returns canonical paths | Spec asks for `std::fs::canonicalize` |
+| Draft review | Consultant | Test 1 should assert by position and test 3 should keep entries short | Both added to section 3 |
+| Architect review | Architect | The tester's report called a 3.7G cargo `target` directory in `/tmp` "unrelated prior data" and left it; `/tmp` (a 3.9G tmpfs) was at 95% | Architect checked it and deleted it; tester assignments now name a cleanup list and require `df -h /tmp` and `ls -d /tmp/a2amx-*` in the report |
+| Architect review | Architect, own mutants | Two mutants outside this spec's four behaviors survive: the list limit at exactly 64 (`>` to `>=`) and the order of the `hide` and `unhide` limit checks | Backlog F35, tests only; not a blocker |

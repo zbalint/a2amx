@@ -226,6 +226,119 @@ fn run_dbus_default_hide_is_not_skipped_when_missing() {
 }
 
 #[test]
+fn skipped_paths_are_sorted() {
+    let fixture = Fixture::new();
+    let plan = confine::plan(
+        &ConfineRequest {
+            hide: vec!["/nonexistent-3az-zz".into(), "/nonexistent-3az-aa".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("sorted skipped-path plan");
+    let skipped = plan.skipped_paths();
+    let zz = skipped
+        .iter()
+        .position(|path| path == Path::new("/nonexistent-3az-zz"))
+        .expect("zz path skipped");
+    let aa = skipped
+        .iter()
+        .position(|path| path == Path::new("/nonexistent-3az-aa"))
+        .expect("aa path skipped");
+    assert!(aa < zz);
+}
+
+#[test]
+fn missing_container_socket_paths_are_reported_as_skipped() {
+    let fixture = Fixture::new();
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("default container-hide plan");
+    for suffix in [".docker/desktop/docker.sock", ".docker/run/docker.sock"] {
+        assert!(
+            plan.skipped_paths()
+                .iter()
+                .any(|path| path.ends_with(suffix)),
+            "missing container path {suffix} was not skipped"
+        );
+    }
+
+    let allowed = confine::plan(
+        &ConfineRequest {
+            allow_containers: true,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("allow-containers plan");
+    for suffix in [".docker/desktop/docker.sock", ".docker/run/docker.sock"] {
+        assert!(
+            !allowed
+                .skipped_paths()
+                .iter()
+                .any(|path| path.ends_with(suffix)),
+            "container path {suffix} was skipped with containers allowed"
+        );
+    }
+}
+
+#[test]
+fn write_limit_error_precedes_hide_limit_error() {
+    let fixture = Fixture::new();
+    let request = ConfineRequest {
+        write: (0..65).map(|index| format!("/tmp/path-{index}")).collect(),
+        hide: (0..65).map(|index| format!("/tmp/hide-{index}")).collect(),
+        ..ConfineRequest::default()
+    };
+    let error = match confine::plan(&request, Harness::Generic, &fixture.cwd, &fixture.host()) {
+        Ok(_) => panic!("entry-count plan must fail"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("confine_write has more than 64 entries"),
+        "unexpected entry-count error: {error}"
+    );
+}
+
+#[test]
+fn unhide_removes_default_hidden_paths() {
+    let fixture = Fixture::new();
+    let aws = std::fs::canonicalize(fixture.home.join(".aws")).expect("aws canonical");
+    let defaults = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("default hide plan");
+    assert!(defaults.hidden_paths().contains(&aws));
+    assert!(defaults.default_hidden.contains(&aws));
+
+    let unhidden = confine::plan(
+        &ConfineRequest {
+            unhide: vec!["~/.aws".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("unhide plan");
+    assert!(!unhidden.hidden_paths().contains(&aws));
+    assert!(!unhidden.default_hidden.contains(&aws));
+}
+
+#[test]
 fn other_harness_credentials_are_default_hidden() {
     let fixture = Fixture::new();
     let claude_credentials = fixture.home.join(".claude/.credentials.json");
