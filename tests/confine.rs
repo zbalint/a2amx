@@ -313,6 +313,112 @@ fn write_limit_error_precedes_hide_limit_error() {
 }
 
 #[test]
+fn a_list_of_exactly_64_entries_is_accepted() {
+    let fixture = Fixture::new();
+    let missing: Vec<String> = (0..confine::MAX_LIST_ENTRIES)
+        .map(|index| {
+            fixture
+                .cwd
+                .join(format!("missing-{index}"))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let cases = [
+        (
+            "confine_write",
+            ConfineRequest {
+                write: missing.clone(),
+                ..ConfineRequest::default()
+            },
+            "confine_write has more than 64 entries",
+        ),
+        (
+            "confine_hide",
+            ConfineRequest {
+                hide: missing.clone(),
+                ..ConfineRequest::default()
+            },
+            "confine_hide has more than 64 entries",
+        ),
+        (
+            "confine_unhide",
+            ConfineRequest {
+                unhide: missing.clone(),
+                ..ConfineRequest::default()
+            },
+            "confine_unhide has more than 64 entries",
+        ),
+    ];
+
+    for (label, mut request, expected_error) in cases {
+        let plan = confine::plan(&request, Harness::Generic, &fixture.cwd, &fixture.host())
+            .unwrap_or_else(|error| panic!("{label} 64 entries must be accepted: {error:#}"));
+        for path in &missing {
+            assert!(
+                plan.skipped
+                    .iter()
+                    .any(|skipped| skipped == Path::new(path)),
+                "{label} path was not skipped: {path}"
+            );
+        }
+
+        let extra = fixture
+            .cwd
+            .join(format!("missing-{}", confine::MAX_LIST_ENTRIES))
+            .to_string_lossy()
+            .into_owned();
+        match label {
+            "confine_write" => request.write.push(extra.clone()),
+            "confine_hide" => request.hide.push(extra.clone()),
+            "confine_unhide" => request.unhide.push(extra),
+            _ => unreachable!("known confinement list label"),
+        }
+        let error = match confine::plan(&request, Harness::Generic, &fixture.cwd, &fixture.host()) {
+            Ok(_) => panic!("{label} 65 entries must be refused"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains(expected_error),
+            "unexpected {label} entry-count error: {error}"
+        );
+    }
+}
+
+#[test]
+fn hide_limit_error_precedes_unhide_limit_error() {
+    let fixture = Fixture::new();
+    let missing: Vec<String> = (0..=confine::MAX_LIST_ENTRIES)
+        .map(|index| {
+            fixture
+                .cwd
+                .join(format!("missing-{index}"))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let request = ConfineRequest {
+        hide: missing.clone(),
+        unhide: missing,
+        ..ConfineRequest::default()
+    };
+    let error = match confine::plan(&request, Harness::Generic, &fixture.cwd, &fixture.host()) {
+        Ok(_) => panic!("hide and unhide entry-count plan must fail"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("confine_hide has more than 64 entries"),
+        "unexpected entry-count error: {error}"
+    );
+    assert!(
+        !error.to_string().contains("confine_unhide"),
+        "hide entry-count error must precede unhide: {error}"
+    );
+}
+
+#[test]
 fn unhide_removes_default_hidden_paths() {
     let fixture = Fixture::new();
     let aws = std::fs::canonicalize(fixture.home.join(".aws")).expect("aws canonical");

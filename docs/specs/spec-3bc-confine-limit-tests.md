@@ -87,3 +87,19 @@ Production code, existing tests, fixtures, the 4096-byte path limit (already tes
 | A missing write path is skipped before any guard runs (`add_validated_write` returns `Ok(None)`) | `src/confine.rs:571-579`, `:778-786` | read (consultant `m_4556`) |
 | `check_request_limits` is the first statement of `plan`; with Generic and short paths a 65-entry error can only come from `check_entry_count` | `src/confine.rs:662`, `:680-691` | read (consultant) |
 | `skipped` is a public field on `Plan` | `src/confine.rs:132` | read (consultant) |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5`; developer and tester on
+the OMP harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed to
+either). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`claude-opus-5-5`) | The draft said `confine_write` needs existing directories; missing write paths are skipped before any guard runs, so all three lists can be tested with missing paths | Tests 1 covers write, hide and unhide with missing paths; the "only if cheap" branch removed |
+| Draft review | Consultant | Only the `Ok` half of the 64-entry test kills the `>=` mutant; the draft did not say so, and the `Ok` assertion did not print the error | Both stated in section 3 |
+| Draft review | Consultant | `/nonexistent-3bc-{i}` is a fixed path, against AGENTS.md | Paths rooted in the fixture's cwd |
+| Draft review | Consultant | The acceptance did not say which test kills which mutant | Mapped in section 4 |
+| Draft review | Consultant | The team-file validation has its own copy of the limit with no boundary test | Backlog F39 |
+| Tester pass | Tester (`gpt-5.6-luna`) | Advisor asked for an independent full `cargo test` and clippy run against section 4 before the report | Done: 697 passed, 0 failed, 3 ignored; clippy and fmt clean |
+| Architect review | Architect, own mutants | none: the `>=`, the hide/unhide swap and a limit of 65 were all killed; the tester's ten mutants had no survivors | no problems found at this stage |
