@@ -214,3 +214,18 @@ Desktop socket and remote-engine credentials, test and example-block traps, trou
 group. Gate step 7 re-run: the process-list and state-directory wording of spec 3bb is not repeated here; "default hides"
 are described without a count in item 1 and in the claims table only. Anchors checked at lock: `README.md:94`,
 `docs/teams.md:110`, `docs/cli.md:49`, `docs/harnesses.md:50`, `a2amx.toml.example` ends with the developer session.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5`; developer on the OMP
+harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed); no tester pass
+(documentation). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`claude-opus-5-5`) | `~` was not expanded by the CLI or the team commands, so every recipe would have been a silent no-op; the architect's claim came from reading `expand_home` and spec 3ax, not from running an example through the user-facing path | Spec 3bj (`a4932d4`) fixed it before this spec was assigned |
+| Draft review | Consultant | The recipes opened whole homes (`~/.cargo`, `~/go`, `~/.gradle`, `~/.m2`), against the guide's own rule; `~/.cargo/bin` and `init.d` carry code that runs later | Narrow cache paths; the architect probed that `~/.cargo/registry` alone is enough for a cargo build |
+| Draft review | Consultant | Default hides were undercounted (24 vs 28 plus three more); the Docker Desktop socket needs an unhide besides the switch; a remote engine needs hidden credentials; a troubleshooting row gave the wrong cause for a missing helper; maintainer trivia in a user guide | All adopted in the locked spec |
+| Draft review | Consultant | Test design traps: the two marker rules conflicted, "at least two blocks" was not guaranteed, keys after a `[[session]]` header in `a2amx.toml.example` belong to that session | Marker rule only, at least one complete block, the example block is its own session |
+| Architect review | Architect | The complete team file ran `cargo build` and `npm install` as session commands, which is not what a team file starts; the example block in `a2amx.toml.example` would have enabled `confine_allow_containers` when uncommented | Commands changed to `claude` and `omp`; the container line is double-commented |
+| Architect review | Architect | Stale installed binary (`v0.1.2-46`, before spec 3bj): the developer's smoke test on it showed `~` paths skipped; the guide's claim holds on a current build | Operator note to reinstall before the restart; not a source defect |

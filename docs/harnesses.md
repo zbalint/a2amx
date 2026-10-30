@@ -130,3 +130,5 @@ byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` a
   helper lose it.
 - To share a helper across sessions, start a shared helper daemon by hand, outside any
   sandbox, before the team, and let the sessions find it by port.
+
+See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.

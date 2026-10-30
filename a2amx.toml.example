@@ -41,3 +41,12 @@ role = "developer"
 cwd = "." # relative paths are relative to this file's directory
 reset = ["/clear"]
 control_from = ["architect"]
+
+# --- confinement example ---
+# [[session]]
+# name = "worker"
+# command = ["omp"]
+# confine = true
+# confine_write = ["~/.cargo/registry", "~/.npm"]
+# # confine_allow_containers = true # root-equivalent, read docs/confinement.md first
+# --- end confinement example ---

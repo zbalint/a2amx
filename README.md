@@ -92,6 +92,7 @@ All code, tests and documentation are written by AI agents; no human writes or h
 - [CLI reference](docs/cli.md) — commands, attachment controls, list columns, quota, and reset.
 - [Teams](docs/teams.md) — configure team files, visibility, watches, heartbeats, activity notices, and team commands.
 - [Harnesses and delivery](docs/harnesses.md) — choose profiles and interpret channels, hooks, and receipts.
+- [Confinement](docs/confinement.md) — set up --confine for your languages, credentials and Docker.
 - [Installation](docs/install.md) — separate development builds from the live installed binary.
 - [Releasing](docs/releasing.md) — how releases are cut, signed and verified.
 - [Using with agents](docs/using-with-agents.md) — peer-message instructions and credential hygiene.

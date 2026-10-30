@@ -80,6 +80,8 @@ paths, and missing paths skipped from the launch plan. A socket or file created 
 after launch is visible when it is outside every launch-time hide; start container daemons
 before a confined session if their socket must be hidden.
 
+See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.
+
 ## State directory and attachment
 
 The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,
