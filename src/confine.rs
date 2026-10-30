@@ -336,7 +336,7 @@ fn harness_data(harness: Harness, home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
                     let path = entry.path();
                     if path
                         .file_name()
-                        .and_then(|name| name.to_str())
+                        .and_then(OsStr::to_str)
                         .is_some_and(|name| name.ends_with(".db"))
                     {
                         databases.insert(path);
@@ -424,7 +424,7 @@ pub fn ensure_data_files(harness: Harness, home: &Path) -> Result<()> {
         .into_iter()
         .filter(|path| {
             path.file_name()
-                .and_then(|name| name.to_str())
+                .and_then(OsStr::to_str)
                 .is_some_and(|name| name.ends_with(".db"))
         })
         .collect::<Vec<_>>();
@@ -627,7 +627,7 @@ fn add_harness_data_mounts(
             add_unique(writable, path);
             continue;
         }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        let Some(name) = path.file_name().and_then(OsStr::to_str) else {
             continue;
         };
         let Some(base) = name
@@ -1152,10 +1152,10 @@ pub fn ensure_empty_file(state_dir: &Path) -> Result<PathBuf> {
         OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o444)
+            .mode(0o400)
             .open(&path)?;
     }
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o400))?;
     Ok(path)
 }
 

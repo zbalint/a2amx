@@ -326,17 +326,24 @@ impl Runtime {
         role
     }
 
-    async fn create_session(self: &Arc<Self>, request: Request) -> anyhow::Result<Response> {
-        let (confine_request, request) = match request {
+    fn split_confine(
+        request: Request,
+    ) -> Result<(Option<confine::ConfineRequest>, Request), String> {
+        match request {
             Request::Confine { confine, request } => {
                 if matches!(request.as_ref(), Request::Confine { .. }) {
-                    return Ok(Response::Error {
-                        message: "nested confinement requests are not allowed".into(),
-                    });
+                    return Err("nested confinement requests are not allowed".into());
                 }
-                (Some(confine), *request)
+                Ok((Some(confine), *request))
             }
-            request => (None, request),
+            request => Ok((None, request)),
+        }
+    }
+
+    async fn create_session(self: &Arc<Self>, request: Request) -> anyhow::Result<Response> {
+        let (confine_request, request) = match Self::split_confine(request) {
+            Ok(split) => split,
+            Err(message) => return Ok(Response::Error { message }),
         };
         let Request::NewSession {
             argv,

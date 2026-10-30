@@ -1272,7 +1272,9 @@ async fn run_team_up(
     let (wanted, file_dir, team_file) = if items.is_empty() {
         let source = resolve_team_file(&home, file).await?;
         let file_dir = source.dir.clone();
-        let team_file = Some(std::fs::canonicalize(&source.path)?);
+        let team_path = source.path.clone();
+        let team_file =
+            Some(tokio::task::spawn_blocking(move || std::fs::canonicalize(team_path)).await??);
         (read_team(source).await?, file_dir, team_file)
     } else {
         (team::flag_sessions(&items)?, cwd.clone(), None)
