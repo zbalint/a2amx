@@ -191,7 +191,112 @@ fn plan_skips_missing_and_unhides_existing_home_secrets_read_only() {
             .any(|window| window == ["--ro-bind", ssh_config.as_str(), ssh_config.as_str()])
     );
 }
+#[test]
+fn run_dbus_default_hide_is_not_skipped_when_missing() {
+    let fixture = Fixture::new();
+    let defaults = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("default hide plan");
+    let no_defaults = confine::plan(
+        &ConfineRequest {
+            no_default_hides: true,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("no-default-hide plan");
+    let dbus = Path::new("/run/dbus");
+    if dbus.exists() {
+        let dbus = std::fs::canonicalize(dbus).expect("dbus canonical");
+        assert!(defaults.hidden_paths().contains(&dbus));
+        assert!(defaults.default_hidden.contains(&dbus));
+        assert!(!no_defaults.hidden_paths().contains(&dbus));
+        assert!(!no_defaults.default_hidden.contains(&dbus));
+    } else {
+        let dbus = dbus.to_path_buf();
+        assert!(!defaults.skipped_paths().contains(&dbus));
+        assert!(!no_defaults.skipped_paths().contains(&dbus));
+    }
+}
 
+#[test]
+fn other_harness_credentials_are_default_hidden() {
+    let fixture = Fixture::new();
+    let claude_credentials = fixture.home.join(".claude/.credentials.json");
+    let codex_credentials = fixture.home.join(".codex/auth.json");
+    std::fs::create_dir_all(claude_credentials.parent().expect("Claude parent"))
+        .expect("Claude directory");
+    std::fs::create_dir_all(codex_credentials.parent().expect("Codex parent"))
+        .expect("Codex directory");
+    std::fs::write(&claude_credentials, "fixture").expect("Claude credentials");
+    std::fs::write(&codex_credentials, "fixture").expect("Codex credentials");
+
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("credential hide plan");
+    for path in [claude_credentials, codex_credentials] {
+        let path = std::fs::canonicalize(path).expect("credential canonical");
+        assert!(plan.hidden_paths().contains(&path));
+        assert!(plan.default_hidden.contains(&path));
+    }
+}
+
+#[test]
+fn git_config_worktree_is_protected_inside_writable_common_dir() {
+    let fixture = Fixture::new();
+    let repo = fixture.cwd.join("repo");
+    let common = repo.join(".git");
+    let config_worktree = common.join("config.worktree");
+    std::fs::create_dir_all(&common).expect("git directory");
+    std::fs::write(&config_worktree, "[core]\n").expect("worktree config");
+
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &repo,
+        &fixture.host(),
+    )
+    .expect("config.worktree plan");
+    let common = std::fs::canonicalize(common).expect("common canonical");
+    let config_worktree =
+        std::fs::canonicalize(config_worktree).expect("worktree config canonical");
+    assert!(plan.writable.contains(&common));
+    assert!(plan.readonly.contains(&config_worktree));
+    assert!(plan.protected.contains(&config_worktree));
+}
+
+#[test]
+fn confine_write_error_precedes_bad_unhide_error() {
+    let fixture = Fixture::new();
+    let socket = fixture.home.join(".docker/run/docker.sock");
+    std::fs::create_dir_all(socket.parent().expect("socket parent")).expect("socket directory");
+    std::fs::write(&socket, "socket placeholder").expect("socket fixture");
+    let error = match confine::plan(
+        &ConfineRequest {
+            write: vec!["~/.docker/run/docker.sock".into()],
+            unhide: vec![fixture.state.to_string_lossy().into_owned()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("container socket write must be refused first"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("confine_write path"));
+    assert!(!error.to_string().contains("confine_unhide"));
+}
 #[test]
 fn mandatory_hides_remain_when_default_hides_are_disabled() {
     let fixture = Fixture::new();

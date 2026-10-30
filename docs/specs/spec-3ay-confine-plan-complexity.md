@@ -188,3 +188,23 @@ git status --short   # only src/confine.rs and tests/confine.rs
 | Full suite, clippy, fmt pass at `1560ff0` | architect run 2026-10-30 | ran |
 | `container_hidden.retain` in an unhide is a no-op while the refusal before it stays | `src/confine.rs:178` (`is_within` includes equality) and the unhide loop in `plan`; test at `tests/confine.rs:377` | read by architect and consultant; not probed |
 | Hand counts: every new function at most 11 (`hide_defaults` 5 with `hide_or_skip`), against the 15 bar | consultant `m_4443` | hand count only; Sonar confirms after the push |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness (model name not exposed to the architect);
+developer and tester on the OMP harness, planning and working model `openai-codex/gpt-5.6-luna` (the advisor model was
+not exposed to either). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Architect (Claude Sonnet 5.5), by grep | The first draft stated four claims from recall: `/run/dbus` at lines 758-763 (it is line 780), 20 test callers (49), the `credentials.json` test hits as covering the non-Claude hide (they are the harness-data allowlist), and a test for the unhide `container_hidden.retain` (the line cannot be observed) | Claims table and section 4 corrected before the consultant saw the draft |
+| Draft review | Consultant | `hide_defaults` with the `if !option` wrapper counts 18, not 11 | Early return in `hide_defaults` and `hide_containers` |
+| Draft review | Consultant | The skip-missing rule would be repeated at four call sites | `hide_or_skip(source, kind)` owns it; `/run/dbus` stays inline |
+| Draft review | Consultant | The `/run/dbus` test asserted nothing on a host where the path exists; the spec had the hosting condition backwards | Test asserts the branch the host selects and the report names the other |
+| Draft review | Consultant | Raw `host` paths and canonical fields side by side on the builder invite a symlinked-home bug | Section 3 says `host` is read only by `add_validated_write` and `plan_empty_file` |
+| Draft review | Consultant | No test pinned that a `confine_write` refusal beats a bad unhide | Added as section 4 item 5 |
+| Architect review | Architect | The developer rebound `path` from `check_unhide_allowed`'s return, which the old code discarded | Developer restored the old form |
+| Architect review | Architect | A two-line comment was reflowed to one 126-character line | Developer restored the wrapping |
+| Tester pass | Tester | Doc comment on `plan` lost a double space | Architect restored it; no behavior change |
+| Tester pass | Tester | Four mutants survive in the moved code: `finish` `skipped.sort()`, missing container paths dropped from `skipped`, the write/hide entry-limit order, the unhide `default_hidden.retain`. The same mutants survive on the code before this spec | Tests-only hardening item (backlog F34), not a blocker |
+| After the push of `1560ff0` | Sonar | The architect's hand count for `create_session` after `split_confine` was 30; Sonar reports 31 | `plan_confinement` extracted from `create_session` in the commit that accepts this spec |

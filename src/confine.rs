@@ -658,6 +658,25 @@ pub fn check_harness(harness: Harness) -> Result<()> {
 /// containment comparison and missing operator paths are retained in
 /// `skipped` for dry-run reporting but never passed to bubblewrap.
 pub fn plan(request: &ConfineRequest, harness: Harness, cwd: &Path, host: &Host) -> Result<Plan> {
+    check_request_limits(request, harness)?;
+    let mut builder = PlanBuilder::new(host, harness)?;
+    let cwd = canonical_existing(cwd, "cwd")?;
+    if !cwd.is_dir() {
+        bail!("cwd is not a directory: {}", cwd.display());
+    }
+    let empty_file = plan_empty_file(host, &builder.state_dir)?;
+    builder.bind_workspace(&cwd)?;
+    builder.bind_harness_data()?;
+    builder.bind_operator_writes(request)?;
+    builder.hide_mandatory();
+    builder.hide_defaults(request);
+    builder.hide_containers(request);
+    builder.release_operator_writes(request)?;
+    builder.apply_operator_hides(request)?;
+    builder.finish(request, cwd, empty_file)
+}
+
+fn check_request_limits(request: &ConfineRequest, harness: Harness) -> Result<()> {
     check_entry_count(&request.write, "confine_write")?;
     check_entry_count(&request.hide, "confine_hide")?;
     check_entry_count(&request.unhide, "confine_unhide")?;
@@ -668,216 +687,287 @@ pub fn plan(request: &ConfineRequest, harness: Harness, cwd: &Path, host: &Host)
     {
         bail!("team_file path exceeds {MAX_PATH_BYTES} bytes");
     }
-    check_harness(harness)?;
-    let home = canonical_existing(&host.home, "home")?;
-    let state_dir = canonical_existing(&host.state_dir, "state directory")?;
-    let runtime_dir = canonical_existing(&host.runtime_dir, "runtime directory")?;
-    let cwd = canonical_existing(cwd, "cwd")?;
-    if !cwd.is_dir() {
-        bail!("cwd is not a directory: {}", cwd.display());
-    }
-    let empty_file = plan_empty_file(host, &state_dir)?;
+    check_harness(harness)
+}
 
-    let mut writable = Vec::new();
-    let mut readonly = Vec::new();
-    let mut hidden = Vec::new();
-    let mut skipped = Vec::new();
-    let mut explicit_writes = BTreeSet::new();
-    let _ = add_validated_write(&cwd, host, &mut writable, &mut skipped)?;
-    if let Some((common, worktree)) = git_common_dir(&cwd, &home) {
-        let _ = add_validated_write(&common, host, &mut writable, &mut skipped)?;
-        if let Ok(hooks) = common.join("hooks").canonicalize() {
-            add_unique(&mut readonly, hooks);
+/// The mount lists while the jobs of `plan` fill them.
+struct PlanBuilder<'a> {
+    host: &'a Host,
+    harness: Harness,
+    home: PathBuf,
+    state_dir: PathBuf,
+    runtime_dir: PathBuf,
+    writable: Vec<PathBuf>,
+    readonly: Vec<PathBuf>,
+    hidden: Vec<PathBuf>,
+    skipped: Vec<PathBuf>,
+    explicit_writes: BTreeSet<PathBuf>,
+    mandatory_hidden: Vec<PathBuf>,
+    default_hidden: Vec<PathBuf>,
+    container_hidden: Vec<PathBuf>,
+}
+
+#[derive(Clone, Copy)]
+enum HideKind {
+    Default,
+    Container,
+}
+
+impl<'a> PlanBuilder<'a> {
+    fn new(host: &'a Host, harness: Harness) -> Result<Self> {
+        Ok(Self {
+            host,
+            harness,
+            home: canonical_existing(&host.home, "home")?,
+            state_dir: canonical_existing(&host.state_dir, "state directory")?,
+            runtime_dir: canonical_existing(&host.runtime_dir, "runtime directory")?,
+            writable: Vec::new(),
+            readonly: Vec::new(),
+            hidden: Vec::new(),
+            skipped: Vec::new(),
+            explicit_writes: BTreeSet::new(),
+            mandatory_hidden: Vec::new(),
+            default_hidden: Vec::new(),
+            container_hidden: Vec::new(),
+        })
+    }
+
+    fn bind_workspace(&mut self, cwd: &Path) -> Result<()> {
+        let _ = add_validated_write(cwd, self.host, &mut self.writable, &mut self.skipped)?;
+        if let Some((common, worktree)) = git_common_dir(cwd, &self.home) {
+            let _ = add_validated_write(&common, self.host, &mut self.writable, &mut self.skipped)?;
+            self.protect_git_metadata(&common, &worktree);
         }
-        for name in ["config", "config.worktree"] {
+        Ok(())
+    }
+
+    fn protect_git_metadata(&mut self, common: &Path, worktree: &Path) {
+        for name in ["hooks", "config", "config.worktree"] {
             if let Ok(path) = common.join(name).canonicalize() {
-                add_unique(&mut readonly, path);
+                add_unique(&mut self.readonly, path);
             }
         }
         if let Some(path) =
-            parse_core_hooks_path(&common, &worktree).and_then(|path| path.canonicalize().ok())
+            parse_core_hooks_path(common, worktree).and_then(|path| path.canonicalize().ok())
         {
-            add_unique(&mut readonly, path);
+            add_unique(&mut self.readonly, path);
         }
     }
 
-    let (data_dirs, data_files) = harness_data(harness, &home);
-    validate_harness_data_paths(
-        harness,
-        &home,
-        &state_dir,
-        &runtime_dir,
-        &data_dirs,
-        &data_files,
-    )?;
-    add_harness_data_mounts(
-        harness,
-        &home,
-        &data_dirs,
-        &data_files,
-        &mut writable,
-        &mut skipped,
-    )?;
+    fn bind_harness_data(&mut self) -> Result<()> {
+        let (data_dirs, data_files) = harness_data(self.harness, &self.home);
+        validate_harness_data_paths(
+            self.harness,
+            &self.home,
+            &self.state_dir,
+            &self.runtime_dir,
+            &data_dirs,
+            &data_files,
+        )?;
+        add_harness_data_mounts(
+            self.harness,
+            &self.home,
+            &data_dirs,
+            &data_files,
+            &mut self.writable,
+            &mut self.skipped,
+        )
+    }
 
-    for path in &request.write {
-        if let Some(path) =
-            add_validated_write(&user_path(path, &home), host, &mut writable, &mut skipped)?
+    fn bind_operator_writes(&mut self, request: &ConfineRequest) -> Result<()> {
+        for path in &request.write {
+            let source = user_path(path, &self.home);
+            if let Some(path) =
+                add_validated_write(&source, self.host, &mut self.writable, &mut self.skipped)?
+            {
+                self.explicit_writes.insert(path);
+            }
+        }
+        if let Some(team_file) = &request.team_file
+            && let Some(path) = add_canonical_existing(
+                &user_path(team_file, &self.home),
+                "team file",
+                &mut self.skipped,
+            )
+            && self.writable.iter().any(|write| is_within(&path, write))
         {
-            explicit_writes.insert(path);
+            add_unique(&mut self.readonly, path);
         }
-    }
-    if let Some(team_file) = &request.team_file
-        && let Some(path) =
-            add_canonical_existing(&user_path(team_file, &home), "team file", &mut skipped)
-        && writable.iter().any(|write| is_within(&path, write))
-    {
-        add_unique(&mut readonly, path);
-    }
-    let mut mandatory_hidden = Vec::new();
-    for path in [runtime_dir.clone(), state_dir.clone()] {
-        add_unique(&mut mandatory_hidden, path);
-    }
-    for path in MANDATORY_ROOTS {
-        if let Some(path) = canonical_if_exists(Path::new(path)) {
-            add_unique(&mut mandatory_hidden, path);
-        } else {
-            add_unique(&mut skipped, PathBuf::from(path));
-        }
-    }
-    for path in &mandatory_hidden {
-        add_unique(&mut hidden, path.clone());
+        Ok(())
     }
 
-    let mut default_hidden = Vec::new();
-    if !request.no_default_hides {
+    fn hide_mandatory(&mut self) {
+        for path in [self.runtime_dir.clone(), self.state_dir.clone()] {
+            add_unique(&mut self.mandatory_hidden, path);
+        }
+        for path in MANDATORY_ROOTS {
+            if let Some(path) = canonical_if_exists(Path::new(path)) {
+                add_unique(&mut self.mandatory_hidden, path);
+            } else {
+                add_unique(&mut self.skipped, PathBuf::from(path));
+            }
+        }
+        for path in &self.mandatory_hidden {
+            add_unique(&mut self.hidden, path.clone());
+        }
+    }
+
+    fn hide_defaults(&mut self, request: &ConfineRequest) {
+        if request.no_default_hides {
+            return;
+        }
         for name in DEFAULT_HIDES.into_iter().chain(DEFAULT_HIDES_EXTRA) {
-            let path = user_path(name, &home);
-            if let Some(path) = canonical_if_exists(&path) {
-                add_unique(&mut default_hidden, path.clone());
-                add_unique(&mut hidden, path);
-            } else {
-                add_unique(&mut skipped, path);
-            }
+            self.hide_or_skip(user_path(name, &self.home), HideKind::Default);
         }
-        if harness != Harness::Claude {
-            let path = home.join(".claude/.credentials.json");
-            if let Some(path) = canonical_if_exists(&path) {
-                add_unique(&mut default_hidden, path.clone());
-                add_unique(&mut hidden, path);
-            } else {
-                add_unique(&mut skipped, path);
-            }
+        if self.harness != Harness::Claude {
+            self.hide_or_skip(
+                self.home.join(".claude/.credentials.json"),
+                HideKind::Default,
+            );
         }
-        if harness != Harness::Codex {
-            let path = home.join(".codex/auth.json");
-            if let Some(path) = canonical_if_exists(&path) {
-                add_unique(&mut default_hidden, path.clone());
-                add_unique(&mut hidden, path);
-            } else {
-                add_unique(&mut skipped, path);
-            }
+        if self.harness != Harness::Codex {
+            self.hide_or_skip(self.home.join(".codex/auth.json"), HideKind::Default);
         }
         if let Some(path) = canonical_if_exists(Path::new("/run/dbus")) {
-            add_unique(&mut default_hidden, path.clone());
-            add_unique(&mut hidden, path);
+            add_unique(&mut self.default_hidden, path.clone());
+            add_unique(&mut self.hidden, path);
         }
     }
 
-    let mut container_hidden = Vec::new();
-    if !request.allow_containers {
+    fn hide_containers(&mut self, request: &ConfineRequest) {
+        if request.allow_containers {
+            return;
+        }
         for entry in CONTAINER_HIDES {
             let source = if let Some(relative) = entry.strip_prefix("~/") {
-                home.join(relative)
+                self.home.join(relative)
             } else {
                 PathBuf::from(entry)
             };
-            if let Some(path) = canonical_if_exists(&source) {
-                add_unique(&mut container_hidden, path.clone());
-                add_unique(&mut hidden, path);
-            } else {
-                add_unique(&mut skipped, source);
-            }
+            self.hide_or_skip(source, HideKind::Container);
         }
     }
-    for path in &explicit_writes {
-        if !request.allow_containers
-            && container_hidden
+
+    fn hide_or_skip(&mut self, source: PathBuf, kind: HideKind) {
+        if let Some(path) = canonical_if_exists(&source) {
+            match kind {
+                HideKind::Default => add_unique(&mut self.default_hidden, path.clone()),
+                HideKind::Container => add_unique(&mut self.container_hidden, path.clone()),
+            }
+            add_unique(&mut self.hidden, path);
+        } else {
+            add_unique(&mut self.skipped, source);
+        }
+    }
+
+    fn check_container_socket(
+        &self,
+        path: &Path,
+        option: &str,
+        allow_containers: bool,
+    ) -> Result<()> {
+        if !allow_containers
+            && self
+                .container_hidden
                 .iter()
                 .any(|socket| is_within(path, socket))
         {
             bail!(
-                "confine_write path {} requires --confine-allow-containers",
+                "{option} path {} requires --confine-allow-containers",
                 path.display()
             );
         }
-        hidden.retain(|existing| existing != path);
-        default_hidden.retain(|existing| existing != path);
+        Ok(())
     }
 
-    for path in &request.hide {
-        add_optional_hide(&user_path(path, &home), &mut hidden, &mut skipped);
-    }
-    for path in &request.unhide {
-        let source = user_path(path, &home);
-        let path = add_canonical_existing(&source, "unhide", &mut skipped);
-        if let Some(path) = path {
-            check_unhide_allowed(&path, &state_dir, &runtime_dir, &home)?;
-            if !request.allow_containers
-                && container_hidden
-                    .iter()
-                    .any(|socket| is_within(&path, socket))
-            {
-                bail!(
-                    "confine_unhide path {} requires --confine-allow-containers",
-                    path.display()
-                );
-            }
-            hidden.retain(|existing| existing != &path);
-            default_hidden.retain(|existing| existing != &path);
-            container_hidden.retain(|existing| existing != &path);
-            add_unique(&mut readonly, path);
+    fn release_operator_writes(&mut self, request: &ConfineRequest) -> Result<()> {
+        for path in &self.explicit_writes {
+            self.check_container_socket(path, "confine_write", request.allow_containers)?;
+            self.hidden.retain(|existing| existing != path);
+            self.default_hidden.retain(|existing| existing != path);
         }
+        Ok(())
     }
 
-    readonly.retain(|path| !explicit_writes.contains(path));
+    fn apply_operator_hides(&mut self, request: &ConfineRequest) -> Result<()> {
+        for path in &request.hide {
+            add_optional_hide(
+                &user_path(path, &self.home),
+                &mut self.hidden,
+                &mut self.skipped,
+            );
+        }
+        for path in &request.unhide {
+            self.unhide(path, request.allow_containers)?;
+        }
+        Ok(())
+    }
+
+    fn unhide(&mut self, path: &str, allow_containers: bool) -> Result<()> {
+        let source = user_path(path, &self.home);
+        if let Some(path) = add_canonical_existing(&source, "unhide", &mut self.skipped) {
+            check_unhide_allowed(&path, &self.state_dir, &self.runtime_dir, &self.home)?;
+            self.check_container_socket(&path, "confine_unhide", allow_containers)?;
+            self.hidden.retain(|existing| existing != &path);
+            self.default_hidden.retain(|existing| existing != &path);
+            self.container_hidden.retain(|existing| existing != &path);
+            add_unique(&mut self.readonly, path);
+        }
+        Ok(())
+    }
+
+    fn finish(
+        mut self,
+        request: &ConfineRequest,
+        cwd: PathBuf,
+        empty_file: PathBuf,
+    ) -> Result<Plan> {
+        self.readonly
+            .retain(|path| !self.explicit_writes.contains(path));
+        let protected = protected_paths(&self.readonly, &self.writable);
+        self.readonly.sort();
+        self.writable.sort();
+        self.hidden.sort();
+        self.mandatory_hidden.sort();
+        self.default_hidden.sort();
+        self.container_hidden.sort();
+        self.skipped.sort();
+
+        let plan = Plan {
+            bwrap: PathBuf::from("bwrap"),
+            empty_file,
+            state_dir: self.state_dir.clone(),
+            cwd,
+            harness: self.harness,
+            writable: self.writable,
+            readonly: self.readonly,
+            protected,
+            hidden: self.hidden,
+            skipped: self.skipped,
+            allow_containers: request.allow_containers,
+            mandatory_hidden: self.mandatory_hidden,
+            default_hidden: self.default_hidden,
+            container_hidden: self.container_hidden,
+        };
+        // Force the expensive argument-size validation while still in the
+        // daemon-side preflight path, before a PTY can be created.
+        plan.wrap(vec!["true".to_owned()])?;
+        Ok(plan)
+    }
+}
+
+fn protected_paths(readonly: &[PathBuf], writable: &[PathBuf]) -> Vec<PathBuf> {
     let mut protected = Vec::new();
     let mut protected_set = BTreeSet::new();
-    for path in &readonly {
+    for path in readonly {
         if writable.iter().any(|write| is_within(path, write))
             && protected_set.insert(path_key(path))
         {
             protected.push(path.clone());
         }
     }
-    readonly.sort();
     protected.sort();
-    writable.sort();
-    hidden.sort();
-    mandatory_hidden.sort();
-    default_hidden.sort();
-    container_hidden.sort();
-    skipped.sort();
-
-    let plan = Plan {
-        bwrap: PathBuf::from("bwrap"),
-        empty_file,
-        state_dir: state_dir.clone(),
-        cwd,
-        harness,
-        writable,
-        readonly,
-        protected,
-        hidden,
-        skipped,
-        allow_containers: request.allow_containers,
-        mandatory_hidden,
-        default_hidden,
-        container_hidden,
-    };
-    // Force the expensive argument-size validation while still in the
-    // daemon-side preflight path, before a PTY can be created.
-    plan.wrap(vec!["true".to_owned()])?;
-    Ok(plan)
+    protected
 }
 
 impl Plan {
