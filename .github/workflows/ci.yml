@@ -104,6 +104,17 @@ jobs:
       - run: cargo install --locked cargo-llvm-cov --version 0.9.1
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
+      # The sandbox and user-namespace tests need bubblewrap and unprivileged user namespaces. The
+      # ubuntu-24.04 runner has neither (no bwrap, AppArmor restricts user namespaces); probed on
+      # that image: bubblewrap 0.9.0 from apt plus this sysctl is enough. The last two commands
+      # fail the step with a clear error if a runner image change breaks that.
+      - name: Install bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --version
+          unshare -Ur true
       # The test run doubles as the coverage run. continue-on-error lets the SonarQube scan still
       # see the report; the last step fails the job when the tests failed.
       # --no-fail-fast: one timing flake must not hide the suites after it.
@@ -112,6 +123,8 @@ jobs:
         continue-on-error: true
         env:
           A2AMX_REQUIRE_NODE: "1"
+          A2AMX_REQUIRE_BWRAP: "1"
+          A2AMX_REQUIRE_USERNS: "1"
           A2AMX_JS_LCOV: js.lcov
         run: cargo llvm-cov --locked --no-fail-fast --no-report
       # A test that kills a child mid-write leaves a truncated .profraw that crashes llvm-profdata,

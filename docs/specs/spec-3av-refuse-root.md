@@ -116,7 +116,8 @@ file already imports its modules the same way for `mcp`, `hook` and `bridge`.)
    and its stderr does not contain `refusing`.
 5. Skip rule for tests 2-3: when `unshare -Ur true` cannot run, print a notice and return, unless
    `A2AMX_REQUIRE_USERNS=1`, which makes the skip a failure. CI does not set it (the GitHub runner's image may restrict
-   unprivileged user namespaces; set it only after one CI run proves it works).
+   unprivileged user namespaces; set it only after one CI run proves it works). Update 2026-10-30: a probe run proved it works with the sysctl of spec 3ax
+   section 6, and CI now sets it.
 6. The suite must run as an ordinary user: 13 of the integration test files spawn the `a2amx` binary, and as root they
    would all be refused. State this in `AGENTS.md` under "Commands" in one sentence (the file is already in scope).
 

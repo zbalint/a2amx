@@ -390,6 +390,9 @@ GitHub's Ubuntu runners restrict unprivileged user namespaces by default; the de
 run there with `A2AMX_REQUIRE_BWRAP=1`; if not they skip and the pure `plan`/`notice` tests plus the PATH-stripped refusal
 test (which needs no bwrap) carry the coverage. The Sonar new-code gate is read after the push.
 
+Update 2026-10-30: the runner has no bubblewrap and restricts user namespaces; a probe run showed `apt-get install
+bubblewrap` (0.9.0) plus that sysctl makes all tests pass, so `ci.yml` now does both and sets `A2AMX_REQUIRE_BWRAP=1`.
+
 ## 7. Items settled at the tester pass, and owner confirmations
 
 - **O1. Claude's `~/.claude.json`.** Written through `~/.claude.json.tmp.<pid>.<hash>` in `$HOME` (seen on disk). Decision:
