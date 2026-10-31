@@ -391,3 +391,18 @@ variables the architect's baseline used (section 12).
 | `tests/docs_examples.rs` parses every non-`# fragment` TOML fence of the guide and the example block of `a2amx.toml.example`, and special-cases `confine_allow_containers =` | `tests/docs_examples.rs:21-76` | read |
 | Confinement is absent at `v0.1.2` and listed under Unreleased | `git cat-file -e v0.1.2:src/confine.rs` fails; `CHANGELOG.md:18-28` | probed |
 | Baseline: develop at `b2f04ab`, full suite 700 passed, 0 failed, 3 ignored | architect run, 2026-10-31 | probed |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5`; developer and tester on the
+OMP harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed to either).
+BLOCKED/amend cycles: 1 BLOCKED, 0 amendments (the architect answered it without changing the spec).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`claude-opus-5-5`) | Several mechanical gaps: an acceptance grep that matched docs, specs and the backlog; `NewOptions.team_file` left in place; the old-format scan placed after the typed parse; `Plan.allow_containers` public; a missing use of `MAX_LIST_ENTRIES`; wrong anchors | Spec fixed before the lock |
+| Implementation | Developer (`gpt-5.6-luna`) | BLOCKED: the confinement notice truncates the writable list ("and 8 more") and the checkout looked read-only | Architect: the working directory is writable by design, the notice is misleading. Backlog item filed for the notice (always name the working directory) |
+| Tester pass | Tester (`gpt-5.6-luna`) | The closest-match wording was not asserted (threshold mutant survived) | Developer added the assertions; mutant killed |
+| Tester pass | Tester | Removing the grants count bound survived | Developer added `grant_count_limit_precedes_grant_lookup`; mutant killed |
+| Tester pass | Tester | Section 9 names a wire-level unknown-grant test, but section 7 test 3 calls `plan()` directly | Accepted: `plan()` is the single check every entry point passes; spec wording imprecise, text left as locked |
+| Architect review | Architect | New `#[allow(clippy::large_enum_variant)]` on `Command` without a reason (clippy needs it once `grants` grew `New`) | Architect added a one-line reason; precedent in `src/wire.rs` |

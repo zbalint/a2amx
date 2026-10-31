@@ -16,6 +16,7 @@ pub mod confine;
 pub mod daemon;
 mod delivery;
 pub mod emulator;
+pub mod grant;
 pub mod harness;
 pub mod hook;
 pub mod mcp;

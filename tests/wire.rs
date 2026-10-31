@@ -974,7 +974,7 @@ fn confine_request_round_trips_and_defaults_missing_fields() {
             hide: vec!["secret".into()],
             unhide: vec![],
             no_default_hides: true,
-            allow_containers: false,
+            grants: vec![],
             team_file: Some("/workspace/team.toml".into()),
         },
         request: Box::new(Request::NewSession {
@@ -1016,4 +1016,15 @@ fn confine_request_round_trips_and_defaults_missing_fields() {
     let absent: a2amx::confine::ConfineRequest =
         serde_json::from_value(serde_json::json!({})).unwrap();
     assert_eq!(absent, a2amx::confine::ConfineRequest::default());
+
+    let mut old_allow = serde_json::to_value(&request).unwrap();
+    let confine = old_allow["confine"]
+        .as_object_mut()
+        .expect("confine object");
+    confine.remove("grants");
+    confine.insert("allow_containers".into(), serde_json::json!(true));
+    let Request::Confine { confine, .. } = serde_json::from_value(old_allow).unwrap() else {
+        panic!("old confine request tag");
+    };
+    assert!(confine.grants.is_empty());
 }

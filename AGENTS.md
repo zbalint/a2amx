@@ -151,6 +151,7 @@ specs showing it found nothing.
 | `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
 | `cli` | Command-line shape |
 | `team` | The team file and flag formats and the up-plan (pure; the commands live in `main`) |
+| `grant` | Named confinement grants: the table of what each one exposes, name validation and the closest-match error (pure) |
 | `main` | CLI dispatch and daemon/session/team command execution |
 
 ## Public repository rules

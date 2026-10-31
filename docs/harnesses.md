@@ -63,8 +63,8 @@ the documented data allow-list, hides the daemon state and runtime directory, an
 always unsets `DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`, `GPG_AGENT_INFO`,
 `WSL_INTEROP`, `DISPLAY`, and `WAYLAND_DISPLAY`. `DOCKER_HOST`, `DOCKER_CONTEXT`,
 `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINERD_ADDRESS`, `BUILDKIT_HOST`,
-and `LIBVIRT_DEFAULT_URI` stay set only with `--confine-allow-containers`. That
-switch exposes only the configured system container sockets; rootless sockets under
+and `LIBVIRT_DEFAULT_URI` stay set only with the `containers` grant. That grant
+exposes only the configured system container sockets; rootless sockets under
 `$XDG_RUNTIME_DIR` remain hidden. For an OMP session, the `omp` directory inside
 the state directory stays visible, read-only; the rest of the state directory is
 hidden.

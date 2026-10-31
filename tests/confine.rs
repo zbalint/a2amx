@@ -298,7 +298,7 @@ fn missing_container_socket_paths_are_reported_as_skipped() {
 
     let allowed = confine::plan(
         &ConfineRequest {
-            allow_containers: true,
+            grants: vec!["containers".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -330,9 +330,7 @@ fn write_limit_error_precedes_hide_limit_error() {
         Err(error) => error,
     };
     assert!(
-        error
-            .to_string()
-            .contains("confine_write has more than 64 entries"),
+        error.to_string().contains("write has more than 64 entries"),
         "unexpected entry-count error: {error}"
     );
 }
@@ -351,28 +349,28 @@ fn a_list_of_exactly_64_entries_is_accepted() {
         .collect();
     let cases = [
         (
-            "confine_write",
+            "write",
             ConfineRequest {
                 write: missing.clone(),
                 ..ConfineRequest::default()
             },
-            "confine_write has more than 64 entries",
+            "write has more than 64 entries",
         ),
         (
-            "confine_hide",
+            "hide",
             ConfineRequest {
                 hide: missing.clone(),
                 ..ConfineRequest::default()
             },
-            "confine_hide has more than 64 entries",
+            "hide has more than 64 entries",
         ),
         (
-            "confine_unhide",
+            "unhide",
             ConfineRequest {
                 unhide: missing.clone(),
                 ..ConfineRequest::default()
             },
-            "confine_unhide has more than 64 entries",
+            "unhide has more than 64 entries",
         ),
     ];
 
@@ -394,9 +392,9 @@ fn a_list_of_exactly_64_entries_is_accepted() {
             .to_string_lossy()
             .into_owned();
         match label {
-            "confine_write" => request.write.push(extra.clone()),
-            "confine_hide" => request.hide.push(extra.clone()),
-            "confine_unhide" => request.unhide.push(extra),
+            "write" => request.write.push(extra.clone()),
+            "hide" => request.hide.push(extra.clone()),
+            "unhide" => request.unhide.push(extra),
             _ => unreachable!("known confinement list label"),
         }
         let error = match confine::plan(&request, Harness::Generic, &fixture.cwd, &fixture.host()) {
@@ -432,13 +430,11 @@ fn hide_limit_error_precedes_unhide_limit_error() {
         Err(error) => error,
     };
     assert!(
-        error
-            .to_string()
-            .contains("confine_hide has more than 64 entries"),
+        error.to_string().contains("hide has more than 64 entries"),
         "unexpected entry-count error: {error}"
     );
     assert!(
-        !error.to_string().contains("confine_unhide"),
+        !error.to_string().contains("unhide"),
         "hide entry-count error must precede unhide: {error}"
     );
 }
@@ -522,7 +518,7 @@ fn git_config_worktree_is_protected_inside_writable_common_dir() {
 }
 
 #[test]
-fn confine_write_error_precedes_bad_unhide_error() {
+fn write_error_precedes_bad_unhide_error() {
     let fixture = Fixture::new();
     let socket = fixture.home.join(".docker/run/docker.sock");
     std::fs::create_dir_all(socket.parent().expect("socket parent")).expect("socket directory");
@@ -540,8 +536,8 @@ fn confine_write_error_precedes_bad_unhide_error() {
         Ok(_) => panic!("container socket write must be refused first"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("confine_write path"));
-    assert!(!error.to_string().contains("confine_unhide"));
+    assert!(error.to_string().contains("write path"));
+    assert!(!error.to_string().contains("unhide"));
 }
 #[test]
 fn mandatory_hides_remain_when_default_hides_are_disabled() {
@@ -642,7 +638,7 @@ fn wrap_unsets_base_and_container_environment_in_stable_order() {
     }
     let allowed = confine::plan(
         &ConfineRequest {
-            allow_containers: true,
+            grants: vec!["containers".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -742,11 +738,11 @@ fn unhide_cannot_lift_container_socket_restriction() {
         Ok(_) => panic!("container socket unhide must be refused"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("--confine-allow-containers"));
+    assert!(error.to_string().contains("containers grant"));
     let allowed = confine::plan(
         &ConfineRequest {
             unhide: vec!["~/.docker/run/docker.sock".into()],
-            allow_containers: true,
+            grants: vec!["containers".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -900,11 +896,11 @@ fn writable_paths_override_exact_hides_but_not_container_sockets() {
         Ok(_) => panic!("container socket write must be refused"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("--confine-allow-containers"));
+    assert!(error.to_string().contains("containers grant"));
     let allowed = confine::plan(
         &ConfineRequest {
             write: vec!["~/.docker/run/docker.sock".into()],
-            allow_containers: true,
+            grants: vec!["containers".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -958,7 +954,7 @@ fn container_socket_hides_are_bound_and_can_be_disabled() {
     }
     let allowed = confine::plan(
         &ConfineRequest {
-            allow_containers: true,
+            grants: vec!["containers".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1698,7 +1694,7 @@ fn notice_describes_restrictions_and_keeps_closing_sentence() {
     assert!(restricted_notice.ends_with(confine::CLOSING_NOTICE));
     let allowed = confine::plan(
         &ConfineRequest {
-            allow_containers: true,
+            grants: vec!["containers".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -2512,4 +2508,53 @@ fn preflight_env_refuses_an_env_without_the_flags() {
     let missing = Path::new("/definitely/missing/a2amx-env");
     let error = confine::preflight_env(missing).expect_err("missing env probe");
     assert!(error.to_string().contains("a2amx-env"));
+}
+
+#[test]
+fn grants_are_validated_and_reported_by_the_plan() {
+    let fixture = Fixture::new();
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["containers".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("containers grant");
+    assert_eq!(plan.grants, ["containers"]);
+    assert!(confine::notice(&plan).contains("Granted: containers."));
+
+    let error = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["container".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("unknown grant"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("closest match: containers"));
+}
+
+#[test]
+fn grant_count_limit_precedes_grant_lookup() {
+    let fixture = Fixture::new();
+    let error = match confine::plan(
+        &ConfineRequest {
+            grants: (0..65).map(|_| "containers".to_owned()).collect(),
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("grant count limit was not enforced"),
+        Err(error) => error,
+    };
+    assert_eq!(error.to_string(), "grants has more than 64 entries");
 }

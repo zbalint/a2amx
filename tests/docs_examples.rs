@@ -64,9 +64,6 @@ fn toml_examples_in_the_confinement_guide_parse() {
         let Some(uncommented) = line.strip_prefix("# ") else {
             panic!("confinement example line is not commented: {line}");
         };
-        if uncommented.starts_with("confine_allow_containers =") {
-            continue;
-        }
         other_lines.push(uncommented);
     }
     let reconstructed = other_lines.join("\n");

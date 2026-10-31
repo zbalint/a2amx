@@ -29,6 +29,8 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+// The parsed command line is built once at startup; boxing `New` would only add indirection.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Manage the host daemon: start, status, stop.
     Daemon {
@@ -61,8 +63,9 @@ pub enum Command {
         confine_unhide: Vec<String>,
         #[arg(long)]
         confine_no_default_hides: bool,
-        #[arg(long)]
-        confine_allow_containers: bool,
+        /// Grant a named capability to a confined session; repeatable.
+        #[arg(long = "confine-grant")]
+        confine_grant: Vec<String>,
         /// Slash command sequence used by `a2amx reset`; repeatable and ordered.
         #[arg(long)]
         reset: Vec<String>,

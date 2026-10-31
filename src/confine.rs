@@ -17,7 +17,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::harness::Harness;
 
 pub const MAX_LIST_ENTRIES: usize = 64;
-const MAX_PATH_BYTES: usize = 4096;
+pub const MAX_PATH_BYTES: usize = 4096;
 const MAX_ARG_BYTES: usize = 128 * 1024;
 const MAX_ARGV_BYTES: usize = 256 * 1024;
 const NOTICE_LIMIT: usize = 12 * 1024;
@@ -106,7 +106,7 @@ pub struct ConfineRequest {
     #[serde(default)]
     pub no_default_hides: bool,
     #[serde(default)]
-    pub allow_containers: bool,
+    pub grants: Vec<String>,
     #[serde(default)]
     pub team_file: Option<String>,
 }
@@ -130,7 +130,7 @@ pub struct Plan {
     pub protected: Vec<PathBuf>,
     pub hidden: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
-    pub allow_containers: bool,
+    pub grants: Vec<String>,
     pub mandatory_hidden: Vec<PathBuf>,
     pub default_hidden: Vec<PathBuf>,
     pub container_hidden: Vec<PathBuf>,
@@ -655,11 +655,13 @@ pub fn check_harness(harness: Harness) -> Result<()> {
     Ok(())
 }
 
-/// Build the complete mount plan.  Paths are canonicalized before every
+/// Build the complete mount plan. Paths are canonicalized before every
 /// containment comparison and missing operator paths are retained in
 /// `skipped` for dry-run reporting but never passed to bubblewrap.
 pub fn plan(request: &ConfineRequest, harness: Harness, cwd: &Path, host: &Host) -> Result<Plan> {
     check_request_limits(request, harness)?;
+    crate::grant::validate(&request.grants)?;
+    let allow_containers = request.grants.iter().any(|grant| grant == "containers");
     let mut builder = PlanBuilder::new(host, harness)?;
     let cwd = canonical_existing(cwd, "cwd")?;
     if !cwd.is_dir() {
@@ -671,16 +673,17 @@ pub fn plan(request: &ConfineRequest, harness: Harness, cwd: &Path, host: &Host)
     builder.bind_operator_writes(request)?;
     builder.hide_mandatory();
     builder.hide_defaults(request);
-    builder.hide_containers(request);
-    builder.release_operator_writes(request)?;
-    builder.apply_operator_hides(request)?;
+    builder.hide_containers(allow_containers);
+    builder.release_operator_writes(allow_containers)?;
+    builder.apply_operator_hides(request, allow_containers)?;
     builder.finish(request, cwd, empty_file)
 }
 
 fn check_request_limits(request: &ConfineRequest, harness: Harness) -> Result<()> {
-    check_entry_count(&request.write, "confine_write")?;
-    check_entry_count(&request.hide, "confine_hide")?;
-    check_entry_count(&request.unhide, "confine_unhide")?;
+    check_entry_count(&request.write, "write")?;
+    check_entry_count(&request.hide, "hide")?;
+    check_entry_count(&request.unhide, "unhide")?;
+    check_entry_count(&request.grants, "grants")?;
     if request
         .team_file
         .as_deref()
@@ -835,8 +838,8 @@ impl<'a> PlanBuilder<'a> {
         }
     }
 
-    fn hide_containers(&mut self, request: &ConfineRequest) {
-        if request.allow_containers {
+    fn hide_containers(&mut self, allow_containers: bool) {
+        if allow_containers {
             return;
         }
         for entry in CONTAINER_HIDES {
@@ -874,23 +877,27 @@ impl<'a> PlanBuilder<'a> {
                 .any(|socket| is_within(path, socket))
         {
             bail!(
-                "{option} path {} requires --confine-allow-containers",
+                "{option} path {} requires the containers grant (--confine-grant containers, or grants = [\"containers\"])",
                 path.display()
             );
         }
         Ok(())
     }
 
-    fn release_operator_writes(&mut self, request: &ConfineRequest) -> Result<()> {
+    fn release_operator_writes(&mut self, allow_containers: bool) -> Result<()> {
         for path in &self.explicit_writes {
-            self.check_container_socket(path, "confine_write", request.allow_containers)?;
+            self.check_container_socket(path, "write", allow_containers)?;
             self.hidden.retain(|existing| existing != path);
             self.default_hidden.retain(|existing| existing != path);
         }
         Ok(())
     }
 
-    fn apply_operator_hides(&mut self, request: &ConfineRequest) -> Result<()> {
+    fn apply_operator_hides(
+        &mut self,
+        request: &ConfineRequest,
+        allow_containers: bool,
+    ) -> Result<()> {
         for path in &request.hide {
             add_optional_hide(
                 &user_path(path, &self.home),
@@ -899,7 +906,7 @@ impl<'a> PlanBuilder<'a> {
             );
         }
         for path in &request.unhide {
-            self.unhide(path, request.allow_containers)?;
+            self.unhide(path, allow_containers)?;
         }
         Ok(())
     }
@@ -908,7 +915,7 @@ impl<'a> PlanBuilder<'a> {
         let source = user_path(path, &self.home);
         if let Some(path) = add_canonical_existing(&source, "unhide", &mut self.skipped) {
             check_unhide_allowed(&path, &self.state_dir, &self.runtime_dir, &self.home)?;
-            self.check_container_socket(&path, "confine_unhide", allow_containers)?;
+            self.check_container_socket(&path, "unhide", allow_containers)?;
             self.hidden.retain(|existing| existing != &path);
             self.default_hidden.retain(|existing| existing != &path);
             self.container_hidden.retain(|existing| existing != &path);
@@ -934,6 +941,8 @@ impl<'a> PlanBuilder<'a> {
         self.container_hidden.sort();
         self.skipped.sort();
 
+        let mut grants = request.grants.clone();
+        grants.sort();
         let plan = Plan {
             bwrap: PathBuf::from("bwrap"),
             empty_file,
@@ -945,7 +954,7 @@ impl<'a> PlanBuilder<'a> {
             protected,
             hidden: self.hidden,
             skipped: self.skipped,
-            allow_containers: request.allow_containers,
+            grants,
             mandatory_hidden: self.mandatory_hidden,
             default_hidden: self.default_hidden,
             container_hidden: self.container_hidden,
@@ -1025,17 +1034,21 @@ impl Plan {
         mounts
     }
 
+    fn allows_containers(&self) -> bool {
+        self.grants.iter().any(|grant| grant == "containers")
+    }
+
     fn env_unsets(&self) -> impl Iterator<Item = &'static str> {
         ALWAYS_UNSET
             .into_iter()
             .chain(
-                (!self.allow_containers)
+                (!self.allows_containers())
                     .then_some(CONTAINER_UNSET.iter().copied())
                     .into_iter()
                     .flatten(),
             )
             .chain(
-                (!self.allow_containers)
+                (!self.allows_containers())
                     .then_some(CONTAINER_UNSET_EXTRA.iter().copied())
                     .into_iter()
                     .flatten(),
@@ -1312,10 +1325,15 @@ pub fn notice(plan: &Plan) -> String {
         text.push_str(&capped_paths(&plan.skipped));
         text.push_str(".\n");
     }
+    if !plan.grants.is_empty() {
+        text.push_str("Granted: ");
+        text.push_str(&plan.grants.join(", "));
+        text.push_str(".\n");
+    }
     text.push_str(
         "Everything else is read-only. /tmp is private to this session and discarded when it ends; paths under a peer's /tmp cannot be read.\n",
     );
-    text.push_str(if plan.allow_containers {
+    text.push_str(if plan.allows_containers() {
         "Container engines are allowed.\n"
     } else {
         "Container engines are restricted.\n"
@@ -1378,7 +1396,7 @@ mod tests {
             protected: Vec::new(),
             hidden: Vec::new(),
             skipped: Vec::new(),
-            allow_containers: false,
+            grants: Vec::new(),
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),
             container_hidden: Vec::new(),

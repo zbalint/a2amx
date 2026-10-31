@@ -64,15 +64,15 @@ byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` a
 `--default-signal` (GNU coreutils 8.31 or newer, or uutils).
 
 The repeatable path flags are `--confine-write PATH`, `--confine-hide PATH`, and
-`--confine-unhide PATH`. Relative paths are resolved against the session cwd.
+`--confine-unhide PATH`; `--confine-grant NAME` opens a named capability such as
+`containers`. Relative paths are resolved against the session cwd.
 `--confine-no-default-hides` disables the optional home hides but never removes the
 mandatory hides: the state directory, the runtime directory, `/run/WSL` and
 `/mnt/wslg`. The private `/proc` and PID namespace are base options, and descriptor
-restrictions are a daemon property. `--confine-allow-containers` allows only the
-configured system container sockets and related environment; the rootless sockets
-under `$XDG_RUNTIME_DIR` remain hidden. For helpers that an MCP server or hook starts,
-see [Background processes](harnesses.md#background-processes). These flags require
-`--confine`; path lists accept at most 64 entries and each entry is capped at 4096 bytes.
+restrictions are a daemon property. The `containers` grant allows only the configured
+system container sockets and related environment; rootless sockets under
+`$XDG_RUNTIME_DIR` remain hidden. These flags require `--confine`; path lists accept at
+most 64 entries and each entry is capped at 4096 bytes.
 
 The session status line adds a dim `[confined]` tag immediately after the session name.
 `a2amx team up --dry-run` reports confinement, writable/protected paths, the final hidden

@@ -109,14 +109,15 @@ Within a `[[session]]` table, `name` may be omitted when `role` is set; the role
 
 ### Confinement settings
 
-Set `confine = true` on a session, or at the team-file top level to default it for
-sessions that do not override the key. `confine_write`, `confine_hide`, and
-`confine_unhide` are repeatable string arrays; relative paths are resolved against the
-resolved session cwd. `confine_no_default_hides` and `confine_allow_containers` are
-booleans. Options are rejected when `confine = false`, and each path list accepts at
-most 64 entries of at most 4096 bytes. Codex sessions cannot be confined. The
-`--confine-allow-containers` behavior leaves rootless sockets under
-`$XDG_RUNTIME_DIR` hidden.
+Use an optional team-level `[confine]` table for defaults and a `[session.confine]`
+table for session settings. `enabled` defaults to false; `default_hides` defaults to
+true. `write`, `hide`, and `unhide` lists add team entries before session entries,
+while scalars override. `grants` is per session only; the first grant is
+`containers`, which exposes the host's container and virtualization sockets and is
+effectively root on the host. Credential or privileged grants cannot be team defaults.
+Options on a disabled session need `enabled = true`; team options without any enabled
+value confine nothing. Lists accept at most 64 entries of at most 4096 bytes. Codex
+sessions cannot be confined.
 
 See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.
 

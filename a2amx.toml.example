@@ -46,7 +46,8 @@ control_from = ["architect"]
 # [[session]]
 # name = "worker"
 # command = ["omp"]
-# confine = true
-# confine_write = ["~/.cargo/registry", "~/.npm"]
-# # confine_allow_containers = true # root-equivalent, read docs/confinement.md first
+# [session.confine]
+# enabled = true
+# write = ["~/.cargo/registry", "~/.npm"]
+# grants = ["containers"] # root-equivalent; read docs/confinement.md first
 # --- end confinement example ---

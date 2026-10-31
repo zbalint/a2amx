@@ -401,7 +401,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         confine_hide,
         confine_unhide,
         confine_no_default_hides,
-        confine_allow_containers,
+        mut confine_grant,
         reset,
         control_from,
         watch,
@@ -413,13 +413,23 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     else {
         return Err(anyhow!("expected new session options"));
     };
+    let mut unique_grants = Vec::with_capacity(confine_grant.len());
+    for grant in confine_grant {
+        if !unique_grants.contains(&grant) {
+            unique_grants.push(grant);
+        }
+    }
+    confine_grant = unique_grants;
     let has_confine_options = !confine_write.is_empty()
         || !confine_hide.is_empty()
         || !confine_unhide.is_empty()
         || confine_no_default_hides
-        || confine_allow_containers;
+        || !confine_grant.is_empty();
     if has_confine_options && !confine {
         return Err(anyhow!("--confine-* flags require --confine"));
+    }
+    if confine {
+        a2amx::grant::validate(&confine_grant)?;
     }
     let activity = parse_activity_watch(
         activity_working_after.as_deref(),
@@ -458,9 +468,19 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     };
     let (cols, rows) = terminal_size_with_default()?;
     let cwd = std::env::current_dir()?;
-    let confine_write = resolve_confine_paths(&cwd, &confine_write);
-    let confine_hide = resolve_confine_paths(&cwd, &confine_hide);
-    let confine_unhide = resolve_confine_paths(&cwd, &confine_unhide);
+    let confine = if confine {
+        let request = ConfineRequest {
+            write: confine_write,
+            hide: confine_hide,
+            unhide: confine_unhide,
+            no_default_hides: confine_no_default_hides,
+            grants: confine_grant,
+            team_file: None,
+        };
+        Some(resolved_confine_request(&request, &cwd, None))
+    } else {
+        None
+    };
     let session = create_session(
         &home,
         &mut client,
@@ -473,12 +493,6 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             no_authorize_peers,
             no_channel,
             confine,
-            confine_write,
-            confine_hide,
-            confine_unhide,
-            confine_no_default_hides,
-            confine_allow_containers,
-            team_file: None,
             reset,
             control_from,
             watch,
@@ -512,13 +526,7 @@ struct NewOptions {
     deliver: Option<Deliver>,
     no_authorize_peers: bool,
     no_channel: bool,
-    confine: bool,
-    confine_write: Vec<String>,
-    confine_hide: Vec<String>,
-    confine_unhide: Vec<String>,
-    confine_no_default_hides: bool,
-    confine_allow_containers: bool,
-    team_file: Option<PathBuf>,
+    confine: Option<ConfineRequest>,
     reset: Vec<String>,
     control_from: Vec<String>,
     watch: Vec<String>,
@@ -607,6 +615,24 @@ fn resolve_confine_paths(base: &Path, paths: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Resolve a confinement request's relative paths and attach its team file.
+fn resolved_confine_request(
+    request: &ConfineRequest,
+    cwd: &Path,
+    team_file: Option<&Path>,
+) -> ConfineRequest {
+    ConfineRequest {
+        write: resolve_confine_paths(cwd, &request.write),
+        hide: resolve_confine_paths(cwd, &request.hide),
+        unhide: resolve_confine_paths(cwd, &request.unhide),
+        no_default_hides: request.no_default_hides,
+        grants: request.grants.clone(),
+        team_file: team_file
+            .map(|path| path.to_string_lossy().into_owned())
+            .or_else(|| request.team_file.clone()),
+    }
+}
+
 async fn create_session(
     home: &Path,
     client: &mut Client,
@@ -621,12 +647,6 @@ async fn create_session(
         no_authorize_peers,
         no_channel,
         confine,
-        confine_write,
-        confine_hide,
-        confine_unhide,
-        confine_no_default_hides,
-        confine_allow_containers,
-        team_file,
         reset,
         control_from,
         watch,
@@ -702,25 +722,18 @@ async fn create_session(
         role,
         heartbeat,
     };
-    let request = if confine {
-        Request::Confine {
-            confine: ConfineRequest {
-                write: confine_write,
-                hide: confine_hide,
-                unhide: confine_unhide,
-                no_default_hides: confine_no_default_hides,
-                allow_containers: confine_allow_containers,
-                team_file: team_file.map(|path| path.to_string_lossy().into_owned()),
-            },
+    let confined = confine.is_some();
+    let request = match confine {
+        Some(confine) => Request::Confine {
+            confine,
             request: Box::new(request),
-        }
-    } else {
-        request
+        },
+        None => request,
     };
     let response = client.request(request).await?;
     match response {
         Response::Created { session } => Ok(session),
-        Response::Error { message } if confine && message.contains("invalid control request") => {
+        Response::Error { message } if confined && message.contains("invalid control request") => {
             Err(anyhow!(
                 "the running daemon does not support --confine; restart it"
             ))
@@ -1044,18 +1057,11 @@ async fn dry_run_start(
         .as_deref()
         .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
     team::validate_session_confine(session, &resolved_cwd)?;
-    let confine_plan = if session.confine {
+    let confine_plan = if let Some(request) = session.confine.as_ref() {
         let host_home = PathBuf::from(std::env::var_os("HOME").context("HOME not set")?);
         let runtime_dir =
             PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?);
-        let request = ConfineRequest {
-            write: resolve_confine_paths(&resolved_cwd, &session.confine_write),
-            hide: resolve_confine_paths(&resolved_cwd, &session.confine_hide),
-            unhide: resolve_confine_paths(&resolved_cwd, &session.confine_unhide),
-            no_default_hides: session.confine_no_default_hides,
-            allow_containers: session.confine_allow_containers,
-            team_file: origin.file.map(|path| path.to_string_lossy().into_owned()),
-        };
+        let request = resolved_confine_request(request, &resolved_cwd, origin.file);
         let host = a2amx::confine::Host {
             home: host_home,
             state_dir: home.to_owned(),
@@ -1097,6 +1103,11 @@ async fn dry_run_start(
             "unconfined"
         }
     ));
+    if let Some(plan) = &confine_plan
+        && !plan.grants.is_empty()
+    {
+        output.push_str(&format!("  grants: {}\n", plan.grants.join(", ")));
+    }
     if let Some(plan) = &confine_plan {
         for path in plan.writable.iter().filter(|path| **path != resolved_cwd) {
             output.push_str(&format!("  writable: {}\n", path.display()));
@@ -1129,20 +1140,13 @@ fn validate_team_session(
         .as_deref()
         .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
     team::validate_session_confine(session, &resolved_cwd)?;
-    if !session.confine {
+    let Some(request) = session.confine.as_ref() else {
         return Ok(());
-    }
+    };
     let host_home = PathBuf::from(std::env::var_os("HOME").context("HOME not set")?);
     let runtime_dir =
         PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?);
-    let request = ConfineRequest {
-        write: resolve_confine_paths(&resolved_cwd, &session.confine_write),
-        hide: resolve_confine_paths(&resolved_cwd, &session.confine_hide),
-        unhide: resolve_confine_paths(&resolved_cwd, &session.confine_unhide),
-        no_default_hides: session.confine_no_default_hides,
-        allow_containers: session.confine_allow_containers,
-        team_file: origin.file.map(|path| path.to_string_lossy().into_owned()),
-    };
+    let request = resolved_confine_request(request, &resolved_cwd, origin.file);
     let host = a2amx::confine::Host {
         home: host_home,
         state_dir: home.to_owned(),
@@ -1225,9 +1229,10 @@ async fn start_planned_session(
         .as_deref()
         .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
     team::validate_session_confine(&session, &resolved_cwd)?;
-    let confine_write = resolve_confine_paths(&resolved_cwd, &session.confine_write);
-    let confine_hide = resolve_confine_paths(&resolved_cwd, &session.confine_hide);
-    let confine_unhide = resolve_confine_paths(&resolved_cwd, &session.confine_unhide);
+    let confine = session
+        .confine
+        .as_ref()
+        .map(|request| resolved_confine_request(request, &resolved_cwd, origin.file));
     let name = session.name;
     let result = create_session(
         home,
@@ -1239,13 +1244,7 @@ async fn start_planned_session(
             team: session.team,
             no_authorize_peers: false,
             no_channel: false,
-            confine: session.confine,
-            confine_write,
-            confine_hide,
-            confine_unhide,
-            confine_no_default_hides: session.confine_no_default_hides,
-            confine_allow_containers: session.confine_allow_containers,
-            team_file: origin.file.map(Path::to_owned),
+            confine,
             deliver: None,
             control_from: session.control_from,
             reset: session.reset.unwrap_or_default(),

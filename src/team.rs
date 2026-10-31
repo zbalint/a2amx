@@ -44,20 +44,27 @@ pub struct TeamSession {
     pub role: Option<String>,
     #[serde(default)]
     pub allow: Vec<String>,
-    #[serde(default)]
-    pub confine: bool,
-    #[serde(default)]
-    pub confine_write: Vec<String>,
-    #[serde(default)]
-    pub confine_hide: Vec<String>,
-    #[serde(default)]
-    pub confine_unhide: Vec<String>,
-    #[serde(default)]
-    pub confine_no_default_hides: bool,
-    #[serde(default)]
-    pub confine_allow_containers: bool,
+    #[serde(skip)]
+    pub confine: Option<crate::confine::ConfineRequest>,
     #[serde(skip)]
     pub team: Option<TeamScope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfineTable {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    write: Vec<String>,
+    #[serde(default)]
+    hide: Vec<String>,
+    #[serde(default)]
+    unhide: Vec<String>,
+    #[serde(default)]
+    grants: Vec<String>,
+    #[serde(default)]
+    default_hides: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -72,7 +79,7 @@ struct TeamFile {
     #[serde(default)]
     prefix: Option<toml::Value>,
     #[serde(default)]
-    confine: Option<bool>,
+    confine: Option<ConfineTable>,
     #[serde(default)]
     session: Vec<toml::Table>,
 }
@@ -417,6 +424,7 @@ pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
 }
 
 pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<TeamSession>> {
+    reject_old_confine_format(text)?;
     let file: TeamFile = toml::from_str(text).context("invalid team file")?;
     let TeamFile {
         team,
@@ -434,17 +442,20 @@ pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<
         bail!("prefix was renamed to team; see the README");
     }
     let scope = build_scope(team, private, allow)?;
-    let confine_default = confine.unwrap_or(false);
-    let mut sessions: Vec<TeamSession> = session
-        .into_iter()
-        .enumerate()
-        .map(|(index, mut table)| {
-            if !table.contains_key("confine") {
-                table.insert("confine".into(), toml::Value::Boolean(confine_default));
-            }
-            session_from_table(index, table)
-        })
-        .collect::<anyhow::Result<_>>()?;
+    let mut sessions = Vec::with_capacity(session.len());
+    for (index, mut table) in session.into_iter().enumerate() {
+        let own_confine = table
+            .remove("confine")
+            .map(|value| {
+                value
+                    .try_into()
+                    .with_context(|| format!("session {}", index + 1))
+            })
+            .transpose()?;
+        let mut session = session_from_table(index, table)?;
+        session.confine = merge_confine(&session.name, confine.as_ref(), own_confine.as_ref())?;
+        sessions.push(session);
+    }
     let base_names: HashSet<String> = sessions
         .iter()
         .map(|session| session.name.clone())
@@ -485,6 +496,155 @@ pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<
     }
     validate_sessions(&sessions)?;
     Ok(sessions)
+}
+
+fn reject_old_confine_format(text: &str) -> anyhow::Result<()> {
+    let Ok(root) = toml::from_str::<toml::Table>(text) else {
+        return Ok(());
+    };
+    if matches!(root.get("confine"), Some(toml::Value::Boolean(_))) {
+        bail!(
+            "confine is now a table: write [confine] with enabled = true; see docs/confinement.md"
+        );
+    }
+    let Some(toml::Value::Array(sessions)) = root.get("session") else {
+        return Ok(());
+    };
+    const OLD_KEYS: [(&str, &str); 5] = [
+        (
+            "confine_write",
+            "confine_write was replaced by write in [session.confine]",
+        ),
+        (
+            "confine_hide",
+            "confine_hide was replaced by hide in [session.confine]",
+        ),
+        (
+            "confine_unhide",
+            "confine_unhide was replaced by unhide in [session.confine]",
+        ),
+        (
+            "confine_no_default_hides",
+            "confine_no_default_hides was replaced by default_hides = false in [session.confine]",
+        ),
+        (
+            "confine_allow_containers",
+            "confine_allow_containers was replaced by grants = [\"containers\"] in [session.confine]",
+        ),
+    ];
+    for (index, value) in sessions.iter().enumerate() {
+        let Some(table) = value.as_table() else {
+            continue;
+        };
+        let label = (index + 1).to_string();
+        if matches!(table.get("confine"), Some(toml::Value::Boolean(_))) {
+            bail!(
+                "session {label}: confine is now a table: use [session.confine] with enabled = true"
+            );
+        }
+        for (key, message) in OLD_KEYS {
+            if table.contains_key(key) {
+                bail!("session {label}: {message}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn deduplicated_values(team: &[String], own: &[String]) -> Vec<String> {
+    let mut values = Vec::with_capacity(team.len() + own.len());
+    for value in team.iter().chain(own) {
+        if !values.contains(value) {
+            values.push(value.clone());
+        }
+    }
+    values
+}
+
+fn validate_confine_list(session_name: &str, label: &str, values: &[String]) -> anyhow::Result<()> {
+    if values.len() > crate::confine::MAX_LIST_ENTRIES {
+        bail!(
+            "session {session_name}: {label} has at most {} entries",
+            crate::confine::MAX_LIST_ENTRIES
+        );
+    }
+    if let Some(value) = values
+        .iter()
+        .find(|value| value.len() > crate::confine::MAX_PATH_BYTES)
+    {
+        bail!(
+            "session {session_name}: {label} entry exceeds {} bytes: {value:?}",
+            crate::confine::MAX_PATH_BYTES
+        );
+    }
+    Ok(())
+}
+
+fn merge_confine(
+    session_name: &str,
+    team: Option<&ConfineTable>,
+    own: Option<&ConfineTable>,
+) -> anyhow::Result<Option<crate::confine::ConfineRequest>> {
+    if let Some(team_grants) = team.map(|table| &table.grants) {
+        for name in team_grants {
+            let grant = crate::grant::lookup(name)?;
+            if !grant.team_default_ok {
+                bail!(
+                    "[confine] grants: {name:?} exposes {}; grant it in the session that needs it, not team-wide",
+                    grant.exposes
+                );
+            }
+        }
+    }
+    let enabled = own
+        .and_then(|table| table.enabled)
+        .or_else(|| team.and_then(|table| table.enabled))
+        .unwrap_or(false);
+    let write = deduplicated_values(
+        team.map_or(&[][..], |table| &table.write),
+        own.map_or(&[][..], |table| &table.write),
+    );
+    let hide = deduplicated_values(
+        team.map_or(&[][..], |table| &table.hide),
+        own.map_or(&[][..], |table| &table.hide),
+    );
+    let unhide = deduplicated_values(
+        team.map_or(&[][..], |table| &table.unhide),
+        own.map_or(&[][..], |table| &table.unhide),
+    );
+    let grants = deduplicated_values(&[], own.map_or(&[][..], |table| &table.grants));
+    let own_has_options = own.is_some_and(|table| {
+        !table.write.is_empty()
+            || !table.hide.is_empty()
+            || !table.unhide.is_empty()
+            || !table.grants.is_empty()
+            || table.default_hides.is_some()
+    });
+    if !enabled {
+        if own_has_options {
+            bail!(
+                "session {session_name}: [confine] options need enabled = true; add enabled = true to the session's confine table or to the team's"
+            );
+        }
+        return Ok(None);
+    }
+    validate_confine_list(session_name, "write", &write)?;
+    validate_confine_list(session_name, "hide", &hide)?;
+    validate_confine_list(session_name, "unhide", &unhide)?;
+    validate_confine_list(session_name, "grants", &grants)?;
+    crate::grant::validate(&grants)?;
+    let default_hides = own
+        .and_then(|table| table.default_hides)
+        .or_else(|| team.and_then(|table| table.default_hides))
+        .unwrap_or(true);
+    Ok(Some(crate::confine::ConfineRequest {
+        write,
+        hide,
+        unhide,
+        no_default_hides: !default_hides,
+        grants,
+        team_file: None,
+    }))
 }
 
 fn build_scope(
@@ -666,12 +826,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             heartbeat: None,
             role: None,
             allow: Vec::new(),
-            confine: false,
-            confine_write: Vec::new(),
-            confine_hide: Vec::new(),
-            confine_unhide: Vec::new(),
-            confine_no_default_hides: false,
-            confine_allow_containers: false,
+            confine: None,
             team: None,
         });
     }
@@ -830,32 +985,7 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
 }
 
 fn validate_session_confine_options(session: &TeamSession) -> anyhow::Result<()> {
-    let lists = [
-        ("confine_write", &session.confine_write),
-        ("confine_hide", &session.confine_hide),
-        ("confine_unhide", &session.confine_unhide),
-    ];
-    let has_options = session.confine_no_default_hides
-        || session.confine_allow_containers
-        || lists.iter().any(|(_, values)| !values.is_empty());
-    if has_options && !session.confine {
-        bail!(
-            "session {}: confinement options require confine = true",
-            session.name
-        );
-    }
-    for (label, values) in lists {
-        if values.len() > 64 {
-            bail!("session {}: {label} has at most 64 entries", session.name);
-        }
-        if let Some(value) = values.iter().find(|value| value.len() > 4096) {
-            bail!(
-                "session {}: {label} entry exceeds 4096 bytes: {value:?}",
-                session.name
-            );
-        }
-    }
-    if session.confine {
+    if session.confine.is_some() {
         let harness = Harness::infer(&session.command);
         if harness == Harness::Codex {
             bail!(
@@ -885,7 +1015,7 @@ fn validate_session_confine_options(session: &TeamSession) -> anyhow::Result<()>
 /// Validate confinement options that depend on the session's resolved working directory.
 pub fn validate_session_confine(session: &TeamSession, cwd: &Path) -> anyhow::Result<()> {
     validate_session_confine_options(session)?;
-    if session.confine {
+    if session.confine.is_some() {
         let harness = Harness::infer(&session.command);
         crate::harness::validate_prompt_options(&session.command, harness, cwd)
             .map_err(|error| anyhow::anyhow!("session {}: {error}", session.name))?;

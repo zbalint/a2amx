@@ -673,12 +673,7 @@ cwd = "."
                 activity: None,
                 role: Some("architect".into()),
                 allow: Vec::new(),
-                confine: false,
-                confine_write: Vec::new(),
-                confine_hide: Vec::new(),
-                confine_unhide: Vec::new(),
-                confine_no_default_hides: false,
-                confine_allow_containers: false,
+                confine: None,
                 team: None,
             },
             TeamSession {
@@ -693,12 +688,7 @@ cwd = "."
                 activity: None,
                 role: None,
                 allow: Vec::new(),
-                confine: false,
-                confine_write: Vec::new(),
-                confine_hide: Vec::new(),
-                confine_unhide: Vec::new(),
-                confine_no_default_hides: false,
-                confine_allow_containers: false,
+                confine: None,
                 team: None,
             },
         ]
@@ -1119,12 +1109,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 activity: None,
                 role: None,
                 allow: Vec::new(),
-                confine: false,
-                confine_write: Vec::new(),
-                confine_hide: Vec::new(),
-                confine_unhide: Vec::new(),
-                confine_no_default_hides: false,
-                confine_allow_containers: false,
+                confine: None,
                 team: None,
             },
             TeamSession {
@@ -1139,12 +1124,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 activity: None,
                 role: None,
                 allow: Vec::new(),
-                confine: false,
-                confine_write: Vec::new(),
-                confine_hide: Vec::new(),
-                confine_unhide: Vec::new(),
-                confine_no_default_hides: false,
-                confine_allow_containers: false,
+                confine: None,
                 team: None,
             },
         ]
@@ -1172,36 +1152,40 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
 fn confinement_team_defaults_and_validation_are_explicit() {
     let sessions = team::parse(
         r#"
-confine = true
+[confine]
+enabled = true
 [[session]]
 name = "worker"
 command = ["cat"]
-confine_write = ["./data"]
-confine_hide = ["./secrets"]
-confine_unhide = ["./public"]
-confine_allow_containers = true
+[session.confine]
+write = ["./data"]
+hide = ["./secrets"]
+unhide = ["./public"]
+grants = ["containers"]
 "#,
     )
     .unwrap();
-    assert!(sessions[0].confine);
-    assert_eq!(sessions[0].confine_write, ["./data"]);
-    assert!(sessions[0].confine_allow_containers);
+    let request = sessions[0].confine.as_ref().expect("confined");
+    assert_eq!(request.write, ["./data"]);
+    assert!(request.grants.contains(&"containers".to_owned()));
     let error = team::parse(
         r#"
 [[session]]
 name = "worker"
 command = ["cat"]
-confine_hide = ["./secrets"]
+[session.confine]
+hide = ["./secrets"]
 "#,
     )
-    .expect_err("options without confine");
-    assert!(error.to_string().contains("require confine"));
+    .expect_err("options without enabled");
+    assert!(error.to_string().contains("need enabled = true"));
     let error = team::parse(
         r#"
 [[session]]
 name = "worker"
 command = ["codex"]
-confine = true
+[session.confine]
+enabled = true
 "#,
     )
     .expect_err("codex confinement");
@@ -1211,14 +1195,15 @@ confine = true
 fn confined_claude_prompt_file_after_separator_is_ignored() {
     let sessions = team::parse(
         r#"
-confine = true
+[confine]
+enabled = true
 [[session]]
 name = "worker"
 command = ["claude", "--", "--append-system-prompt-file=prompt.txt"]
 "#,
     )
     .expect("post-separator prompt option is not part of the command");
-    assert!(sessions[0].confine);
+    assert!(sessions[0].confine.is_some());
 }
 
 #[test]
@@ -1573,15 +1558,18 @@ async fn dry_run_expands_home_relative_confine_paths() {
     std::fs::write(
         project.path().join("dry-tilde.toml"),
         r#"
-[[session]]
-name = "demo"
-command = ["sh", "-c", "echo demo"]
-cwd = "."
-confine = true
-confine_write = ["~/.tool-cache", "~/.missing-tool"]
-confine_hide = ["~/.tool-hide"]
-confine_unhide = ["~/.ssh"]
-"#,
+        [confine]
+        enabled = true
+        [[session]]
+        name = "demo"
+        command = ["sh", "-c", "echo demo"]
+        cwd = "."
+        [session.confine]
+        write = ["~/.tool-cache", "~/.missing-tool"]
+        hide = ["~/.tool-hide"]
+        unhide = ["~/.ssh"]
+        grants = ["containers"]
+        "#,
     )
     .unwrap();
     let output = run_binary_in_with_home_and_runtime(
@@ -1602,6 +1590,7 @@ confine_unhide = ["~/.ssh"]
     let hidden = std::fs::canonicalize(&tool_hide).unwrap();
     let unhidden = std::fs::canonicalize(&ssh).unwrap();
     let missing = user_home.path().join(".missing-tool");
+    assert!(stdout.contains("  grants: containers\n"));
     assert!(!stdout.contains(&format!("  hidden: {}\n", unhidden.display())));
     assert!(stdout.contains(&format!("  writable: {}\n", writable.display())));
     assert!(stdout.contains(&format!("  hidden: {}\n", hidden.display())));
@@ -1612,6 +1601,36 @@ confine_unhide = ["~/.ssh"]
         "  hidden: {} (skipped missing)\n",
         missing.display()
     )));
+    std::fs::write(
+        project.path().join("dry-plain.toml"),
+        r#"
+        [confine]
+        enabled = true
+        [[session]]
+        name = "plain"
+        command = ["sh", "-c", "echo plain"]
+        cwd = "."
+        [session.confine]
+        write = ["~/.tool-cache"]
+        "#,
+    )
+    .unwrap();
+    let plain_output = run_binary_in_with_home_and_runtime(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime_dir.path(),
+        &["team", "up", "--dry-run", "--file", "dry-plain.toml"],
+    )
+    .unwrap();
+    assert!(
+        plain_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain_output.stderr)
+    );
+    let plain_stdout = String::from_utf8(plain_output.stdout).unwrap();
+    assert!(plain_stdout.contains("  confinement: confined\n"));
+    assert!(!plain_stdout.contains("  grants: "));
 }
 
 fn run_binary_in_with_home_and_runtime(
@@ -1639,12 +1658,13 @@ async fn dry_run_rejects_existing_relative_omp_prompt_file() {
     std::fs::write(
         dir.path().join("invalid-omp.toml"),
         r#"
-confine = true
-[[session]]
-name = "omp"
-command = ["omp", "--append-system-prompt=prompt.txt"]
-cwd = "."
-"#,
+        [confine]
+        enabled = true
+        [[session]]
+        name = "omp"
+        command = ["omp", "--append-system-prompt=prompt.txt"]
+        cwd = "."
+        "#,
     )
     .unwrap();
     let output = run_binary(
@@ -2688,4 +2708,189 @@ command = ["sh"]
 "#,
     )
     .unwrap();
+}
+#[test]
+fn confine_table_merges_team_defaults_and_session_grants() {
+    let sessions = team::parse(
+        r#"
+team = "myproject"
+[confine]
+enabled = true
+write = ["~/.ctrscm"]
+default_hides = true
+[[session]]
+name = "architect"
+command = ["claude"]
+[session.confine]
+grants = ["containers"]
+write = ["~/.cache"]
+[[session]]
+name = "scratch"
+command = ["omp"]
+[session.confine]
+enabled = false
+"#,
+    )
+    .expect("new confine table");
+    assert_eq!(
+        sessions[0].confine,
+        Some(a2amx::confine::ConfineRequest {
+            write: vec!["~/.ctrscm".into(), "~/.cache".into()],
+            hide: vec![],
+            unhide: vec![],
+            no_default_hides: false,
+            grants: vec!["containers".into()],
+            team_file: None,
+        })
+    );
+    assert_eq!(sessions[1].confine, None);
+}
+
+#[test]
+fn confine_table_rejects_old_keys_and_team_grants() {
+    let old_inputs = [
+        (
+            "confine = false\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+            "confine is now a table: write [confine] with enabled = true; see docs/confinement.md",
+        ),
+        (
+            "confine = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+            "confine is now a table: write [confine] with enabled = true; see docs/confinement.md",
+        ),
+        (
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine = false",
+            "session 1: confine is now a table: use [session.confine] with enabled = true",
+        ),
+        (
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_write = ['x']",
+            "session 1: confine_write was replaced by write in [session.confine]",
+        ),
+        (
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_hide = ['x']",
+            "session 1: confine_hide was replaced by hide in [session.confine]",
+        ),
+        (
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_unhide = ['x']",
+            "session 1: confine_unhide was replaced by unhide in [session.confine]",
+        ),
+        (
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_no_default_hides = true",
+            "session 1: confine_no_default_hides was replaced by default_hides = false in [session.confine]",
+        ),
+        (
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_allow_containers = true",
+            "session 1: confine_allow_containers was replaced by grants = [\"containers\"] in [session.confine]",
+        ),
+    ];
+    for (text, expected) in old_inputs {
+        let error = team::parse(text).expect_err("old confinement syntax");
+        assert_eq!(error.to_string(), expected);
+    }
+
+    let team_grant = team::parse(
+        "[confine]\ngrants = ['containers']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+    )
+    .expect_err("team grant");
+    assert!(team_grant.to_string().contains("grant it in the session"));
+}
+
+#[test]
+fn confine_table_requires_enabled_for_own_options_and_deduplicates_lists() {
+    let error = team::parse(
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['x']",
+    )
+    .expect_err("options without enabled");
+    assert!(error.to_string().contains("need enabled = true"));
+
+    let sessions = team::parse(
+        "[confine]\nenabled = true\nwrite = ['x', 'x']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['x', 'y', 'y']\ngrants = ['containers', 'containers']",
+    )
+    .expect("deduplicated confine lists");
+    let request = sessions[0].confine.as_ref().expect("confined");
+    assert_eq!(request.write, ["x", "y"]);
+    assert_eq!(request.grants, ["containers"]);
+}
+
+#[test]
+fn confine_table_covers_disabled_and_merged_limit_rules() {
+    let inherited = team::parse(
+        "[confine]\nenabled = false\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = true",
+    )
+    .expect("session enables team defaults");
+    assert_eq!(
+        inherited[0].confine.as_ref().expect("confined").write,
+        ["team"]
+    );
+    let default_hides =
+        team::parse("[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']")
+            .expect("default hides on");
+    assert!(
+        !default_hides[0]
+            .confine
+            .as_ref()
+            .expect("confined")
+            .no_default_hides
+    );
+
+    let ignored = team::parse(
+        "[confine]\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n",
+    )
+    .expect("team options without enabled are ignored");
+    assert_eq!(ignored[0].confine, None);
+
+    let disabled = team::parse(
+        "[confine]\nenabled = true\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false",
+    )
+    .expect("session can opt out");
+    assert_eq!(disabled[0].confine, None);
+
+    let own_option = team::parse(
+        "[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\nwrite = ['own']",
+    )
+    .expect_err("disabled session options");
+    assert!(own_option.to_string().contains("need enabled = true"));
+
+    let unknown_key = team::parse(
+        "[confine]\nenabled = true\nnope = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+    )
+    .expect_err("unknown confine key");
+    assert!(format!("{unknown_key:#}").contains("unknown field"));
+
+    let unknown_grant = team::parse(
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = true\ngrants = ['container']",
+    )
+    .expect_err("unknown session grant");
+    assert!(
+        unknown_grant
+            .to_string()
+            .contains("closest match: containers")
+    );
+
+    let team_paths = (0..40)
+        .map(|index| format!("'team-{index}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let session_paths = (0..30)
+        .map(|index| format!("'session-{index}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let merged_limit = team::parse(&format!(
+        "[confine]\nenabled = true\nwrite = [{team_paths}]\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = [{session_paths}]"
+    ))
+    .expect_err("merged write limit");
+    assert!(
+        merged_limit
+            .to_string()
+            .contains("session worker: write has at most 64 entries")
+    );
+    let long_path = "x".repeat(4097);
+    let merged_bytes = team::parse(&format!(
+        "[confine]\nenabled = true\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['{long_path}']"
+    ))
+    .expect_err("merged write byte limit");
+    assert!(
+        merged_bytes
+            .to_string()
+            .contains("write entry exceeds 4096 bytes")
+    );
 }
