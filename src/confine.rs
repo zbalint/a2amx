@@ -169,12 +169,18 @@ pub struct Plan {
     pub mandatory_hidden: Vec<PathBuf>,
     pub default_hidden: Vec<PathBuf>,
     pub container_hidden: Vec<PathBuf>,
+    overlay_parents: Vec<PathBuf>,
+    overlay_protected: Vec<PathBuf>,
+    unsaved_files: Vec<PathBuf>,
+    overlay_notice: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MountKind {
+    Overlay,
     Writable,
     ReadOnly,
+    ReadOnlyTry,
     Empty,
     Tmpfs,
 }
@@ -426,6 +432,108 @@ fn harness_data(harness: Harness, home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
     }
     (dirs, files)
 }
+
+fn harness_overlay_parents(
+    home: &Path,
+    data_files: &[PathBuf],
+    writable: &[PathBuf],
+    hidden: &[PathBuf],
+    readonly: &[PathBuf],
+    protected: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut parents = Vec::new();
+    for file in data_files {
+        let Some(parent) = file.parent().and_then(canonical_if_exists) else {
+            continue;
+        };
+        if parent == home || !parent.is_dir() {
+            continue;
+        }
+        if [writable, hidden, readonly, protected]
+            .into_iter()
+            .any(|paths| paths.iter().any(|path| is_within(&parent, path)))
+        {
+            continue;
+        }
+        add_unique(&mut parents, parent);
+    }
+    parents.sort();
+    parents
+}
+
+fn overlay_protected_entries(
+    parents: &[PathBuf],
+    data_dirs: &[PathBuf],
+    data_files: &[PathBuf],
+    writable: &[PathBuf],
+    readonly: &[PathBuf],
+    protected: &[PathBuf],
+    hidden: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut entries_protected = Vec::new();
+    for parent in parents {
+        let Ok(entries) = fs::read_dir(parent) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if metadata.file_type().is_symlink()
+                || (!metadata.file_type().is_file() && !metadata.file_type().is_dir())
+            {
+                continue;
+            }
+            let excluded = data_dirs
+                .iter()
+                .chain(data_files)
+                .chain(writable)
+                .chain(readonly)
+                .chain(protected)
+                .chain(parents)
+                .chain(hidden)
+                .any(|other| {
+                    other == &path
+                        || canonical_if_exists(other).is_some_and(|canonical| canonical == path)
+                });
+            if !excluded {
+                add_unique(&mut entries_protected, path);
+            }
+        }
+    }
+    entries_protected.sort();
+    entries_protected
+}
+
+fn unsaved_harness_files(data_files: &[PathBuf], overlay_parents: &[PathBuf]) -> Vec<PathBuf> {
+    let mut unsaved = Vec::new();
+    for file in data_files {
+        if file.exists() {
+            continue;
+        }
+        let Some(parent) = file.parent().and_then(canonical_if_exists) else {
+            continue;
+        };
+        if !overlay_parents.contains(&parent) {
+            continue;
+        }
+        let Some(name) = file.file_name().and_then(OsStr::to_str) else {
+            continue;
+        };
+        if let Some(base) = name
+            .strip_suffix("-wal")
+            .or_else(|| name.strip_suffix("-shm"))
+            && file.with_file_name(base).is_file()
+        {
+            continue;
+        }
+        add_unique(&mut unsaved, file.clone());
+    }
+    unsaved.sort();
+    unsaved
+}
+
 fn validate_harness_data_paths(
     harness: Harness,
     home: &Path,
@@ -1121,6 +1229,25 @@ impl<'a> PlanBuilder<'a> {
         self.readonly
             .retain(|path| !self.explicit_writes.contains(path));
         let protected = protected_paths(&self.readonly, &self.writable);
+        let (data_dirs, data_files) = harness_data(self.harness, &self.home);
+        let overlay_parents = harness_overlay_parents(
+            &self.home,
+            &data_files,
+            &self.writable,
+            &self.hidden,
+            &self.readonly,
+            &protected,
+        );
+        let overlay_protected = overlay_protected_entries(
+            &overlay_parents,
+            &data_dirs,
+            &data_files,
+            &self.writable,
+            &self.readonly,
+            &protected,
+            &self.hidden,
+        );
+        let unsaved_files = unsaved_harness_files(&data_files, &overlay_parents);
         self.readonly.sort();
         self.writable.sort();
         self.hidden.sort();
@@ -1155,6 +1282,10 @@ impl<'a> PlanBuilder<'a> {
             mandatory_hidden: self.mandatory_hidden,
             default_hidden: self.default_hidden,
             container_hidden: self.container_hidden,
+            overlay_parents,
+            overlay_protected,
+            unsaved_files,
+            overlay_notice: None,
         };
         // Force the expensive argument-size validation while still in the
         // daemon-side preflight path, before a PTY can be created.
@@ -1189,6 +1320,9 @@ impl Plan {
 
     fn mounts(&self) -> Vec<Mount> {
         let mut mounts = BTreeMap::<PathBuf, MountKind>::new();
+        for path in &self.overlay_parents {
+            mounts.insert(path.clone(), MountKind::Overlay);
+        }
         for path in &self.hidden {
             let kind = if path.is_dir() {
                 MountKind::Tmpfs
@@ -1206,6 +1340,9 @@ impl Plan {
         for path in &self.protected {
             mounts.insert(path.clone(), MountKind::ReadOnly);
         }
+        for path in &self.overlay_protected {
+            mounts.insert(path.clone(), MountKind::ReadOnlyTry);
+        }
         if self.harness == Harness::Omp {
             let omp = self.state_dir.join("omp");
             if omp.exists() {
@@ -1221,8 +1358,8 @@ impl Plan {
                 .cmp(&path_depth(&right.path))
                 .then_with(|| {
                     let rank = |kind| match kind {
-                        MountKind::Tmpfs | MountKind::Empty => 0,
-                        MountKind::Writable | MountKind::ReadOnly => 1,
+                        MountKind::Overlay | MountKind::Tmpfs | MountKind::Empty => 0,
+                        MountKind::Writable | MountKind::ReadOnly | MountKind::ReadOnlyTry => 1,
                     };
                     rank(left.kind).cmp(&rank(right.kind))
                 })
@@ -1298,10 +1435,18 @@ impl Plan {
             wrapped.push("--unsetenv".into());
             wrapped.push(variable.into());
         }
-        let mounts = self.mounts();
         let mut remounts = Vec::new();
-        for mount in mounts {
+        for mount in self.mounts() {
             match mount.kind {
+                MountKind::Overlay => {
+                    // shortcut: tmpfs upper layer, no size bound; bubblewrap offers none with --tmp-overlay, a disk-backed upper or a quota if it ever does.
+                    wrapped.extend([
+                        "--overlay-src".into(),
+                        path_key(&mount.path),
+                        "--tmp-overlay".into(),
+                        path_key(&mount.path),
+                    ]);
+                }
                 MountKind::Writable => {
                     wrapped.extend([
                         "--bind".into(),
@@ -1312,6 +1457,13 @@ impl Plan {
                 MountKind::ReadOnly => {
                     wrapped.extend([
                         "--ro-bind".into(),
+                        path_key(&mount.path),
+                        path_key(&mount.path),
+                    ]);
+                }
+                MountKind::ReadOnlyTry => {
+                    wrapped.extend([
+                        "--ro-bind-try".into(),
                         path_key(&mount.path),
                         path_key(&mount.path),
                     ]);
@@ -1347,6 +1499,22 @@ impl Plan {
 
     pub fn skipped_paths(&self) -> &[PathBuf] {
         &self.skipped
+    }
+    pub fn overlay_parents(&self) -> &[PathBuf] {
+        &self.overlay_parents
+    }
+
+    pub fn unsaved_files(&self) -> Vec<PathBuf> {
+        self.unsaved_files.clone()
+    }
+
+    pub fn without_overlays(mut self, reason: &str) -> Self {
+        self.overlay_parents.clear();
+        self.overlay_protected.clear();
+        self.overlay_notice = Some(format!(
+            "harness login cannot be renewed in this session: {reason}; bubblewrap 0.8 or newer is needed (or open the harness directory with `write`)."
+        ));
+        self
     }
 }
 
@@ -1439,12 +1607,8 @@ pub fn resolve_bwrap(path_var: Option<&OsStr>) -> Result<PathBuf> {
     bail!("bubblewrap was not found in PATH")
 }
 
-/// Run version and a real base-mount probe.  A failure is fatal; callers must
-/// not fall back to an unwrapped PTY after this returns an error.
-pub fn preflight(bwrap: &Path) -> Result<()> {
-    let bwrap = canonical_existing(bwrap, "bubblewrap")?;
-    command_with_timeout(&bwrap, &["--version".into()])?;
-    let probe = vec![
+fn preflight_args() -> Vec<String> {
+    vec![
         "--die-with-parent".into(),
         "--unshare-user".into(),
         "--unshare-ipc".into(),
@@ -1462,8 +1626,50 @@ pub fn preflight(bwrap: &Path) -> Result<()> {
         "/tmp".into(),
         "--".into(),
         "true".into(),
-    ];
-    command_with_timeout(&bwrap, &probe)
+    ]
+}
+
+/// Run version and a real base-mount probe.  A failure is fatal; callers must
+/// not fall back to an unwrapped PTY after this returns an error.
+pub fn preflight(bwrap: &Path) -> Result<()> {
+    let bwrap = canonical_existing(bwrap, "bubblewrap")?;
+    command_with_timeout(&bwrap, &["--version".into()])?;
+    command_with_timeout(&bwrap, &preflight_args())
+}
+
+/// Check whether bubblewrap supports the temporary overlays used for harness files.
+pub fn supports_tmp_overlay(bwrap: &Path, parents: &[PathBuf]) -> Result<(), String> {
+    if parents.is_empty() {
+        return Ok(());
+    }
+    let bwrap = canonical_existing(bwrap, "bubblewrap").map_err(|error| error.to_string())?;
+    let mut probe = preflight_args();
+    let Some(mut separator) = probe.iter().position(|argument| argument == "--") else {
+        return Err("invalid preflight probe".into());
+    };
+    for parent in parents {
+        probe.splice(
+            separator..separator,
+            [
+                "--overlay-src".to_owned(),
+                path_key(parent),
+                "--tmp-overlay".to_owned(),
+                path_key(parent),
+            ],
+        );
+        separator += 4;
+    }
+    command_with_timeout(&bwrap, &probe).map_err(|error| {
+        let text = error.to_string();
+        text.split_once(": ")
+            .map(|(_, stderr)| stderr.lines().next().unwrap_or(stderr))
+            .unwrap_or_else(|| {
+                text.lines()
+                    .next()
+                    .unwrap_or("bubblewrap overlay probe failed")
+            })
+            .to_owned()
+    })
 }
 
 /// Verify that `env` supports the signal-disposition flags used for Generic sessions.
@@ -1558,6 +1764,21 @@ pub fn notice(plan: &Plan) -> String {
         text.push_str("Skipped missing paths: ");
         text.push_str(&capped_paths(&plan.skipped));
         text.push_str(".\n");
+    }
+    for path in &plan.overlay_parents {
+        text.push_str(&format!(
+            "{}: writable, but only the harness's data files are saved; other writes are discarded at exit.\n",
+            path.display()
+        ));
+    }
+    if !plan.unsaved_files.is_empty() {
+        text.push_str("Files not present at start, writes to them are not saved: ");
+        text.push_str(&capped_paths(&plan.unsaved_files));
+        text.push_str(".\n");
+    }
+    if let Some(reason) = &plan.overlay_notice {
+        text.push_str(reason);
+        text.push('\n');
     }
     if !plan.grants.is_empty() {
         text.push_str("Granted: ");
@@ -1658,6 +1879,10 @@ mod tests {
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),
             container_hidden: Vec::new(),
+            overlay_parents: Vec::new(),
+            overlay_protected: Vec::new(),
+            unsaved_files: Vec::new(),
+            overlay_notice: None,
         };
         let text = notice(&plan);
         assert!(text.len() <= NOTICE_LIMIT);

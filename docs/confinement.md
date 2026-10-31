@@ -7,7 +7,7 @@ Confinement is a safety net for a trusted but fallible agent, not a security bou
 | Area | Default |
 | --- | --- |
 | Writable | The workspace, its Git directory, the harness's data paths, and a private `/tmp`; `write = ["~"]` deliberately opens the home directory. |
-| Read-only | The rest of the filesystem by default; a writable home still keeps `~/.a2amx`, existing `PATH` directories inside home, and this session's Git `hooks`, `config`, `config.worktree`, `core.hooksPath`, and team file read-only. |
+| Read-only | The rest of the filesystem by default; a writable home still keeps `~/.a2amx`, existing `PATH` directories inside home, harness control files and directories, and this session's Git `hooks`, `config`, `config.worktree`, `core.hooksPath`, and team file read-only. |
 | Hidden | Secret locations such as `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.npmrc`, and `~/.docker`; the state and runtime directories, `/run/WSL`, `/mnt/wslg`, and the container sockets. |
 
 
@@ -82,13 +82,26 @@ When a tool reports `Read-only file system`, add the directory named in the erro
 `write = ["~"]` is an operator choice, not a sandbox escape hidden behind a default. It leaves these residuals:
 
 1. The Git history inside a writable Git directory is writable, so an agent can rewrite commits.
-2. Harness login files it needs, such as `~/.claude/.credentials.json` for Claude, are writable and readable by the harness it runs. So are `~/.claude/settings.json` hooks that a user's next unconfined run executes. Only this session's repository `hooks`/`config` and team file are protected; every other repository's `.git/hooks` and `.git/config`, and every other `a2amx.toml` under a writable home, are writable. Windows drives under `/mnt` are writable if `/mnt` is opened.
+2. Harness login files it needs, such as `~/.claude/.credentials.json` for Claude, are writable and readable by the harness it runs, but existing settings, hooks, plugins and other control files in that directory stay read-only unless they are symlinks. So are `~/.claude/settings.json` hooks that a user's next unconfined run executes when they are writable or symlinked. Only this session's repository `hooks`/`config` and team file are protected; every other repository's `.git/hooks` and `.git/config`, and every other `a2amx.toml` under a writable home, are writable. Windows drives under `/mnt` are writable if `/mnt` is opened.
 3. Hides are decided when the session starts. A file created later at a hidden path is not hidden.
 4. Network access is not restricted.
 5. A writable home lets the agent edit shell startup files and editor configs that the user's next unconfined run executes. Open it knowing that.
 6. A grant opens what its row says and no more. An install directory other than `~/.a2amx` is protected only when it appears as an existing `PATH` directory inside the home.
 7. The daemon finds `bwrap` and the `omp` quota probe only in absolute `PATH` directories; relative and empty entries are ignored.
    An `omp` started from a path the session can write (a relative path with a slash, or an absolute one outside the `PATH` directories that `write` opens) is still run by the quota probe outside the sandbox, so keep the harness binary in a read-only directory.
+
+
+## Harness login and state files
+
+A confined Claude or OMP session shares the real login file with every other session. The directory that contains it is writable but temporary, so the harness can renew its token and save its own data files. Other writes there, including settings, hooks, skills and new files, are discarded when the session ends and never reach the real directory.
+
+`/login` and saves to `~/.claude.json` from inside a confined session still do not work: their lock and temporary files live in your home, which stays read-only. Run `claude /login` once in a normal terminal; every session picks up that login. Logging in or renewing **outside** a session replaces the login file while a running confined session keeps its old copy, so restart confined sessions after logging in outside.
+
+Existing settings, plugins and other regular control files in the harness directory stay read-only. Symlinked entries such as `hooks`, `agents` or `CLAUDE.md` cannot be pinned and can be replaced inside the session; the replacement is discarded at exit. Entries added later are writable until exit. Files that do not exist at start are not saved; the notice and dry run identify them.
+
+Several confined sessions do not exclude one another while renewing because each has its own lock. Renewals that happen together may need one session restart. A confined session renewing while an unconfined harness of the same account also renews can end up logged out and needs the same restart; Claude re-reads the saved login after a 401. The refresh token lasts weeks, and an expired one needs the same normal-terminal login.
+
+Bubblewrap 0.8 or newer is required for the overlay. An older version keeps the previous behavior with a plain notice line. The overlay uses memory (a tmpfs with no size bound). The opt-in grant that makes the config directory persistent is a separate item (spec 3bt, not yet available); until then, `write = ["~/.claude"]` makes it persistent.
 
 ## Recipes by ecosystem
 

@@ -113,3 +113,14 @@ A single-file bind on top of the overlay pins the file's inode (probed by the co
 - Section 7 "To verify after implementation" gains: that a host-side rename over the credentials file leaves a confined session with the old content (expected, documented).
 - No code, test or scope change. The developer adds the two clauses to the docs it is already writing and reports it.
 
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus (reviews `m_4878`, `m_4885` before the lock, `m_4893` during implementation; exact model id not re-derived in this session); developer and tester on the OMP harness, `openai-codex/gpt-5.6-luna` as they reported it (planning and advisor models not exposed). BLOCKED/amend cycles: 0 (Amendment 1 was a disclosure added while the developer implemented, not a BLOCKED).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`m_4878`, `m_4885`) | The first draft let an overlay re-expose a hidden directory, left the control files (settings, plugins) writable, lost writes to files missing at start silently, left the tmpfs unbounded and undisclosed, mounted symlink entries (a bind onto a symlink fails the whole start), raced `read_dir`, reused `writable`/`protected` for the overlay lists (breaking tests that pin them) and ran test 5 through a daemon that would touch the real login | Folded into the locked spec: parents under hide/write/unhide are excluded, controls re-mounted with `--ro-bind-try`, `unsaved_files` and notice lines, the `shortcut:` comment and memory disclosure, symlinks skipped and documented, separate `Plan` fields, test 5 on a fixture home with direct bubblewrap |
+| Implementation | Consultant (`m_4893`) | A single-file bind on the overlay pins the credentials inode, so an unconfined renewal strands a running confined session's login | Amendment 1: two clauses in the docs section, residual (6) and a verify-later item; no code change |
+| Architect review | Architect (Claude Sonnet 5.5) | A blank line was missing before the next heading in `docs/confinement.md` | Added; fmt and diff check rechecked |
+| Tester pass | Tester | No problems found in the implementation; mutants 1–9 all killed, OMP nested overlays and the dry run probed under real bubblewrap | None needed |

@@ -1140,6 +1140,12 @@ async fn dry_run_start(
         for path in plan.hidden_paths() {
             output.push_str(&format!("  hidden: {}\n", path.display()));
         }
+        for path in plan.overlay_parents() {
+            output.push_str(&format!("  overlay: {}\n", path.display()));
+        }
+        for path in plan.unsaved_files() {
+            output.push_str(&format!("  unsaved: {}\n", path.display()));
+        }
         for unresolved in &plan.unresolved {
             output.push_str(&format!(
                 "  unresolved: {} ({}: {})\n",

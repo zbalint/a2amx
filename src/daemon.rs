@@ -388,7 +388,12 @@ impl Runtime {
                 runtime_dir,
                 empty_file,
             };
-            let plan = confine::plan(&confine_request, harness, &cwd, &host)?;
+            let mut plan = confine::plan(&confine_request, harness, &cwd, &host)?;
+            if !plan.overlay_parents().is_empty()
+                && let Err(reason) = confine::supports_tmp_overlay(&bwrap, plan.overlay_parents())
+            {
+                plan = plan.without_overlays(&reason);
+            }
             confine::ensure_empty_file(&state_dir)?;
             confine::ensure_data_dirs(harness, &home)?;
             confine::ensure_data_files(harness, &home)?;

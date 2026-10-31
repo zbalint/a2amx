@@ -5,6 +5,7 @@ use anyhow::Context as _;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use a2amx::client::Client;
 use a2amx::confine::{self, ConfineRequest, Host};
@@ -3371,4 +3372,412 @@ fn resolve_bwrap_refuses_a_relative_file_path() {
     let error =
         confine::resolve_bwrap(Some(OsStr::new("scripts"))).expect_err("directory is not bwrap");
     assert_eq!(error.to_string(), "bubblewrap was not found in PATH");
+}
+
+#[test]
+fn claude_data_files_parent_gets_an_overlay_before_the_binds() {
+    let claude = Fixture::new();
+    populate_claude_overlay(&claude, true);
+    let claude_plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Claude,
+        &claude.cwd,
+        &claude.host(),
+    )
+    .expect("Claude overlay plan");
+    let claude_root = std::fs::canonicalize(claude.home.join(".claude")).expect("Claude root");
+    let wrapped = claude_plan
+        .wrap(vec!["true".into()])
+        .expect("Claude wrapper");
+    let overlay_index = assert_overlay_mount(&wrapped, &claude_root);
+    assert!(
+        !wrapped.windows(2).any(|window| {
+            window[0] == "--remount-ro" && window[1] == claude_root.to_string_lossy()
+        }),
+        "overlay must not be remounted read-only"
+    );
+    for path in [
+        claude_root.join("settings.json"),
+        claude_root.join("plugins"),
+    ] {
+        let path = std::fs::canonicalize(path).expect("Claude control path");
+        assert!(assert_ro_bind_try(&wrapped, &path) > overlay_index);
+    }
+    let hooks_link = claude_root.join("hooks");
+    let hooks_target = claude._root.path().join("external-hooks");
+    assert!(
+        !wrapped
+            .iter()
+            .any(|argument| argument == hooks_link.to_string_lossy().as_ref()),
+        "symlink entry must not be re-protected"
+    );
+    assert!(
+        !wrapped
+            .iter()
+            .any(|argument| argument == hooks_target.to_string_lossy().as_ref()),
+        "symlink target must not be re-protected"
+    );
+    assert!(!claude_plan.overlay_parents().contains(&claude.home));
+    assert!(!claude_plan.writable.contains(&claude_root));
+    assert!(claude_plan.overlay_parents().contains(&claude_root));
+
+    let omp = Fixture::new();
+    populate_omp_overlay(&omp);
+    let omp_plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Omp,
+        &omp.cwd,
+        &omp.host(),
+    )
+    .expect("OMP overlay plan");
+    let omp_root = std::fs::canonicalize(omp.home.join(".omp")).expect("OMP root");
+    let omp_agent = std::fs::canonicalize(omp.home.join(".omp/agent")).expect("OMP agent");
+    let wrapped = omp_plan.wrap(vec!["true".into()]).expect("OMP wrapper");
+    let root_index = assert_overlay_mount(&wrapped, &omp_root);
+    let agent_index = assert_overlay_mount(&wrapped, &omp_agent);
+    assert!(root_index < agent_index);
+    for path in [omp_root.join("config.yml"), omp_root.join("extensions")] {
+        let path = std::fs::canonicalize(path).expect("OMP control path");
+        assert!(assert_ro_bind_try(&wrapped, &path) > root_index);
+    }
+    assert!(omp_plan.overlay_parents().contains(&omp_root));
+    assert!(omp_plan.overlay_parents().contains(&omp_agent));
+
+    let omp_without_databases = Fixture::new();
+    std::fs::create_dir_all(omp_without_databases.home.join(".omp/agent"))
+        .expect("empty OMP agent");
+    let omp_without_databases_plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Omp,
+        &omp_without_databases.cwd,
+        &omp_without_databases.host(),
+    )
+    .expect("OMP without databases plan");
+    assert!(omp_without_databases_plan.overlay_parents().is_empty());
+
+    let generic = Fixture::new();
+    let generic_plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &generic.cwd,
+        &generic.host(),
+    )
+    .expect("Generic plan");
+    assert!(generic_plan.overlay_parents().is_empty());
+    assert!(!generic_plan.overlay_parents().contains(&generic.home));
+}
+
+#[test]
+fn overlay_is_not_planned_over_a_hidden_written_or_unhidden_parent() {
+    let fixture = Fixture::new();
+    populate_claude_overlay(&fixture, true);
+    let parent = std::fs::canonicalize(fixture.home.join(".claude")).expect("Claude root");
+    for (request, operation) in [
+        (
+            ConfineRequest {
+                hide: vec!["~/.claude".into()],
+                ..ConfineRequest::default()
+            },
+            "--tmpfs",
+        ),
+        (
+            ConfineRequest {
+                write: vec!["~/.claude".into()],
+                ..ConfineRequest::default()
+            },
+            "--bind",
+        ),
+        (
+            ConfineRequest {
+                unhide: vec!["~/.claude".into()],
+                ..ConfineRequest::default()
+            },
+            "--ro-bind",
+        ),
+    ] {
+        let plan = confine::plan(&request, Harness::Claude, &fixture.cwd, &fixture.host())
+            .expect("Claude exclusion plan");
+        assert!(!plan.overlay_parents().contains(&parent));
+        let wrapped = plan.wrap(vec!["true".into()]).expect("operator wrapper");
+        let parent = parent.to_string_lossy();
+        let retained = if operation == "--tmpfs" {
+            wrapped
+                .windows(2)
+                .any(|window| window[0] == operation && window[1] == parent)
+        } else {
+            wrapped
+                .windows(3)
+                .any(|window| window[0] == operation && window[1] == parent && window[2] == parent)
+        };
+        assert!(retained, "operator mount was lost: {request:?}");
+    }
+
+    let omp = Fixture::new();
+    populate_omp_overlay(&omp);
+    let omp_root = std::fs::canonicalize(omp.home.join(".omp")).expect("OMP root");
+    let plan = confine::plan(
+        &ConfineRequest {
+            hide: vec!["~/.omp".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Omp,
+        &omp.cwd,
+        &omp.host(),
+    )
+    .expect("OMP exclusion plan");
+    assert!(!plan.overlay_parents().contains(&omp_root));
+    let wrapped = plan.wrap(vec!["true".into()]).expect("OMP hidden wrapper");
+    let omp_root_text = omp_root.to_string_lossy();
+    assert!(
+        wrapped
+            .windows(2)
+            .any(|window| window[0] == "--tmpfs" && window[1] == omp_root_text)
+    );
+}
+
+#[test]
+fn missing_data_file_is_listed_as_not_saved() {
+    let claude = Fixture::new();
+    populate_claude_overlay(&claude, false);
+    let claude_json = claude.home.join(".claude.json");
+    std::fs::write(&claude_json, "claude state").expect("Claude home state");
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Claude,
+        &claude.cwd,
+        &claude.host(),
+    )
+    .expect("Claude missing-file plan");
+    let credentials = std::fs::canonicalize(claude.home.join(".claude"))
+        .expect("Claude root")
+        .join(".credentials.json");
+    assert!(plan.unsaved_files().contains(&credentials));
+    assert!(!plan.unsaved_files().contains(&claude_json));
+    assert!(confine::notice(&plan).contains("not present at start, writes to them are not saved"));
+    assert!(
+        confine::notice(&plan).contains("writable, but only the harness's data files are saved")
+    );
+
+    let omp = Fixture::new();
+    populate_omp_overlay(&omp);
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Omp,
+        &omp.cwd,
+        &omp.host(),
+    )
+    .expect("OMP existing-file plan");
+    let wal = omp.home.join(".omp/stats.db-wal");
+    let shm = omp.home.join(".omp/stats.db-shm");
+    assert!(!wal.exists());
+    assert!(!shm.exists());
+    assert!(!plan.unsaved_files().contains(&wal));
+    assert!(!plan.unsaved_files().contains(&shm));
+    assert!(
+        !plan
+            .unsaved_files()
+            .contains(&omp.home.join(".claude.json"))
+    );
+    assert_eq!(plan.overlay_parents().len(), 2);
+    let omp_root = omp.home.join(".omp");
+    assert!(confine::notice(&plan).contains(omp_root.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn without_overlays_restores_todays_mounts() {
+    let fixture = Fixture::new();
+    populate_claude_overlay(&fixture, true);
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Claude,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("Claude overlay plan");
+    let without = plan.without_overlays("x");
+    let wrapped = without
+        .wrap(vec!["true".into()])
+        .expect("without-overlay wrapper");
+    assert!(!wrapped.iter().any(|argument| argument == "--overlay-src"));
+    assert!(!wrapped.iter().any(|argument| argument == "--tmp-overlay"));
+    assert!(!wrapped.iter().any(|argument| argument == "--ro-bind-try"));
+    let root = fixture.home.join(".claude");
+    let mut expected_writable = vec![fixture.cwd.clone()];
+    for name in [
+        "projects",
+        "todos",
+        "shell-snapshots",
+        "session-env",
+        "sessions",
+        "statsig",
+        "file-history",
+        "paste-cache",
+        "debug",
+        "cache",
+        "telemetry",
+        "plans",
+        "backups",
+    ] {
+        expected_writable.push(root.join(name));
+    }
+    expected_writable.extend([
+        root.join("history.jsonl"),
+        root.join("stats-cache.json"),
+        root.join(".credentials.json"),
+    ]);
+    expected_writable = expected_writable
+        .into_iter()
+        .map(|path| std::fs::canonicalize(path).expect("expected writable path"))
+        .collect();
+    expected_writable.sort();
+    assert_eq!(without.writable, expected_writable);
+    assert!(without.protected.is_empty());
+    assert!(
+        confine::notice(&without).contains("harness login cannot be renewed in this session: x")
+    );
+}
+
+#[tokio::test]
+async fn harness_data_files_can_be_saved_through_the_overlay() -> anyhow::Result<()> {
+    let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
+    let home = root.path().join("home");
+    let state = root.path().join("state");
+    let runtime = root.path().join("runtime");
+    let cwd = root.path().join("workspace");
+    let claude_root = home.join(".claude");
+    let credentials = claude_root.join(".credentials.json");
+    let settings = claude_root.join("settings.json");
+    let plugins = claude_root.join("plugins");
+    let hooks_target = root.path().join("external-hooks");
+    for path in [
+        &home,
+        &state,
+        &runtime,
+        &cwd,
+        &claude_root,
+        &plugins,
+        &hooks_target,
+    ] {
+        std::fs::create_dir_all(path)?;
+    }
+    std::fs::write(&credentials, "old")?;
+    std::fs::write(&settings, "settings")?;
+    std::os::unix::fs::symlink(&hooks_target, claude_root.join("hooks"))?;
+    let empty_file = state.join("confine-empty");
+    confine::ensure_data_dirs(Harness::Claude, &home)?;
+    std::fs::write(&empty_file, [])?;
+    let host = Host {
+        home,
+        state_dir: state,
+        runtime_dir: runtime,
+        empty_file,
+    };
+    let bwrap = match confine::resolve_bwrap(None) {
+        Ok(path) => path,
+        Err(error) if !require_bwrap() => {
+            eprintln!("skipping overlay write test: {error:#}");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let plan = confine::plan(&ConfineRequest::default(), Harness::Claude, &cwd, &host)?;
+    if let Err(error) = confine::supports_tmp_overlay(&bwrap, plan.overlay_parents()) {
+        if require_bwrap() {
+            anyhow::bail!("tmp-overlay unavailable: {error}");
+        }
+        eprintln!("skipping overlay write test: {error}");
+        return Ok(());
+    }
+    let script = format!(
+        "set -u; credentials='{}'; root='{}'; settings='{}'; tmp=\"$credentials.tmp.1\"; \
+         if ! printf renewed > \"$tmp\"; then exit 70; fi; \
+         if ! mv \"$tmp\" \"$credentials\"; then \
+           if ! printf renewed > \"$credentials\"; then exit 70; fi; \
+         fi; \
+         if ! printf new > \"$root/new-file\"; then exit 71; fi; \
+         if printf changed > \"$settings\"; then exit 72; fi; exit 0",
+        credentials.display(),
+        claude_root.display(),
+        settings.display()
+    );
+    let wrapped = plan
+        .with_bwrap(bwrap)
+        .wrap(vec!["sh".into(), "-c".into(), script])?;
+    let status = Command::new(&wrapped[0])
+        .args(&wrapped[1..])
+        .status()
+        .context("run real bubblewrap overlay write probe")?;
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&credentials)?, "renewed");
+    assert!(!root.path().join("home/.claude/new-file").exists());
+    assert!(
+        !root
+            .path()
+            .join("home/.claude/.credentials.json.tmp.1")
+            .exists()
+    );
+    assert_eq!(std::fs::read_to_string(&settings)?, "settings");
+    Ok(())
+}
+
+fn populate_claude_overlay(fixture: &Fixture, credential: bool) {
+    let root = fixture.home.join(".claude");
+    std::fs::create_dir_all(&root).expect("Claude root");
+    for name in [
+        "projects",
+        "todos",
+        "shell-snapshots",
+        "session-env",
+        "sessions",
+        "statsig",
+        "file-history",
+        "paste-cache",
+        "debug",
+        "cache",
+        "telemetry",
+        "plans",
+        "backups",
+        "plugins",
+    ] {
+        std::fs::create_dir_all(root.join(name)).expect("Claude data directory");
+    }
+    std::fs::write(root.join("history.jsonl"), "history").expect("history");
+    std::fs::write(root.join("stats-cache.json"), "stats").expect("stats");
+    if credential {
+        std::fs::write(root.join(".credentials.json"), "credentials").expect("credentials");
+    }
+    std::fs::write(root.join("settings.json"), "settings").expect("settings");
+    let target = fixture._root.path().join("external-hooks");
+    std::fs::create_dir_all(&target).expect("hooks target");
+    symlink(&target, root.join("hooks")).expect("hooks symlink");
+}
+
+fn populate_omp_overlay(fixture: &Fixture) {
+    let root = fixture.home.join(".omp");
+    let agent = root.join("agent");
+    std::fs::create_dir_all(agent.join("sessions")).expect("OMP sessions");
+    std::fs::create_dir_all(root.join("extensions")).expect("OMP extensions");
+    std::fs::write(agent.join("a.db"), "agent").expect("agent db");
+    std::fs::write(root.join("stats.db"), "stats").expect("stats db");
+    std::fs::write(root.join("config.yml"), "config").expect("OMP config");
+}
+
+fn assert_overlay_mount(wrapped: &[String], parent: &Path) -> usize {
+    let parent = parent.to_string_lossy();
+    let index = wrapped
+        .windows(2)
+        .position(|window| window[0] == "--overlay-src" && window[1] == parent)
+        .expect("overlay source mount");
+    assert_eq!(wrapped[index + 1], parent);
+    assert_eq!(wrapped[index + 2], "--tmp-overlay");
+    assert_eq!(wrapped[index + 3], parent);
+    index
+}
+
+fn assert_ro_bind_try(wrapped: &[String], path: &Path) -> usize {
+    let path = path.to_string_lossy();
+    wrapped
+        .windows(3)
+        .position(|window| window[0] == "--ro-bind-try" && window[1] == path && window[2] == path)
+        .expect("read-only try bind")
 }
