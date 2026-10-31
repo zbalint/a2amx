@@ -152,7 +152,7 @@ write of `~` lifts the default hides; (7) `/` allowed when explicit.
 ## Review record
 
 Models: architect Claude Sonnet 5.5; developer on the OMP harness, working model `openai-codex/gpt-6.1-terra` as it reported it (planning and advisor
-models not exposed); tester on the OMP harness (its models were not stated in its report). The consultant review `m_4787` before the lock is
+models not exposed); tester on the OMP harness, `openai-codex/gpt-5.6-luna` as it reported in `m_4856`. The consultant review `m_4787` before the lock is
 recorded in section 0; its model was not re-derived in this session. BLOCKED/amend cycles: 0 (two BLOCKED messages from the tester, both about the
 disk limit, not the spec).
 
