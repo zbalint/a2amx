@@ -1027,6 +1027,36 @@ async fn failed_omp_usage_poll_is_not_retried_every_check() {
 }
 
 #[tokio::test]
+async fn omp_usage_poll_keeps_absolute_session_executable() {
+    let fake_dir = tempdir().unwrap();
+    let marker = fake_dir.path().join("usage-ran");
+    let usage = format!("printf ran > usage-ran\nprintf '%s\\n' '{OMP_USAGE_FIXTURE}'");
+    let executable = fake_executable(fake_dir.path(), "omp", &usage);
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = direct_omp_session(
+        &mut admin,
+        "agent-omp-absolute",
+        &executable,
+        fake_dir.path(),
+    )
+    .await;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if marker.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("absolute executable was polled");
+    assert_eq!(summary(&mut admin, &id).await.quota, None);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn slow_omp_usage_poll_does_not_block_list() {
     let fake_dir = tempdir().unwrap();
     let executable = fake_executable(fake_dir.path(), "omp", "printf started > started\nsleep 60");

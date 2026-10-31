@@ -2,7 +2,7 @@
 mod common;
 
 use anyhow::Context as _;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -3337,4 +3337,38 @@ fn workspace_in_home_is_still_refused() {
             .to_string()
             .contains("writable path $HOME is not allowed")
     );
+}
+
+#[test]
+fn find_executable_ignores_relative_and_empty_entries() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let expected = std::fs::canonicalize(manifest.join("scripts/prepush-fast.sh"))
+        .expect("tracked executable");
+    assert!(
+        confine::find_executable("prepush-fast.sh", OsStr::new("scripts")).is_none(),
+        "relative PATH entry must be ignored"
+    );
+    assert!(
+        confine::find_executable("scripts/prepush-fast.sh", OsStr::new("")).is_none(),
+        "empty PATH entry must be ignored"
+    );
+    assert!(
+        confine::find_executable("scripts/prepush-fast.sh", OsStr::new(":")).is_none(),
+        "empty PATH entries must be ignored"
+    );
+    let absolute_path = OsString::from(format!("{}:/usr/bin", manifest.join("scripts").display()));
+    assert_eq!(
+        confine::find_executable("prepush-fast.sh", &absolute_path),
+        Some(expected)
+    );
+}
+
+#[test]
+fn resolve_bwrap_refuses_a_relative_file_path() {
+    let error = confine::resolve_bwrap(Some(OsStr::new("scripts/prepush-fast.sh")))
+        .expect_err("relative file path must not select bwrap");
+    assert_eq!(error.to_string(), "bubblewrap was not found in PATH");
+    let error =
+        confine::resolve_bwrap(Some(OsStr::new("scripts"))).expect_err("directory is not bwrap");
+    assert_eq!(error.to_string(), "bubblewrap was not found in PATH");
 }

@@ -87,6 +87,8 @@ When a tool reports `Read-only file system`, add the directory named in the erro
 4. Network access is not restricted.
 5. A writable home lets the agent edit shell startup files and editor configs that the user's next unconfined run executes. Open it knowing that.
 6. A grant opens what its row says and no more. An install directory other than `~/.a2amx` is protected only when it appears as an existing `PATH` directory inside the home.
+7. The daemon finds `bwrap` and the `omp` quota probe only in absolute `PATH` directories; relative and empty entries are ignored.
+   An `omp` started from a path the session can write (a relative path with a slash, or an absolute one outside the `PATH` directories that `write` opens) is still run by the quota probe outside the sandbox, so keep the harness binary in a read-only directory.
 
 ## Recipes by ecosystem
 

@@ -1389,6 +1389,26 @@ fn command_with_timeout(path: &Path, args: &[String]) -> Result<()> {
     }
 }
 
+/// Find the first executable named `name` in absolute entries of a PATH value.
+pub fn find_executable(name: &str, path_var: &OsStr) -> Option<PathBuf> {
+    for entry in std::env::split_paths(path_var) {
+        if !entry.is_absolute() {
+            continue;
+        }
+        let candidate = entry.join(name);
+        let Ok(metadata) = fs::metadata(&candidate) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+            continue;
+        }
+        if let Ok(path) = fs::canonicalize(candidate) {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// Resolve a bwrap executable from a daemon-owned PATH-style value.
 pub fn resolve_bwrap(path_var: Option<&OsStr>) -> Result<PathBuf> {
     let path_var = path_var
@@ -1399,7 +1419,7 @@ pub fn resolve_bwrap(path_var: Option<&OsStr>) -> Result<PathBuf> {
     if path.as_os_str().is_empty() {
         bail!("PATH is empty; cannot find bubblewrap");
     }
-    if path.components().count() > 1 && path.is_file() {
+    if path.is_absolute() && path.components().count() > 1 && path.is_file() {
         return fs::canonicalize(&path).context("canonicalizing bwrap path");
     }
     let candidate_name = if path.is_file() {
@@ -1410,19 +1430,11 @@ pub fn resolve_bwrap(path_var: Option<&OsStr>) -> Result<PathBuf> {
     if candidate_name.is_absolute() {
         return fs::canonicalize(&candidate_name).context("canonicalizing bwrap path");
     }
-    for entry in std::env::split_paths(&path) {
-        let entry = if entry.as_os_str().is_empty() {
-            PathBuf::from(".")
-        } else {
-            entry
-        };
-        let candidate = entry.join(&candidate_name);
-        if candidate.is_file() {
-            let metadata = fs::metadata(&candidate)?;
-            if metadata.permissions().mode() & 0o111 != 0 {
-                return fs::canonicalize(candidate).context("canonicalizing bwrap path");
-            }
-        }
+    let Some(candidate_name) = candidate_name.to_str() else {
+        bail!("bubblewrap was not found in PATH");
+    };
+    if let Some(path) = find_executable(candidate_name, path.as_os_str()) {
+        return Ok(path);
     }
     bail!("bubblewrap was not found in PATH")
 }

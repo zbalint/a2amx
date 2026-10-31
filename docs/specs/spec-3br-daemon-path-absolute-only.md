@@ -113,3 +113,17 @@ Mutants for the tester: (1) `find_executable` honours relative entries again; (2
 | The probe never reads `bwrap_path` today and the session spawns through the process `PATH` | `src/daemon.rs:1513`, `tests/common/mod.rs:43-50` | read (consultant) |
 | `scripts/prepush-fast.sh` is tracked with mode 100755 and cargo runs tests with the crate root as cwd | `git ls-files -s` | probed (consultant) |
 | The default `env` path is the constant `confine::ENV_PATH`, not a `PATH` lookup | `src/daemon.rs:1649-1652` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; developer and tester on the OMP harness, `openai-codex/gpt-5.6-luna` as they reported it (planning and
+advisor models not exposed); the consultant review `m_4861` before the lock, its model not re-derived in this session. BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`m_4861`) | Test 3 could not be red on the old code (the probe never reads `bwrap_path`, and the session starts through the process `PATH`); the `resolve_bwrap` relative file branch was kept although it honours a relative path; the open `argv0` cases and the Codex spawn were not listed; line anchors were off | Section 5 says test 3 is a contract test and mutant 3 is reviewed by reading; the file branch got an `is_absolute()` guard and a red test; residuals and the Codex exclusion moved to section 6 and the disposition changed to "reduced"; anchors fixed |
+| Developer report | Developer | The report gave 733 passed; its own suite figures (71 confine, 37 quota) add to 734 | The architect reran the full suite: 734 passed, 0 failed, 3 ignored |
+| Architect review | Architect (Claude Sonnet 5.5) | The docs residual was appended to item 6, which is about grants; a blank line was missing before the first new test | Architect moved it to a new item 7 and added the line; fmt and clippy rechecked |
+| Tester pass | Tester | None in the implementation. It noted that the new quota test would not fail if the probe ignored the resolved executable (its `argv0` has a slash) | Accepted: section 5 test 3 states it; mutant 3 stays reviewed by reading |
+| Tester pass | Tester | A scratch backup file was created in the main checkout by a working-directory mistake | Compared, removed, `git status` confirmed no out-of-scope file |
+

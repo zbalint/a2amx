@@ -56,7 +56,7 @@ pub struct DaemonConfig {
     pub listen: Vec<SocketAddr>,
     pub host_name: Option<String>,
     pub limits: Limits,
-    /// PATH-style search list used to resolve bubblewrap for confined requests.
+    /// Daemon PATH value used to resolve bubblewrap and the OMP quota probe.
     pub bwrap_path: Option<OsString>,
     /// `env` program probed by the Generic confinement preflight; `None` means `confine::ENV_PATH`.
     /// Only the probe uses it: the launched argv always names `confine::ENV_PATH`.
@@ -296,7 +296,14 @@ impl Runtime {
             }
             *attempt = Some(Instant::now());
         }
-        match run_omp_usage(&argv0, cwd.as_deref(), stopping).await {
+        match run_omp_usage(
+            &argv0,
+            cwd.as_deref(),
+            self.bwrap_path.as_os_str(),
+            stopping,
+        )
+        .await
+        {
             Ok(quota) => {
                 *self
                     .omp_usage
@@ -1508,9 +1515,20 @@ impl Runtime {
 async fn run_omp_usage(
     argv0: &str,
     cwd: Option<&Path>,
+    path_var: &std::ffi::OsStr,
     stopping: &mut watch::Receiver<bool>,
 ) -> Result<BTreeMap<String, QuotaInfo>, &'static str> {
-    let mut command = Command::new(argv0);
+    let executable = if argv0.contains('/') {
+        PathBuf::from(argv0)
+    } else {
+        let argv0 = argv0.to_owned();
+        let path_var = path_var.to_os_string();
+        tokio::task::spawn_blocking(move || crate::confine::find_executable(&argv0, &path_var))
+            .await
+            .map_err(|_| "spawn")?
+            .ok_or("spawn")?
+    };
+    let mut command = Command::new(executable);
     command
         .args(["usage", "--json", "--no-extensions", "--redact"])
         .stdin(Stdio::null())
