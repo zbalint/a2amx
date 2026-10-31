@@ -1512,7 +1512,7 @@ impl Plan {
         self.overlay_parents.clear();
         self.overlay_protected.clear();
         self.overlay_notice = Some(format!(
-            "harness login cannot be renewed in this session: {reason}; bubblewrap 0.8 or newer is needed (or open the harness directory with `write`)."
+            "harness login cannot be renewed in this session: {reason}; bubblewrap 0.11 or newer is needed (or open the harness directory with `write`)."
         ));
         self
     }

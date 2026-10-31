@@ -101,7 +101,7 @@ Existing settings, plugins and other regular control files in the harness direct
 
 Several confined sessions do not exclude one another while renewing because each has its own lock. Renewals that happen together may need one session restart. A confined session renewing while an unconfined harness of the same account also renews can end up logged out and needs the same restart; Claude re-reads the saved login after a 401. The refresh token lasts weeks, and an expired one needs the same normal-terminal login.
 
-Bubblewrap 0.8 or newer is required for the overlay. An older version keeps the previous behavior with a plain notice line. The overlay uses memory (a tmpfs with no size bound). The opt-in grant that makes the config directory persistent is a separate item (spec 3bt, not yet available); until then, `write = ["~/.claude"]` makes it persistent.
+Bubblewrap 0.11 or newer is required for the overlay (Ubuntu 24.04 ships 0.9, which keeps the previous behavior). An older version keeps the previous behavior with a plain notice line. The overlay uses memory (a tmpfs with no size bound). The opt-in grant that makes the config directory persistent is a separate item (spec 3bt, not yet available); until then, `write = ["~/.claude"]` makes it persistent.
 
 ## Recipes by ecosystem
 
