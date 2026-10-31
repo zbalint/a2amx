@@ -36,6 +36,38 @@ const ALWAYS_UNSET: [&str; 6] = [
     "DISPLAY",
     "WAYLAND_DISPLAY",
 ];
+const CREDENTIAL_ENV: [&str; 29] = [
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITLAB_TOKEN",
+    "GITLAB_PRIVATE_TOKEN",
+    "CI_JOB_TOKEN",
+    "BITBUCKET_TOKEN",
+    "NPM_TOKEN",
+    "NODE_AUTH_TOKEN",
+    "PYPI_TOKEN",
+    "TWINE_PASSWORD",
+    "CARGO_REGISTRY_TOKEN",
+    "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+    "AZURE_CLIENT_SECRET",
+    "ARM_CLIENT_SECRET",
+    "VAULT_TOKEN",
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+    "SONAR_TOKEN",
+    "SENTRY_AUTH_TOKEN",
+    "DIGITALOCEAN_ACCESS_TOKEN",
+    "HCLOUD_TOKEN",
+    "CLOUDFLARE_API_TOKEN",
+    "NETLIFY_AUTH_TOKEN",
+    "VERCEL_TOKEN",
+    "FLY_API_TOKEN",
+    "HEROKU_API_KEY",
+    "PGPASSWORD",
+    "MYSQL_PWD",
+];
+
 const DEFAULT_HIDES: [&str; 24] = [
     "~/.ssh",
     "~/.gnupg",
@@ -84,6 +116,8 @@ pub struct ConfineRequest {
     #[serde(default)]
     pub grants: Vec<String>,
     #[serde(default)]
+    pub keep_env: Vec<String>,
+    #[serde(default)]
     pub team_file: Option<String>,
 }
 
@@ -131,6 +165,7 @@ pub struct Plan {
     pub skipped: Vec<PathBuf>,
     pub unresolved: Vec<Unresolved>,
     pub grants: Vec<String>,
+    pub keep_env: Vec<String>,
     pub mandatory_hidden: Vec<PathBuf>,
     pub default_hidden: Vec<PathBuf>,
     pub container_hidden: Vec<PathBuf>,
@@ -683,6 +718,26 @@ fn check_request_limits(request: &ConfineRequest, harness: Harness) -> Result<()
     check_entry_count(&request.hide, "hide")?;
     check_entry_count(&request.unhide, "unhide")?;
     check_entry_count(&request.grants, "grants")?;
+    check_entry_count(&request.keep_env, "keep_env")?;
+    let mut seen_keep_env = BTreeSet::new();
+    for name in &request.keep_env {
+        if !CREDENTIAL_ENV.contains(&name.as_str()) {
+            if let Some(grant) = grant::all()
+                .iter()
+                .find(|grant| grant.env.contains(&name.as_str()))
+            {
+                bail!(
+                    "keep_env {name:?} is not unset by default, so there is nothing to keep; it returns with the {} grant",
+                    grant.name
+                );
+            }
+            bail!("keep_env {name:?} is not unset by default, so there is nothing to keep");
+        }
+        if !seen_keep_env.insert(name.as_str()) {
+            bail!("keep_env {name:?} is repeated");
+        }
+    }
+
     for (option, entries) in [
         ("write", &request.write),
         ("hide", &request.hide),
@@ -1009,6 +1064,8 @@ impl<'a> PlanBuilder<'a> {
 
         let mut grants = request.grants.clone();
         grants.sort();
+        let mut keep_env = request.keep_env.clone();
+        keep_env.sort();
         let plan = Plan {
             bwrap: PathBuf::from("bwrap"),
             empty_file,
@@ -1022,6 +1079,7 @@ impl<'a> PlanBuilder<'a> {
             skipped: self.skipped,
             unresolved: self.unresolved,
             grants,
+            keep_env,
             mandatory_hidden: self.mandatory_hidden,
             default_hidden: self.default_hidden,
             container_hidden: self.container_hidden,
@@ -1121,6 +1179,11 @@ impl Plan {
                 if !released.contains(name) && !unset.contains(name) {
                     unset.push(name);
                 }
+            }
+        }
+        for name in CREDENTIAL_ENV {
+            if !self.keep_env.iter().any(|kept| kept == name) && !unset.contains(&name) {
+                unset.push(name);
             }
         }
         unset.into_iter()
@@ -1417,6 +1480,18 @@ pub fn notice(plan: &Plan) -> String {
         text.push_str(&plan.grants.join(", "));
         text.push_str(".\n");
     }
+    let unset_credentials = CREDENTIAL_ENV
+        .iter()
+        .filter(|name| !plan.keep_env.iter().any(|kept| kept == *name))
+        .copied()
+        .collect::<Vec<_>>();
+    text.push_str("Credential environment variables are unset: ");
+    text.push_str(&unset_credentials.join(", "));
+    if !plan.keep_env.is_empty() {
+        text.push_str("; kept: ");
+        text.push_str(&plan.keep_env.join(", "));
+    }
+    text.push_str(".\n");
     text.push_str(
         "Everything else is read-only. /tmp is private to this session and discarded when it ends; paths under a peer's /tmp cannot be read.\n",
     );
@@ -1495,6 +1570,7 @@ mod tests {
             skipped: Vec::new(),
             unresolved: Vec::new(),
             grants: Vec::new(),
+            keep_env: Vec::new(),
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),
             container_hidden: Vec::new(),
@@ -1540,10 +1616,41 @@ mod tests {
             for name in grant.env {
                 assert!(!ALWAYS_UNSET.contains(name), "always-unset name {name}");
                 assert!(
+                    !CREDENTIAL_ENV.contains(name),
+                    "credential environment name {name} is a grant environment"
+                );
+                assert!(
                     environment.insert(*name),
                     "duplicate environment name {name}"
                 );
             }
+        }
+        for name in CREDENTIAL_ENV {
+            for prefix in [
+                "ANTHROPIC_",
+                "OPENAI_",
+                "GEMINI_",
+                "GOOGLE_API_KEY",
+                "OPENROUTER_",
+                "A2AMX_",
+            ] {
+                assert!(
+                    !name.starts_with(prefix),
+                    "excluded environment prefix {prefix}: {name}"
+                );
+            }
+            assert!(!ALWAYS_UNSET.contains(&name), "always-unset name {name}");
+        }
+        for name in [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        ] {
+            assert!(
+                !CREDENTIAL_ENV.contains(&name),
+                "harness credential {name} must remain set"
+            );
         }
     }
 }

@@ -943,6 +943,217 @@ fn wrap_unsets_base_and_container_environment_in_stable_order() {
             .any(|window| window == ["--tmpfs", fixture.runtime.to_string_lossy().as_ref()])
     );
 }
+#[test]
+fn wrap_unsets_every_credential_environment_variable_by_default() {
+    let fixture = Fixture::new();
+    let wrapped = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("plan")
+    .with_bwrap(PathBuf::from("bwrap"))
+    .wrap(vec!["true".into()])
+    .expect("wrap");
+    for name in [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITLAB_TOKEN",
+        "GITLAB_PRIVATE_TOKEN",
+        "CI_JOB_TOKEN",
+        "BITBUCKET_TOKEN",
+        "NPM_TOKEN",
+        "NODE_AUTH_TOKEN",
+        "PYPI_TOKEN",
+        "TWINE_PASSWORD",
+        "CARGO_REGISTRY_TOKEN",
+        "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+        "AZURE_CLIENT_SECRET",
+        "ARM_CLIENT_SECRET",
+        "VAULT_TOKEN",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "SONAR_TOKEN",
+        "SENTRY_AUTH_TOKEN",
+        "DIGITALOCEAN_ACCESS_TOKEN",
+        "HCLOUD_TOKEN",
+        "CLOUDFLARE_API_TOKEN",
+        "NETLIFY_AUTH_TOKEN",
+        "VERCEL_TOKEN",
+        "FLY_API_TOKEN",
+        "HEROKU_API_KEY",
+        "PGPASSWORD",
+        "MYSQL_PWD",
+    ] {
+        assert!(
+            wrapped
+                .windows(2)
+                .any(|window| window == ["--unsetenv", name]),
+            "missing credential environment variable {name}"
+        );
+    }
+    for name in [
+        "ANTHROPIC_API_KEY",
+        "A2AMX_TOKEN",
+        "A2AMX_ADDR",
+        "OPENAI_API_KEY",
+    ] {
+        assert!(
+            !wrapped
+                .windows(2)
+                .any(|window| window == ["--unsetenv", name]),
+            "harness environment variable {name} was unset"
+        );
+    }
+}
+#[test]
+fn wrap_keeps_requested_credentials_and_never_unsets_harness_environment() {
+    let fixture = Fixture::new();
+    let kept = confine::plan(
+        &ConfineRequest {
+            keep_env: vec!["GITHUB_TOKEN".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("kept plan")
+    .with_bwrap(PathBuf::from("bwrap"))
+    .wrap(vec!["true".into()])
+    .expect("kept wrap");
+    for name in [
+        "GH_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITLAB_TOKEN",
+        "GITLAB_PRIVATE_TOKEN",
+        "CI_JOB_TOKEN",
+        "BITBUCKET_TOKEN",
+        "NPM_TOKEN",
+        "NODE_AUTH_TOKEN",
+        "PYPI_TOKEN",
+        "TWINE_PASSWORD",
+        "CARGO_REGISTRY_TOKEN",
+        "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+        "AZURE_CLIENT_SECRET",
+        "ARM_CLIENT_SECRET",
+        "VAULT_TOKEN",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "SONAR_TOKEN",
+        "SENTRY_AUTH_TOKEN",
+        "DIGITALOCEAN_ACCESS_TOKEN",
+        "HCLOUD_TOKEN",
+        "CLOUDFLARE_API_TOKEN",
+        "NETLIFY_AUTH_TOKEN",
+        "VERCEL_TOKEN",
+        "FLY_API_TOKEN",
+        "HEROKU_API_KEY",
+        "PGPASSWORD",
+        "MYSQL_PWD",
+    ] {
+        assert!(
+            kept.windows(2).any(|window| window == ["--unsetenv", name]),
+            "missing unset for non-kept credential {name}"
+        );
+    }
+    assert!(
+        !kept
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "GITHUB_TOKEN"])
+    );
+    for name in [
+        "ANTHROPIC_API_KEY",
+        "A2AMX_TOKEN",
+        "A2AMX_ADDR",
+        "OPENAI_API_KEY",
+    ] {
+        assert!(
+            !kept.windows(2).any(|window| window == ["--unsetenv", name]),
+            "harness environment variable {name} was unset"
+        );
+    }
+}
+#[test]
+fn plan_sorts_kept_credential_names() {
+    let fixture = Fixture::new();
+    let plan = confine::plan(
+        &ConfineRequest {
+            keep_env: vec!["NPM_TOKEN".into(), "GH_TOKEN".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("plan");
+    assert_eq!(plan.keep_env, ["GH_TOKEN", "NPM_TOKEN"]);
+}
+
+#[test]
+fn keep_env_validation_is_closed_and_bounded() {
+    let fixture = Fixture::new();
+    let error_for = |keep_env| match confine::plan(
+        &ConfineRequest {
+            keep_env,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("keep_env should be rejected"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error_for(vec!["ANTHROPIC_API_KEY".into()]).contains(
+        "keep_env \"ANTHROPIC_API_KEY\" is not unset by default, so there is nothing to keep"
+    ));
+    assert!(error_for(vec!["DOCKER_HOST".into()]).contains(
+        "keep_env \"DOCKER_HOST\" is not unset by default, so there is nothing to keep; it returns with the docker grant"
+    ));
+    assert_eq!(
+        error_for(vec!["GITHUB_TOKEN".into(), "GITHUB_TOKEN".into()]),
+        "keep_env \"GITHUB_TOKEN\" is repeated"
+    );
+    assert_eq!(
+        error_for(vec!["GITHUB_TOKEN".into(); 65]),
+        "keep_env has more than 64 entries"
+    );
+}
+
+#[test]
+fn notice_lists_credential_environment_variables_and_kept_names() {
+    let fixture = Fixture::new();
+    let default_notice = confine::notice(
+        &confine::plan(
+            &ConfineRequest::default(),
+            Harness::Generic,
+            &fixture.cwd,
+            &fixture.host(),
+        )
+        .expect("default plan"),
+    );
+    assert!(default_notice.contains(
+        "Credential environment variables are unset: GH_TOKEN, GITHUB_TOKEN, GH_ENTERPRISE_TOKEN, GITLAB_TOKEN, GITLAB_PRIVATE_TOKEN, CI_JOB_TOKEN, BITBUCKET_TOKEN, NPM_TOKEN, NODE_AUTH_TOKEN, PYPI_TOKEN, TWINE_PASSWORD, CARGO_REGISTRY_TOKEN, CARGO_REGISTRIES_CRATES_IO_TOKEN, AZURE_CLIENT_SECRET, ARM_CLIENT_SECRET, VAULT_TOKEN, HF_TOKEN, HUGGING_FACE_HUB_TOKEN, SONAR_TOKEN, SENTRY_AUTH_TOKEN, DIGITALOCEAN_ACCESS_TOKEN, HCLOUD_TOKEN, CLOUDFLARE_API_TOKEN, NETLIFY_AUTH_TOKEN, VERCEL_TOKEN, FLY_API_TOKEN, HEROKU_API_KEY, PGPASSWORD, MYSQL_PWD."
+    ));
+    let kept_notice = confine::notice(
+        &confine::plan(
+            &ConfineRequest {
+                keep_env: vec!["GITHUB_TOKEN".into()],
+                ..ConfineRequest::default()
+            },
+            Harness::Generic,
+            &fixture.cwd,
+            &fixture.host(),
+        )
+        .expect("kept plan"),
+    );
+    assert!(kept_notice.contains(
+        "Credential environment variables are unset: GH_TOKEN, GH_ENTERPRISE_TOKEN, GITLAB_TOKEN, GITLAB_PRIVATE_TOKEN, CI_JOB_TOKEN, BITBUCKET_TOKEN, NPM_TOKEN, NODE_AUTH_TOKEN, PYPI_TOKEN, TWINE_PASSWORD, CARGO_REGISTRY_TOKEN, CARGO_REGISTRIES_CRATES_IO_TOKEN, AZURE_CLIENT_SECRET, ARM_CLIENT_SECRET, VAULT_TOKEN, HF_TOKEN, HUGGING_FACE_HUB_TOKEN, SONAR_TOKEN, SENTRY_AUTH_TOKEN, DIGITALOCEAN_ACCESS_TOKEN, HCLOUD_TOKEN, CLOUDFLARE_API_TOKEN, NETLIFY_AUTH_TOKEN, VERCEL_TOKEN, FLY_API_TOKEN, HEROKU_API_KEY, PGPASSWORD, MYSQL_PWD; kept: GITHUB_TOKEN."
+    ));
+}
 
 #[test]
 fn wrap_enables_user_ipc_and_pid_namespaces() {

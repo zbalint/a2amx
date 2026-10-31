@@ -975,6 +975,7 @@ fn confine_request_round_trips_and_defaults_missing_fields() {
             unhide: vec![],
             no_default_hides: true,
             grants: vec![],
+            keep_env: vec!["GITHUB_TOKEN".into()],
             team_file: Some("/workspace/team.toml".into()),
         },
         request: Box::new(Request::NewSession {
@@ -1004,15 +1005,24 @@ fn confine_request_round_trips_and_defaults_missing_fields() {
         encoded["confine"]["team_file"],
         serde_json::json!("/workspace/team.toml")
     );
+    assert_eq!(
+        encoded["confine"]["keep_env"],
+        serde_json::json!(["GITHUB_TOKEN"])
+    );
     let mut old = encoded;
     old["confine"]
         .as_object_mut()
         .expect("confine object")
         .remove("team_file");
+    old["confine"]
+        .as_object_mut()
+        .expect("confine object")
+        .remove("keep_env");
     let Request::Confine { confine, .. } = serde_json::from_value(old).unwrap() else {
         panic!("confine request tag");
     };
     assert_eq!(confine.team_file, None);
+    assert!(confine.keep_env.is_empty());
     let absent: a2amx::confine::ConfineRequest =
         serde_json::from_value(serde_json::json!({})).unwrap();
     assert_eq!(absent, a2amx::confine::ConfineRequest::default());

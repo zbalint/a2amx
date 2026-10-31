@@ -250,6 +250,40 @@ unhide = ["~/.config/gh"]
 
 The mount is read-only, so a tool that rewrites the file, such as during a token refresh, fails. The network is open, so a readable token lets the agent act as you on that service. Unhide only what the work needs, prefer a token with the least scope, and review what the agent did. The maintainers did not test any `gh` command under confinement.
 
+### Credential environment variables
+
+Every confined session unsets this closed list of credential variables by default:
+
+```text
+GH_TOKEN, GITHUB_TOKEN, GH_ENTERPRISE_TOKEN, GITLAB_TOKEN, GITLAB_PRIVATE_TOKEN,
+CI_JOB_TOKEN, BITBUCKET_TOKEN, NPM_TOKEN, NODE_AUTH_TOKEN, PYPI_TOKEN, TWINE_PASSWORD,
+CARGO_REGISTRY_TOKEN, CARGO_REGISTRIES_CRATES_IO_TOKEN, AZURE_CLIENT_SECRET,
+ARM_CLIENT_SECRET, VAULT_TOKEN, HF_TOKEN, HUGGING_FACE_HUB_TOKEN, SONAR_TOKEN,
+SENTRY_AUTH_TOKEN, DIGITALOCEAN_ACCESS_TOKEN, HCLOUD_TOKEN, CLOUDFLARE_API_TOKEN,
+NETLIFY_AUTH_TOKEN, VERCEL_TOKEN, FLY_API_TOKEN, HEROKU_API_KEY, PGPASSWORD, MYSQL_PWD
+```
+
+The list is explicit, not pattern-matched. It never removes LLM provider keys
+(`ANTHROPIC_*`, `OPENAI_*`, `GEMINI_*`, `GOOGLE_API_KEY`, `OPENROUTER_*`), `A2AMX_*`,
+or harness internals. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
+`AWS_SESSION_TOKEN` are the Bedrock login used by the harness; `GOOGLE_APPLICATION_CREDENTIALS`
+is only a path. Those four names stay set so Claude Code and OMP can run as the confined child.
+The corresponding `~/.aws` and `~/.config/gcloud` files remain hidden by default.
+
+Return one listed variable to one session with `keep_env`:
+
+```toml
+# fragment
+[session.confine]
+keep_env = ["GITHUB_TOKEN"] # for a session that pushes with gh
+```
+
+`keep_env` only returns the value already present in the operator's environment; it does not
+read or inject a new secret. It is per-session, and the dry run and launch notice list both
+the variables still unset and the names kept. A value read from a file the user writable-binds
+is not an environment variable and is unaffected by `keep_env`. Updating the daemon alone
+changes the environment of every confined session it launches.
+
 ### ssh and signed commits
 
 Plain `ssh` fails in a confined session even with `~/.ssh` unhidden, with `Bad owner or permissions on /etc/ssh/ssh_config.d/...`. The sandbox cannot map root, so root-owned system files show as owned by `nobody`, and `ssh` refuses a system configuration file it does not trust. `ssh -F /dev/null host` skips the system files and works; a `~/.ssh/config` passed with `-F` should too, but the maintainers did not test it. `git push` over ssh should work with `GIT_SSH_COMMAND='ssh -F /dev/null'` and the key unhidden, untested. No ssh agent is passed through, so a passphrase-protected key cannot be used, and signing commits with gpg or an ssh key is untested and probably fails, because the agent sockets and `~/.gnupg` are hidden. Pushing over https with `gh` avoids all of this. Proper support is backlog item F53 in [the backlog](backlog.md).

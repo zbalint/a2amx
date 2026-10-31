@@ -108,6 +108,39 @@ fn global_guard_rejects_protected_directories_in_order() {
 }
 
 #[test]
+fn new_confine_options_require_confine_before_daemon_connection() {
+    let state = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    let runtime_dir = tempfile::tempdir().unwrap();
+
+    for (option, value) in [
+        ("--confine-keep-env", "GITHUB_TOKEN"),
+        ("--confine-grant", "docker"),
+    ] {
+        let args = ["new", option, value, "--", "true"];
+        let output = run_binary_in_with_home_and_runtime(
+            state.path(),
+            project.path(),
+            user_home.path(),
+            runtime_dir.path(),
+            &args,
+        )
+        .unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--confine-* flags require --confine"),
+            "{option}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("cannot reach the a2amx daemon"),
+            "{option}: guard did not run before daemon connection: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn parse_with_applies_derived_private_team_and_rejects_global_team_key() {
     let text = r#"
 [[session]]
@@ -1569,6 +1602,7 @@ async fn dry_run_expands_home_relative_confine_paths() {
         hide = ["~/.tool-hide"]
         unhide = ["~/.ssh"]
         grants = ["docker"]
+        keep_env = ["GITHUB_TOKEN", "GITHUB_TOKEN"]
         "#,
     )
     .unwrap();
@@ -1591,6 +1625,7 @@ async fn dry_run_expands_home_relative_confine_paths() {
     let unhidden = std::fs::canonicalize(&ssh).unwrap();
     let missing = user_home.path().join(".missing-tool");
     assert!(stdout.contains("  grants: docker\n"));
+    assert!(stdout.contains("  keep_env: GITHUB_TOKEN\n"));
     assert!(!stdout.contains(&format!("  hidden: {}\n", unhidden.display())));
     assert!(stdout.contains(&format!("  writable: {}\n", writable.display())));
     assert!(stdout.contains(&format!("  hidden: {}\n", hidden.display())));
@@ -1640,6 +1675,41 @@ async fn dry_run_expands_home_relative_confine_paths() {
     let plain_stdout = String::from_utf8(plain_output.stdout).unwrap();
     assert!(plain_stdout.contains("  confinement: confined\n"));
     assert!(!plain_stdout.contains("  grants: "));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_rejects_unknown_keep_env() {
+    let (state, _daemon) = common::start_daemon().await;
+    let project = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    let runtime_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("unknown-keep-env.toml"),
+        r#"
+[confine]
+enabled = true
+[[session]]
+name = "worker"
+command = ["sh", "-c", "echo worker"]
+cwd = "."
+[session.confine]
+keep_env = ["NOT_A_CREDENTIAL"]
+"#,
+    )
+    .unwrap();
+    let output = run_binary_in_with_home_and_runtime(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime_dir.path(),
+        &["team", "up", "--dry-run", "--file", "unknown-keep-env.toml"],
+    )
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(
+        "keep_env \"NOT_A_CREDENTIAL\" is not unset by default, so there is nothing to keep"
+    ));
 }
 
 fn run_binary_in_with_home_and_runtime(
@@ -2732,6 +2802,7 @@ name = "architect"
 command = ["claude"]
 [session.confine]
 grants = ["docker"]
+keep_env = ["GITHUB_TOKEN", "GITHUB_TOKEN"]
 write = ["~/.cache"]
 [[session]]
 name = "scratch"
@@ -2749,6 +2820,7 @@ enabled = false
             unhide: vec![],
             no_default_hides: false,
             grants: vec!["docker".into()],
+            keep_env: vec!["GITHUB_TOKEN".into()],
             team_file: None,
         })
     );
@@ -2802,6 +2874,37 @@ fn confine_table_rejects_old_keys_and_team_grants() {
     .expect_err("team grant");
     assert!(team_grant.to_string().contains("grant it in the session"));
 }
+#[test]
+fn confine_table_keeps_credentials_per_session_only() {
+    let team_error = team::parse(
+        "[confine]\nkeep_env = ['GITHUB_TOKEN']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+    )
+    .expect_err("team keep_env");
+    assert_eq!(
+        team_error.to_string(),
+        "[confine] keep_env: a credential variable is returned per session, not team-wide; put keep_env in [session.confine]"
+    );
+
+    let disabled = team::parse(
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nkeep_env = ['GITHUB_TOKEN']",
+    )
+    .expect_err("keep_env without enabled");
+    assert!(disabled.to_string().contains("need enabled = true"));
+
+    let sessions = team::parse(
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = true\nkeep_env = ['GITHUB_TOKEN', 'GITHUB_TOKEN']",
+    )
+    .expect("session keep_env");
+    assert_eq!(
+        sessions[0]
+            .confine
+            .as_ref()
+            .expect("confined session")
+            .keep_env,
+        ["GITHUB_TOKEN"]
+    );
+}
+
 #[test]
 fn confine_entry_syntax_is_checked_at_parse_time() {
     let session_error = team::parse(

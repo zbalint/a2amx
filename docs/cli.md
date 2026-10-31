@@ -69,6 +69,10 @@ description without contacting a daemon or reading `HOME`.
 The repeatable path flags are `--confine-write PATH`, `--confine-hide PATH`, and
 `--confine-unhide PATH`; `--confine-grant NAME` opens one named runtime capability.
 The valid values and what each one exposes are listed by `a2amx confine list`.
+`--confine-keep-env NAME` returns one listed credential environment variable to this session;
+repeat it for multiple names. It requires `--confine` and rejects names that are not in the
+closed credential list.
+
 Relative paths are resolved against the session cwd. `--confine-no-default-hides`
 disables the optional home hides but never removes the mandatory hides: the state
 directory, the runtime directory, `/run/WSL` and `/mnt/wslg`. The private `/proc` and

@@ -68,6 +68,10 @@ expose only the configured system runtime sockets. Rootless sockets under `$XDG_
 remain hidden. For an OMP session, the `omp` directory inside the state directory stays visible,
 read-only; the rest of the state directory is hidden.
 
+The credential environment list is separate from harness logins: Bedrock's AWS variables and
+Vertex's `GOOGLE_APPLICATION_CREDENTIALS` are not touched, because Claude Code and OMP run as
+the confined child. See [Credential environment variables](confinement.md#credential-environment-variables).
+
 The Claude and OMP confined launch notices are appended to an existing system prompt.
 Claude refuses `--append-system-prompt-file`; OMP refuses an existing file used as the
 append-prompt value. Generic sessions receive no notice. A socket created after launch

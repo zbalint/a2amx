@@ -138,3 +138,14 @@ not merged; (7) `keep_env` without `enabled` accepted.
 | Existing tests assert `--unsetenv` for names; none counts or enumerates them | `tests/confine.rs:836`, `:855` | grep (consultant `m_4752`) |
 | For Claude and OMP the harness argv itself runs under `plan.wrap`, so the harness is the confined child | `src/confine.rs:1455-1456` | read (consultant) |
 | `NewOptions` carries only `confine: Option<ConfineRequest>` after spec 3bk | `src/main.rs:521-539` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5`; developer and tester on the
+OMP harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed to either).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`claude-opus-5-5`) | The list unset four names that are the harness's own login on Bedrock and Vertex (the harness is itself the confined child), and the spec wrongly said the harness process is unaffected; the notice gave only a count the agent could not act on; team-level `keep_env` would hand a credential to every session; wrong claims about `NewOptions` and `env --unsetenv`; the `has_confine_options` anchor was missing | The four names left out and documented; the notice lists the names; `keep_env` per session only; wording and anchors fixed before the lock |
+| Tester pass | Tester (`gpt-5.6-luna`) | Removing `keep_env` from the `--confine-*` requires `--confine` guard survived all tests | Developer added `new_confine_options_require_confine_before_daemon_connection`; mutant killed |

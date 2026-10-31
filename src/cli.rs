@@ -71,6 +71,9 @@ pub enum Command {
         /// Grant a named capability to a confined session; repeatable.
         #[arg(long = "confine-grant")]
         confine_grant: Vec<String>,
+        /// Return a credential environment variable to the confined session; repeatable.
+        #[arg(long = "confine-keep-env")]
+        confine_keep_env: Vec<String>,
         /// Slash command sequence used by `a2amx reset`; repeatable and ordered.
         #[arg(long)]
         reset: Vec<String>,

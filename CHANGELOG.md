@@ -27,7 +27,7 @@ All notable user-visible changes are listed here. The format follows
   refused with a message naming the replacement. A `write`, `hide` or `unhide` entry must be absolute, `~/...` or
   relative to the working directory; `$VAR` and `~user` forms are refused instead of silently skipped, a listed path that
   is missing or unreadable gets its own `unresolved:` line in the dry run, and the agent notice always names the working
-  directory. The agent is told its limits in its system prompt, the status bar shows `[confined]`, and `team up --dry-run` prints the effective
+  directory. Credential environment variables (a fixed list of 29 names such as `GITHUB_TOKEN`, `NPM_TOKEN`, `VAULT_TOKEN`; never LLM provider keys, `A2AMX_*` or the Bedrock and Vertex logins) are unset in a confined session; `--confine-keep-env NAME` or `keep_env` in `[session.confine]` returns one, and a daemon upgrade alone changes the environment of every confined session. The agent is told its limits in its system prompt, the status bar shows `[confined]`, and `team up --dry-run` prints the effective
   restrictions. A session never starts unconfined when confinement was requested; Codex sessions are
   refused. It is a safety net for a trusted but fallible agent, not a security boundary. A Ctrl-C in a
   confined Generic session reaches the command, not the sandbox (see Changed). Additive protocol: the

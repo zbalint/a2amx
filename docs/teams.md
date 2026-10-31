@@ -112,8 +112,10 @@ Within a `[[session]]` table, `name` may be omitted when `role` is set; the role
 Use an optional team-level `[confine]` table for defaults and a `[session.confine]`
 table for session settings. `enabled` defaults to false; `default_hides` defaults to
 true. `write`, `hide`, and `unhide` lists add team entries before session entries,
-while scalars override. `grants` is per session only; run `a2amx confine list` for
-the valid runtime names and what each exposes. Credential or privileged grants cannot
+while scalars override. `grants` and `keep_env` are per session only; run
+`a2amx confine list` for the valid runtime names and see
+[Confinement](confinement.md#credential-environment-variables) for the closed credential
+environment list. A team-level `keep_env` is refused. Credential or privileged grants cannot
 be team defaults.
 Options on a disabled session need `enabled = true`; team options without any enabled
 value confine nothing. Lists accept at most 64 entries of at most 4096 bytes. Codex

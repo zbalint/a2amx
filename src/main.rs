@@ -408,6 +408,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         confine_unhide,
         confine_no_default_hides,
         mut confine_grant,
+        confine_keep_env,
         reset,
         control_from,
         watch,
@@ -430,7 +431,8 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         || !confine_hide.is_empty()
         || !confine_unhide.is_empty()
         || confine_no_default_hides
-        || !confine_grant.is_empty();
+        || !confine_grant.is_empty()
+        || !confine_keep_env.is_empty();
     if has_confine_options && !confine {
         return Err(anyhow!("--confine-* flags require --confine"));
     }
@@ -481,6 +483,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             unhide: confine_unhide,
             no_default_hides: confine_no_default_hides,
             grants: confine_grant,
+            keep_env: confine_keep_env,
             team_file: None,
         };
         Some(resolved_confine_request(&request, &cwd, None)?)
@@ -639,6 +642,7 @@ fn resolved_confine_request(
         unhide: resolve_confine_paths(cwd, "unhide", &request.unhide)?,
         no_default_hides: request.no_default_hides,
         grants: request.grants.clone(),
+        keep_env: request.keep_env.clone(),
         team_file: team_file
             .map(|path| path.to_string_lossy().into_owned())
             .or_else(|| request.team_file.clone()),
@@ -1120,6 +1124,12 @@ async fn dry_run_start(
     {
         output.push_str(&format!("  grants: {}\n", plan.grants.join(", ")));
     }
+    if let Some(plan) = &confine_plan
+        && !plan.keep_env.is_empty()
+    {
+        output.push_str(&format!("  keep_env: {}\n", plan.keep_env.join(", ")));
+    }
+
     if let Some(plan) = &confine_plan {
         for path in plan.writable.iter().filter(|path| **path != resolved_cwd) {
             output.push_str(&format!("  writable: {}\n", path.display()));

@@ -64,6 +64,8 @@ struct ConfineTable {
     #[serde(default)]
     grants: Vec<String>,
     #[serde(default)]
+    keep_env: Vec<String>,
+    #[serde(default)]
     default_hides: Option<bool>,
 }
 
@@ -601,6 +603,12 @@ fn merge_confine(
     if let Some(table) = team {
         validate_confine_syntax("[confine] ", table)?;
     }
+    if team.is_some_and(|table| !table.keep_env.is_empty()) {
+        bail!(
+            "[confine] keep_env: a credential variable is returned per session, not team-wide; put keep_env in [session.confine]"
+        );
+    }
+
     if let Some(table) = own {
         validate_confine_syntax(&format!("session {session_name}: "), table)?;
     }
@@ -632,11 +640,13 @@ fn merge_confine(
         own.map_or(&[][..], |table| &table.unhide),
     );
     let grants = deduplicated_values(&[], own.map_or(&[][..], |table| &table.grants));
+    let keep_env = deduplicated_values(&[], own.map_or(&[][..], |table| &table.keep_env));
     let own_has_options = own.is_some_and(|table| {
         !table.write.is_empty()
             || !table.hide.is_empty()
             || !table.unhide.is_empty()
             || !table.grants.is_empty()
+            || !table.keep_env.is_empty()
             || table.default_hides.is_some()
     });
     if !enabled {
@@ -651,6 +661,7 @@ fn merge_confine(
     validate_confine_list(session_name, "hide", &hide)?;
     validate_confine_list(session_name, "unhide", &unhide)?;
     validate_confine_list(session_name, "grants", &grants)?;
+    validate_confine_list(session_name, "keep_env", &keep_env)?;
     crate::grant::validate(&grants)?;
     let default_hides = own
         .and_then(|table| table.default_hides)
@@ -662,6 +673,7 @@ fn merge_confine(
         unhide,
         no_default_hides: !default_hides,
         grants,
+        keep_env,
         team_file: None,
     }))
 }
