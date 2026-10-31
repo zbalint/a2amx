@@ -5,7 +5,7 @@
 **LOCKED** (2026-10-31, one consultant review `m_4893` applied, no second pass; context `a2amx-confine-grants-2026-10-31`; backlog F58; owner request of this date: "we should provide a grant that allows the agent to read and write its config dir if the user decided he wants that"). Depends on spec 3bs (the overlay it switches off for the granted harness): assign it only after 3bs is accepted and committed.
 Implementation goes to `a2amx-developer` only; the tester pass goes to `a2amx-tester`.
 
-**Baseline:** develop after spec 3bs is accepted (its commit and suite count are filled in by the architect at the assignment); full suite run as in spec 3bs section 0.
+**Baseline:** develop at `347758c` (spec 3bs accepted); full suite 739 passed, 0 failed, 3 ignored; run as in spec 3bs section 0. Spec 3bs moved the `src/confine.rs` anchors below (it added the overlay fields, `harness_overlay_parents`, `overlay_protected_entries` and the mount kinds); re-anchor every line number against the tree before editing, and the plan step goes after `bind_harness_data` and before `bind_operator_writes`, not after the overlay computation in `finish()`.
 **Location and branch:** main checkout `/home/zbalint/workspace/a2amx`, branch `develop`.
 **Public test seams:** `grant::all`, `grant::lookup`, `grant::render_list`, `confine::plan`, `Plan::wrap` argv, `Plan::overlay_parents()` (`tests/grant.rs`, `tests/confine.rs`).
 
