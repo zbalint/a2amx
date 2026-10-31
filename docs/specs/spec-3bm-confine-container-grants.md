@@ -143,7 +143,7 @@ the two assertions in `notice_describes_restrictions_and_keeps_closing_sentence`
 ## 8. Out of scope
 
 New runtimes beyond the seven, the rootless `$XDG_RUNTIME_DIR` sockets (the runtime directory is hidden wholesale and stays
-so), credential grants (`gh`, `git-credentials`, `ssh`, `gpg`), harness grants, any change to network access, `src/team.rs`.
+so), credential grants (`gh`, `git-credentials`, `ssh`, `gpg`), harness grants, any change to network access, any edit of `src/team.rs` other than the one migration string of section 3.
 
 ## 9. Trust boundaries
 
