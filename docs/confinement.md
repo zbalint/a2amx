@@ -193,6 +193,10 @@ confine_unhide = ["~/.config/gh"]
 
 The mount is read-only, so a tool that rewrites the file, such as during a token refresh, fails. The network is open, so a readable token lets the agent act as you on that service. Unhide only what the work needs, prefer a token with the least scope, and review what the agent did. The maintainers did not test any `gh` command under confinement.
 
+### ssh and signed commits
+
+Plain `ssh` fails in a confined session even with `~/.ssh` unhidden, with `Bad owner or permissions on /etc/ssh/ssh_config.d/...`. The sandbox cannot map root, so root-owned system files show as owned by `nobody`, and `ssh` refuses a system configuration file it does not trust. `ssh -F /dev/null host` skips the system files and works; a `~/.ssh/config` passed with `-F` should too, but the maintainers did not test it. `git push` over ssh should work with `GIT_SSH_COMMAND='ssh -F /dev/null'` and the key unhidden, untested. No ssh agent is passed through, so a passphrase-protected key cannot be used, and signing commits with gpg or an ssh key is untested and probably fails, because the agent sockets and `~/.gnupg` are hidden. Pushing over https with `gh` avoids all of this. Proper support is backlog item F53 in [the backlog](backlog.md).
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
