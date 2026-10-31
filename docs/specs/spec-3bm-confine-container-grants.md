@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-**LOCKED** (2026-10-31; one consultant review `m_4742`, all findings applied, no second pass; context `a2amx-confine-grants-2026-10-31`; backlog F48). Architect-directed, before 0.2.0.
+**LOCKED** (2026-10-31, amended once for the acceptance grep; one consultant review `m_4742`, all findings applied, no second pass; context `a2amx-confine-grants-2026-10-31`; backlog F48). Architect-directed, before 0.2.0.
 Implementation goes to `a2amx-developer` only; the tester pass goes to `a2amx-tester`.
 
 **Baseline:** develop at `7524684` (after spec 3bl); full suite 714 passed, 0 failed, 3 ignored; run as
@@ -168,7 +168,10 @@ git diff --check
 git status --short   # only the files in section 0
 rg -n 'CONTAINER_HIDES|CONTAINER_UNSET|allows_containers' src   # no matches
 rg -n -w containers src tests docs a2amx.toml.example --glob '!docs/specs/*' --glob '!docs/backlog.md'
-# only these may remain: docs/architecture.md and docs/install.md prose about running inside containers
+# only these may remain: docs/architecture.md and docs/install.md prose about running inside containers; in src/grant.rs the
+# special case for the old name `containers` and its message; in tests/grant.rs the test of that message. Any other whole-word
+# hit is reworded (a source comment or doc sentence), not allowed. Amendment 1 (m_4775): the migration lookup and its test are
+# the intended survivors.
 ```
 
 Known flaky: backlog I9 and F37, and `tests/team.rs::team_up_forwards_reset_configuration_and_consent`: rerun once and record as
