@@ -529,7 +529,7 @@ fn reject_old_confine_format(text: &str) -> anyhow::Result<()> {
         ),
         (
             "confine_allow_containers",
-            "confine_allow_containers was replaced by grants = [\"containers\"] in [session.confine]",
+            "confine_allow_containers was replaced by one grant per runtime, for example grants = [\"docker\"], in [session.confine]; run a2amx confine list",
         ),
     ];
     for (index, value) in sessions.iter().enumerate() {

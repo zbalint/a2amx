@@ -1161,13 +1161,13 @@ command = ["cat"]
 write = ["./data"]
 hide = ["./secrets"]
 unhide = ["./public"]
-grants = ["containers"]
+grants = ["docker"]
 "#,
     )
     .unwrap();
     let request = sessions[0].confine.as_ref().expect("confined");
     assert_eq!(request.write, ["./data"]);
-    assert!(request.grants.contains(&"containers".to_owned()));
+    assert!(request.grants.contains(&"docker".to_owned()));
     let error = team::parse(
         r#"
 [[session]]
@@ -1568,7 +1568,7 @@ async fn dry_run_expands_home_relative_confine_paths() {
         write = ["~/.tool-cache", "~/.missing-tool"]
         hide = ["~/.tool-hide"]
         unhide = ["~/.ssh"]
-        grants = ["containers"]
+        grants = ["docker"]
         "#,
     )
     .unwrap();
@@ -1590,7 +1590,7 @@ async fn dry_run_expands_home_relative_confine_paths() {
     let hidden = std::fs::canonicalize(&tool_hide).unwrap();
     let unhidden = std::fs::canonicalize(&ssh).unwrap();
     let missing = user_home.path().join(".missing-tool");
-    assert!(stdout.contains("  grants: containers\n"));
+    assert!(stdout.contains("  grants: docker\n"));
     assert!(!stdout.contains(&format!("  hidden: {}\n", unhidden.display())));
     assert!(stdout.contains(&format!("  writable: {}\n", writable.display())));
     assert!(stdout.contains(&format!("  hidden: {}\n", hidden.display())));
@@ -2731,7 +2731,7 @@ default_hides = true
 name = "architect"
 command = ["claude"]
 [session.confine]
-grants = ["containers"]
+grants = ["docker"]
 write = ["~/.cache"]
 [[session]]
 name = "scratch"
@@ -2748,7 +2748,7 @@ enabled = false
             hide: vec![],
             unhide: vec![],
             no_default_hides: false,
-            grants: vec!["containers".into()],
+            grants: vec!["docker".into()],
             team_file: None,
         })
     );
@@ -2788,7 +2788,7 @@ fn confine_table_rejects_old_keys_and_team_grants() {
         ),
         (
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_allow_containers = true",
-            "session 1: confine_allow_containers was replaced by grants = [\"containers\"] in [session.confine]",
+            "session 1: confine_allow_containers was replaced by one grant per runtime, for example grants = [\"docker\"], in [session.confine]; run a2amx confine list",
         ),
     ];
     for (text, expected) in old_inputs {
@@ -2797,7 +2797,7 @@ fn confine_table_rejects_old_keys_and_team_grants() {
     }
 
     let team_grant = team::parse(
-        "[confine]\ngrants = ['containers']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        "[confine]\ngrants = ['docker']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
     )
     .expect_err("team grant");
     assert!(team_grant.to_string().contains("grant it in the session"));
@@ -2846,12 +2846,12 @@ fn confine_table_requires_enabled_for_own_options_and_deduplicates_lists() {
     assert!(error.to_string().contains("need enabled = true"));
 
     let sessions = team::parse(
-        "[confine]\nenabled = true\nwrite = ['x', 'x']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['x', 'y', 'y']\ngrants = ['containers', 'containers']",
+    "[confine]\nenabled = true\nwrite = ['x', 'x']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['x', 'y', 'y']\ngrants = ['docker', 'docker']",
     )
     .expect("deduplicated confine lists");
     let request = sessions[0].confine.as_ref().expect("confined");
     assert_eq!(request.write, ["x", "y"]);
-    assert_eq!(request.grants, ["containers"]);
+    assert_eq!(request.grants, ["docker"]);
 }
 
 #[test]
@@ -2906,7 +2906,7 @@ fn confine_table_covers_disabled_and_merged_limit_rules() {
     assert!(
         unknown_grant
             .to_string()
-            .contains("closest match: containers")
+            .contains("closest match: containerd")
     );
 
     let team_paths = (0..40)

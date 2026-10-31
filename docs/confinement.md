@@ -59,10 +59,17 @@ credential or privileged grant must be named by the session that needs it, never
 
 | Name | Exposes | Team default |
 | --- | --- | --- |
-| `containers` | every container and virtualization socket on the host (docker, podman, containerd, lxd, libvirt, snapd and others): effectively root on the host | No; grant it per session. |
+| `docker` | docker container daemon sockets: effectively root on the host | No; grant it per session. |
+| `podman` | podman container daemon sockets: effectively root on the host | No; grant it per session. |
+| `containerd` | containerd, buildkit and k3s container daemon sockets: effectively root on the host | No; grant it per session. |
+| `crio` | crio container daemon sockets: effectively root on the host | No; grant it per session. |
+| `libvirt` | libvirt virtual-machine control: controls virtual machines | No; grant it per session. |
+| `lxd` | lxd and incus container daemon sockets: effectively root on the host | No; grant it per session. |
+| `snap` | snapd package management: installs and removes packages | No; grant it per session. |
 
-Grant names are closed and validated before launch. The `containers` grant reproduces the
-old container-socket switch; it does not make a session a sandbox.
+Grant names are closed and validated before launch. Each runtime is a separate opt-in;
+these grants do not make a session a sandbox. Run `a2amx confine list` for the current
+table and descriptions.
 
 ## The method: open what an honest mistake can recover from
 
@@ -181,34 +188,55 @@ For any other tool, run it once, read the failing path in the error, and decide 
 
 ## Docker and other container engines
 
-By default, the system container sockets are hidden, including `/run/docker.sock`, `/run/podman/podman.sock`, and `/run/containerd/containerd.sock`. The container variables `DOCKER_HOST`, `DOCKER_CONTEXT`, `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINERD_ADDRESS`, `BUILDKIT_HOST`, and `LIBVIRT_DEFAULT_URI` are unset. Consequently, `docker ps` fails with `EACCES` on the socket.
+By default, the system runtime sockets are hidden, including `/run/docker.sock`,
+`/run/podman/podman.sock`, `/run/containerd/containerd.sock`, `/run/crio/crio.sock`,
+`/run/libvirt/libvirt-sock`, the LXD and Incus sockets, and the Snap socket. The runtime
+variables `DOCKER_HOST`, `DOCKER_CONTEXT`, `CONTAINER_HOST`, `CONTAINER_CONNECTION`,
+`CONTAINERD_ADDRESS`, `BUILDKIT_HOST`, and `LIBVIRT_DEFAULT_URI` are unset. Consequently,
+`docker ps` fails with `EACCES` on the socket.
 
 Grant the configured host Docker daemon explicitly:
 
 ```sh
-a2amx new --confine --confine-grant containers -- <command>
+a2amx new --confine --confine-grant docker -- <command>
 ```
 
 ```toml
 # fragment
 [session.confine]
-grants = ["containers"]
+grants = ["docker"]
 ```
 
-This gives the agent root-equivalent power over the host: a member of the `docker` group can start a container that mounts the host's root, and confinement does not limit what a container can do. Use the grant only when you accept that. After the grant, the configured daemon socket is reachable; the maintainers did not test `docker run`, `docker build`, or `docker compose` here.
+This gives the agent root-equivalent power over the host: a member of the `docker` group can
+start a container that mounts the host's root, and confinement does not limit what a container
+can do. Use the grant only when you accept that. After the grant, the configured daemon socket
+is reachable; the maintainers did not test `docker run`, `docker build`, or `docker compose` here.
 
-The Docker Desktop sockets `~/.docker/desktop/docker.sock` and `~/.docker/run/docker.sock` are also inside the default hide of `~/.docker`. The grant does not lift that hide, so both the grant and an unhide are needed:
+The Docker Desktop sockets `~/.docker/desktop/docker.sock` and `~/.docker/run/docker.sock` are
+also inside the default hide of `~/.docker`. The grant does not lift that hide, so both the grant
+and an unhide are needed:
 
 ```sh
-a2amx new --confine --confine-grant containers \
+a2amx new --confine --confine-grant docker \
   --confine-unhide ~/.docker/desktop/docker.sock -- <command>
 ```
 
-Choose `~/.docker/run/docker.sock` instead when that is the socket path. The Docker CLI configuration, contexts, and `docker login` credentials are under the default hide of `~/.docker`, so the CLI configuration is hidden. A private registry login needs an `unhide = ["~/.docker/config.json"]` entry under `[session.confine]`, with the warning in [Credentials a tool needs](#credentials-a-tool-needs); this was not tested.
+Choose `~/.docker/run/docker.sock` instead when that is the socket path. The Docker CLI
+configuration, contexts, and `docker login` credentials are under the default hide of `~/.docker`,
+so the CLI configuration is hidden. A private registry login needs an
+`unhide = ["~/.docker/config.json"]` entry under `[session.confine]`, with the warning in
+[Credentials a tool needs](#credentials-a-tool-needs); this was not tested.
 
-Rootless Docker and Podman cannot be used here: their sockets are under `$XDG_RUNTIME_DIR`, which is hidden and cannot be unhidden, even with the grant. Use an engine on another machine (`DOCKER_HOST` passes through with the grant and the network is open), or run the whole session in a container or VM instead of a2amx confinement. Reaching a remote engine needs its credentials, for example `~/.ssh` or TLS files under `~/.docker`; those are default hides and need an `unhide` entry. None of this remote-engine path was tested.
+Rootless Docker and Podman cannot be used here: their sockets are under `$XDG_RUNTIME_DIR`,
+which is hidden and cannot be unhidden, even with the grant. Use an engine on another machine
+(`DOCKER_HOST` passes through with the grant and the network is open), or run the whole session
+in a container or VM instead of a2amx confinement. Reaching a remote engine needs its credentials,
+for example `~/.ssh` or TLS files under `~/.docker`; those are default hides and need an `unhide`
+entry. None of this remote-engine path was tested.
 
-Containers the agent starts are not confined by a2amx. A socket created after the session starts and outside every launch-time hide is visible. Start container daemons before the session when their host socket must be hidden.
+Workloads the agent starts are not confined by a2amx. A socket created after the session starts
+and outside every launch-time hide is visible. Start runtime daemons before the session when
+their host socket must be hidden.
 
 ## Credentials a tool needs
 

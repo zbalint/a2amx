@@ -12,7 +12,7 @@ use clap::Parser;
 use tokio::sync::mpsc;
 
 use a2amx::bridge;
-use a2amx::cli::{Cli, Command, DaemonAction, TeamAction};
+use a2amx::cli::{Cli, Command, ConfineAction, DaemonAction, TeamAction};
 use a2amx::client::{Attachment, Client};
 use a2amx::confine::ConfineRequest;
 use a2amx::daemon::{self, Daemon, DaemonConfig};
@@ -77,6 +77,12 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         }
         Command::Hook => return hook::run().await.map(|_| std::process::ExitCode::SUCCESS),
         Command::OmpBridge => return bridge::run().await.map(|_| std::process::ExitCode::SUCCESS),
+        Command::Confine {
+            action: ConfineAction::List,
+        } => {
+            write_stdout(a2amx::grant::render_list().into_bytes()).await?;
+            return Ok(std::process::ExitCode::SUCCESS);
+        }
         _ => {}
     }
     let home = resolve_home(home_arg)?;
@@ -132,7 +138,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         Command::Screen { session, rows } => run_screen(home, session, rows).await,
         Command::Messages { session, state } => run_messages(home, session, state).await,
         Command::Cancel { message } => run_cancel(home, message).await,
-        Command::Mcp { .. } | Command::Hook | Command::OmpBridge => {
+        Command::Confine { .. } | Command::Mcp { .. } | Command::Hook | Command::OmpBridge => {
             unreachable!("early dispatch returned before resolving home")
         }
     };

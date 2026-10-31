@@ -192,3 +192,19 @@ Line numbers are from `07bdcf9`, before spec 3bl; re-anchor. Counts use `rg -n -
 | `main` returns early for `Mcp`, `Hook`, `OmpBridge` before `resolve_home` | `src/main.rs:68-82`, `:142-156` | read (consultant) |
 | The migration message for `confine_allow_containers` | `src/team.rs:532`, `tests/team.rs:2782` | read (consultant) |
 | `Command` carries one `#[allow(clippy::large_enum_variant)]` from spec 3bk | `src/cli.rs:33` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5`; developer and tester on the
+OMP harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed to either).
+BLOCKED/amend cycles: 1 BLOCKED with 2 amendments, plus one BLOCKED that was a misreading of the truncated notice (lifted, no amendment).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`claude-opus-5-5`) | Tests 5 and 6 depended on which sockets the host has; two sockets could resolve to one file and defeat a grant (granted must win); the migration message in `src/team.rs` pointed at a removed grant; `confine list` dispatch had to run before the state directory is resolved; unlisted test changes; counts and anchors wrong; the acceptance grep too weak | All fixed in the spec before the lock |
+| Implementation | Developer (`gpt-5.6-luna`) | BLOCKED: the fresh developer read the checkout as read-only from the truncated notice | Architect: the working directory is writable; wait lifted; fixed for new sessions by spec 3bl |
+| Implementation | Developer | BLOCKED: the acceptance grep for the word `containers` forbade the required migration message and its test | Amendment 1 (`23f9892`) |
+| Implementation | Developer | Section 8 listed `src/team.rs` as out of scope while section 3 required one string there | Amendment 2 (`2281c8d`) |
+| Implementation | Developer | The granted-wins rule could not be tested through public seams with host-neutral fixtures | Architect approved one private unit test over a table-parameterised helper |
+| Architect review | Architect | A test-only trait with a callback and a single-variant enum with an unused parameter were added only to serve one test | Developer replaced them with plain data rows and removed the enum |
+| Tester pass | Tester (`gpt-5.6-luna`) | Reversing the order of the unset environment names survived all tests | Accepted: the order of `--unsetenv` arguments has no effect on behavior, and the output is deterministic by construction |

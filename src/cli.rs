@@ -37,6 +37,11 @@ pub enum Command {
         #[command(subcommand)]
         action: DaemonAction,
     },
+    /// Inspect confinement grants.
+    Confine {
+        #[command(subcommand)]
+        action: ConfineAction,
+    },
     /// Start a session running COMMAND and attach to it.
     New {
         #[arg(long)]
@@ -162,6 +167,12 @@ pub enum Command {
     },
     /// Run the prompt-submit hook adapter (reads the harness payload on stdin).
     Hook,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfineAction {
+    /// List the named confinement grants.
+    List,
 }
 
 #[derive(Debug, Subcommand)]

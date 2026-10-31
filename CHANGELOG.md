@@ -21,8 +21,9 @@ All notable user-visible changes are listed here. The format follows
   (`~/.ssh`, `~/.aws`, the state directory, the session bus, container sockets and others) are hidden;
   `--confine-write`, `--confine-hide`, `--confine-unhide`, `--confine-no-default-hides` and
   `--confine-grant NAME` adjust it, with the keys `write`, `hide`, `unhide`, `default_hides` and `grants` in the
-  confine table (session lists add to the team's lists). The only grant so far is `containers`; a team-level
-  table cannot grant it. The old flat team-file keys (`confine = true`, `confine_write` and the rest) are
+  confine table (session lists add to the team's lists). Grants are one per container runtime (`docker`, `podman`, `containerd`, `crio`,
+  `libvirt`, `lxd`, `snap`), each opening only its own sockets and environment names, and `a2amx confine list` prints
+  them with what each exposes; a team-level table cannot grant one. The old flat team-file keys (`confine = true`, `confine_write` and the rest) are
   refused with a message naming the replacement. A `write`, `hide` or `unhide` entry must be absolute, `~/...` or
   relative to the working directory; `$VAR` and `~user` forms are refused instead of silently skipped, a listed path that
   is missing or unreadable gets its own `unresolved:` line in the dry run, and the agent notice always names the working

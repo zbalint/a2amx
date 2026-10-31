@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::grant;
 use crate::harness::Harness;
 
 pub const MAX_LIST_ENTRIES: usize = 64;
@@ -34,32 +35,6 @@ const ALWAYS_UNSET: [&str; 6] = [
     "WSL_INTEROP",
     "DISPLAY",
     "WAYLAND_DISPLAY",
-];
-const CONTAINER_UNSET: [&str; 6] = [
-    "DOCKER_HOST",
-    "DOCKER_CONTEXT",
-    "CONTAINER_HOST",
-    "CONTAINER_CONNECTION",
-    "CONTAINERD_ADDRESS",
-    "BUILDKIT_HOST",
-];
-const CONTAINER_UNSET_EXTRA: [&str; 1] = ["LIBVIRT_DEFAULT_URI"];
-const CONTAINER_HIDES: [&str; 15] = [
-    "/run/docker.sock",
-    "/run/podman/podman.sock",
-    "/run/containerd/containerd.sock",
-    "/run/containerd/containerd.sock.ttrpc",
-    "/run/buildkit/buildkitd.sock",
-    "/run/crio/crio.sock",
-    "/run/k3s/containerd/containerd.sock",
-    "/run/libvirt/libvirt-sock",
-    "/run/snapd.socket",
-    "/run/snapd-snap.socket",
-    "/var/snap/lxd/common/lxd/unix.socket",
-    "/var/lib/lxd/unix.socket",
-    "/var/lib/incus/unix.socket",
-    "~/.docker/desktop/docker.sock",
-    "~/.docker/run/docker.sock",
 ];
 const DEFAULT_HIDES: [&str; 24] = [
     "~/.ssh",
@@ -686,7 +661,6 @@ pub fn check_harness(harness: Harness) -> Result<()> {
 pub fn plan(request: &ConfineRequest, harness: Harness, cwd: &Path, host: &Host) -> Result<Plan> {
     check_request_limits(request, harness)?;
     crate::grant::validate(&request.grants)?;
-    let allow_containers = request.grants.iter().any(|grant| grant == "containers");
     let mut builder = PlanBuilder::new(host, harness)?;
     let cwd = canonical_existing(cwd, "cwd")?;
     if !cwd.is_dir() {
@@ -698,9 +672,9 @@ pub fn plan(request: &ConfineRequest, harness: Harness, cwd: &Path, host: &Host)
     builder.bind_operator_writes(request)?;
     builder.hide_mandatory();
     builder.hide_defaults(request);
-    builder.hide_containers(allow_containers);
-    builder.release_operator_writes(allow_containers)?;
-    builder.apply_operator_hides(request, allow_containers)?;
+    builder.hide_containers(&request.grants);
+    builder.release_operator_writes()?;
+    builder.apply_operator_hides(request)?;
     builder.finish(request, cwd, empty_file)
 }
 
@@ -744,12 +718,48 @@ struct PlanBuilder<'a> {
     mandatory_hidden: Vec<PathBuf>,
     default_hidden: Vec<PathBuf>,
     container_hidden: Vec<PathBuf>,
+    container_sockets: Vec<(PathBuf, &'static str)>,
 }
 
-#[derive(Clone, Copy)]
-enum HideKind {
-    Default,
-    Container,
+struct SocketRow<'a> {
+    name: &'static str,
+    sockets: &'a [&'a str],
+}
+
+fn container_socket_hides(
+    table: &[SocketRow<'_>],
+    given: &[String],
+    home: &Path,
+) -> (Vec<(PathBuf, &'static str)>, Vec<PathBuf>) {
+    let given = given.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let mut granted_targets = BTreeSet::new();
+    for row in table.iter().filter(|row| given.contains(row.name)) {
+        for socket in row.sockets {
+            let source = expand_home(socket, home);
+            if let Some(path) = canonical_if_exists(&source) {
+                granted_targets.insert(path);
+            }
+        }
+    }
+
+    let mut hidden = Vec::new();
+    let mut skipped = Vec::new();
+    for row in table.iter().filter(|row| !given.contains(row.name)) {
+        for socket in row.sockets {
+            let source = expand_home(socket, home);
+            let Some(path) = canonical_if_exists(&source) else {
+                add_unique(&mut skipped, source);
+                continue;
+            };
+            if granted_targets.contains(&path) {
+                continue;
+            }
+            if !hidden.iter().any(|(existing, _)| existing == &path) {
+                hidden.push((path, row.name));
+            }
+        }
+    }
+    (hidden, skipped)
 }
 
 impl<'a> PlanBuilder<'a> {
@@ -769,6 +779,7 @@ impl<'a> PlanBuilder<'a> {
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),
             container_hidden: Vec::new(),
+            container_sockets: Vec::new(),
         })
     }
 
@@ -883,16 +894,13 @@ impl<'a> PlanBuilder<'a> {
             return;
         }
         for name in DEFAULT_HIDES.into_iter().chain(DEFAULT_HIDES_EXTRA) {
-            self.hide_or_skip(user_path(name, &self.home), HideKind::Default);
+            self.hide_or_skip(user_path(name, &self.home));
         }
         if self.harness != Harness::Claude {
-            self.hide_or_skip(
-                self.home.join(".claude/.credentials.json"),
-                HideKind::Default,
-            );
+            self.hide_or_skip(self.home.join(".claude/.credentials.json"));
         }
         if self.harness != Harness::Codex {
-            self.hide_or_skip(self.home.join(".codex/auth.json"), HideKind::Default);
+            self.hide_or_skip(self.home.join(".codex/auth.json"));
         }
         if let Some(path) = canonical_if_exists(Path::new("/run/dbus")) {
             add_unique(&mut self.default_hidden, path.clone());
@@ -900,66 +908,58 @@ impl<'a> PlanBuilder<'a> {
         }
     }
 
-    fn hide_containers(&mut self, allow_containers: bool) {
-        if allow_containers {
-            return;
+    fn hide_containers(&mut self, given: &[String]) {
+        let table = grant::all()
+            .iter()
+            .map(|grant| SocketRow {
+                name: grant.name,
+                sockets: grant.sockets,
+            })
+            .collect::<Vec<_>>();
+        let (hidden, skipped) = container_socket_hides(&table, given, &self.home);
+        for (path, owner) in hidden {
+            add_unique(&mut self.container_hidden, path.clone());
+            add_unique(&mut self.hidden, path.clone());
+            self.container_sockets.push((path, owner));
         }
-        for entry in CONTAINER_HIDES {
-            let source = if let Some(relative) = entry.strip_prefix("~/") {
-                self.home.join(relative)
-            } else {
-                PathBuf::from(entry)
-            };
-            self.hide_or_skip(source, HideKind::Container);
+        for path in skipped {
+            add_unique(&mut self.skipped, path);
         }
     }
 
-    fn hide_or_skip(&mut self, source: PathBuf, kind: HideKind) {
+    fn hide_or_skip(&mut self, source: PathBuf) {
         if let Some(path) = canonical_if_exists(&source) {
-            match kind {
-                HideKind::Default => add_unique(&mut self.default_hidden, path.clone()),
-                HideKind::Container => add_unique(&mut self.container_hidden, path.clone()),
-            }
+            add_unique(&mut self.default_hidden, path.clone());
             add_unique(&mut self.hidden, path);
         } else {
             add_unique(&mut self.skipped, source);
         }
     }
 
-    fn check_container_socket(
-        &self,
-        path: &Path,
-        option: &str,
-        allow_containers: bool,
-    ) -> Result<()> {
-        if !allow_containers
-            && self
-                .container_hidden
-                .iter()
-                .any(|socket| is_within(path, socket))
+    fn check_container_socket(&self, path: &Path, option: &str) -> Result<()> {
+        if let Some((_, grant)) = self
+            .container_sockets
+            .iter()
+            .find(|(socket, _)| is_within(path, socket))
         {
             bail!(
-                "{option} path {} requires the containers grant (--confine-grant containers, or grants = [\"containers\"])",
+                "{option} path {} requires the {grant} grant (--confine-grant {grant}, or grants = [\"{grant}\"])",
                 path.display()
             );
         }
         Ok(())
     }
 
-    fn release_operator_writes(&mut self, allow_containers: bool) -> Result<()> {
+    fn release_operator_writes(&mut self) -> Result<()> {
         for path in &self.explicit_writes {
-            self.check_container_socket(path, "write", allow_containers)?;
+            self.check_container_socket(path, "write")?;
             self.hidden.retain(|existing| existing != path);
             self.default_hidden.retain(|existing| existing != path);
         }
         Ok(())
     }
 
-    fn apply_operator_hides(
-        &mut self,
-        request: &ConfineRequest,
-        allow_containers: bool,
-    ) -> Result<()> {
+    fn apply_operator_hides(&mut self, request: &ConfineRequest) -> Result<()> {
         for path in &request.hide {
             let source = user_path(path, &self.home);
             if let Some(path) = self.resolve_operator_path("hide", &source) {
@@ -967,16 +967,16 @@ impl<'a> PlanBuilder<'a> {
             }
         }
         for path in &request.unhide {
-            self.unhide(path, allow_containers)?;
+            self.unhide(path)?;
         }
         Ok(())
     }
 
-    fn unhide(&mut self, path: &str, allow_containers: bool) -> Result<()> {
+    fn unhide(&mut self, path: &str) -> Result<()> {
         let source = user_path(path, &self.home);
         if let Some(path) = self.resolve_operator_path("unhide", &source) {
             check_unhide_allowed(&path, &self.state_dir, &self.runtime_dir, &self.home)?;
-            self.check_container_socket(&path, "unhide", allow_containers)?;
+            self.check_container_socket(&path, "unhide")?;
             self.hidden.retain(|existing| existing != &path);
             self.default_hidden.retain(|existing| existing != &path);
             self.container_hidden.retain(|existing| existing != &path);
@@ -1101,25 +1101,29 @@ impl Plan {
         mounts
     }
 
-    fn allows_containers(&self) -> bool {
-        self.grants.iter().any(|grant| grant == "containers")
-    }
-
     fn env_unsets(&self) -> impl Iterator<Item = &'static str> {
-        ALWAYS_UNSET
-            .into_iter()
-            .chain(
-                (!self.allows_containers())
-                    .then_some(CONTAINER_UNSET.iter().copied())
-                    .into_iter()
-                    .flatten(),
-            )
-            .chain(
-                (!self.allows_containers())
-                    .then_some(CONTAINER_UNSET_EXTRA.iter().copied())
-                    .into_iter()
-                    .flatten(),
-            )
+        let given = self
+            .grants
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let released = grant::all()
+            .iter()
+            .filter(|grant| given.contains(grant.name))
+            .flat_map(|grant| grant.env.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let mut unset = ALWAYS_UNSET.to_vec();
+        for grant in grant::all()
+            .iter()
+            .filter(|grant| !given.contains(grant.name))
+        {
+            for name in grant.env {
+                if !released.contains(name) && !unset.contains(name) {
+                    unset.push(name);
+                }
+            }
+        }
+        unset.into_iter()
     }
 
     /// Produce `bwrap <options> -- <argv>` with deterministic operation order.
@@ -1416,11 +1420,21 @@ pub fn notice(plan: &Plan) -> String {
     text.push_str(
         "Everything else is read-only. /tmp is private to this session and discarded when it ends; paths under a peer's /tmp cannot be read.\n",
     );
-    text.push_str(if plan.allows_containers() {
-        "Container engines are allowed.\n"
+    let granted = plan
+        .grants
+        .iter()
+        .filter_map(|name| grant::all().iter().find(|grant| grant.name == name))
+        .filter(|grant| !grant.sockets.is_empty())
+        .map(|grant| grant.name)
+        .collect::<Vec<_>>();
+    if granted.is_empty() {
+        text.push_str("Container engines are restricted.\n");
     } else {
-        "Container engines are restricted.\n"
-    });
+        text.push_str(&format!(
+            "Container engines allowed: {}. Other container engines are restricted.\n",
+            granted.join(", ")
+        ));
+    }
     text.push_str(
         "A Read-only file system error is authoritative where this notice and the system disagree.",
     );
@@ -1488,5 +1502,48 @@ mod tests {
         let text = notice(&plan);
         assert!(text.len() <= NOTICE_LIMIT);
         assert!(text.ends_with(CLOSING_NOTICE));
+    }
+    #[test]
+    fn granted_socket_target_wins_over_an_ungranted_alias() {
+        let root = tempfile::tempdir().expect("socket fixture directory");
+        let granted = root.path().join("granted.sock");
+        let alias = root.path().join("alias.sock");
+        std::fs::write(&granted, "socket").expect("granted socket");
+        std::os::unix::fs::symlink(&granted, &alias).expect("alias socket");
+        let granted_path = granted.to_string_lossy().into_owned();
+        let alias_path = alias.to_string_lossy().into_owned();
+        let granted_sockets = [granted_path.as_str()];
+        let alias_sockets = [alias_path.as_str()];
+        let table = [
+            SocketRow {
+                name: "granted",
+                sockets: &granted_sockets,
+            },
+            SocketRow {
+                name: "alias",
+                sockets: &alias_sockets,
+            },
+        ];
+        let given = vec!["granted".to_owned()];
+        let (hidden, skipped) = container_socket_hides(&table, &given, root.path());
+        assert!(hidden.is_empty());
+        assert!(skipped.is_empty());
+    }
+    #[test]
+    fn grant_socket_and_environment_names_are_unique() {
+        let mut sockets = BTreeSet::new();
+        let mut environment = BTreeSet::new();
+        for grant in grant::all() {
+            for socket in grant.sockets {
+                assert!(sockets.insert(*socket), "duplicate socket {socket}");
+            }
+            for name in grant.env {
+                assert!(!ALWAYS_UNSET.contains(name), "always-unset name {name}");
+                assert!(
+                    environment.insert(*name),
+                    "duplicate environment name {name}"
+                );
+            }
+        }
     }
 }

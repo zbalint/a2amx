@@ -499,43 +499,87 @@ fn skipped_paths_are_sorted() {
 }
 
 #[test]
-fn missing_container_socket_paths_are_reported_as_skipped() {
+fn runtime_grants_select_sockets_and_environment() {
     let fixture = Fixture::new();
-    let plan = confine::plan(
+    let docker_socket = fixture.home.join(".docker/run/docker.sock");
+    std::fs::create_dir_all(docker_socket.parent().expect("docker parent")).expect("docker dir");
+    std::fs::write(&docker_socket, "socket placeholder").expect("docker socket fixture");
+    let restricted = confine::plan(
         &ConfineRequest::default(),
         Harness::Generic,
         &fixture.cwd,
         &fixture.host(),
     )
-    .expect("default container-hide plan");
-    for suffix in [".docker/desktop/docker.sock", ".docker/run/docker.sock"] {
-        assert!(
-            plan.skipped_paths()
-                .iter()
-                .any(|path| path.ends_with(suffix)),
-            "missing container path {suffix} was not skipped"
-        );
-    }
-
-    let allowed = confine::plan(
+    .expect("restricted plan");
+    let restricted_wrapped = restricted
+        .wrap(vec!["true".into()])
+        .expect("restricted wrapper");
+    assert!(
+        restricted_wrapped
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "DOCKER_HOST"])
+    );
+    assert!(
+        restricted_wrapped
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "CONTAINER_HOST"])
+    );
+    let docker = confine::plan(
         &ConfineRequest {
-            grants: vec!["containers".into()],
+            grants: vec!["docker".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
         &fixture.cwd,
         &fixture.host(),
     )
-    .expect("allow-containers plan");
-    for suffix in [".docker/desktop/docker.sock", ".docker/run/docker.sock"] {
+    .expect("docker plan");
+    let docker_socket = std::fs::canonicalize(docker_socket).expect("docker socket canonical");
+    assert!(!docker.hidden_paths().contains(&docker_socket));
+    let podman = PathBuf::from("/run/podman/podman.sock");
+    let docker_host_socket = PathBuf::from("/run/docker.sock");
+    let podman_canonical = std::fs::canonicalize(&podman).ok();
+    let docker_canonical = std::fs::canonicalize(&docker_host_socket).ok();
+    if let (Some(podman_target), Some(docker_target)) =
+        (podman_canonical.as_ref(), docker_canonical.as_ref())
+    {
+        if podman_target == docker_target {
+            assert!(!docker.hidden_paths().contains(podman_target));
+            assert!(!docker.skipped_paths().contains(&podman));
+        } else {
+            assert!(
+                docker.hidden_paths().contains(podman_target)
+                    || docker.skipped_paths().contains(&podman),
+                "podman socket must stay hidden or skipped"
+            );
+        }
+    } else {
+        let hidden_podman = podman_canonical
+            .as_ref()
+            .is_some_and(|target| docker.hidden_paths().contains(target));
         assert!(
-            !allowed
-                .skipped_paths()
-                .iter()
-                .any(|path| path.ends_with(suffix)),
-            "container path {suffix} was skipped with containers allowed"
+            hidden_podman || docker.skipped_paths().contains(&podman),
+            "podman socket must stay hidden or skipped"
         );
     }
+    assert!(!docker.hidden_paths().contains(&docker_host_socket));
+    assert!(!docker.skipped_paths().contains(&docker_host_socket));
+    let docker_wrapped = docker.wrap(vec!["true".into()]).expect("docker wrapper");
+    assert!(
+        !docker_wrapped
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "DOCKER_HOST"])
+    );
+    assert!(
+        !docker_wrapped
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "DOCKER_CONTEXT"])
+    );
+    assert!(
+        docker_wrapped
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "CONTAINER_HOST"])
+    );
 }
 
 #[test]
@@ -859,7 +903,7 @@ fn wrap_unsets_base_and_container_environment_in_stable_order() {
     }
     let allowed = confine::plan(
         &ConfineRequest {
-            grants: vec!["containers".into()],
+            grants: vec!["docker".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -875,6 +919,24 @@ fn wrap_unsets_base_and_container_environment_in_stable_order() {
             .windows(2)
             .any(|window| window == ["--unsetenv", "DOCKER_HOST"])
     );
+    assert!(
+        !allowed
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "DOCKER_CONTEXT"])
+    );
+    for name in [
+        "CONTAINER_HOST",
+        "CONTAINER_CONNECTION",
+        "CONTAINERD_ADDRESS",
+        "BUILDKIT_HOST",
+        "LIBVIRT_DEFAULT_URI",
+    ] {
+        assert!(
+            allowed
+                .windows(2)
+                .any(|window| window == ["--unsetenv", name])
+        );
+    }
     assert!(
         allowed
             .windows(2)
@@ -959,18 +1021,36 @@ fn unhide_cannot_lift_container_socket_restriction() {
         Ok(_) => panic!("container socket unhide must be refused"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("containers grant"));
+    assert!(error.to_string().contains("docker grant"));
+    let wrong_grant = match confine::plan(
+        &ConfineRequest {
+            unhide: vec!["~/.docker/run/docker.sock".into()],
+            grants: vec!["podman".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("podman must not authorize a docker socket"),
+        Err(error) => error,
+    };
+    assert!(
+        wrong_grant
+            .to_string()
+            .contains("requires the docker grant")
+    );
     let allowed = confine::plan(
         &ConfineRequest {
             unhide: vec!["~/.docker/run/docker.sock".into()],
-            grants: vec!["containers".into()],
+            grants: vec!["docker".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
         &fixture.cwd,
         &fixture.host(),
     )
-    .expect("allow-containers switch");
+    .expect("allow-docker switch");
     assert!(
         allowed
             .readonly
@@ -1117,11 +1197,11 @@ fn writable_paths_override_exact_hides_but_not_container_sockets() {
         Ok(_) => panic!("container socket write must be refused"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("containers grant"));
+    assert!(error.to_string().contains("docker grant"));
     let allowed = confine::plan(
         &ConfineRequest {
             write: vec!["~/.docker/run/docker.sock".into()],
-            grants: vec!["containers".into()],
+            grants: vec!["docker".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1175,14 +1255,14 @@ fn container_socket_hides_are_bound_and_can_be_disabled() {
     }
     let allowed = confine::plan(
         &ConfineRequest {
-            grants: vec!["containers".into()],
+            grants: vec!["docker".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
         &fixture.cwd,
         &fixture.host(),
     )
-    .expect("allow containers plan");
+    .expect("allow docker plan");
     for socket in &sockets {
         let socket = std::fs::canonicalize(socket).expect("socket canonical");
         assert!(!allowed.hidden_paths().contains(&socket));
@@ -1190,7 +1270,7 @@ fn container_socket_hides_are_bound_and_can_be_disabled() {
     let allowed_wrapped = allowed
         .with_bwrap(PathBuf::from("bwrap"))
         .wrap(vec!["true".into()])
-        .expect("wrapped allow containers plan");
+        .expect("wrapped allow docker plan");
     for socket in &sockets {
         let socket = std::fs::canonicalize(socket).expect("socket canonical");
         assert!(
@@ -1915,7 +1995,7 @@ fn notice_describes_restrictions_and_keeps_closing_sentence() {
     assert!(restricted_notice.ends_with(confine::CLOSING_NOTICE));
     let allowed = confine::plan(
         &ConfineRequest {
-            grants: vec!["containers".into()],
+            grants: vec!["docker".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1923,7 +2003,10 @@ fn notice_describes_restrictions_and_keeps_closing_sentence() {
         &fixture.host(),
     )
     .expect("plan");
-    assert!(confine::notice(&allowed).contains("Container engines are allowed."));
+    assert!(
+        confine::notice(&allowed)
+            .contains("Container engines allowed: docker. Other container engines are restricted.")
+    );
 }
 
 #[test]
@@ -2766,16 +2849,16 @@ fn grants_are_validated_and_reported_by_the_plan() {
     let fixture = Fixture::new();
     let plan = confine::plan(
         &ConfineRequest {
-            grants: vec!["containers".into()],
+            grants: vec!["docker".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
         &fixture.cwd,
         &fixture.host(),
     )
-    .expect("containers grant");
-    assert_eq!(plan.grants, ["containers"]);
-    assert!(confine::notice(&plan).contains("Granted: containers."));
+    .expect("docker grant");
+    assert_eq!(plan.grants, ["docker"]);
+    assert!(confine::notice(&plan).contains("Granted: docker."));
 
     let error = match confine::plan(
         &ConfineRequest {
@@ -2789,7 +2872,7 @@ fn grants_are_validated_and_reported_by_the_plan() {
         Ok(_) => panic!("unknown grant"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("closest match: containers"));
+    assert!(error.to_string().contains("closest match: containerd"));
 }
 
 #[test]
@@ -2797,7 +2880,7 @@ fn grant_count_limit_precedes_grant_lookup() {
     let fixture = Fixture::new();
     let error = match confine::plan(
         &ConfineRequest {
-            grants: (0..65).map(|_| "containers".to_owned()).collect(),
+            grants: (0..65).map(|_| "docker".to_owned()).collect(),
             ..ConfineRequest::default()
         },
         Harness::Generic,

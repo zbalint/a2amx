@@ -49,5 +49,5 @@ control_from = ["architect"]
 # [session.confine]
 # enabled = true
 # write = ["~/.cargo/registry", "~/.npm"]
-# grants = ["containers"] # root-equivalent; read docs/confinement.md first
+# grants = ["docker"] # root-equivalent; read docs/confinement.md first
 # --- end confinement example ---
