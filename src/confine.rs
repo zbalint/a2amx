@@ -4,6 +4,7 @@
 //! paths and a harness profile; the resulting [`Plan`] is the sole source for
 //! mounts, the launch argv, the notice, and dry-run visibility.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
@@ -112,6 +113,29 @@ pub struct ConfineRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unresolved {
+    pub option: &'static str,
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+/// Reject a confinement entry that no later stage would understand.
+pub fn check_entry_syntax(option: &str, entry: &str) -> Result<()> {
+    if entry.is_empty() {
+        bail!("{option} entry is empty");
+    }
+    if entry.starts_with('$') {
+        bail!(
+            "{option} entry {entry:?}: environment variables are not expanded; write the path out, or use ~/ for your home"
+        );
+    }
+    if entry.starts_with('~') && entry != "~" && !entry.starts_with("~/") {
+        bail!("{option} entry {entry:?}: only ~ and ~/... are understood, not another user's home");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Host {
     pub home: PathBuf,
     pub state_dir: PathBuf,
@@ -130,6 +154,7 @@ pub struct Plan {
     pub protected: Vec<PathBuf>,
     pub hidden: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
+    pub unresolved: Vec<Unresolved>,
     pub grants: Vec<String>,
     pub mandatory_hidden: Vec<PathBuf>,
     pub default_hidden: Vec<PathBuf>,
@@ -191,6 +216,12 @@ fn check_entry_count(values: &[String], label: &str) -> Result<()> {
         if value.len() > MAX_PATH_BYTES {
             bail!("{label} path exceeds {MAX_PATH_BYTES} bytes");
         }
+    }
+    Ok(())
+}
+fn check_absolute_entry(option: &str, entry: &str) -> Result<()> {
+    if entry != "~" && !entry.starts_with("~/") && !Path::new(entry).is_absolute() {
+        bail!("{option} entry {entry:?} must be an absolute path or start with ~/");
     }
     Ok(())
 }
@@ -583,12 +614,6 @@ fn add_validated_write(
     Ok(Some(path))
 }
 
-fn add_optional_hide(path: &Path, hidden: &mut Vec<PathBuf>, skipped: &mut Vec<PathBuf>) {
-    if let Some(path) = add_canonical_existing(path, "hide", skipped) {
-        add_unique(hidden, path);
-    }
-}
-
 fn add_harness_data_mounts(
     harness: Harness,
     home: &Path,
@@ -684,12 +709,21 @@ fn check_request_limits(request: &ConfineRequest, harness: Harness) -> Result<()
     check_entry_count(&request.hide, "hide")?;
     check_entry_count(&request.unhide, "unhide")?;
     check_entry_count(&request.grants, "grants")?;
-    if request
-        .team_file
-        .as_deref()
-        .is_some_and(|path| path.len() > MAX_PATH_BYTES)
-    {
-        bail!("team_file path exceeds {MAX_PATH_BYTES} bytes");
+    for (option, entries) in [
+        ("write", &request.write),
+        ("hide", &request.hide),
+        ("unhide", &request.unhide),
+    ] {
+        for entry in entries {
+            check_entry_syntax(option, entry)?;
+            check_absolute_entry(option, entry)?;
+        }
+    }
+    if let Some(path) = request.team_file.as_deref() {
+        if path.len() > MAX_PATH_BYTES {
+            bail!("team_file path exceeds {MAX_PATH_BYTES} bytes");
+        }
+        check_absolute_entry("team_file", path)?;
     }
     check_harness(harness)
 }
@@ -705,6 +739,7 @@ struct PlanBuilder<'a> {
     readonly: Vec<PathBuf>,
     hidden: Vec<PathBuf>,
     skipped: Vec<PathBuf>,
+    unresolved: Vec<Unresolved>,
     explicit_writes: BTreeSet<PathBuf>,
     mandatory_hidden: Vec<PathBuf>,
     default_hidden: Vec<PathBuf>,
@@ -729,6 +764,7 @@ impl<'a> PlanBuilder<'a> {
             readonly: Vec::new(),
             hidden: Vec::new(),
             skipped: Vec::new(),
+            unresolved: Vec::new(),
             explicit_writes: BTreeSet::new(),
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),
@@ -778,11 +814,37 @@ impl<'a> PlanBuilder<'a> {
         )
     }
 
+    fn resolve_operator_path(&mut self, option: &'static str, source: &Path) -> Option<PathBuf> {
+        match fs::canonicalize(source) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                add_unique(&mut self.skipped, source.to_owned());
+                self.unresolved.push(Unresolved {
+                    option,
+                    path: source.to_owned(),
+                    reason: if error.kind() == std::io::ErrorKind::NotFound {
+                        "not found".into()
+                    } else {
+                        error.kind().to_string()
+                    },
+                });
+                tracing::debug!(
+                    path = %source.display(),
+                    %option,
+                    error = %error,
+                    "operator confinement path unresolved"
+                );
+                None
+            }
+        }
+    }
+
     fn bind_operator_writes(&mut self, request: &ConfineRequest) -> Result<()> {
         for path in &request.write {
             let source = user_path(path, &self.home);
-            if let Some(path) =
-                add_validated_write(&source, self.host, &mut self.writable, &mut self.skipped)?
+            if let Some(source) = self.resolve_operator_path("write", &source)
+                && let Some(path) =
+                    add_validated_write(&source, self.host, &mut self.writable, &mut self.skipped)?
             {
                 self.explicit_writes.insert(path);
             }
@@ -899,11 +961,10 @@ impl<'a> PlanBuilder<'a> {
         allow_containers: bool,
     ) -> Result<()> {
         for path in &request.hide {
-            add_optional_hide(
-                &user_path(path, &self.home),
-                &mut self.hidden,
-                &mut self.skipped,
-            );
+            let source = user_path(path, &self.home);
+            if let Some(path) = self.resolve_operator_path("hide", &source) {
+                add_unique(&mut self.hidden, path);
+            }
         }
         for path in &request.unhide {
             self.unhide(path, allow_containers)?;
@@ -913,7 +974,7 @@ impl<'a> PlanBuilder<'a> {
 
     fn unhide(&mut self, path: &str, allow_containers: bool) -> Result<()> {
         let source = user_path(path, &self.home);
-        if let Some(path) = add_canonical_existing(&source, "unhide", &mut self.skipped) {
+        if let Some(path) = self.resolve_operator_path("unhide", &source) {
             check_unhide_allowed(&path, &self.state_dir, &self.runtime_dir, &self.home)?;
             self.check_container_socket(&path, "unhide", allow_containers)?;
             self.hidden.retain(|existing| existing != &path);
@@ -940,6 +1001,11 @@ impl<'a> PlanBuilder<'a> {
         self.default_hidden.sort();
         self.container_hidden.sort();
         self.skipped.sort();
+        self.unresolved.sort_by(|left, right| {
+            left.option
+                .cmp(right.option)
+                .then_with(|| left.path.cmp(&right.path))
+        });
 
         let mut grants = request.grants.clone();
         grants.sort();
@@ -954,6 +1020,7 @@ impl<'a> PlanBuilder<'a> {
             protected,
             hidden: self.hidden,
             skipped: self.skipped,
+            unresolved: self.unresolved,
             grants,
             mandatory_hidden: self.mandatory_hidden,
             default_hidden: self.default_hidden,
@@ -1309,10 +1376,26 @@ fn truncate_before_closing(mut text: String) -> String {
 
 /// Render the operator-facing notice from the exact mount plan.
 pub fn notice(plan: &Plan) -> String {
+    let writable: Cow<'_, [PathBuf]> = match plan.writable.iter().position(|path| path == &plan.cwd)
+    {
+        Some(0) | None => Cow::Borrowed(&plan.writable),
+        Some(index) => {
+            let mut reordered = Vec::with_capacity(plan.writable.len());
+            reordered.push(plan.cwd.clone());
+            reordered.extend(
+                plan.writable
+                    .iter()
+                    .enumerate()
+                    .filter(|(position, _)| *position != index)
+                    .map(|(_, path)| path.clone()),
+            );
+            Cow::Owned(reordered)
+        }
+    };
     let mut text = String::new();
     text.push_str("This session is confined.\n");
     text.push_str("Writable locations: ");
-    text.push_str(&capped_paths(&plan.writable));
+    text.push_str(&capped_paths(&writable));
     text.push_str(".\n");
     text.push_str("Read-only protected paths: ");
     text.push_str(&capped_paths(&plan.protected));
@@ -1396,6 +1479,7 @@ mod tests {
             protected: Vec::new(),
             hidden: Vec::new(),
             skipped: Vec::new(),
+            unresolved: Vec::new(),
             grants: Vec::new(),
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),

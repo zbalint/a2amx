@@ -172,10 +172,14 @@ refuse because of a conflict. A conflict note uses the same remediation text as
 `a2amx team up --dry-run` uses the same daemon list and conflict preflight, then prints
 `would start`/`already running` rows and the resolved harness, cwd, team visibility and
 allow list, role, attachment, watch, controller, heartbeat, confinement, writable and
-protected paths, final hidden paths, skipped missing paths, and redacted command for
-each session that would start. It needs a running daemon, exits 1 on the same conflicts,
-and never creates sessions or installs the OMP extension. `--dry-run` cannot be combined
-with `--detach` or inline `NAME=EXECUTABLE` items.
+protected paths, final hidden paths, unresolved operator paths with their option and
+filesystem reason, skipped missing defaults, and redacted command for
+each session that would start. Paths accept absolute names, `~`, `~/...`, or other
+relative names resolved against the session cwd; `$VAR`, `~user`, and empty entries
+are rejected. A relative directory literally named `$x` is written `./$x`. It needs a
+running daemon, exits 1 on the same conflicts, and never creates sessions or installs
+the OMP extension. `--dry-run` cannot be combined with `--detach` or inline
+`NAME=EXECUTABLE` items.
 
 After `team up`, `team status`, or a dry run, the command may print
 `note: N message(s) to this team were lost in a daemon restart; see a2amx messages

@@ -1598,8 +1598,17 @@ async fn dry_run_expands_home_relative_confine_paths() {
     assert!(!stdout.contains("~/"));
     assert!(!stdout.contains(&format!("  writable: {}\n", missing.display())));
     assert!(stdout.contains(&format!(
+        "  unresolved: {} (write: not found)\n",
+        missing.display()
+    )));
+    assert!(!stdout.contains(&format!(
         "  hidden: {} (skipped missing)\n",
         missing.display()
+    )));
+    let default_missing = user_home.path().join(".aws");
+    assert!(stdout.contains(&format!(
+        "  hidden: {} (skipped missing)\n",
+        default_missing.display()
     )));
     std::fs::write(
         project.path().join("dry-plain.toml"),
@@ -2792,6 +2801,40 @@ fn confine_table_rejects_old_keys_and_team_grants() {
     )
     .expect_err("team grant");
     assert!(team_grant.to_string().contains("grant it in the session"));
+}
+#[test]
+fn confine_entry_syntax_is_checked_at_parse_time() {
+    let session_error = team::parse(
+        r#"
+[[session]]
+name = "worker"
+command = ["cat"]
+[session.confine]
+write = ["$HOME/.cache"]
+"#,
+    )
+    .expect_err("session shell-style path");
+    assert!(
+        session_error
+            .to_string()
+            .contains("session worker: write entry \"$HOME/.cache\": environment variables are not expanded; write the path out, or use ~/ for your home")
+    );
+
+    let team_error = team::parse(
+        r#"
+[confine]
+write = ["$HOME/.cache"]
+[[session]]
+name = "worker"
+command = ["cat"]
+"#,
+    )
+    .expect_err("team shell-style path");
+    assert!(
+        team_error
+            .to_string()
+            .contains("[confine] write entry \"$HOME/.cache\": environment variables are not expanded; write the path out, or use ~/ for your home")
+    );
 }
 
 #[test]

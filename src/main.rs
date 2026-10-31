@@ -477,7 +477,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             grants: confine_grant,
             team_file: None,
         };
-        Some(resolved_confine_request(&request, &cwd, None))
+        Some(resolved_confine_request(&request, &cwd, None)?)
     } else {
         None
     };
@@ -597,21 +597,27 @@ async fn wired_command(
     }
 }
 
-fn resolve_confine_paths(base: &Path, paths: &[String]) -> Vec<String> {
+fn resolve_confine_paths(
+    base: &Path,
+    option: &str,
+    paths: &[String],
+) -> anyhow::Result<Vec<String>> {
     paths
         .iter()
-        .map(|path| {
-            if path == "~" || path.starts_with("~/") {
-                return PathBuf::from(path);
-            }
-            let path = Path::new(path);
-            if path.is_absolute() {
-                path.to_owned()
+        .map(|entry| {
+            a2amx::confine::check_entry_syntax(option, entry)?;
+            let path = if entry == "~" || entry.starts_with("~/") {
+                PathBuf::from(entry)
             } else {
-                base.join(path)
-            }
+                let path = Path::new(entry);
+                if path.is_absolute() {
+                    path.to_owned()
+                } else {
+                    base.join(path)
+                }
+            };
+            Ok(path.to_string_lossy().into_owned())
         })
-        .map(|path| path.to_string_lossy().into_owned())
         .collect()
 }
 
@@ -620,17 +626,17 @@ fn resolved_confine_request(
     request: &ConfineRequest,
     cwd: &Path,
     team_file: Option<&Path>,
-) -> ConfineRequest {
-    ConfineRequest {
-        write: resolve_confine_paths(cwd, &request.write),
-        hide: resolve_confine_paths(cwd, &request.hide),
-        unhide: resolve_confine_paths(cwd, &request.unhide),
+) -> anyhow::Result<ConfineRequest> {
+    Ok(ConfineRequest {
+        write: resolve_confine_paths(cwd, "write", &request.write)?,
+        hide: resolve_confine_paths(cwd, "hide", &request.hide)?,
+        unhide: resolve_confine_paths(cwd, "unhide", &request.unhide)?,
         no_default_hides: request.no_default_hides,
         grants: request.grants.clone(),
         team_file: team_file
             .map(|path| path.to_string_lossy().into_owned())
             .or_else(|| request.team_file.clone()),
-    }
+    })
 }
 
 async fn create_session(
@@ -1061,7 +1067,7 @@ async fn dry_run_start(
         let host_home = PathBuf::from(std::env::var_os("HOME").context("HOME not set")?);
         let runtime_dir =
             PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?);
-        let request = resolved_confine_request(request, &resolved_cwd, origin.file);
+        let request = resolved_confine_request(request, &resolved_cwd, origin.file)?;
         let host = a2amx::confine::Host {
             home: host_home,
             state_dir: home.to_owned(),
@@ -1118,7 +1124,19 @@ async fn dry_run_start(
         for path in plan.hidden_paths() {
             output.push_str(&format!("  hidden: {}\n", path.display()));
         }
-        for path in plan.skipped_paths() {
+        for unresolved in &plan.unresolved {
+            output.push_str(&format!(
+                "  unresolved: {} ({}: {})\n",
+                unresolved.path.display(),
+                unresolved.option,
+                unresolved.reason
+            ));
+        }
+        for path in plan
+            .skipped_paths()
+            .iter()
+            .filter(|path| !plan.unresolved.iter().any(|item| item.path == **path))
+        {
             output.push_str(&format!("  hidden: {} (skipped missing)\n", path.display()));
         }
     }
@@ -1146,7 +1164,7 @@ fn validate_team_session(
     let host_home = PathBuf::from(std::env::var_os("HOME").context("HOME not set")?);
     let runtime_dir =
         PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?);
-    let request = resolved_confine_request(request, &resolved_cwd, origin.file);
+    let request = resolved_confine_request(request, &resolved_cwd, origin.file)?;
     let host = a2amx::confine::Host {
         home: host_home,
         state_dir: home.to_owned(),
@@ -1232,7 +1250,8 @@ async fn start_planned_session(
     let confine = session
         .confine
         .as_ref()
-        .map(|request| resolved_confine_request(request, &resolved_cwd, origin.file));
+        .map(|request| resolved_confine_request(request, &resolved_cwd, origin.file))
+        .transpose()?;
     let name = session.name;
     let result = create_session(
         home,

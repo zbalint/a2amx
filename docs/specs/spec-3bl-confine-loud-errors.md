@@ -181,3 +181,14 @@ the `$` rule; (2) remove the `~user` rule; (3) drop the absolute check in `plan(
 | Tests that pin the `(skipped missing)` line: one | `tests/team.rs:1601` | grep |
 | `tests/confine.rs` uses `skipped_paths()` at 192, 197, 250, 251, 268, 292, 312 and `plan.skipped` at 382; `skipped` is unchanged, but the relative entry at `:192` and `:1679-1690` is rejected by the new check (test 5) | `tests/confine.rs` | grep |
 | `docs/confinement.md:46` and `:238`, `docs/teams.md:175` mention skipped missing paths | docs | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness, model `claude-opus-5-5`; developer and tester on the
+OMP harness, model `openai-codex/gpt-5.6-luna` for planning and working (the advisor model was not exposed to either).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`claude-opus-5-5`) | Two existing tests passed a relative missing entry to `plan()` and would fail on the new check; the cap test cannot keep "exactly 20" if the working directory is always listed (and the notice would claim a non-writable path); the recording mechanism for `Unresolved` was unnamed while `add_canonical_existing` is shared; the `0o000` fixture needs a root skip and restore-before-assert; the team-level check ran only for enabled sessions; one call site is in a closure; `team_file` was not covered by the absolute check; the check belongs in `check_request_limits` | All fixed in the spec before the lock |
+| Tester pass | Tester (`gpt-5.6-luna`) | Appending an `Unresolved` for missing harness-data paths survived all tests | Developer added `plan_keeps_missing_harness_data_skipped_without_unresolved`; mutant killed |

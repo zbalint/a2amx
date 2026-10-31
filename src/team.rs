@@ -579,12 +579,31 @@ fn validate_confine_list(session_name: &str, label: &str, values: &[String]) -> 
     }
     Ok(())
 }
+fn validate_confine_syntax(prefix: &str, table: &ConfineTable) -> anyhow::Result<()> {
+    for (label, values) in [
+        ("write", &table.write),
+        ("hide", &table.hide),
+        ("unhide", &table.unhide),
+    ] {
+        for value in values {
+            crate::confine::check_entry_syntax(label, value)
+                .map_err(|error| anyhow::anyhow!("{prefix}{error}"))?;
+        }
+    }
+    Ok(())
+}
 
 fn merge_confine(
     session_name: &str,
     team: Option<&ConfineTable>,
     own: Option<&ConfineTable>,
 ) -> anyhow::Result<Option<crate::confine::ConfineRequest>> {
+    if let Some(table) = team {
+        validate_confine_syntax("[confine] ", table)?;
+    }
+    if let Some(table) = own {
+        validate_confine_syntax(&format!("session {session_name}: "), table)?;
+    }
     if let Some(team_grants) = team.map(|table| &table.grants) {
         for name in team_grants {
             let grant = crate::grant::lookup(name)?;

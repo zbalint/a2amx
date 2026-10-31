@@ -29,7 +29,7 @@ a2amx new --confine \
   -- <command>
 ```
 
-`~` and `~/...` expand to your home directory. Other relative paths are relative to the session's working directory. A path that does not exist is skipped. Each of the three lists accepts at most 64 entries.
+`~` and `~/...` expand to your home directory. Absolute paths are accepted; other relative paths are relative to the session's working directory. Environment variables are not expanded, and `~user` forms are rejected. To reach a relative directory literally named `$x`, write `./$x`. A path that does not exist is retained in the dry run as an unresolved operator entry with its option and reason; missing defaults remain skipped. Each of the three lists accepts at most 64 entries.
 
 ### Team file
 
@@ -43,7 +43,7 @@ Run this before starting the team:
 a2amx team up --dry-run
 ```
 
-The dry run shows the effective restrictions. It lists a missing path as `(skipped missing)`. The complete team file at the end of this page parses as a team file.
+The dry run shows the effective restrictions. An operator `write`, `hide`, or `unhide` entry that cannot be resolved is printed as `unresolved: PATH (write|hide|unhide: REASON)`; missing default hides and other optional paths remain `hidden: PATH (skipped missing)`. The complete team file at the end of this page parses as a team file.
 
 ### How the options combine
 
@@ -235,7 +235,7 @@ Plain `ssh` fails in a confined session even with `~/.ssh` unhidden, with `Bad o
 | `permission denied` on a container socket | Container sockets are hidden. | Use [Docker and other container engines](#docker-and-other-container-engines). |
 | A file written under `/tmp` is not seen by a peer session | `/tmp` is private per session. | Use a directory in the workspace. |
 | Another session cannot find a helper daemon that one session started | A recorded process id is wrong across sessions, and a socket or file under `/tmp` or `$XDG_RUNTIME_DIR` is not shared. | Find the helper by a port or a shared writable directory; see [Background processes](harnesses.md#background-processes). |
-| A path in `write` does not appear as writable in `--dry-run` | It does not exist and was skipped. | The dry run lists it as `skipped missing`; create the directory or correct the path. |
+| A path in `write`, `hide`, or `unhide` is reported as `unresolved` in `--dry-run` | The operator path could not be canonicalized; the reason is shown as `not found`, `permission denied`, or another filesystem error. | Create or correct the path, or fix its permissions. Missing default hides continue to use `(skipped missing)`. |
 
 ## A complete team file
 
