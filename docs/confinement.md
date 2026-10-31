@@ -6,8 +6,8 @@ Confinement is a safety net for a trusted but fallible agent, not a security bou
 
 | Area | Default |
 | --- | --- |
-| Writable | The workspace, its Git directory, the harness's data paths, and a private `/tmp`. |
-| Read-only | The rest of the filesystem, including `$HOME`; inside the writable Git directory, `hooks`, `config`, `config.worktree`, the directory named by `core.hooksPath`, and the team file are read-only. |
+| Writable | The workspace, its Git directory, the harness's data paths, and a private `/tmp`; `write = ["~"]` deliberately opens the home directory. |
+| Read-only | The rest of the filesystem by default; a writable home still keeps `~/.a2amx`, existing `PATH` directories inside home, and this session's Git `hooks`, `config`, `config.worktree`, `core.hooksPath`, and team file read-only. |
 | Hidden | Secret locations such as `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.npmrc`, and `~/.docker`; the state and runtime directories, `/run/WSL`, `/mnt/wslg`, and the container sockets. |
 
 
@@ -75,7 +75,18 @@ table and descriptions.
 
 Open a directory when an accident in it is recoverable: a cache is disposable, and a toolchain can be reinstalled. Keep credentials, the repository itself, installed binaries, and state closed. Prefer the narrowest cache directory.
 
-When a tool reports `Read-only file system`, add the directory named in the error to `write` in the session's `[session.confine]` table, not `$HOME`. Whatever you open stays writable for the next unconfined run too. The recipe entries below are caches; opening all of `~/.cargo` also opens `~/.cargo/bin` and `~/.cargo/config.toml`, while its `credentials` files stay hidden when they exist at launch.
+When a tool reports `Read-only file system`, add the directory named in the error to `write` in the session's `[session.confine]` table, not `$HOME`, unless opening the whole home is your deliberate choice. `write = ["~"]` makes everything under home writable except the hides and protected launch inputs; the choice belongs to the user. Whatever you open stays writable for the next unconfined run too. The recipe entries below are caches; opening all of `~/.cargo` also opens `~/.cargo/bin` and `~/.cargo/config.toml`, while its `credentials` files stay hidden when they exist at launch.
+
+## What stays open
+
+`write = ["~"]` is an operator choice, not a sandbox escape hidden behind a default. It leaves these residuals:
+
+1. The Git history inside a writable Git directory is writable, so an agent can rewrite commits.
+2. Harness login files it needs, such as `~/.claude/.credentials.json` for Claude, are writable and readable by the harness it runs. So are `~/.claude/settings.json` hooks that a user's next unconfined run executes. Only this session's repository `hooks`/`config` and team file are protected; every other repository's `.git/hooks` and `.git/config`, and every other `a2amx.toml` under a writable home, are writable. Windows drives under `/mnt` are writable if `/mnt` is opened.
+3. Hides are decided when the session starts. A file created later at a hidden path is not hidden.
+4. Network access is not restricted.
+5. A writable home lets the agent edit shell startup files and editor configs that the user's next unconfined run executes. Open it knowing that.
+6. A grant opens what its row says and no more. An install directory other than `~/.a2amx` is protected only when it appears as an existing `PATH` directory inside the home.
 
 ## Recipes by ecosystem
 

@@ -148,3 +148,18 @@ write of `~` lifts the default hides; (7) `/` allowed when explicit.
 | The daemon finds `bwrap` through its `PATH` at each confined start and runs the `omp` quota probe by `argv[0]` unconfined | `src/daemon.rs:366`, `:1508-1520`, `src/confine.rs:1254-1289` | read (consultant `m_4787`) |
 | `git_common_dir` stops at the home directory, so only this session's repository is protected | `src/confine.rs:775-781` | read (consultant) |
 | `docs/confinement.md` line 10 and line 71 describe the read-only row and the `$HOME` advice | `docs/confinement.md` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; developer on the OMP harness, working model `openai-codex/gpt-6.1-terra` as it reported it (planning and advisor
+models not exposed); tester on the OMP harness (its models were not stated in its report). The consultant review `m_4787` before the lock is
+recorded in section 0; its model was not re-derived in this session. BLOCKED/amend cycles: 0 (two BLOCKED messages from the tester, both about the
+disk limit, not the spec).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`m_4787`) | Findings applied before the lock (see section 10 claims marked consultant) | Spec amended before the lock; individual findings not itemised here |
+| Architect review | Architect (Claude Sonnet 5.5) | The diff dropped the existing doc comment on `plan()` (paths canonicalized before containment, skipped paths never reach bubblewrap) | Architect restored it on `plan_with_path`, comment only, fmt and clippy rechecked |
+| Architect review | Architect (Claude Sonnet 5.5) | The relative and empty `PATH` assertion in `write_home_keeps_the_launch_inputs_read_only` cannot fail through the public seam (fixture home is a tempdir) | Left as is; the tester showed the guard matters only with the process cwd inside the home and probed it (9/9 probes passed) |
+| Tester pass | Architect | The brief's 5 GB disk cap was too low for one full test build plus clippy (about 7.4 GB into the shared target); the tester stopped and asked twice | Disposition: breach accepted, brief error; the cap is incremental growth and a full build needs about 7 GB |
+| Process | Owner and architect | The guest `df` showed 33% used while the Windows drive was full (about 20 MB free) and the VM crashed after the developer's mutation pass, before the final gates | Gates rerun after the restart; lesson stored in SALTMDB; old target directories removed |

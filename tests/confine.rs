@@ -1504,16 +1504,37 @@ fn codex_is_refused_and_write_guards_are_reciprocal() {
         )
         .is_err()
     );
-    assert!(confine::check_write_allowed(&fixture.state, &fixture.home, &fixture.state).is_err());
+    assert!(
+        confine::check_write_allowed(&fixture.state, &fixture.home, &fixture.state, false).is_err()
+    );
     assert!(
         confine::check_write_allowed(
             fixture.state.parent().expect("parent"),
             &fixture.home,
-            &fixture.state
+            &fixture.state,
+            false,
         )
         .is_err()
     );
-    assert!(confine::check_write_allowed(&fixture.runtime, &fixture.home, &fixture.state).is_ok());
+    assert!(
+        confine::check_write_allowed(&fixture.runtime, &fixture.home, &fixture.state, false)
+            .is_ok()
+    );
+    assert!(
+        confine::check_write_allowed(
+            fixture.state.parent().expect("state ancestor"),
+            &fixture.home,
+            &fixture.state,
+            true,
+        )
+        .is_ok()
+    );
+    let state_child = fixture.state.join("nested");
+    std::fs::create_dir_all(&state_child).expect("state child");
+    assert!(
+        confine::check_write_allowed(&state_child, &fixture.home, &fixture.state, true).is_err()
+    );
+
     assert!(
         confine::check_unhide_allowed(
             &fixture.home,
@@ -1916,7 +1937,9 @@ fn canonical_paths_cover_symlinked_workspace_and_hide_targets() {
     symlink(&hide_target, &hide_link).expect("hide symlink");
     let state_link = fixture.cwd.with_file_name("state-link");
     symlink(&fixture.state, &state_link).expect("state symlink");
-    assert!(confine::check_write_allowed(&state_link, &fixture.home, &fixture.state).is_err());
+    assert!(
+        confine::check_write_allowed(&state_link, &fixture.home, &fixture.state, false).is_err()
+    );
     let runtime_link = fixture.cwd.with_file_name("runtime-link");
     symlink(&fixture.runtime, &runtime_link).expect("runtime symlink");
     assert!(
@@ -3102,4 +3125,216 @@ fn grant_count_limit_precedes_grant_lookup() {
         Err(error) => error,
     };
     assert_eq!(error.to_string(), "grants has more than 64 entries");
+}
+#[test]
+fn write_home_is_allowed_and_keeps_hides_on_top() {
+    let fixture = Fixture::new();
+    let root = std::fs::canonicalize(fixture._root.path()).expect("fixture root");
+    let netrc = fixture.home.join(".netrc");
+    std::fs::write(&netrc, []).expect("netrc");
+    let plan = confine::plan(
+        &ConfineRequest {
+            write: vec![root.to_string_lossy().into_owned()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("ancestor write plan");
+    let root = root.to_string_lossy().into_owned();
+    let empty = std::fs::canonicalize(&fixture.empty)
+        .expect("empty canonical")
+        .to_string_lossy()
+        .into_owned();
+    let hidden = plan.hidden_paths().to_vec();
+    let wrapped = plan
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("wrapped ancestor plan");
+    let writable_index = wrapped
+        .windows(3)
+        .position(|window| window == ["--bind", root.as_str(), root.as_str()])
+        .expect("ancestor writable bind");
+    for path in [
+        fixture.state.clone(),
+        fixture.runtime.clone(),
+        fixture.home.join(".ssh"),
+        netrc,
+    ] {
+        let path = std::fs::canonicalize(path).expect("hidden path");
+        assert!(hidden.contains(&path), "missing hidden path {path:?}");
+        let path = path.to_string_lossy().into_owned();
+        let hide_index = wrapped
+            .windows(2)
+            .position(|window| window == ["--tmpfs", path.as_str()])
+            .or_else(|| {
+                wrapped
+                    .windows(3)
+                    .position(|window| window == ["--ro-bind", empty.as_str(), path.as_str()])
+            })
+            .expect("hide mount");
+        assert!(
+            hide_index > writable_index,
+            "hide mount must follow ancestor writable mount"
+        );
+    }
+
+    let plan = confine::plan(
+        &ConfineRequest {
+            write: vec!["~".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("home write plan");
+    assert!(plan.writable.contains(&fixture.home));
+    for path in [fixture.home.join(".ssh"), fixture.home.join(".netrc")] {
+        assert!(
+            plan.hidden_paths()
+                .contains(&std::fs::canonicalize(path).expect("home hide"))
+        );
+    }
+}
+
+#[test]
+fn write_home_keeps_the_launch_inputs_read_only() {
+    let fixture = Fixture::new();
+    let install = fixture.home.join(".a2amx");
+    let path_dir = fixture.home.join(".local/bin");
+    let relative = fixture.home.join("relative");
+    std::fs::create_dir_all(&install).expect("install directory");
+    std::fs::create_dir_all(&path_dir).expect("PATH directory");
+    std::fs::create_dir_all(&relative).expect("relative PATH directory");
+    let path_var = OsString::from(format!("{}:/usr/bin", path_dir.display()));
+    let plan = |write: Vec<String>, path_var: OsString| {
+        confine::plan_with_path(
+            &ConfineRequest {
+                write,
+                ..ConfineRequest::default()
+            },
+            Harness::Generic,
+            &fixture.cwd,
+            &fixture.host(),
+            Some(path_var),
+        )
+        .expect("launch-input plan")
+    };
+
+    let base = plan(vec!["~".into()], path_var.clone());
+    let install = std::fs::canonicalize(&install).expect("install canonical");
+    let path_dir = std::fs::canonicalize(&path_dir).expect("PATH canonical");
+    let relative = std::fs::canonicalize(&relative).expect("relative canonical");
+    assert!(base.protected.contains(&install));
+    assert!(base.protected.contains(&path_dir));
+    assert!(
+        !base
+            .readonly
+            .contains(&std::fs::canonicalize("/usr/bin").expect("usr bin"))
+    );
+    assert!(
+        !base
+            .protected
+            .contains(&std::fs::canonicalize("/usr/bin").expect("usr bin"))
+    );
+
+    let install_open = plan(vec!["~".into(), "~/.a2amx".into()], path_var.clone());
+    assert!(!install_open.protected.contains(&install));
+    assert!(install_open.protected.contains(&path_dir));
+
+    let path_open = plan(vec!["~".into(), "~/.local/bin".into()], path_var.clone());
+    assert!(path_open.protected.contains(&install));
+    assert!(!path_open.protected.contains(&path_dir));
+
+    let relative_path = plan(
+        vec!["~".into()],
+        OsString::from(format!("relative::{}", path_dir.display())),
+    );
+    assert!(!relative_path.readonly.contains(&relative));
+    assert!(!relative_path.protected.contains(&relative));
+}
+
+#[test]
+fn write_slash_and_inside_state_dir_stay_refused() {
+    let fixture = Fixture::new();
+    let nested = fixture.state.join("nested");
+    std::fs::create_dir_all(&nested).expect("nested state path");
+    for path in [
+        "/",
+        fixture.state.to_str().expect("state"),
+        nested.to_str().expect("nested"),
+        fixture.runtime.to_str().expect("runtime"),
+    ] {
+        assert!(
+            confine::plan(
+                &ConfineRequest {
+                    write: vec![path.into()],
+                    ..ConfineRequest::default()
+                },
+                Harness::Generic,
+                &fixture.cwd,
+                &fixture.host(),
+            )
+            .is_err(),
+            "write must be refused: {path}"
+        );
+    }
+}
+
+#[test]
+fn workspace_in_home_is_still_refused() {
+    let fixture = Fixture::new();
+    let error = match confine::plan(
+        &ConfineRequest {
+            write: vec!["~".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.home,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("home cwd must remain refused"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("writable path $HOME is not allowed")
+    );
+
+    let outer = tempfile::tempdir().expect("outer root");
+    let home = outer.path().join("home");
+    std::fs::create_dir_all(&home).expect("outer home");
+    let protected = tempfile::tempdir().expect("protected root");
+    let state = protected.path().join("state");
+    let runtime = protected.path().join("runtime");
+    std::fs::create_dir_all(&state).expect("outer state");
+    std::fs::create_dir_all(&runtime).expect("outer runtime");
+    let empty = state.join("confine-empty");
+    std::fs::write(&empty, []).expect("outer empty");
+    let host = Host {
+        home,
+        state_dir: state,
+        runtime_dir: runtime,
+        empty_file: empty,
+    };
+    let error = match confine::plan(
+        &ConfineRequest {
+            write: vec!["~".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        outer.path(),
+        &host,
+    ) {
+        Ok(_) => panic!("ancestor cwd must remain refused"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("writable path $HOME is not allowed")
+    );
 }

@@ -6,7 +6,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -237,34 +237,57 @@ fn check_absolute_entry(option: &str, entry: &str) -> Result<()> {
 }
 
 /// Canonicalize and validate a path that may become writable.
-pub fn check_write_allowed(path: &Path, home: &Path, state_dir: &Path) -> Result<PathBuf> {
+pub fn check_write_allowed(
+    path: &Path,
+    home: &Path,
+    state_dir: &Path,
+    explicit: bool,
+) -> Result<PathBuf> {
     let path = canonical_existing(path, "writable path")?;
     let home = canonical_existing(home, "home")?;
     let state_dir = canonical_existing(state_dir, "state directory")?;
     if path == Path::new("/") {
         bail!("writable path / is not allowed");
     }
-    if path == home {
+    if !explicit && (path == home || is_within(&home, &path)) {
         bail!("writable path $HOME is not allowed");
     }
-    if paths_overlap(&path, &state_dir) {
+    let state_overlap = if explicit {
+        is_within(&path, &state_dir)
+    } else {
+        paths_overlap(&path, &state_dir)
+    };
+    if state_overlap {
         bail!(
             "writable path {} overlaps the state directory",
             path.display()
         );
     }
-    if paths_overlap(&path, Path::new("/run/WSL")) || paths_overlap(&path, Path::new("/mnt/wslg")) {
-        bail!(
-            "writable path {} overlaps a mandatory hidden path",
-            path.display()
-        );
+    for mandatory in MANDATORY_ROOTS {
+        let mandatory = Path::new(mandatory);
+        let overlap = if explicit {
+            is_within(&path, mandatory)
+        } else {
+            paths_overlap(&path, mandatory)
+        };
+        if overlap {
+            bail!(
+                "writable path {} overlaps a mandatory hidden path",
+                path.display()
+            );
+        }
     }
     Ok(path)
 }
 
-fn check_write_runtime_allowed(path: &Path, runtime_dir: &Path) -> Result<()> {
+fn check_write_runtime_allowed(path: &Path, runtime_dir: &Path, explicit: bool) -> Result<()> {
     let runtime_dir = canonical_existing(runtime_dir, "runtime directory")?;
-    if paths_overlap(path, &runtime_dir) {
+    let overlap = if explicit {
+        is_within(path, &runtime_dir)
+    } else {
+        paths_overlap(path, &runtime_dir)
+    };
+    if overlap {
         bail!(
             "writable path {} overlaps the runtime directory",
             path.display()
@@ -422,8 +445,8 @@ fn validate_harness_data_paths(
         .chain(data_files.iter().cloned())
     {
         if let Some(path) = canonical_if_exists(&path) {
-            check_write_allowed(&path, home, state_dir)?;
-            check_write_runtime_allowed(&path, runtime_dir)?;
+            check_write_allowed(&path, home, state_dir, false)?;
+            check_write_runtime_allowed(&path, runtime_dir, false)?;
         }
     }
     Ok(())
@@ -614,12 +637,13 @@ fn add_validated_write(
     host: &Host,
     writable: &mut Vec<PathBuf>,
     skipped: &mut Vec<PathBuf>,
+    explicit: bool,
 ) -> Result<Option<PathBuf>> {
     let Some(path) = add_canonical_existing(path, "write", skipped) else {
         return Ok(None);
     };
-    let path = check_write_allowed(&path, &host.home, &host.state_dir)?;
-    check_write_runtime_allowed(&path, &host.runtime_dir)?;
+    let path = check_write_allowed(&path, &host.home, &host.state_dir, explicit)?;
+    check_write_runtime_allowed(&path, &host.runtime_dir, explicit)?;
     add_unique(writable, path.clone());
     Ok(Some(path))
 }
@@ -690,10 +714,22 @@ pub fn check_harness(harness: Harness) -> Result<()> {
     Ok(())
 }
 
-/// Build the complete mount plan. Paths are canonicalized before every
-/// containment comparison and missing operator paths are retained in
-/// `skipped` for dry-run reporting but never passed to bubblewrap.
+/// Build the complete mount plan using the daemon's current `PATH`.
 pub fn plan(request: &ConfineRequest, harness: Harness, cwd: &Path, host: &Host) -> Result<Plan> {
+    plan_with_path(request, harness, cwd, host, std::env::var_os("PATH"))
+}
+
+/// Build the complete mount plan with an explicit daemon `PATH` value. Paths
+/// are canonicalized before every containment comparison and missing operator
+/// paths are retained in `skipped` for dry-run reporting but never passed to
+/// bubblewrap.
+pub fn plan_with_path(
+    request: &ConfineRequest,
+    harness: Harness,
+    cwd: &Path,
+    host: &Host,
+    path_var: Option<OsString>,
+) -> Result<Plan> {
     check_request_limits(request, harness)?;
     crate::grant::validate(&request.grants)?;
     let mut builder = PlanBuilder::new(host, harness)?;
@@ -704,7 +740,7 @@ pub fn plan(request: &ConfineRequest, harness: Harness, cwd: &Path, host: &Host)
     let empty_file = plan_empty_file(host, &builder.state_dir)?;
     builder.bind_workspace(&cwd)?;
     builder.bind_harness_data()?;
-    builder.bind_operator_writes(request)?;
+    builder.bind_operator_writes(request, path_var.as_deref())?;
     builder.hide_mandatory();
     builder.hide_defaults(request);
     builder.hide_containers(&request.grants);
@@ -839,9 +875,15 @@ impl<'a> PlanBuilder<'a> {
     }
 
     fn bind_workspace(&mut self, cwd: &Path) -> Result<()> {
-        let _ = add_validated_write(cwd, self.host, &mut self.writable, &mut self.skipped)?;
+        let _ = add_validated_write(cwd, self.host, &mut self.writable, &mut self.skipped, false)?;
         if let Some((common, worktree)) = git_common_dir(cwd, &self.home) {
-            let _ = add_validated_write(&common, self.host, &mut self.writable, &mut self.skipped)?;
+            let _ = add_validated_write(
+                &common,
+                self.host,
+                &mut self.writable,
+                &mut self.skipped,
+                false,
+            )?;
             self.protect_git_metadata(&common, &worktree);
         }
         Ok(())
@@ -905,12 +947,21 @@ impl<'a> PlanBuilder<'a> {
         }
     }
 
-    fn bind_operator_writes(&mut self, request: &ConfineRequest) -> Result<()> {
+    fn bind_operator_writes(
+        &mut self,
+        request: &ConfineRequest,
+        path_var: Option<&OsStr>,
+    ) -> Result<()> {
         for path in &request.write {
             let source = user_path(path, &self.home);
             if let Some(source) = self.resolve_operator_path("write", &source)
-                && let Some(path) =
-                    add_validated_write(&source, self.host, &mut self.writable, &mut self.skipped)?
+                && let Some(path) = add_validated_write(
+                    &source,
+                    self.host,
+                    &mut self.writable,
+                    &mut self.skipped,
+                    true,
+                )?
             {
                 self.explicit_writes.insert(path);
             }
@@ -924,6 +975,27 @@ impl<'a> PlanBuilder<'a> {
             && self.writable.iter().any(|write| is_within(&path, write))
         {
             add_unique(&mut self.readonly, path);
+        }
+        if let Some(path) = canonical_if_exists(&self.home.join(".a2amx"))
+            && is_within(&path, &self.home)
+            && self.writable.iter().any(|write| is_within(&path, write))
+        {
+            add_unique(&mut self.readonly, path);
+        }
+        if let Some(path_var) = path_var {
+            for source in std::env::split_paths(path_var) {
+                if !source.is_absolute() || !source.is_dir() {
+                    continue;
+                }
+                let Some(path) = canonical_if_exists(&source) else {
+                    continue;
+                };
+                if is_within(&path, &self.home)
+                    && self.writable.iter().any(|write| is_within(&path, write))
+                {
+                    add_unique(&mut self.readonly, path);
+                }
+            }
         }
         Ok(())
     }
