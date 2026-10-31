@@ -103,3 +103,13 @@ Mutants for the tester: (1) the parent list includes the home directory; (2) the
 | Existing tests stay green by construction: overlay list apart from `writable`; control files read-only | `tests/confine.rs:1687-1838`, `:1759-1771` | read (consultant) |
 | `require_bwrap()` and the CI variable `A2AMX_REQUIRE_BWRAP`; CI installs bubblewrap 0.9.0 | `tests/confine.rs:112`, `.github/workflows/ci.yml:107-126` | read (consultant) |
 | On the owner's machine `~/.claude/hooks`, `agents` and `CLAUDE.md` are symlinks into `~/.agents` | `find ~/.claude -maxdepth 1 -type l` | probed (consultant `m_4885`) |
+
+## Amendment 1 (2026-10-31, consultant `m_4893`, applied while the developer implements; documentation and disclosure only)
+
+A single-file bind on top of the overlay pins the file's inode (probed by the consultant). When an unconfined harness renews its login by writing a temp file and renaming it over the credentials file, a running confined session keeps the old file: it reads the old token, and its own later writes go to the replaced inode and are lost, so a confined session can end up logged out although the host file is valid. This is not new (before this spec the same pinning applies and writes fail loudly), and a2amx cannot change how the harness replaces the file; this spec disclaims it instead:
+
+- `docs/confinement.md`, the new section "Harness login and state files": add to item (2) that logging in or renewing **outside** a session replaces the login file and a running confined session keeps the old copy, so **restart the confined sessions after you log in outside**; add to item (5) that a confined session that renews while an unconfined harness of the same account also renews can end up logged out and needs the same restart. The section 5 list in this spec gains these two clauses; nothing else in it changes.
+- Section 8 gains attack-path-free residual (6): "an unconfined renewal strands the confined sessions' login file until they restart; documented".
+- Section 7 "To verify after implementation" gains: that a host-side rename over the credentials file leaves a confined session with the old content (expected, documented).
+- No code, test or scope change. The developer adds the two clauses to the docs it is already writing and reports it.
+
