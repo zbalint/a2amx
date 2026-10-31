@@ -36,7 +36,7 @@ After spec 3bs a confined Claude or OMP session can renew its login, but its con
 - The conflict checks run in `finish()` after `apply_operator_hides` (`:748`, body `:1089-1099`), because operator hides arrive there, not at the grant: if the directory is in `hidden` the plan fails with `grant "harness-config" conflicts with the hide of <path>`; if it is in `readonly` through an `unhide` at the same path (readonly is inserted after writable in `mounts()` and wins, `:1200-1205`) it fails with `grant "harness-config" conflicts with the unhide of <path>`. Neither `~/.claude` nor `~/.omp` is a default hide (`DEFAULT_HIDES`, `:71-102`; only `~/.claude/ide` inside is), so say "operator hide" in the message.
 - Spec 3bs excludes a parent inside a writable path from the overlay, so a granted harness gets no overlay; one test (section 5).
 - `~/.claude.json` is unchanged: its parent is the home, so saves to it still fail (backlog F59); the docs say so.
-- The agent notice and the dry run list the directory among the writable paths already; add one line to both: "<dir>: harness config, writable and persistent (grant harness-config)".
+- The agent notice lists the directory among the writable paths already; add one line to the notice: "<dir>: harness config, writable and persistent (grant harness-config)" (Amendment 1: not to the dry run).
 
 ## 4. Docs (`docs/confinement.md`, `docs/teams.md`)
 
@@ -89,3 +89,7 @@ Mutants for the tester: (1) `own_config` ignored (the grant does nothing); (2) t
 | `bind_operator_writes` re-protects `~/.a2amx`, `PATH` directories and the team file against `writable` as it is at that moment | `src/confine.rs:972-997` (before 3br), call at `:743` | read (consultant) |
 | `readonly` is inserted after `writable` in `mounts()` and `finish()` drops only explicit writes from it | `src/confine.rs:1200-1205`, `:1121-1122` | read (consultant) |
 | `validate_harness_data_paths` validates the roots `~/.claude` and `~/.omp` | `src/confine.rs:430-452` | read (consultant) |
+
+## Amendment 1 (2026-11-01, developer `m_4911`, architect adjudication)
+
+Section 3 asked for the descriptive line in both the notice and the dry run, but section 0 excludes `src/main.rs`, the only place that prints the dry run, and the dry run needs a new `Plan` accessor to know which directory the grant opened. The conflict is real and was the architect's omission. Ruling: **the dry run is unchanged.** It already prints `grants: harness-config` and `writable: <dir>` for the opened directory, which says the same thing; scope stays as in section 0 (no `src/main.rs`). The notice line of section 3 stays, and test 2 also asserts it in `confine::notice` for the granted Claude and OMP fixtures (and its absence without the grant). Also, for test 1 the `render_list` column rule is: the name column is 16 wide (`harness-config` plus 2) and the scope column stays 15 wide, so a `session only` row has three spaces before the description; pin that literal.
