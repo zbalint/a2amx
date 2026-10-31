@@ -3637,8 +3637,8 @@ fn without_overlays_restores_todays_mounts() {
     );
 }
 
-#[tokio::test]
-async fn harness_data_files_can_be_saved_through_the_overlay() -> anyhow::Result<()> {
+#[test]
+fn harness_data_files_can_be_saved_through_the_overlay() -> anyhow::Result<()> {
     let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
     let home = root.path().join("home");
     let state = root.path().join("state");
