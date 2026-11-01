@@ -136,3 +136,14 @@ Known flaky: backlog I9 and F37, and `tests/team.rs::team_up_forwards_reset_conf
 ## Amendment log
 
 None yet.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (review `m_4980`, exact model id not re-derived); developer on the OMP harness, `openai-codex/gpt-5.6-luna` as it reported it (advisor model not exposed). No tester pass: the owner asked to finish quickly, the module is small and pure, and the developer ran and reported all nine mutants killed. BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant (`m_4980`) | Test 5's prefix had no name or role, so `team::parse` would fail under any implementation | Prefix gets `name = "x"` |
+| Draft review | Consultant | Test 7 and mutant 5 could pass trivially against `render`, which takes no directory | Test 7 is a binary test with a marker file; mutant 5 targets `main` |
+| Draft review | Consultant | `Ecosystem` derives unspecified; the instruction line printed with no table; default-DIR branch untested; dead dedup; docs `# fragment` trap; anchor off by one | Derives named, instruction line only with a table, test 6b added, dedup dropped, docs sentence added, anchor fixed |
+| Architect review | Architect (Claude Sonnet 5.5) | `unwrap_or(std::env::current_dir()?)` read the current directory even when `DIR` was given, so an explicit `DIR` failed in a deleted working directory | One-line `match` in `src/main.rs`; full suite (762 passed, 0 failed, 3 ignored), clippy and fmt rerun green |

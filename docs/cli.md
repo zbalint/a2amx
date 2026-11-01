@@ -66,6 +66,8 @@ byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` a
 `a2amx confine list` prints the valid grant names, scope and one-line exposure
 description without contacting a daemon or reading `HOME`.
 
+`a2amx confine suggest [DIR]` checks whether the listed build files exist in the project directory, without reading their contents. It prints a TOML fragment with the matching `write` paths and recipe notes, needs neither a daemon nor `HOME`, and defaults to the current directory.
+
 The repeatable path flags are `--confine-write PATH`, `--confine-hide PATH`, and
 `--confine-unhide PATH`; `--confine-grant NAME` opens one named runtime capability.
 The valid values and what each one exposes are listed by `a2amx confine list`.

@@ -176,6 +176,11 @@ pub enum Command {
 pub enum ConfineAction {
     /// List the named confinement grants.
     List,
+    /// Print a [session.confine] fragment for the build tools found in DIR.
+    Suggest {
+        /// Project directory; defaults to the current directory.
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

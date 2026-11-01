@@ -17,6 +17,8 @@ Hide and write are strict by default; you open what you name.
 
 You can configure confinement on one command, in a team file, or by previewing a team file before starting it.
 
+The quickest way to get the `write` line for a project is `a2amx confine suggest [DIR]`. It checks the project's known build-file markers and prints the matching fragment without requiring a daemon or `HOME`.
+
 ### One command
 
 Use repeatable path flags with `a2amx new`:

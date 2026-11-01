@@ -152,6 +152,7 @@ specs showing it found nothing.
 | `cli` | Command-line shape |
 | `team` | The team file and flag formats and the up-plan (pure; the commands live in `main`) |
 | `grant` | Named confinement grants: the table of what each one exposes (sockets and environment names), name validation, the closest-match error and the `confine list` text (pure) |
+| `suggest` | Build-file detection and the `confine suggest` fragment text (pure) |
 | `main` | CLI dispatch and daemon/session/team command execution |
 
 ## Public repository rules

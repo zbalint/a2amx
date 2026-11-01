@@ -83,6 +83,25 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
             write_stdout(a2amx::grant::render_list().into_bytes()).await?;
             return Ok(std::process::ExitCode::SUCCESS);
         }
+        Command::Confine {
+            action: ConfineAction::Suggest { dir },
+        } => {
+            let dir = match dir {
+                Some(dir) => dir.clone(),
+                None => std::env::current_dir()?,
+            };
+            let found = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let metadata = std::fs::metadata(&dir)
+                    .with_context(|| format!("cannot read project directory {}", dir.display()))?;
+                if !metadata.is_dir() {
+                    bail!("cannot read project directory {}", dir.display());
+                }
+                Ok(a2amx::suggest::detect(|name| dir.join(name).exists()))
+            })
+            .await??;
+            write_stdout(a2amx::suggest::render(&found).into_bytes()).await?;
+            return Ok(std::process::ExitCode::SUCCESS);
+        }
         _ => {}
     }
     let home = resolve_home(home_arg)?;
