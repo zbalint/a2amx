@@ -30,6 +30,23 @@ fn detect_reports_markers_in_fixed_order_and_uses_first_marker() {
 }
 
 #[test]
+fn write_paths_return_the_static_cache_union_in_table_order() {
+    assert_eq!(
+        suggest::write_paths(&[
+            (Ecosystem::Rust, "Cargo.toml"),
+            (Ecosystem::Node, "package.json"),
+            (Ecosystem::Gradle, "build.gradle"),
+        ]),
+        vec![
+            "~/.cargo/registry",
+            "~/.npm",
+            "~/.gradle/caches",
+            "~/.gradle/wrapper"
+        ]
+    );
+}
+
+#[test]
 fn render_rust_and_node_is_the_documented_fragment() {
     let found = [
         (Ecosystem::Rust, "Cargo.toml"),

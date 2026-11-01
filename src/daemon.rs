@@ -388,15 +388,25 @@ impl Runtime {
                 runtime_dir,
                 empty_file,
             };
-            let mut plan = confine::plan(&confine_request, harness, &cwd, &host)?;
+            confine::ensure_empty_file(&state_dir)?;
+            confine::ensure_data_dirs(harness, &home)?;
+            confine::ensure_data_files(harness, &home)?;
+            let preflight =
+                confine::ensure_build_paths(&confine_request, harness, &cwd, &host, true);
+            let mut plan = confine::plan_with_preflight(
+                &confine_request,
+                harness,
+                &cwd,
+                &host,
+                std::env::var_os("PATH"),
+                preflight,
+                false,
+            )?;
             if !plan.overlay_parents().is_empty()
                 && let Err(reason) = confine::supports_tmp_overlay(&bwrap, plan.overlay_parents())
             {
                 plan = plan.without_overlays(&reason);
             }
-            confine::ensure_empty_file(&state_dir)?;
-            confine::ensure_data_dirs(harness, &home)?;
-            confine::ensure_data_files(harness, &home)?;
             Ok(plan.with_bwrap(bwrap))
         })
         .await?;

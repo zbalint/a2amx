@@ -3621,6 +3621,114 @@ fn write_home_keeps_the_launch_inputs_read_only() {
 }
 
 #[test]
+fn build_paths_bind_detected_cargo_cache() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.cwd.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .expect("Cargo marker");
+    let host = fixture.host();
+    let request = ConfineRequest {
+        build_paths: true,
+        ..ConfineRequest::default()
+    };
+    let preflight =
+        confine::ensure_build_paths(&request, Harness::Generic, &fixture.cwd, &host, true);
+    assert!(preflight.is_empty());
+    let plan = confine::plan_with_preflight(
+        &request,
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+        None,
+        preflight,
+        false,
+    )
+    .expect("build path plan");
+    let registry = std::fs::canonicalize(fixture.home.join(".cargo/registry"))
+        .expect("created cargo registry");
+    assert!(plan.build_writes.contains(&registry));
+    assert!(plan.writable.contains(&registry));
+}
+
+#[test]
+fn build_path_symlink_to_hidden_is_unresolved_and_stays_hidden() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.cwd.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .expect("Cargo marker");
+    std::fs::create_dir_all(fixture.home.join(".cargo")).expect("cargo directory");
+    symlink(
+        fixture.home.join(".ssh"),
+        fixture.home.join(".cargo/registry"),
+    )
+    .expect("registry symlink");
+    let host = fixture.host();
+    let request = ConfineRequest {
+        build_paths: true,
+        ..ConfineRequest::default()
+    };
+    let preflight =
+        confine::ensure_build_paths(&request, Harness::Generic, &fixture.cwd, &host, true);
+    assert_eq!(preflight.len(), 1);
+    let plan = confine::plan_with_preflight(
+        &request,
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+        None,
+        preflight,
+        false,
+    )
+    .expect("build path plan");
+    let ssh = std::fs::canonicalize(fixture.home.join(".ssh")).expect("ssh path");
+    assert!(!plan.build_writes.iter().any(|path| path == &ssh));
+    assert!(plan.hidden_paths().contains(&ssh));
+    assert!(plan.unresolved.iter().any(|item| item.option == "build"));
+    assert!(
+        plan.unresolved
+            .iter()
+            .any(|item| item.reason.contains("symlink component"))
+    );
+}
+
+#[test]
+fn build_path_symlink_ancestor_is_not_created() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.cwd.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .expect("Cargo marker");
+    let target = fixture._root.path().join("outside");
+    std::fs::create_dir_all(&target).expect("outside directory");
+    symlink(&target, fixture.home.join(".cargo")).expect("cargo symlink");
+    let host = fixture.host();
+    let request = ConfineRequest {
+        build_paths: true,
+        ..ConfineRequest::default()
+    };
+    let preflight =
+        confine::ensure_build_paths(&request, Harness::Generic, &fixture.cwd, &host, true);
+    assert_eq!(preflight.len(), 1);
+    let plan = confine::plan_with_preflight(
+        &request,
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+        None,
+        preflight,
+        false,
+    )
+    .expect("build path plan");
+    assert!(!target.join("registry").exists());
+    assert!(plan.unresolved.iter().any(|item| item.option == "build"));
+}
+
+#[test]
 fn write_slash_and_inside_state_dir_stay_refused() {
     let fixture = Fixture::new();
     let nested = fixture.state.join("nested");

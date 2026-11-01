@@ -33,9 +33,11 @@ a2amx new --confine \
 
 `~` and `~/...` expand to your home directory. Absolute paths are accepted; other relative paths are relative to the session's working directory. Environment variables are not expanded, and `~user` forms are rejected. To reach a relative directory literally named `$x`, write `./$x`. A path that does not exist is retained in the dry run as an unresolved operator entry with its option and reason; missing defaults remain skipped. Each of the three lists accepts at most 64 entries.
 
+When confinement is enabled by `a2amx new --confine` or a team file, detected Rust, Node, Maven, and Gradle build files open their listed cache paths automatically. Set `build_paths = false` in the relevant confine table, or pass `--confine-no-build-paths`, to opt out. Go and Python remain the recipes below because their build paths are environment-specific or workspace-local.
+
 ### Team file
 
-Use one optional `[confine]` table for team defaults and `[session.confine]` for per-session settings. Set `enabled = true` in either table; lists add and scalars override. `write`, `hide`, and `unhide` are arrays, `default_hides` is a boolean, and `grants` names a capability for that session. In the complete example below, `cwd = "."` is relative to the team file's directory; other relative paths are relative to the resolved session working directory.
+Use one optional `[confine]` table for team defaults and `[session.confine]` for per-session settings. Set `enabled = true` in either table; lists add and scalars override. `write`, `hide`, and `unhide` are arrays, `default_hides` and `build_paths` are booleans, and `grants` names a capability for that session. `build_paths` defaults to true for a confined team session. In the complete example below, `cwd = "."` is relative to the team file's directory; other relative paths are relative to the resolved session working directory.
 
 ### Preview
 
@@ -51,7 +53,8 @@ The dry run shows the effective restrictions. An operator `write`, `hide`, or `u
 
 The effective session setting uses the session table when a scalar is present, otherwise
 the team table, otherwise the default (`enabled = false`, `default_hides = true`). The
-`write`, `hide`, and `unhide` lists add in team-then-session order, with exact duplicates
+`build_paths` scalar follows the same session-over-team precedence and defaults to true
+once confinement is enabled. The `write`, `hide`, and `unhide` lists add in team-then-session order, with exact duplicates
 kept once; `grants` is per session only. `enabled = false` needs no other key. A team table
 with options but no `enabled` anywhere confines nothing, while team `enabled = false` and
 session `enabled = true` confines that session and still applies the team's lists. A
@@ -118,6 +121,8 @@ Existing settings, plugins and other regular control files in the harness direct
 Several confined sessions do not exclude one another while renewing because each has its own lock. Renewals that happen together may need one session restart. A confined session renewing while an unconfined harness of the same account also renews can end up logged out and needs the same restart; Claude re-reads the saved login after a 401. The refresh token lasts weeks, and an expired one needs the same normal-terminal login.
 
 Bubblewrap 0.11 or newer is required for the overlay (Ubuntu 24.04 ships 0.9, which keeps the previous behavior). An older version keeps the previous behavior with a plain notice line. The overlay uses memory (a tmpfs with no size bound). To make the harness config directory persistent and writable, add `grants = ["harness-config"]` in the session's `[session.confine]` table. This grant is session-only and cannot be set in a team-level table; without it, `write = ["~/.claude"]` remains the explicit persistent-write option.
+
+With build-path defaults enabled, Rust, Node, Maven, and Gradle markers cause the cache paths shown below to be opened automatically. The TOML fragments are still useful when `build_paths = false` or when adding an explicit path; they no longer need to be copied for the default case.
 
 ## Recipes by ecosystem
 

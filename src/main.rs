@@ -426,6 +426,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         confine_hide,
         confine_unhide,
         confine_no_default_hides,
+        confine_no_build_paths,
         mut confine_grant,
         confine_keep_env,
         reset,
@@ -450,6 +451,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         || !confine_hide.is_empty()
         || !confine_unhide.is_empty()
         || confine_no_default_hides
+        || confine_no_build_paths
         || !confine_grant.is_empty()
         || !confine_keep_env.is_empty();
     if has_confine_options && !confine {
@@ -501,6 +503,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             hide: confine_hide,
             unhide: confine_unhide,
             no_default_hides: confine_no_default_hides,
+            build_paths: !confine_no_build_paths,
             grants: confine_grant,
             keep_env: confine_keep_env,
             team_file: None,
@@ -660,6 +663,7 @@ fn resolved_confine_request(
         hide: resolve_confine_paths(cwd, "hide", &request.hide)?,
         unhide: resolve_confine_paths(cwd, "unhide", &request.unhide)?,
         no_default_hides: request.no_default_hides,
+        build_paths: request.build_paths,
         grants: request.grants.clone(),
         keep_env: request.keep_env.clone(),
         team_file: team_file
@@ -1103,9 +1107,19 @@ async fn dry_run_start(
             runtime_dir,
             empty_file: home.join("confine-empty"),
         };
+        let preflight =
+            a2amx::confine::ensure_build_paths(&request, harness, &resolved_cwd, &host, false);
         Some(
-            a2amx::confine::plan(&request, harness, &resolved_cwd, &host)?
-                .with_bwrap(PathBuf::from("bwrap")),
+            a2amx::confine::plan_with_preflight(
+                &request,
+                harness,
+                &resolved_cwd,
+                &host,
+                std::env::var_os("PATH"),
+                preflight,
+                true,
+            )?
+            .with_bwrap(PathBuf::from("bwrap")),
         )
     } else {
         None
@@ -1150,8 +1164,18 @@ async fn dry_run_start(
     }
 
     if let Some(plan) = &confine_plan {
-        for path in plan.writable.iter().filter(|path| **path != resolved_cwd) {
+        for path in plan
+            .writable
+            .iter()
+            .filter(|path| **path != resolved_cwd && !plan.build_writes.contains(path))
+        {
             output.push_str(&format!("  writable: {}\n", path.display()));
+        }
+        for path in &plan.build_writes {
+            output.push_str(&format!(
+                "  writable: {} (from build files)\n",
+                path.display()
+            ));
         }
         for path in &plan.protected {
             output.push_str(&format!("  protected: {}\n", path.display()));
@@ -1206,17 +1230,23 @@ fn validate_team_session(
     let runtime_dir =
         PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?);
     let request = resolved_confine_request(request, &resolved_cwd, origin.file)?;
+    let harness = Harness::infer(&session.command);
     let host = a2amx::confine::Host {
         home: host_home,
         state_dir: home.to_owned(),
         runtime_dir,
         empty_file: home.join("confine-empty"),
     };
-    a2amx::confine::plan(
+    let preflight =
+        a2amx::confine::ensure_build_paths(&request, harness, &resolved_cwd, &host, false);
+    a2amx::confine::plan_with_preflight(
         &request,
-        Harness::infer(&session.command),
+        harness,
         &resolved_cwd,
         &host,
+        std::env::var_os("PATH"),
+        preflight,
+        false,
     )?;
     Ok(())
 }

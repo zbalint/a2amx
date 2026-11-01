@@ -79,6 +79,23 @@ pub fn detect(has_file: impl Fn(&str) -> bool) -> Vec<(Ecosystem, &'static str)>
         })
         .collect()
 }
+/// Return the unique writable cache paths for the detected ecosystems.
+pub fn write_paths(found: &[(Ecosystem, &'static str)]) -> Vec<&'static str> {
+    let mut write_paths = Vec::new();
+    for info in &ECOSYSTEMS {
+        if found
+            .iter()
+            .any(|(ecosystem, _)| *ecosystem == info.ecosystem)
+        {
+            for path in info.write_paths {
+                if !write_paths.contains(path) {
+                    write_paths.push(*path);
+                }
+            }
+        }
+    }
+    write_paths
+}
 
 /// Render the confinement fragment and its ecosystem notes.
 pub fn render(found: &[(Ecosystem, &'static str)]) -> String {
@@ -101,19 +118,7 @@ pub fn render(found: &[(Ecosystem, &'static str)]) -> String {
     }
     output.push('\n');
 
-    let mut write_paths = Vec::new();
-    for info in &ECOSYSTEMS {
-        if found
-            .iter()
-            .any(|(ecosystem, _)| *ecosystem == info.ecosystem)
-        {
-            for path in info.write_paths {
-                if !write_paths.contains(path) {
-                    write_paths.push(*path);
-                }
-            }
-        }
-    }
+    let write_paths = write_paths(found);
     if !write_paths.is_empty() {
         output.push_str("# Add this to the session's table in your team file, or pass --confine-write for each path. Confinement must be enabled (enabled = true here or in the team's [confine] table).\n");
         output.push_str("[session.confine]\nwrite = [");

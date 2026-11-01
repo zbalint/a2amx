@@ -48,6 +48,7 @@ control_from = ["architect"]
 # command = ["omp"]
 # [session.confine]
 # enabled = true
+# build_paths = true # set false to keep ecosystem caches read-only
 # write = ["~/.cargo/registry", "~/.npm"]
 # grants = ["gh"] # for a session that pushes or opens pull requests with gh
 # keep_env = ["NPM_TOKEN"] # for a session that publishes with npm; see docs/confinement.md

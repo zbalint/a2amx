@@ -1678,6 +1678,47 @@ async fn dry_run_expands_home_relative_confine_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_reports_detected_build_cache_writes() {
+    let (state, _daemon) = common::start_daemon().await;
+    let project = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    let runtime_dir = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("Cargo.toml"), "").unwrap();
+    std::fs::write(
+        project.path().join("build-paths.toml"),
+        r#"
+[confine]
+enabled = true
+[[session]]
+name = "worker"
+command = ["sh", "-c", "echo worker"]
+cwd = "."
+"#,
+    )
+    .unwrap();
+    let output = run_binary_in_with_home_and_runtime(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime_dir.path(),
+        &["team", "up", "--dry-run", "--file", "build-paths.toml"],
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let registry = user_home.path().join(".cargo/registry");
+    assert!(!registry.exists());
+    assert!(stdout.contains(&format!(
+        "  writable: {} (from build files)\n",
+        registry.display()
+    )));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dry_run_rejects_unknown_keep_env() {
     let (state, _daemon) = common::start_daemon().await;
     let project = tempfile::tempdir().unwrap();
@@ -2819,6 +2860,7 @@ enabled = false
             hide: vec![],
             unhide: vec![],
             no_default_hides: false,
+            build_paths: true,
             grants: vec!["docker".into()],
             keep_env: vec!["GITHUB_TOKEN".into()],
             team_file: None,
@@ -2961,6 +3003,56 @@ command = ["cat"]
             .to_string()
             .contains("[confine] write entry \"$HOME/.cache\": environment variables are not expanded; write the path out, or use ~/ for your home")
     );
+}
+
+#[test]
+fn confine_build_paths_defaults_and_overrides() {
+    let default =
+        team::parse("[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']")
+            .expect("build paths default");
+    assert!(default[0].confine.as_ref().expect("confined").build_paths);
+
+    let team_opt_out = team::parse(
+        "[confine]\nenabled = true\nbuild_paths = false\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+    )
+    .expect("team opt out");
+    assert!(
+        !team_opt_out[0]
+            .confine
+            .as_ref()
+            .expect("confined")
+            .build_paths
+    );
+
+    let session_opt_out = team::parse(
+        "[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nbuild_paths = false",
+    )
+    .expect("session opt out");
+    assert!(
+        !session_opt_out[0]
+            .confine
+            .as_ref()
+            .expect("confined")
+            .build_paths
+    );
+
+    let session_override = team::parse(
+        "[confine]\nenabled = true\nbuild_paths = false\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nbuild_paths = true",
+    )
+    .expect("session override");
+    assert!(
+        session_override[0]
+            .confine
+            .as_ref()
+            .expect("confined")
+            .build_paths
+    );
+
+    let missing_enabled = team::parse(
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nbuild_paths = false",
+    )
+    .expect_err("build paths needs enabled");
+    assert!(missing_enabled.to_string().contains("need enabled = true"));
 }
 
 #[test]

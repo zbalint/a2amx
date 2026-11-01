@@ -87,3 +87,17 @@ default path.
 | an unresolved path never refuses a launch | src/daemon.rs:391-399, docs/confinement.md:34,48,362 | read |
 | `{}` equals `ConfineRequest::default()` | tests/wire.rs:1026-1028 | read |
 | old clients and daemons ignore the field | src/wire.rs:148-151 | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus (team file `--model opus`); developer OMP with
+openai-codex/gpt-5.6-luna (the developer's report names one model); no tester pass (tester at its quota limit),
+so the architect's fresh run was the only independent check. BLOCKED/amend cycles: 0.
+
+| Where found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Appending detected paths to `write` makes them explicit writes that release default hides; a symlinked cache path would open `~/.ssh` by default | Detected paths bind through a separate non-explicit step with a symlink and hidden-path skip |
+| Draft review | consultant | `harness-config` as a team default fails every Generic session (harness is inferred at launch) | Dropped from the spec; stays per session |
+| Draft review | consultant | `build_paths` default ambiguous between wire default and client default; the "flip the default" mutant had no killing test; no data shape for the "from build files" label; refusal-skip needs a non-propagating call; a missing cache directory still breaks the first build; stale line anchor | Spec amended: Default and serde false, clients true; test seams named; `Plan.build_writes`; skips never propagate; leaf directories are created |
+| Implementation | developer | Report said final while the tree was still changing (`ensure_build_paths` gained a `create` argument during my check) | Asked for "TREE STABLE"; the architect ran the checks after that message |
+| Implementation | developer | Developer worked from the previous spec's context id and offered to reimplement 3bu | Architect restated the scope and context |

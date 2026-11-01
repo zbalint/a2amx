@@ -77,7 +77,8 @@ closed credential list.
 
 Relative paths are resolved against the session cwd. `--confine-no-default-hides`
 disables the optional home hides but never removes the mandatory hides: the state
-directory, the runtime directory, `/run/WSL` and `/mnt/wslg`. The private `/proc` and
+directory, the runtime directory, `/run/WSL` and `/mnt/wslg`. `--confine-no-build-paths`
+disables automatic Rust, Node, Maven, and Gradle cache writes. The private `/proc` and
 PID namespace are base options, and descriptor restrictions are a daemon property.
 Rootless runtime sockets under `$XDG_RUNTIME_DIR` remain hidden. These flags require
 `--confine`; path lists accept at most 64 entries and each entry is capped at 4096 bytes.

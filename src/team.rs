@@ -62,6 +62,8 @@ struct ConfineTable {
     #[serde(default)]
     unhide: Vec<String>,
     #[serde(default)]
+    build_paths: Option<bool>,
+    #[serde(default)]
     grants: Vec<String>,
     #[serde(default)]
     keep_env: Vec<String>,
@@ -648,6 +650,7 @@ fn merge_confine(
             || !table.grants.is_empty()
             || !table.keep_env.is_empty()
             || table.default_hides.is_some()
+            || table.build_paths.is_some()
     });
     if !enabled {
         if own_has_options {
@@ -667,11 +670,16 @@ fn merge_confine(
         .and_then(|table| table.default_hides)
         .or_else(|| team.and_then(|table| table.default_hides))
         .unwrap_or(true);
+    let build_paths = own
+        .and_then(|table| table.build_paths)
+        .or_else(|| team.and_then(|table| table.build_paths))
+        .unwrap_or(true);
     Ok(Some(crate::confine::ConfineRequest {
         write,
         hide,
         unhide,
         no_default_hides: !default_hides,
+        build_paths,
         grants,
         keep_env,
         team_file: None,

@@ -974,6 +974,7 @@ fn confine_request_round_trips_and_defaults_missing_fields() {
             hide: vec!["secret".into()],
             unhide: vec![],
             no_default_hides: true,
+            build_paths: true,
             grants: vec![],
             keep_env: vec!["GITHUB_TOKEN".into()],
             team_file: Some("/workspace/team.toml".into()),
