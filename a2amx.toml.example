@@ -49,6 +49,6 @@ control_from = ["architect"]
 # [session.confine]
 # enabled = true
 # write = ["~/.cargo/registry", "~/.npm"]
-# grants = ["docker"] # root-equivalent; read docs/confinement.md first
-# keep_env = ["GITHUB_TOKEN"] # per-session; see docs/confinement.md
+# grants = ["gh"] # for a session that pushes or opens pull requests with gh
+# keep_env = ["NPM_TOKEN"] # for a session that publishes with npm; see docs/confinement.md
 # --- end confinement example ---

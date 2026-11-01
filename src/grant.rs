@@ -16,6 +16,8 @@ pub struct Grant {
     pub env: &'static [&'static str],
     /// Whether this grant opens the current harness's own configuration directory.
     pub own_config: bool,
+    /// Home-relative or absolute paths made visible read-only when the grant is given.
+    pub unhides: &'static [&'static str],
 }
 
 const NO_PATHS: &[&str] = &[];
@@ -43,8 +45,11 @@ const LXD_SOCKETS: &[&str] = &[
     "/var/lib/incus/unix.socket",
 ];
 const SNAP_SOCKETS: &[&str] = &["/run/snapd.socket", "/run/snapd-snap.socket"];
+const GH_UNHIDES: &[&str] = &["~/.config/gh"];
+const GH_ENV: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"];
+const GIT_CREDENTIAL_UNHIDES: &[&str] = &["~/.git-credentials", "~/.config/git/credentials"];
 
-static GRANTS: [Grant; 8] = [
+static GRANTS: [Grant; 10] = [
     Grant {
         name: "docker",
         exposes: "docker container daemon sockets: effectively root on the host",
@@ -52,6 +57,7 @@ static GRANTS: [Grant; 8] = [
         sockets: DOCKER_SOCKETS,
         env: DOCKER_ENV,
         own_config: false,
+        unhides: NO_PATHS,
     },
     Grant {
         name: "podman",
@@ -60,6 +66,7 @@ static GRANTS: [Grant; 8] = [
         sockets: PODMAN_SOCKETS,
         env: PODMAN_ENV,
         own_config: false,
+        unhides: NO_PATHS,
     },
     Grant {
         name: "containerd",
@@ -68,6 +75,7 @@ static GRANTS: [Grant; 8] = [
         sockets: CONTAINERD_SOCKETS,
         env: CONTAINERD_ENV,
         own_config: false,
+        unhides: NO_PATHS,
     },
     Grant {
         name: "crio",
@@ -76,6 +84,7 @@ static GRANTS: [Grant; 8] = [
         sockets: CRIO_SOCKETS,
         env: NO_PATHS,
         own_config: false,
+        unhides: NO_PATHS,
     },
     Grant {
         name: "libvirt",
@@ -84,6 +93,7 @@ static GRANTS: [Grant; 8] = [
         sockets: LIBVIRT_SOCKETS,
         env: LIBVIRT_ENV,
         own_config: false,
+        unhides: NO_PATHS,
     },
     Grant {
         name: "lxd",
@@ -92,6 +102,7 @@ static GRANTS: [Grant; 8] = [
         sockets: LXD_SOCKETS,
         env: NO_PATHS,
         own_config: false,
+        unhides: NO_PATHS,
     },
     Grant {
         name: "snap",
@@ -100,6 +111,7 @@ static GRANTS: [Grant; 8] = [
         sockets: SNAP_SOCKETS,
         env: NO_PATHS,
         own_config: false,
+        unhides: NO_PATHS,
     },
     Grant {
         name: "harness-config",
@@ -108,6 +120,25 @@ static GRANTS: [Grant; 8] = [
         sockets: NO_PATHS,
         env: NO_PATHS,
         own_config: true,
+        unhides: NO_PATHS,
+    },
+    Grant {
+        name: "gh",
+        exposes: "your GitHub CLI login (~/.config/gh) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you",
+        team_default_ok: false,
+        sockets: NO_PATHS,
+        env: GH_ENV,
+        own_config: false,
+        unhides: GH_UNHIDES,
+    },
+    Grant {
+        name: "git-credentials",
+        exposes: "the plain-text git credential files: every host and password stored there",
+        team_default_ok: false,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: GIT_CREDENTIAL_UNHIDES,
     },
 ];
 
@@ -134,7 +165,12 @@ pub fn lookup(name: &str) -> Result<&'static Grant> {
     let mut closest = None;
     let mut close_count = 0;
     for grant in all() {
-        if edit_distance_at_most(name, grant.name, 2) {
+        let limit = if grant.name.chars().count() <= 3 {
+            1
+        } else {
+            2
+        };
+        if edit_distance_at_most(name, grant.name, limit) {
             close_count += 1;
             closest = Some(grant);
         }

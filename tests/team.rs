@@ -1601,7 +1601,7 @@ async fn dry_run_expands_home_relative_confine_paths() {
         write = ["~/.tool-cache", "~/.missing-tool"]
         hide = ["~/.tool-hide"]
         unhide = ["~/.ssh"]
-        grants = ["docker"]
+        grants = ["gh"]
         keep_env = ["GITHUB_TOKEN", "GITHUB_TOKEN"]
         "#,
     )
@@ -1624,7 +1624,7 @@ async fn dry_run_expands_home_relative_confine_paths() {
     let hidden = std::fs::canonicalize(&tool_hide).unwrap();
     let unhidden = std::fs::canonicalize(&ssh).unwrap();
     let missing = user_home.path().join(".missing-tool");
-    assert!(stdout.contains("  grants: docker\n"));
+    assert!(stdout.contains("  grants: gh\n"));
     assert!(stdout.contains("  keep_env: GITHUB_TOKEN\n"));
     assert!(!stdout.contains(&format!("  hidden: {}\n", unhidden.display())));
     assert!(stdout.contains(&format!("  writable: {}\n", writable.display())));
@@ -2881,6 +2881,19 @@ fn confine_table_rejects_old_keys_and_team_grants() {
         harness_config_team_grant
             .to_string()
             .contains("grant it in the session")
+    );
+    let gh_team_grant =
+        team::parse("[confine]\ngrants = ['gh']\n[[session]]\nname = 'worker'\ncommand = ['cat']")
+            .expect_err("team gh grant");
+    assert!(
+        gh_team_grant
+            .to_string()
+            .contains("grant it in the session")
+    );
+    assert!(
+        gh_team_grant
+            .to_string()
+            .contains("your GitHub CLI login (~/.config/gh)")
     );
 }
 

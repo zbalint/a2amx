@@ -13,12 +13,14 @@ fn grant_table_has_expected_rows() {
                 "~/.docker/run/docker.sock",
             ],
             vec!["DOCKER_HOST", "DOCKER_CONTEXT"],
+            vec![],
             false,
         ),
         (
             "podman",
             vec!["/run/podman/podman.sock"],
             vec!["CONTAINER_HOST", "CONTAINER_CONNECTION"],
+            vec![],
             false,
         ),
         (
@@ -30,13 +32,15 @@ fn grant_table_has_expected_rows() {
                 "/run/k3s/containerd/containerd.sock",
             ],
             vec!["CONTAINERD_ADDRESS", "BUILDKIT_HOST"],
+            vec![],
             false,
         ),
-        ("crio", vec!["/run/crio/crio.sock"], vec![], false),
+        ("crio", vec!["/run/crio/crio.sock"], vec![], vec![], false),
         (
             "libvirt",
             vec!["/run/libvirt/libvirt-sock"],
             vec!["LIBVIRT_DEFAULT_URI"],
+            vec![],
             false,
         ),
         (
@@ -47,26 +51,57 @@ fn grant_table_has_expected_rows() {
                 "/var/lib/incus/unix.socket",
             ],
             vec![],
+            vec![],
             false,
         ),
         (
             "snap",
             vec!["/run/snapd.socket", "/run/snapd-snap.socket"],
             vec![],
+            vec![],
             false,
         ),
-        ("harness-config", vec![], vec![], true),
+        ("harness-config", vec![], vec![], vec![], true),
+        (
+            "gh",
+            vec![],
+            vec!["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"],
+            vec!["~/.config/gh"],
+            false,
+        ),
+        (
+            "git-credentials",
+            vec![],
+            vec![],
+            vec!["~/.git-credentials", "~/.config/git/credentials"],
+            false,
+        ),
     ];
     let all = grant::all();
     assert_eq!(all.len(), expected.len());
-    for ((name, sockets, env, own_config), row) in expected.iter().zip(all) {
+    for ((name, sockets, env, unhides, own_config), row) in expected.iter().zip(all) {
         assert_eq!(row.name, *name);
         assert!(!row.exposes.is_empty());
         assert!(!row.team_default_ok);
         assert_eq!(row.sockets, sockets.as_slice());
         assert_eq!(row.env, env.as_slice());
+        assert_eq!(row.unhides, unhides.as_slice());
         assert_eq!(row.own_config, *own_config);
     }
+}
+
+#[test]
+fn credential_grant_rows_have_exact_exposure_text() {
+    let gh = grant::lookup("gh").expect("gh grant");
+    assert_eq!(
+        gh.exposes,
+        "your GitHub CLI login (~/.config/gh) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you"
+    );
+    let git_credentials = grant::lookup("git-credentials").expect("git-credentials grant");
+    assert_eq!(
+        git_credentials.exposes,
+        "the plain-text git credential files: every host and password stored there"
+    );
 }
 
 #[test]
@@ -79,6 +114,11 @@ fn grant_validation_rejects_repeats_and_suggests_close_names() {
         ("container", "containerd"),
         ("containrs", "containerd"),
         ("contaner", "containerd"),
+        ("gx", "gh"),
+        ("g", "gh"),
+        ("sh", "gh"),
+        ("lx", "lxd"),
+        ("gitcredentials", "git-credentials"),
     ] {
         let error = grant::lookup(name).expect_err("close typo");
         assert!(
@@ -87,7 +127,13 @@ fn grant_validation_rejects_repeats_and_suggests_close_names() {
                 .contains(&format!("closest match: {closest}"))
         );
     }
-
+    for name in ["ssh", "gpg", "git"] {
+        let error = grant::lookup(name).expect_err("ambiguous close typo");
+        assert!(
+            !error.to_string().contains("closest match"),
+            "{name} unexpectedly received a suggestion: {error}"
+        );
+    }
     let distant = grant::lookup("zzz").expect_err("unknown grant");
     assert!(distant.to_string().contains("docker"));
     assert!(!distant.to_string().contains("closest"));
@@ -108,16 +154,34 @@ fn render_list_has_every_grant_and_instruction() {
     let lines = rendered.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), grant::all().len() + 1);
     for (line, row) in lines.iter().zip(grant::all()) {
-        assert!(
-            line.starts_with(row.name),
-            "{line:?} does not start with {}",
+        let after_name = line
+            .strip_prefix(row.name)
+            .expect("each rendered row starts with its grant name");
+        assert_eq!(
+            after_name.chars().next(),
+            Some(' '),
+            "{line:?} has no separating space after {}",
             row.name
+        );
+        let scope_offset = after_name
+            .find("session only")
+            .expect("each rendered row reports the literal session-only scope");
+        assert!(
+            scope_offset > 0
+                && after_name[..scope_offset]
+                    .chars()
+                    .all(|character| character.is_whitespace()),
+            "{line:?} does not separate the name and scope with whitespace"
         );
         assert!(line.contains(row.exposes));
     }
     assert_eq!(
-        lines[7],
-        "harness-config  session only   the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately"
+        lines[8],
+        "gh              session only   your GitHub CLI login (~/.config/gh) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you"
+    );
+    assert_eq!(
+        lines[9],
+        "git-credentials session only   the plain-text git credential files: every host and password stored there"
     );
     assert_eq!(
         lines.last().copied(),

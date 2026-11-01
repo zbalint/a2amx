@@ -854,6 +854,7 @@ pub fn plan_with_path(
     builder.hide_mandatory();
     builder.hide_defaults(request);
     builder.hide_containers(&request.grants);
+    builder.apply_grant_unhides(&request.grants, request.no_default_hides)?;
     builder.release_operator_writes()?;
     builder.apply_operator_hides(request)?;
     builder.finish(request, cwd, empty_file)
@@ -920,6 +921,7 @@ struct PlanBuilder<'a> {
     default_hidden: Vec<PathBuf>,
     container_hidden: Vec<PathBuf>,
     container_sockets: Vec<(PathBuf, &'static str)>,
+    grant_unhides: Vec<(PathBuf, &'static str)>,
     harness_config: Option<PathBuf>,
 }
 
@@ -982,6 +984,7 @@ impl<'a> PlanBuilder<'a> {
             default_hidden: Vec::new(),
             container_hidden: Vec::new(),
             container_sockets: Vec::new(),
+            grant_unhides: Vec::new(),
             harness_config: None,
         })
     }
@@ -1164,23 +1167,98 @@ impl<'a> PlanBuilder<'a> {
         }
     }
 
+    fn default_hide_sources(&self) -> Vec<PathBuf> {
+        let mut sources = DEFAULT_HIDES
+            .into_iter()
+            .chain(DEFAULT_HIDES_EXTRA)
+            .map(|name| user_path(name, &self.home))
+            .collect::<Vec<_>>();
+        if self.harness != Harness::Claude {
+            sources.push(self.home.join(".claude/.credentials.json"));
+        }
+        if self.harness != Harness::Codex {
+            sources.push(self.home.join(".codex/auth.json"));
+        }
+        sources.push(PathBuf::from("/run/dbus"));
+        sources
+    }
+
     fn hide_defaults(&mut self, request: &ConfineRequest) {
         if request.no_default_hides {
             return;
         }
-        for name in DEFAULT_HIDES.into_iter().chain(DEFAULT_HIDES_EXTRA) {
-            self.hide_or_skip(user_path(name, &self.home));
+        for source in self.default_hide_sources() {
+            if source == Path::new("/run/dbus") {
+                if let Some(path) = canonical_if_exists(&source) {
+                    add_unique(&mut self.default_hidden, path.clone());
+                    add_unique(&mut self.hidden, path);
+                }
+            } else {
+                self.hide_or_skip(source);
+            }
         }
-        if self.harness != Harness::Claude {
-            self.hide_or_skip(self.home.join(".claude/.credentials.json"));
+    }
+
+    fn apply_grant_unhides(&mut self, given: &[String], no_default_hides: bool) -> Result<()> {
+        let given = given.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let own_paths = grant::all()
+            .iter()
+            .filter(|grant| given.contains(grant.name))
+            .flat_map(|grant| grant.unhides)
+            .map(|path| user_path(path, &self.home))
+            .collect::<BTreeSet<_>>();
+        let default_hide_sources = if no_default_hides {
+            Vec::new()
+        } else {
+            self.default_hide_sources()
+        };
+        for grant in grant::all()
+            .iter()
+            .filter(|grant| given.contains(grant.name))
+        {
+            for name in grant.unhides {
+                let source = user_path(name, &self.home);
+                let Some(path) = canonical_if_exists(&source) else {
+                    add_unique(&mut self.skipped, source);
+                    continue;
+                };
+                for hidden_source in &default_hide_sources {
+                    if own_paths.contains(hidden_source) {
+                        continue;
+                    }
+                    let Some(hidden) = canonical_if_exists(hidden_source) else {
+                        continue;
+                    };
+                    if paths_overlap(&path, &hidden) {
+                        bail!(
+                            "confinement grant \"{}\" path {} resolves to the hidden path {}",
+                            grant.name,
+                            name,
+                            hidden.display()
+                        );
+                    }
+                }
+                for hidden in self
+                    .mandatory_hidden
+                    .iter()
+                    .chain(self.container_hidden.iter())
+                {
+                    if paths_overlap(&path, hidden) {
+                        bail!(
+                            "confinement grant \"{}\" path {} resolves to the hidden path {}",
+                            grant.name,
+                            name,
+                            hidden.display()
+                        );
+                    }
+                }
+                self.hidden.retain(|existing| existing != &path);
+                self.default_hidden.retain(|existing| existing != &path);
+                add_unique(&mut self.readonly, path.clone());
+                self.grant_unhides.push((path, grant.name));
+            }
         }
-        if self.harness != Harness::Codex {
-            self.hide_or_skip(self.home.join(".codex/auth.json"));
-        }
-        if let Some(path) = canonical_if_exists(Path::new("/run/dbus")) {
-            add_unique(&mut self.default_hidden, path.clone());
-            add_unique(&mut self.hidden, path);
-        }
+        Ok(())
     }
 
     fn hide_containers(&mut self, given: &[String]) {
@@ -1282,6 +1360,14 @@ impl<'a> PlanBuilder<'a> {
                 );
             }
         }
+        for (path, grant) in &self.grant_unhides {
+            if self.hidden.iter().any(|existing| existing == path) {
+                bail!(
+                    "confinement grant \"{grant}\" conflicts with the hide of {}",
+                    path.display()
+                );
+            }
+        }
         let protected = protected_paths(&self.readonly, &self.writable);
         let (data_dirs, data_files) = harness_data(self.harness, &self.home);
         let overlay_parents = harness_overlay_parents(
@@ -1362,6 +1448,14 @@ fn protected_paths(readonly: &[PathBuf], writable: &[PathBuf]) -> Vec<PathBuf> {
     protected.sort();
     protected
 }
+fn granted_env(grants: &[String]) -> BTreeSet<&'static str> {
+    let given = grants.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    grant::all()
+        .iter()
+        .filter(|grant| given.contains(grant.name))
+        .flat_map(|grant| grant.env.iter().copied())
+        .collect()
+}
 
 impl Plan {
     pub fn with_bwrap(mut self, path: PathBuf) -> Self {
@@ -1429,24 +1523,24 @@ impl Plan {
             .iter()
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
-        let released = grant::all()
-            .iter()
-            .filter(|grant| given.contains(grant.name))
-            .flat_map(|grant| grant.env.iter().copied())
-            .collect::<BTreeSet<_>>();
+        let released = granted_env(&self.grants);
         let mut unset = ALWAYS_UNSET.to_vec();
         for grant in grant::all()
             .iter()
             .filter(|grant| !given.contains(grant.name))
         {
             for name in grant.env {
-                if !released.contains(name) && !unset.contains(name) {
-                    unset.push(name);
+                if CREDENTIAL_ENV.contains(name) || unset.contains(name) {
+                    continue;
                 }
+                unset.push(name);
             }
         }
         for name in CREDENTIAL_ENV {
-            if !self.keep_env.iter().any(|kept| kept == name) && !unset.contains(&name) {
+            if !released.contains(name)
+                && !self.keep_env.iter().any(|kept| kept == name)
+                && !unset.contains(&name)
+            {
                 unset.push(name);
             }
         }
@@ -1846,10 +1940,11 @@ pub fn notice(plan: &Plan) -> String {
         text.push_str(&plan.grants.join(", "));
         text.push_str(".\n");
     }
+    let released = granted_env(&plan.grants);
     let unset_credentials = CREDENTIAL_ENV
         .iter()
-        .filter(|name| !plan.keep_env.iter().any(|kept| kept == *name))
         .copied()
+        .filter(|name| !released.contains(*name) && !plan.keep_env.iter().any(|kept| kept == *name))
         .collect::<Vec<_>>();
     text.push_str("Credential environment variables are unset: ");
     text.push_str(&unset_credentials.join(", "));
@@ -1977,6 +2072,23 @@ mod tests {
         assert!(skipped.is_empty());
     }
     #[test]
+    fn grant_unhides_are_default_hide_sources() {
+        let defaults = DEFAULT_HIDES
+            .into_iter()
+            .chain(DEFAULT_HIDES_EXTRA)
+            .collect::<BTreeSet<_>>();
+        for grant in grant::all() {
+            for path in grant.unhides {
+                assert!(
+                    defaults.contains(path),
+                    "{} unhide path {path} is not a default hide",
+                    grant.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn grant_socket_and_environment_names_are_unique() {
         let mut sockets = BTreeSet::new();
         let mut environment = BTreeSet::new();
@@ -1987,8 +2099,8 @@ mod tests {
             for name in grant.env {
                 assert!(!ALWAYS_UNSET.contains(name), "always-unset name {name}");
                 assert!(
-                    !CREDENTIAL_ENV.contains(name),
-                    "credential environment name {name} is a grant environment"
+                    !CREDENTIAL_ENV.contains(name) || !grant.unhides.is_empty(),
+                    "credential environment name {name} needs a credential grant path"
                 );
                 assert!(
                     environment.insert(*name),

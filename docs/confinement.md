@@ -67,10 +67,14 @@ credential or privileged grant must be named by the session that needs it, never
 | `lxd` | lxd and incus container daemon sockets: effectively root on the host | No; grant it per session. |
 | `snap` | snapd package management: installs and removes packages | No; grant it per session. |
 | `harness-config` | the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately | No; grant it per session. |
+| `gh` | your GitHub CLI login (`~/.config/gh`) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you | No; grant it per session. |
+| `git-credentials` | the plain-text git credential files: every host and password stored there | No; grant it per session. |
 
 Grant names are closed and validated before launch. Each runtime grant is a separate opt-in;
-`harness-config` is a separate session-only opt-in for the harness directory. These grants do
-not make a session a sandbox. Run `a2amx confine list` for the current table and descriptions.
+`harness-config` is a separate session-only opt-in for the harness directory. `gh` and
+`git-credentials` are credential grants and must be named by the session that needs them.
+These grants do not make a session a sandbox. Run `a2amx confine list` for the current table
+and descriptions.
 
 `harness-config` is deliberately broad: the agent can change settings, hooks, instructions and
 programs under `~/.claude` or `~/.omp`, and a running session of that harness—including your own
@@ -276,15 +280,33 @@ their host socket must be hidden.
 
 ## Credentials a tool needs
 
-Secrets are hidden by default. `unhide` under `[session.confine]` exposes a path read-only, and you can unhide one file inside a hidden directory without exposing the whole directory. For example, expose the configuration needed by `gh` like this:
+Credential files are hidden by default. The `gh` grant exposes `~/.config/gh` read-only and
+returns `GH_TOKEN`, `GITHUB_TOKEN` and `GH_ENTERPRISE_TOKEN` to that session. The
+`git-credentials` grant exposes `~/.git-credentials` and `~/.config/git/credentials` read-only.
+Use the narrowest grant that matches the work:
 
 ```toml
 # fragment
 [session.confine]
-unhide = ["~/.config/gh"]
+grants = ["gh"] # for a session that pushes or opens pull requests with gh
 ```
 
-The mount is read-only, so a tool that rewrites the file, such as during a token refresh, fails. The network is open, so a readable token lets the agent act as you on that service. Unhide only what the work needs, prefer a token with the least scope, and review what the agent did. The maintainers did not test any `gh` command under confinement.
+`git push` over https needs the credential helper in the user's `~/.gitconfig`
+(`gh auth setup-git`); that file is readable but read-only inside, so run `gh auth setup-git`
+outside first. Run `gh` once outside before the first confined use too: a one-time migration of
+an old-format `hosts.yml` otherwise fails on the read-only mount. The read-only mount also
+breaks commands that rewrite `hosts.yml`, such as `gh auth refresh`, `auth switch` and
+`config set`; add an exact `write = ["~/.config/gh"]` entry when that write is deliberate.
+
+Use `git-credentials` only when the user keeps a plain-text store. With the store helper, git's
+write-back to the file fails on the read-only mount, likely non-fatal. A credential helper that
+is a Windows program reached through WSL interop does not work because `/run/WSL` is hidden.
+SSH pushes need an `ssh` grant (backlog F53, not built); a `gh` token kept in the system
+keyring is unreachable because `~/.local/share/keyrings` and the session bus are hidden.
+
+The maintainers read `gh`'s token from `hosts.yml` and ran `gh auth status` and
+`git push --dry-run` with the path unhidden read-only (2026-11-01). A real push, `gh pr create`
+and this recipe in a fresh login are untested; the tests use fixtures.
 
 ### Credential environment variables
 
@@ -311,8 +333,10 @@ Return one listed variable to one session with `keep_env`:
 ```toml
 # fragment
 [session.confine]
-keep_env = ["GITHUB_TOKEN"] # for a session that pushes with gh
+keep_env = ["NPM_TOKEN"] # for a session that publishes with npm
 ```
+
+The `gh` grant is the named alternative when the session needs the three GitHub names.
 
 `keep_env` only returns the value already present in the operator's environment; it does not
 read or inject a new secret. It is per-session, and the dry run and launch notice list both

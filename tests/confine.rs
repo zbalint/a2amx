@@ -584,6 +584,369 @@ fn runtime_grants_select_sockets_and_environment() {
 }
 
 #[test]
+fn credential_grants_lift_named_paths_read_only() {
+    let fixture = Fixture::new();
+    let gh = fixture.home.join(".config/gh");
+    std::fs::create_dir_all(&gh).expect("gh directory");
+    std::fs::write(gh.join("hosts.yml"), "github.com:\n").expect("gh hosts");
+    let gh = std::fs::canonicalize(gh).expect("gh canonical");
+
+    let restricted = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("restricted plan");
+    assert!(restricted.hidden_paths().contains(&gh));
+
+    let granted = confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("gh plan");
+    assert!(granted.readonly.contains(&gh));
+    assert!(!granted.protected.contains(&gh));
+    assert!(!granted.hidden_paths().contains(&gh));
+    let gh_string = gh.to_string_lossy().into_owned();
+    let wrapped = granted
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("gh wrapper");
+    assert!(
+        wrapped
+            .windows(3)
+            .any(|window| window == ["--ro-bind", gh_string.as_str(), gh_string.as_str()])
+    );
+    assert!(
+        !wrapped
+            .windows(2)
+            .any(|window| window == ["--tmpfs", gh_string.as_str()])
+    );
+}
+
+#[test]
+fn credential_grant_readonly_path_is_reprotected_inside_writable_parent() {
+    let fixture = Fixture::new();
+    let config = fixture.home.join(".config");
+    let gh = config.join("gh");
+    std::fs::create_dir_all(&gh).expect("gh directory");
+    std::fs::write(gh.join("hosts.yml"), "github.com:\n").expect("gh hosts");
+    let config = std::fs::canonicalize(config).expect("config canonical");
+    let gh = std::fs::canonicalize(gh).expect("gh canonical");
+
+    let granted = confine::plan(
+        &ConfineRequest {
+            write: vec!["~/.config".into()],
+            grants: vec!["gh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("gh writable-parent plan");
+    assert!(granted.writable.contains(&config));
+    assert!(granted.protected.contains(&gh));
+    let config_string = config.to_string_lossy().into_owned();
+    let gh_string = gh.to_string_lossy().into_owned();
+    let wrapped = granted
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("gh writable-parent wrapper");
+    let bind = wrapped
+        .windows(3)
+        .position(|window| window == ["--bind", config_string.as_str(), config_string.as_str()])
+        .expect("writable config bind");
+    let readonly = wrapped
+        .windows(3)
+        .position(|window| window == ["--ro-bind", gh_string.as_str(), gh_string.as_str()])
+        .expect("read-only gh bind");
+    assert!(
+        readonly > bind,
+        "gh must be re-protected after its parent bind"
+    );
+}
+
+#[test]
+fn exact_write_lifts_a_granted_credential_path() {
+    let fixture = Fixture::new();
+    let gh = fixture.home.join(".config/gh");
+    std::fs::create_dir_all(&gh).expect("gh directory");
+    std::fs::write(gh.join("hosts.yml"), "github.com:\n").expect("gh hosts");
+    let gh = std::fs::canonicalize(gh).expect("gh canonical");
+    let plan = confine::plan(
+        &ConfineRequest {
+            write: vec!["~/.config/gh".into()],
+            grants: vec!["gh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("exact-write plan");
+    assert!(plan.writable.contains(&gh));
+    assert!(!plan.readonly.contains(&gh));
+}
+
+#[test]
+fn gh_grant_opens_only_its_paths_and_conflicts_with_exact_hides() {
+    let fixture = Fixture::new();
+    let config = fixture.home.join(".config");
+    let gh = config.join("gh");
+    std::fs::create_dir_all(&gh).expect("gh directory");
+    std::fs::write(gh.join("hosts.yml"), "github.com:\n").expect("gh hosts");
+    std::fs::write(
+        fixture.home.join(".git-credentials"),
+        "https://user:pass@example\n",
+    )
+    .expect("git credentials");
+    let git_config = config.join("git");
+    std::fs::create_dir_all(&git_config).expect("git config directory");
+    std::fs::write(
+        git_config.join("credentials"),
+        "https://user:pass@example\n",
+    )
+    .expect("git config credentials");
+    let gh = std::fs::canonicalize(gh).expect("gh canonical");
+    let config = std::fs::canonicalize(config).expect("config canonical");
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("gh-only plan");
+    assert!(!plan.hidden_paths().contains(&gh));
+    assert!(plan.hidden_paths().contains(&fixture.home.join(".ssh")));
+    assert!(!plan.writable.contains(&config));
+    assert!(!plan.readonly.contains(&config));
+    assert!(
+        plan.hidden_paths()
+            .contains(&fixture.home.join(".git-credentials"))
+    );
+    assert!(
+        plan.hidden_paths()
+            .iter()
+            .any(|path| path.ends_with(".config/git/credentials"))
+    );
+
+    for request in [
+        ConfineRequest {
+            grants: vec!["gh".into()],
+            hide: vec!["~/.config/gh".into()],
+            ..ConfineRequest::default()
+        },
+        ConfineRequest {
+            grants: vec!["gh".into()],
+            hide: vec!["~/.config/gh".into()],
+            write: vec!["~/.config/gh".into()],
+            ..ConfineRequest::default()
+        },
+    ] {
+        let error = match confine::plan(&request, Harness::Generic, &fixture.cwd, &fixture.host()) {
+            Ok(_) => panic!("exact hide must conflict with gh grant"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("confinement grant \"gh\" conflicts with the hide of"),
+            "unexpected conflict: {error}"
+        );
+    }
+}
+
+#[test]
+fn git_credentials_grant_lifts_both_files_only() {
+    let fixture = Fixture::new();
+    let gh = fixture.home.join(".config/gh");
+    std::fs::create_dir_all(&gh).expect("gh directory");
+    std::fs::write(gh.join("hosts.yml"), "github.com:\n").expect("gh hosts");
+    std::fs::write(
+        fixture.home.join(".git-credentials"),
+        "https://user:pass@example\n",
+    )
+    .expect("git credentials");
+    let git_config = fixture.home.join(".config/git");
+    std::fs::create_dir_all(&git_config).expect("git config directory");
+    std::fs::write(
+        git_config.join("credentials"),
+        "https://user:pass@example\n",
+    )
+    .expect("git config credentials");
+    let git_credentials = std::fs::canonicalize(fixture.home.join(".git-credentials"))
+        .expect("git credentials canonical");
+    let git_config_credentials =
+        std::fs::canonicalize(git_config.join("credentials")).expect("git config credentials");
+    let gh = std::fs::canonicalize(gh).expect("gh canonical");
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["git-credentials".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("git credentials plan");
+    assert!(plan.readonly.contains(&git_credentials));
+    assert!(plan.readonly.contains(&git_config_credentials));
+    assert!(!plan.hidden_paths().contains(&git_credentials));
+    assert!(!plan.hidden_paths().contains(&git_config_credentials));
+    assert!(plan.hidden_paths().contains(&gh));
+}
+
+#[test]
+fn granted_paths_may_be_missing_without_becoming_unresolved() {
+    let fixture = Fixture::new();
+    let missing = fixture.home.join(".config/gh");
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("missing credential path plan");
+    assert!(plan.unresolved.is_empty());
+    assert!(plan.skipped_paths().contains(&missing));
+}
+
+#[test]
+fn grant_alias_to_hidden_path_is_rejected_but_unhidden_alias_is_allowed() {
+    let fixture = Fixture::new();
+    let config = fixture.home.join(".config");
+    std::fs::create_dir_all(&config).expect("config directory");
+    symlink(fixture.home.join(".ssh"), config.join("gh")).expect("gh alias");
+    let error = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("gh alias to ssh must fail"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("confinement grant \"gh\" path ~/.config/gh resolves to the hidden path")
+    );
+
+    let allowed = Fixture::new();
+    let allowed_config = allowed.home.join(".config");
+    let target = allowed.home.join("unhidden-target");
+    std::fs::create_dir_all(&allowed_config).expect("allowed config directory");
+    std::fs::create_dir_all(&target).expect("allowed target");
+    symlink(&target, allowed_config.join("gh")).expect("allowed gh alias");
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &allowed.cwd,
+        &allowed.host(),
+    )
+    .expect("unhidden alias plan");
+    assert!(
+        plan.readonly
+            .contains(&std::fs::canonicalize(target).expect("target canonical"))
+    );
+}
+
+#[test]
+fn gh_grant_releases_its_environment_and_notice_names() {
+    let fixture = Fixture::new();
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("gh environment plan");
+    let notice = confine::notice(&plan);
+    let wrapped = plan
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("gh environment wrapper");
+    for name in ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"] {
+        assert!(
+            !wrapped
+                .windows(2)
+                .any(|window| window == ["--unsetenv", name]),
+            "granted environment variable {name} was unset"
+        );
+    }
+    for name in [
+        "GITLAB_TOKEN",
+        "GITLAB_PRIVATE_TOKEN",
+        "CI_JOB_TOKEN",
+        "BITBUCKET_TOKEN",
+        "NPM_TOKEN",
+        "NODE_AUTH_TOKEN",
+        "PYPI_TOKEN",
+        "TWINE_PASSWORD",
+        "CARGO_REGISTRY_TOKEN",
+        "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+        "AZURE_CLIENT_SECRET",
+        "ARM_CLIENT_SECRET",
+        "VAULT_TOKEN",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "SONAR_TOKEN",
+        "SENTRY_AUTH_TOKEN",
+        "DIGITALOCEAN_ACCESS_TOKEN",
+        "HCLOUD_TOKEN",
+        "CLOUDFLARE_API_TOKEN",
+        "NETLIFY_AUTH_TOKEN",
+        "VERCEL_TOKEN",
+        "FLY_API_TOKEN",
+        "HEROKU_API_KEY",
+        "PGPASSWORD",
+        "MYSQL_PWD",
+    ] {
+        assert!(
+            wrapped
+                .windows(2)
+                .any(|window| window == ["--unsetenv", name]),
+            "unrelated credential environment variable {name} was not unset"
+        );
+    }
+    let line = notice
+        .lines()
+        .find(|line| line.starts_with("Credential environment variables are unset:"))
+        .expect("credential notice line");
+    let names = line
+        .strip_prefix("Credential environment variables are unset: ")
+        .expect("credential notice prefix")
+        .strip_suffix('.')
+        .expect("credential notice suffix");
+    assert_eq!(names.split(", ").count(), 26);
+    assert!(!names.contains("GH_TOKEN"));
+    assert!(!names.contains("GITHUB_TOKEN"));
+    assert!(!names.contains("GH_ENTERPRISE_TOKEN"));
+}
+
+#[test]
 fn write_limit_error_precedes_hide_limit_error() {
     let fixture = Fixture::new();
     let request = ConfineRequest {

@@ -117,6 +117,7 @@ while scalars override. `grants` and `keep_env` are per session only; run
 [Confinement](confinement.md#credential-environment-variables) for the closed credential
 environment list. A team-level `keep_env` is refused. Credential or privileged grants cannot
 be team defaults.
+For a session that pushes with `gh`, put `grants = ["gh"]` in its `[session.confine]` table.
 Options on a disabled session need `enabled = true`; team options without any enabled
 value confine nothing. Lists accept at most 64 entries of at most 4096 bytes. Codex
 sessions cannot be confined.
