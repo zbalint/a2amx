@@ -3718,6 +3718,288 @@ fn harness_data_files_can_be_saved_through_the_overlay() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn harness_config_grant_opens_the_own_directory() {
+    let claude = Fixture::new();
+    populate_claude_overlay(&claude, true);
+    let claude_root = std::fs::canonicalize(claude.home.join(".claude")).expect("Claude root");
+    std::fs::create_dir_all(claude_root.join("ide")).expect("Claude IDE directory");
+    let path_dir = claude_root.join("local/bin");
+    std::fs::create_dir_all(&path_dir).expect("PATH directory");
+    let path_var = OsString::from(format!("{}:/usr/bin", path_dir.display()));
+    let claude_plan = confine::plan_with_path(
+        &ConfineRequest {
+            grants: vec!["harness-config".into()],
+            unhide: vec!["~/.claude/settings.json".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &claude.cwd,
+        &claude.host(),
+        Some(path_var),
+    )
+    .expect("Claude harness-config plan");
+    assert!(claude_plan.writable.contains(&claude_root));
+    assert!(claude_plan.overlay_parents().is_empty());
+    let wrapped = claude_plan
+        .wrap(vec!["true".into()])
+        .expect("Claude wrapper");
+    let root_text = claude_root.to_string_lossy();
+    let root_index = wrapped
+        .windows(3)
+        .position(|window| {
+            window[0] == "--bind" && window[1] == root_text && window[2] == root_text
+        })
+        .expect("Claude root writable bind");
+    let path_dir = std::fs::canonicalize(path_dir).expect("PATH canonical");
+    assert!(claude_plan.protected.contains(&path_dir));
+    let path_dir_text = path_dir.to_string_lossy();
+    let path_dir_index = wrapped
+        .windows(3)
+        .position(|window| {
+            window[0] == "--ro-bind" && window[1] == path_dir_text && window[2] == path_dir_text
+        })
+        .expect("nested 3bo protected launch input");
+    assert!(root_index < path_dir_index);
+    let ide = claude_root.join("ide");
+    let ide_text = ide.to_string_lossy();
+    let ide_index = wrapped
+        .windows(2)
+        .position(|window| window[0] == "--tmpfs" && window[1] == ide_text)
+        .expect("Claude IDE hide");
+    let settings = claude_root.join("settings.json");
+    let settings_text = settings.to_string_lossy();
+    let settings_index = wrapped
+        .windows(3)
+        .position(|window| {
+            window[0] == "--ro-bind" && window[1] == settings_text && window[2] == settings_text
+        })
+        .expect("Claude read-only settings bind");
+    assert!(root_index < ide_index);
+    assert!(root_index < settings_index);
+    for path in [
+        claude_root.join("projects"),
+        claude_root.join("history.jsonl"),
+        claude_root.join(".credentials.json"),
+    ] {
+        assert!(
+            !wrapped
+                .iter()
+                .any(|argument| argument == path.to_string_lossy().as_ref()),
+            "harness data path must be covered by the root bind: {}",
+            path.display()
+        );
+    }
+    assert!(confine::notice(&claude_plan).contains(&format!(
+        "{}: harness config, writable and persistent (grant harness-config).",
+        claude_root.display()
+    )));
+
+    let plain = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Claude,
+        &claude.cwd,
+        &claude.host(),
+    )
+    .expect("Claude plain plan");
+    assert!(!confine::notice(&plain).contains("harness config, writable and persistent"));
+    assert!(plain.overlay_parents().contains(&claude_root));
+
+    let omp = Fixture::new();
+    populate_omp_overlay(&omp);
+    let omp_root = std::fs::canonicalize(omp.home.join(".omp")).expect("OMP root");
+    let omp_plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["harness-config".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Omp,
+        &omp.cwd,
+        &omp.host(),
+    )
+    .expect("OMP harness-config plan");
+    assert!(omp_plan.writable.contains(&omp_root));
+    assert!(confine::notice(&omp_plan).contains(&format!(
+        "{}: harness config, writable and persistent (grant harness-config).",
+        omp_root.display()
+    )));
+    assert!(omp_plan.overlay_parents().is_empty());
+    let wrapped = omp_plan.wrap(vec!["true".into()]).expect("OMP wrapper");
+    let root_text = omp_root.to_string_lossy();
+    assert!(wrapped.windows(3).any(|window| {
+        window[0] == "--bind" && window[1] == root_text && window[2] == root_text
+    }));
+    for path in [
+        omp_root.join("agent/a.db"),
+        omp_root.join("stats.db"),
+        omp_root.join("config.yml"),
+    ] {
+        assert!(
+            !wrapped
+                .iter()
+                .any(|argument| argument == path.to_string_lossy().as_ref()),
+            "OMP harness data path must be covered by the root bind: {}",
+            path.display()
+        );
+    }
+    assert!(
+        !wrapped
+            .iter()
+            .any(|argument| { argument == omp_root.join("agent").to_string_lossy().as_ref() })
+    );
+}
+
+#[test]
+fn harness_config_grant_refuses_generic_hide_and_unhide() {
+    let generic = Fixture::new();
+    let error = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["harness-config".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &generic.cwd,
+        &generic.host(),
+    ) {
+        Ok(_) => panic!("Generic harness-config grant was accepted"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.to_string(),
+        "confinement grant \"harness-config\" needs a Claude or OMP session"
+    );
+
+    let claude = Fixture::new();
+    populate_claude_overlay(&claude, true);
+    for (operation, expected) in [
+        (
+            ConfineRequest {
+                grants: vec!["harness-config".into()],
+                hide: vec!["~/.claude".into()],
+                ..ConfineRequest::default()
+            },
+            "confinement grant \"harness-config\" conflicts with the hide of",
+        ),
+        (
+            ConfineRequest {
+                grants: vec!["harness-config".into()],
+                unhide: vec!["~/.claude".into()],
+                ..ConfineRequest::default()
+            },
+            "confinement grant \"harness-config\" conflicts with the unhide of",
+        ),
+    ] {
+        let error = match confine::plan(&operation, Harness::Claude, &claude.cwd, &claude.host()) {
+            Ok(_) => panic!("harness-config conflict was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn harness_config_grant_persists_regular_writes() -> anyhow::Result<()> {
+    let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
+    let home = root.path().join("home");
+    let state = root.path().join("state");
+    let runtime = root.path().join("runtime");
+    let cwd = root.path().join("workspace");
+    let claude_root = home.join(".claude");
+    let credentials = claude_root.join(".credentials.json");
+    let settings = claude_root.join("settings.json");
+    for path in [&home, &state, &runtime, &cwd, &claude_root] {
+        std::fs::create_dir_all(path)?;
+    }
+    for name in [
+        "projects",
+        "todos",
+        "shell-snapshots",
+        "session-env",
+        "sessions",
+        "statsig",
+        "file-history",
+        "paste-cache",
+        "debug",
+        "cache",
+        "telemetry",
+        "plans",
+        "backups",
+    ] {
+        std::fs::create_dir_all(claude_root.join(name))?;
+    }
+    std::fs::write(&credentials, "old")?;
+    std::fs::write(&settings, "settings")?;
+    confine::ensure_data_dirs(Harness::Claude, &home)?;
+    let empty_file = state.join("confine-empty");
+    std::fs::write(&empty_file, [])?;
+    let host = Host {
+        home,
+        state_dir: state,
+        runtime_dir: runtime,
+        empty_file,
+    };
+    let bwrap = match confine::resolve_bwrap(None) {
+        Ok(path) => path,
+        Err(error) if !require_bwrap() => {
+            eprintln!("skipping harness-config write test: {error:#}");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let plain = confine::plan(&ConfineRequest::default(), Harness::Claude, &cwd, &host)?;
+    let plain = match confine::supports_tmp_overlay(&bwrap, plain.overlay_parents()) {
+        Ok(()) => plain,
+        Err(_) => plain.without_overlays("unsupported"),
+    };
+
+    let granted = confine::plan(
+        &ConfineRequest {
+            grants: vec!["harness-config".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &cwd,
+        &host,
+    )?;
+    let script = format!(
+        "set -u; settings='{}'; credentials='{}'; tmp=\"$credentials.tmp.1\"; \
+         printf changed > \"$settings\"; printf renewed > \"$tmp\"; mv \"$tmp\" \"$credentials\"",
+        settings.display(),
+        credentials.display()
+    );
+    let wrapped = granted
+        .with_bwrap(bwrap.clone())
+        .wrap(vec!["sh".into(), "-c".into(), script])?;
+    let status = Command::new(&wrapped[0])
+        .args(&wrapped[1..])
+        .status()
+        .context("run granted harness-config write probe")?;
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&settings)?, "changed");
+    assert_eq!(std::fs::read_to_string(&credentials)?, "renewed");
+    assert!(
+        !credentials
+            .with_file_name(".credentials.json.tmp.1")
+            .exists()
+    );
+
+    std::fs::write(&settings, "settings")?;
+    let script = format!(
+        "if printf changed > '{}'; then exit 1; else exit 0; fi",
+        settings.display()
+    );
+    let wrapped = plain
+        .with_bwrap(bwrap)
+        .wrap(vec!["sh".into(), "-c".into(), script])?;
+    let status = Command::new(&wrapped[0])
+        .args(&wrapped[1..])
+        .status()
+        .context("run ungranted harness-config write probe")?;
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&settings)?, "settings");
+    Ok(())
+}
+
 fn populate_claude_overlay(fixture: &Fixture, credential: bool) {
     let root = fixture.home.join(".claude");
     std::fs::create_dir_all(&root).expect("Claude root");

@@ -3,7 +3,7 @@ use std::process::Command;
 use a2amx::grant;
 
 #[test]
-fn grant_table_has_one_non_default_runtime_row_per_name() {
+fn grant_table_has_expected_rows() {
     let expected = [
         (
             "docker",
@@ -13,11 +13,13 @@ fn grant_table_has_one_non_default_runtime_row_per_name() {
                 "~/.docker/run/docker.sock",
             ],
             vec!["DOCKER_HOST", "DOCKER_CONTEXT"],
+            false,
         ),
         (
             "podman",
             vec!["/run/podman/podman.sock"],
             vec!["CONTAINER_HOST", "CONTAINER_CONNECTION"],
+            false,
         ),
         (
             "containerd",
@@ -28,12 +30,14 @@ fn grant_table_has_one_non_default_runtime_row_per_name() {
                 "/run/k3s/containerd/containerd.sock",
             ],
             vec!["CONTAINERD_ADDRESS", "BUILDKIT_HOST"],
+            false,
         ),
-        ("crio", vec!["/run/crio/crio.sock"], vec![]),
+        ("crio", vec!["/run/crio/crio.sock"], vec![], false),
         (
             "libvirt",
             vec!["/run/libvirt/libvirt-sock"],
             vec!["LIBVIRT_DEFAULT_URI"],
+            false,
         ),
         (
             "lxd",
@@ -43,21 +47,25 @@ fn grant_table_has_one_non_default_runtime_row_per_name() {
                 "/var/lib/incus/unix.socket",
             ],
             vec![],
+            false,
         ),
         (
             "snap",
             vec!["/run/snapd.socket", "/run/snapd-snap.socket"],
             vec![],
+            false,
         ),
+        ("harness-config", vec![], vec![], true),
     ];
     let all = grant::all();
     assert_eq!(all.len(), expected.len());
-    for ((name, sockets, env), row) in expected.iter().zip(all) {
+    for ((name, sockets, env, own_config), row) in expected.iter().zip(all) {
         assert_eq!(row.name, *name);
         assert!(!row.exposes.is_empty());
         assert!(!row.team_default_ok);
         assert_eq!(row.sockets, sockets.as_slice());
         assert_eq!(row.env, env.as_slice());
+        assert_eq!(row.own_config, *own_config);
     }
 }
 
@@ -107,6 +115,10 @@ fn render_list_has_every_grant_and_instruction() {
         );
         assert!(line.contains(row.exposes));
     }
+    assert_eq!(
+        lines[7],
+        "harness-config  session only   the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately"
+    );
     assert_eq!(
         lines.last().copied(),
         Some(

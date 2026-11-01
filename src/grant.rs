@@ -14,6 +14,8 @@ pub struct Grant {
     pub sockets: &'static [&'static str],
     /// Environment names unset unless the grant is given.
     pub env: &'static [&'static str],
+    /// Whether this grant opens the current harness's own configuration directory.
+    pub own_config: bool,
 }
 
 const NO_PATHS: &[&str] = &[];
@@ -42,13 +44,14 @@ const LXD_SOCKETS: &[&str] = &[
 ];
 const SNAP_SOCKETS: &[&str] = &["/run/snapd.socket", "/run/snapd-snap.socket"];
 
-static GRANTS: [Grant; 7] = [
+static GRANTS: [Grant; 8] = [
     Grant {
         name: "docker",
         exposes: "docker container daemon sockets: effectively root on the host",
         team_default_ok: false,
         sockets: DOCKER_SOCKETS,
         env: DOCKER_ENV,
+        own_config: false,
     },
     Grant {
         name: "podman",
@@ -56,6 +59,7 @@ static GRANTS: [Grant; 7] = [
         team_default_ok: false,
         sockets: PODMAN_SOCKETS,
         env: PODMAN_ENV,
+        own_config: false,
     },
     Grant {
         name: "containerd",
@@ -63,6 +67,7 @@ static GRANTS: [Grant; 7] = [
         team_default_ok: false,
         sockets: CONTAINERD_SOCKETS,
         env: CONTAINERD_ENV,
+        own_config: false,
     },
     Grant {
         name: "crio",
@@ -70,6 +75,7 @@ static GRANTS: [Grant; 7] = [
         team_default_ok: false,
         sockets: CRIO_SOCKETS,
         env: NO_PATHS,
+        own_config: false,
     },
     Grant {
         name: "libvirt",
@@ -77,6 +83,7 @@ static GRANTS: [Grant; 7] = [
         team_default_ok: false,
         sockets: LIBVIRT_SOCKETS,
         env: LIBVIRT_ENV,
+        own_config: false,
     },
     Grant {
         name: "lxd",
@@ -84,6 +91,7 @@ static GRANTS: [Grant; 7] = [
         team_default_ok: false,
         sockets: LXD_SOCKETS,
         env: NO_PATHS,
+        own_config: false,
     },
     Grant {
         name: "snap",
@@ -91,6 +99,15 @@ static GRANTS: [Grant; 7] = [
         team_default_ok: false,
         sockets: SNAP_SOCKETS,
         env: NO_PATHS,
+        own_config: false,
+    },
+    Grant {
+        name: "harness-config",
+        exposes: "the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately",
+        team_default_ok: false,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: true,
     },
 ];
 
@@ -156,7 +173,7 @@ pub fn render_list() -> String {
             "session only"
         };
         output.push_str(&format!(
-            "{:<12}{:<15}{}\n",
+            "{:<16}{:<15}{}\n",
             grant.name, scope, grant.exposes
         ));
     }

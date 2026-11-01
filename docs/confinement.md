@@ -66,10 +66,20 @@ credential or privileged grant must be named by the session that needs it, never
 | `libvirt` | libvirt virtual-machine control: controls virtual machines | No; grant it per session. |
 | `lxd` | lxd and incus container daemon sockets: effectively root on the host | No; grant it per session. |
 | `snap` | snapd package management: installs and removes packages | No; grant it per session. |
+| `harness-config` | the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately | No; grant it per session. |
 
-Grant names are closed and validated before launch. Each runtime is a separate opt-in;
-these grants do not make a session a sandbox. Run `a2amx confine list` for the current
-table and descriptions.
+Grant names are closed and validated before launch. Each runtime grant is a separate opt-in;
+`harness-config` is a separate session-only opt-in for the harness directory. These grants do
+not make a session a sandbox. Run `a2amx confine list` for the current table and descriptions.
+
+`harness-config` is deliberately broad: the agent can change settings, hooks, instructions and
+programs under `~/.claude` or `~/.omp`, and a running session of that harness—including your own
+unconfined sessions—picks changes up immediately. A hook it adds therefore runs with your full
+rights at once. The directory also holds programs such as `~/.claude/local/claude` and anything
+under `~/.omp`; a launched `omp` whose `argv0` lies there is run by the daemon's quota probe
+outside the sandbox within minutes. Symlinked entries such as `hooks`, `agents` and `CLAUDE.md`
+can be replaced for good, which breaks a setup managed elsewhere. If `~/.claude` is itself a
+symlink, the grant opens its canonical target. Open it only for an agent you trust with that.
 
 ## The method: open what an honest mistake can recover from
 
@@ -101,7 +111,7 @@ Existing settings, plugins and other regular control files in the harness direct
 
 Several confined sessions do not exclude one another while renewing because each has its own lock. Renewals that happen together may need one session restart. A confined session renewing while an unconfined harness of the same account also renews can end up logged out and needs the same restart; Claude re-reads the saved login after a 401. The refresh token lasts weeks, and an expired one needs the same normal-terminal login.
 
-Bubblewrap 0.11 or newer is required for the overlay (Ubuntu 24.04 ships 0.9, which keeps the previous behavior). An older version keeps the previous behavior with a plain notice line. The overlay uses memory (a tmpfs with no size bound). The opt-in grant that makes the config directory persistent is a separate item (spec 3bt, not yet available); until then, `write = ["~/.claude"]` makes it persistent.
+Bubblewrap 0.11 or newer is required for the overlay (Ubuntu 24.04 ships 0.9, which keeps the previous behavior). An older version keeps the previous behavior with a plain notice line. The overlay uses memory (a tmpfs with no size bound). To make the harness config directory persistent and writable, add `grants = ["harness-config"]` in the session's `[session.confine]` table. This grant is session-only and cannot be set in a team-level table; without it, `write = ["~/.claude"]` remains the explicit persistent-write option.
 
 ## Recipes by ecosystem
 

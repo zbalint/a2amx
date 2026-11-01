@@ -173,6 +173,7 @@ pub struct Plan {
     overlay_protected: Vec<PathBuf>,
     unsaved_files: Vec<PathBuf>,
     overlay_notice: Option<String>,
+    harness_config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -848,6 +849,7 @@ pub fn plan_with_path(
     let empty_file = plan_empty_file(host, &builder.state_dir)?;
     builder.bind_workspace(&cwd)?;
     builder.bind_harness_data()?;
+    builder.bind_harness_config(&request.grants)?;
     builder.bind_operator_writes(request, path_var.as_deref())?;
     builder.hide_mandatory();
     builder.hide_defaults(request);
@@ -918,6 +920,7 @@ struct PlanBuilder<'a> {
     default_hidden: Vec<PathBuf>,
     container_hidden: Vec<PathBuf>,
     container_sockets: Vec<(PathBuf, &'static str)>,
+    harness_config: Option<PathBuf>,
 }
 
 struct SocketRow<'a> {
@@ -979,6 +982,7 @@ impl<'a> PlanBuilder<'a> {
             default_hidden: Vec::new(),
             container_hidden: Vec::new(),
             container_sockets: Vec::new(),
+            harness_config: None,
         })
     }
 
@@ -1028,6 +1032,42 @@ impl<'a> PlanBuilder<'a> {
             &mut self.writable,
             &mut self.skipped,
         )
+    }
+
+    fn bind_harness_config(&mut self, grants: &[String]) -> Result<()> {
+        let own_config = grants.iter().any(|name| {
+            grant::all()
+                .iter()
+                .any(|row| row.name == name && row.own_config)
+        });
+        if !own_config {
+            return Ok(());
+        }
+        let root = match self.harness {
+            Harness::Claude => self.home.join(".claude"),
+            Harness::Omp => self.home.join(".omp"),
+            Harness::Generic => {
+                bail!("confinement grant \"harness-config\" needs a Claude or OMP session")
+            }
+            Harness::Codex => unreachable!("Codex confinement is rejected before planning"),
+        };
+        let Some(root) = add_canonical_existing(&root, "harness config", &mut self.skipped) else {
+            return Ok(());
+        };
+        let (data_dirs, data_files) = harness_data(self.harness, &self.home);
+        let data_paths = data_dirs
+            .into_iter()
+            .chain(data_files)
+            .filter_map(|path| {
+                let path = canonical_if_exists(&path).unwrap_or(path);
+                is_within(&path, &root).then_some(path)
+            })
+            .collect::<Vec<_>>();
+        self.writable
+            .retain(|path| !data_paths.iter().any(|data| data == path));
+        self.harness_config = Some(root.clone());
+        add_unique(&mut self.writable, root);
+        Ok(())
     }
 
     fn resolve_operator_path(&mut self, option: &'static str, source: &Path) -> Option<PathBuf> {
@@ -1228,6 +1268,20 @@ impl<'a> PlanBuilder<'a> {
     ) -> Result<Plan> {
         self.readonly
             .retain(|path| !self.explicit_writes.contains(path));
+        if let Some(root) = self.harness_config.as_ref() {
+            if self.hidden.iter().any(|path| path == root) {
+                bail!(
+                    "confinement grant \"harness-config\" conflicts with the hide of {}",
+                    root.display()
+                );
+            }
+            if self.readonly.iter().any(|path| path == root) {
+                bail!(
+                    "confinement grant \"harness-config\" conflicts with the unhide of {}",
+                    root.display()
+                );
+            }
+        }
         let protected = protected_paths(&self.readonly, &self.writable);
         let (data_dirs, data_files) = harness_data(self.harness, &self.home);
         let overlay_parents = harness_overlay_parents(
@@ -1286,6 +1340,7 @@ impl<'a> PlanBuilder<'a> {
             overlay_protected,
             unsaved_files,
             overlay_notice: None,
+            harness_config: self.harness_config,
         };
         // Force the expensive argument-size validation while still in the
         // daemon-side preflight path, before a PTY can be created.
@@ -1780,6 +1835,12 @@ pub fn notice(plan: &Plan) -> String {
         text.push_str(reason);
         text.push('\n');
     }
+    if let Some(path) = &plan.harness_config {
+        text.push_str(&format!(
+            "{}: harness config, writable and persistent (grant harness-config).\n",
+            path.display()
+        ));
+    }
     if !plan.grants.is_empty() {
         text.push_str("Granted: ");
         text.push_str(&plan.grants.join(", "));
@@ -1883,6 +1944,7 @@ mod tests {
             overlay_protected: Vec::new(),
             unsaved_files: Vec::new(),
             overlay_notice: None,
+            harness_config: None,
         };
         let text = notice(&plan);
         assert!(text.len() <= NOTICE_LIMIT);

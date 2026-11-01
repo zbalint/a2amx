@@ -23,7 +23,7 @@ All notable user-visible changes are listed here. The format follows
   `--confine-grant NAME` adjust it, with the keys `write`, `hide`, `unhide`, `default_hides` and `grants` in the
   confine table (session lists add to the team's lists). Grants are one per container runtime (`docker`, `podman`, `containerd`, `crio`,
   `libvirt`, `lxd`, `snap`), each opening only its own sockets and environment names, and `a2amx confine list` prints
-  them with what each exposes; a team-level table cannot grant one. The old flat team-file keys (`confine = true`, `confine_write` and the rest) are
+  them with what each exposes; a team-level table cannot grant one. The session-only grant `harness-config` makes the session's own harness directory (`~/.claude` or `~/.omp`) writable and persistent; the agent can then change settings, hooks and programs that your other sessions run at once (`docs/confinement.md`). The old flat team-file keys (`confine = true`, `confine_write` and the rest) are
   refused with a message naming the replacement. A `write`, `hide` or `unhide` entry must be absolute, `~/...` or
   relative to the working directory; `$VAR` and `~user` forms are refused instead of silently skipped, a listed path that
   is missing or unreadable gets its own `unresolved:` line in the dry run, and the agent notice always names the working

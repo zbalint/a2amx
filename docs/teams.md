@@ -113,7 +113,7 @@ Use an optional team-level `[confine]` table for defaults and a `[session.confin
 table for session settings. `enabled` defaults to false; `default_hides` defaults to
 true. `write`, `hide`, and `unhide` lists add team entries before session entries,
 while scalars override. `grants` and `keep_env` are per session only; run
-`a2amx confine list` for the valid runtime names and see
+`a2amx confine list` for the valid grant names and see
 [Confinement](confinement.md#credential-environment-variables) for the closed credential
 environment list. A team-level `keep_env` is refused. Credential or privileged grants cannot
 be team defaults.

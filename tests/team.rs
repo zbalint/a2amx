@@ -2873,7 +2873,17 @@ fn confine_table_rejects_old_keys_and_team_grants() {
     )
     .expect_err("team grant");
     assert!(team_grant.to_string().contains("grant it in the session"));
+    let harness_config_team_grant = team::parse(
+        "[confine]\ngrants = ['harness-config']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+    )
+    .expect_err("team harness-config grant");
+    assert!(
+        harness_config_team_grant
+            .to_string()
+            .contains("grant it in the session")
+    );
 }
+
 #[test]
 fn confine_table_keeps_credentials_per_session_only() {
     let team_error = team::parse(
