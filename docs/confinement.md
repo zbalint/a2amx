@@ -74,10 +74,11 @@ credential or privileged grant must be named by the session that needs it, never
 | `harness-config` | the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately | No; grant it per session. |
 | `gh` | your GitHub CLI login (`~/.config/gh`) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you | No; grant it per session. |
 | `git-credentials` | the plain-text git credential files: every host and password stored there | No; grant it per session. |
+| `ssh` | your ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them | No; grant it per session. |
 
 Grant names are closed and validated before launch. Each runtime grant is a separate opt-in;
-`harness-config` is a separate session-only opt-in for the harness directory. `gh` and
-`git-credentials` are credential grants and must be named by the session that needs them.
+`harness-config` is a separate session-only opt-in for the harness directory. `gh`,
+`git-credentials` and `ssh` are credential grants and must be named by the session that needs them.
 These grants do not make a session a sandbox. Run `a2amx confine list` for the current table
 and descriptions.
 
@@ -278,8 +279,8 @@ Rootless Docker and Podman cannot be used here: their sockets are under `$XDG_RU
 which is hidden and cannot be unhidden, even with the grant. Use an engine on another machine
 (`DOCKER_HOST` passes through with the grant and the network is open), or run the whole session
 in a container or VM instead of a2amx confinement. Reaching a remote engine needs its credentials,
-for example `~/.ssh` or TLS files under `~/.docker`; those are default hides and need an `unhide`
-entry. None of this remote-engine path was tested.
+for example `~/.ssh` (use the `ssh` grant, which opens it read-only)
+or TLS files under `~/.docker`; those are default hides and need an `unhide` entry. None of this remote-engine path was tested.
 
 Workloads the agent starts are not confined by a2amx. A socket created after the session starts
 and outside every launch-time hide is visible. Start runtime daemons before the session when
@@ -308,7 +309,7 @@ breaks commands that rewrite `hosts.yml`, such as `gh auth refresh`, `auth switc
 Use `git-credentials` only when the user keeps a plain-text store. With the store helper, git's
 write-back to the file fails on the read-only mount, likely non-fatal. A credential helper that
 is a Windows program reached through WSL interop does not work because `/run/WSL` is hidden.
-SSH pushes need an `ssh` grant (backlog F53, not built); a `gh` token kept in the system
+SSH pushes need an `ssh` grant; see [ssh and signed commits](#ssh-and-signed-commits). A `gh` token kept in the system
 keyring is unreachable because `~/.local/share/keyrings` and the session bus are hidden.
 
 The maintainers read `gh`'s token from `hosts.yml` and ran `gh auth status` and
@@ -353,7 +354,17 @@ changes the environment of every confined session it launches.
 
 ### ssh and signed commits
 
-Plain `ssh` fails in a confined session even with `~/.ssh` unhidden, with `Bad owner or permissions on /etc/ssh/ssh_config.d/...`. The sandbox cannot map root, so root-owned system files show as owned by `nobody`, and `ssh` refuses a system configuration file it does not trust. `ssh -F /dev/null host` skips the system files and works; a `~/.ssh/config` passed with `-F` should too, but the maintainers did not test it. `git push` over ssh should work with `GIT_SSH_COMMAND='ssh -F /dev/null'` and the key unhidden, untested. No ssh agent is passed through, so a passphrase-protected key cannot be used, and signing commits with gpg or an ssh key is untested and probably fails, because the agent sockets and `~/.gnupg` are hidden. Pushing over https with `gh` avoids all of this. Proper support is backlog item F53 in [the backlog](backlog.md).
+The grant opens `~/.ssh` read-only and mounts an empty file over `/etc/ssh/ssh_config`, so the
+root-owned system configuration and its included files no longer break `ssh`. Settings from the
+system configuration therefore no longer apply; copy what you need into `~/.ssh/config`. An
+`Include` of a root-owned file there still fails. Because `~/.ssh` is read-only, `ssh` cannot add a
+host to `known_hosts`; add the host from outside first. A `ControlPath` under `~/.ssh` is also
+unusable; point it at `/tmp`.
+
+No `SSH_AUTH_SOCK` is passed through, so a passphrase-protected key cannot be used (F63). Signing
+commits with an unencrypted listed ssh key works; gpg signing is F54. With `no_default_hides`,
+`~/.ssh` is visible without the grant, but the system configuration still breaks `ssh`. Keep the
+HTTPS recipe above if that is preferable.
 
 ## Troubleshooting
 

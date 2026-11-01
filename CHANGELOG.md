@@ -34,6 +34,9 @@ All notable user-visible changes are listed here. The format follows
   `Confine` request (its `allow_containers` field became `grants`; an older client's field is ignored) and
   `confined` on the status; restart an older daemon to use `--confine`
   (`docs/cli.md`, `docs/teams.md`, `docs/harnesses.md`).
+- Confinement grant `ssh` (session only): makes `~/.ssh` readable and shows the root-owned `/etc/ssh/ssh_config`
+  as an empty file, so `ssh` and `git push` over ssh work in a confined session. `~/.ssh` stays read-only
+  and no ssh agent is passed through, so a passphrase-protected key cannot be used (`docs/confinement.md`).
 
 ### Changed
 

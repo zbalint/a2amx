@@ -980,6 +980,7 @@ pub fn plan_with_preflight(
     builder.hide_defaults(request);
     builder.hide_containers(&request.grants);
     builder.apply_grant_unhides(&request.grants, request.no_default_hides)?;
+    builder.apply_grant_stand_ins(&request.grants);
     builder.release_operator_writes()?;
     builder.apply_operator_hides(request)?;
     if request.build_paths {
@@ -1466,6 +1467,23 @@ impl<'a> PlanBuilder<'a> {
             }
         }
         Ok(())
+    }
+
+    fn apply_grant_stand_ins(&mut self, given: &[String]) {
+        let given = given.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        for grant in grant::all()
+            .iter()
+            .filter(|grant| given.contains(grant.name))
+        {
+            for name in grant.stand_ins {
+                let source = PathBuf::from(name);
+                let Some(path) = canonical_if_exists(&source) else {
+                    add_unique(&mut self.skipped, source);
+                    continue;
+                };
+                add_unique(&mut self.hidden, path);
+            }
+        }
     }
 
     fn hide_containers(&mut self, given: &[String]) {

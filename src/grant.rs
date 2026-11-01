@@ -18,6 +18,8 @@ pub struct Grant {
     pub own_config: bool,
     /// Home-relative or absolute paths made visible read-only when the grant is given.
     pub unhides: &'static [&'static str],
+    /// Absolute host files shown as empty when the grant is given.
+    pub stand_ins: &'static [&'static str],
 }
 
 const NO_PATHS: &[&str] = &[];
@@ -48,8 +50,10 @@ const SNAP_SOCKETS: &[&str] = &["/run/snapd.socket", "/run/snapd-snap.socket"];
 const GH_UNHIDES: &[&str] = &["~/.config/gh"];
 const GH_ENV: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"];
 const GIT_CREDENTIAL_UNHIDES: &[&str] = &["~/.git-credentials", "~/.config/git/credentials"];
+const SSH_UNHIDES: &[&str] = &["~/.ssh"];
+const SSH_STAND_INS: &[&str] = &["/etc/ssh/ssh_config"];
 
-static GRANTS: [Grant; 10] = [
+static GRANTS: [Grant; 11] = [
     Grant {
         name: "docker",
         exposes: "docker container daemon sockets: effectively root on the host",
@@ -58,6 +62,7 @@ static GRANTS: [Grant; 10] = [
         env: DOCKER_ENV,
         own_config: false,
         unhides: NO_PATHS,
+        stand_ins: NO_PATHS,
     },
     Grant {
         name: "podman",
@@ -67,6 +72,7 @@ static GRANTS: [Grant; 10] = [
         env: PODMAN_ENV,
         own_config: false,
         unhides: NO_PATHS,
+        stand_ins: NO_PATHS,
     },
     Grant {
         name: "containerd",
@@ -76,6 +82,7 @@ static GRANTS: [Grant; 10] = [
         env: CONTAINERD_ENV,
         own_config: false,
         unhides: NO_PATHS,
+        stand_ins: NO_PATHS,
     },
     Grant {
         name: "crio",
@@ -85,6 +92,7 @@ static GRANTS: [Grant; 10] = [
         env: NO_PATHS,
         own_config: false,
         unhides: NO_PATHS,
+        stand_ins: NO_PATHS,
     },
     Grant {
         name: "libvirt",
@@ -94,6 +102,7 @@ static GRANTS: [Grant; 10] = [
         env: LIBVIRT_ENV,
         own_config: false,
         unhides: NO_PATHS,
+        stand_ins: NO_PATHS,
     },
     Grant {
         name: "lxd",
@@ -103,6 +112,7 @@ static GRANTS: [Grant; 10] = [
         env: NO_PATHS,
         own_config: false,
         unhides: NO_PATHS,
+        stand_ins: NO_PATHS,
     },
     Grant {
         name: "snap",
@@ -112,6 +122,7 @@ static GRANTS: [Grant; 10] = [
         env: NO_PATHS,
         own_config: false,
         unhides: NO_PATHS,
+        stand_ins: NO_PATHS,
     },
     Grant {
         name: "harness-config",
@@ -121,6 +132,7 @@ static GRANTS: [Grant; 10] = [
         env: NO_PATHS,
         own_config: true,
         unhides: NO_PATHS,
+        stand_ins: NO_PATHS,
     },
     Grant {
         name: "gh",
@@ -130,6 +142,7 @@ static GRANTS: [Grant; 10] = [
         env: GH_ENV,
         own_config: false,
         unhides: GH_UNHIDES,
+        stand_ins: NO_PATHS,
     },
     Grant {
         name: "git-credentials",
@@ -139,6 +152,17 @@ static GRANTS: [Grant; 10] = [
         env: NO_PATHS,
         own_config: false,
         unhides: GIT_CREDENTIAL_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "ssh",
+        exposes: "your ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them",
+        team_default_ok: false,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: SSH_UNHIDES,
+        stand_ins: SSH_STAND_INS,
     },
 ];
 

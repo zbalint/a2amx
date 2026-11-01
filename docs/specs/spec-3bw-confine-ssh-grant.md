@@ -133,4 +133,16 @@ Live check, done by the owner after the install (not a developer command): in a 
 
 ## Review record
 
-(Appended at acceptance.)
+Models: architect Claude Sonnet 5.5; consultant Claude Opus (team file `--model opus`); developer OMP with
+openai-codex/gpt-5.6-luna (the advisor's model is not exposed in the session); tester OMP, model not stated in its
+report. BLOCKED/amend cycles: 0.
+
+| Where found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The draft put a dry-run `stand-in:` line in `src/main.rs`, which its own scope excluded | Reuse the hidden-file mount: no `Plan` field, no `main.rs` edit |
+| Draft review | consultant | The draft missed four existing tests the new grant breaks, among them the typo test: `sh` became ambiguous between `gh` and `ssh`, and `ssh` was listed as an unknown name | Named in section 5, typo input changed to `gj` |
+| Draft review | consultant | The stand-in tests had no fixture seam for an absolute host path; the real-bubblewrap test needed the Host-fixture pattern for CI bubblewrap 0.9.0; the "drop the stand-in" mutant needed an argv assert | Host-conditional tests and an argv window assert in section 5 |
+| Draft review | consultant | The draft claimed how an unknown host fails and omitted the lost system settings and the `ControlPath` limit | Docs wording changed to "add the host from outside first" and both limits stated |
+| Implementation | developer | One new test returns early on a host without `/etc/ssh/ssh_config`, skipping its host-independent assertions | Accepted: CI has the file; both branches ran here |
+| Architect review | architect | Two whitespace slips (a removed blank line in `src/grant.rs`, a missing one in `src/confine.rs`) | Fixed by the architect before the tester pass |
+| Tester pass | tester | Plan file written after the first probes, because a hook blocked the first write | Disclosed; no result changed |

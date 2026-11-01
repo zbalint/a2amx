@@ -947,6 +947,194 @@ fn gh_grant_releases_its_environment_and_notice_names() {
 }
 
 #[test]
+fn ssh_grant_unhides_home_ssh_and_stands_in_host_config() {
+    let fixture = Fixture::new();
+    let ssh_dir = std::fs::canonicalize(fixture.home.join(".ssh")).expect("ssh directory");
+    let plain = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("plain plan");
+    assert!(plain.hidden_paths().contains(&ssh_dir));
+
+    let config_source = Path::new("/etc/ssh/ssh_config");
+    let config = std::fs::canonicalize(config_source).ok();
+    assert!(
+        !plain.skipped_paths().contains(&config_source.to_owned()),
+        "plain plans must not skip the SSH stand-in"
+    );
+    if let Some(config) = &config {
+        assert!(!plain.hidden_paths().contains(config));
+    }
+
+    for no_default_hides in [false, true] {
+        let plan = confine::plan(
+            &ConfineRequest {
+                grants: vec!["ssh".into()],
+                no_default_hides,
+                ..ConfineRequest::default()
+            },
+            Harness::Generic,
+            &fixture.cwd,
+            &fixture.host(),
+        )
+        .expect("ssh grant plan");
+        assert!(!plan.hidden_paths().contains(&ssh_dir));
+        let config_hidden = config
+            .as_ref()
+            .is_some_and(|config| plan.hidden_paths().contains(config));
+        let config_skipped = plan.skipped_paths().contains(&config_source.to_owned());
+        let wrapped = plan
+            .with_bwrap(PathBuf::from("bwrap"))
+            .wrap(vec!["true".into()])
+            .expect("ssh grant wrapper");
+        let ssh_dir = ssh_dir.to_string_lossy();
+        assert!(wrapped.windows(3).any(|window| {
+            window[0] == "--ro-bind" && window[1] == ssh_dir && window[2] == ssh_dir
+        }));
+        match &config {
+            Some(config) => {
+                assert!(config_hidden);
+                let empty = fixture.empty.to_string_lossy();
+                let config = config.to_string_lossy();
+                assert!(wrapped.windows(3).any(|window| {
+                    window[0] == "--ro-bind" && window[1] == empty && window[2] == config
+                }));
+            }
+            None => assert!(
+                config_skipped,
+                "missing SSH config must be reported as skipped"
+            ),
+        }
+    }
+}
+
+#[test]
+fn ssh_grant_operator_visibility_wins_and_key_hides_remain_supported() {
+    let fixture = Fixture::new();
+    let config_source = Path::new("/etc/ssh/ssh_config");
+    let Some(config) = std::fs::canonicalize(config_source).ok() else {
+        eprintln!("skipping SSH operator override assertions: host config is absent");
+        return;
+    };
+
+    let unhidden = confine::plan(
+        &ConfineRequest {
+            grants: vec!["ssh".into()],
+            unhide: vec![config_source.display().to_string()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("SSH unhide override");
+    assert!(!unhidden.hidden_paths().contains(&config));
+
+    let writable = confine::plan(
+        &ConfineRequest {
+            grants: vec!["ssh".into()],
+            write: vec![config_source.display().to_string()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("SSH write override");
+    assert!(!writable.hidden_paths().contains(&config));
+    let wrapped = writable
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("SSH write wrapper");
+    let config = config.to_string_lossy();
+    assert!(
+        wrapped
+            .windows(3)
+            .any(|window| { window[0] == "--bind" && window[1] == config && window[2] == config })
+    );
+
+    let whole_directory = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["ssh".into()],
+            hide: vec!["~/.ssh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("whole SSH directory hide must conflict"),
+        Err(error) => error,
+    };
+    assert!(
+        whole_directory
+            .to_string()
+            .contains("conflicts with the hide")
+    );
+
+    let key = fixture.home.join(".ssh/id_work");
+    std::fs::write(&key, "private key").expect("SSH key fixture");
+    let key = std::fs::canonicalize(key).expect("SSH key path");
+    let per_key = confine::plan(
+        &ConfineRequest {
+            grants: vec!["ssh".into()],
+            hide: vec![key.display().to_string()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("per-key SSH hide");
+    assert!(per_key.hidden_paths().contains(&key));
+}
+
+#[test]
+fn ssh_grant_runs_ssh_query_through_bwrap() -> anyhow::Result<()> {
+    let bwrap = match confine::resolve_bwrap(None) {
+        Ok(path) => path,
+        Err(error) if !require_bwrap() => {
+            eprintln!("skipping SSH bwrap probe: {error:#}");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    match Command::new("ssh").arg("-V").output() {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping SSH bwrap probe: ssh is not installed");
+            return Ok(());
+        }
+        Err(error) => return Err(error).context("probe ssh availability"),
+    }
+    let fixture = Fixture::new();
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["ssh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )?
+    .with_bwrap(bwrap);
+    let wrapped = plan.wrap(vec!["ssh".into(), "-G".into(), "example.invalid".into()])?;
+    match Command::new(&wrapped[0]).args(&wrapped[1..]).status() {
+        Ok(status) => {
+            assert_eq!(status.code(), Some(0));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping SSH bwrap probe: ssh is not installed");
+        }
+        Err(error) => return Err(error).context("run SSH bwrap probe"),
+    }
+    Ok(())
+}
+
+#[test]
 fn write_limit_error_precedes_hide_limit_error() {
     let fixture = Fixture::new();
     let request = ConfineRequest {

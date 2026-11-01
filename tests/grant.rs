@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use a2amx::grant;
+use a2amx::{grant, team};
 
 #[test]
 fn grant_table_has_expected_rows() {
@@ -14,12 +14,14 @@ fn grant_table_has_expected_rows() {
             ],
             vec!["DOCKER_HOST", "DOCKER_CONTEXT"],
             vec![],
+            vec![],
             false,
         ),
         (
             "podman",
             vec!["/run/podman/podman.sock"],
             vec!["CONTAINER_HOST", "CONTAINER_CONNECTION"],
+            vec![],
             vec![],
             false,
         ),
@@ -33,13 +35,22 @@ fn grant_table_has_expected_rows() {
             ],
             vec!["CONTAINERD_ADDRESS", "BUILDKIT_HOST"],
             vec![],
+            vec![],
             false,
         ),
-        ("crio", vec!["/run/crio/crio.sock"], vec![], vec![], false),
+        (
+            "crio",
+            vec!["/run/crio/crio.sock"],
+            vec![],
+            vec![],
+            vec![],
+            false,
+        ),
         (
             "libvirt",
             vec!["/run/libvirt/libvirt-sock"],
             vec!["LIBVIRT_DEFAULT_URI"],
+            vec![],
             vec![],
             false,
         ),
@@ -52,6 +63,7 @@ fn grant_table_has_expected_rows() {
             ],
             vec![],
             vec![],
+            vec![],
             false,
         ),
         (
@@ -59,14 +71,16 @@ fn grant_table_has_expected_rows() {
             vec!["/run/snapd.socket", "/run/snapd-snap.socket"],
             vec![],
             vec![],
+            vec![],
             false,
         ),
-        ("harness-config", vec![], vec![], vec![], true),
+        ("harness-config", vec![], vec![], vec![], vec![], true),
         (
             "gh",
             vec![],
             vec!["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"],
             vec!["~/.config/gh"],
+            vec![],
             false,
         ),
         (
@@ -74,18 +88,28 @@ fn grant_table_has_expected_rows() {
             vec![],
             vec![],
             vec!["~/.git-credentials", "~/.config/git/credentials"],
+            vec![],
+            false,
+        ),
+        (
+            "ssh",
+            vec![],
+            vec![],
+            vec!["~/.ssh"],
+            vec!["/etc/ssh/ssh_config"],
             false,
         ),
     ];
     let all = grant::all();
     assert_eq!(all.len(), expected.len());
-    for ((name, sockets, env, unhides, own_config), row) in expected.iter().zip(all) {
+    for ((name, sockets, env, unhides, stand_ins, own_config), row) in expected.iter().zip(all) {
         assert_eq!(row.name, *name);
         assert!(!row.exposes.is_empty());
         assert!(!row.team_default_ok);
         assert_eq!(row.sockets, sockets.as_slice());
         assert_eq!(row.env, env.as_slice());
         assert_eq!(row.unhides, unhides.as_slice());
+        assert_eq!(row.stand_ins, stand_ins.as_slice());
         assert_eq!(row.own_config, *own_config);
     }
 }
@@ -102,6 +126,11 @@ fn credential_grant_rows_have_exact_exposure_text() {
         git_credentials.exposes,
         "the plain-text git credential files: every host and password stored there"
     );
+    let ssh = grant::lookup("ssh").expect("ssh grant");
+    assert_eq!(
+        ssh.exposes,
+        "your ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them"
+    );
 }
 
 #[test]
@@ -116,7 +145,7 @@ fn grant_validation_rejects_repeats_and_suggests_close_names() {
         ("contaner", "containerd"),
         ("gx", "gh"),
         ("g", "gh"),
-        ("sh", "gh"),
+        ("gj", "gh"),
         ("lx", "lxd"),
         ("gitcredentials", "git-credentials"),
     ] {
@@ -127,7 +156,7 @@ fn grant_validation_rejects_repeats_and_suggests_close_names() {
                 .contains(&format!("closest match: {closest}"))
         );
     }
-    for name in ["ssh", "gpg", "git"] {
+    for name in ["gpg", "git"] {
         let error = grant::lookup(name).expect_err("ambiguous close typo");
         assert!(
             !error.to_string().contains("closest match"),
@@ -146,6 +175,13 @@ fn old_containers_name_reports_the_split_grants() {
         error.to_string(),
         "confinement grant \"containers\" was split into one grant per runtime: docker, podman, containerd, crio, libvirt, lxd, snap; run a2amx confine list"
     );
+}
+#[test]
+fn team_table_rejects_ssh_grant() {
+    let error =
+        team::parse("[confine]\ngrants = ['ssh']\n[[session]]\nname = 'worker'\ncommand = ['cat']")
+            .expect_err("team ssh grant");
+    assert!(error.to_string().contains("grant it in the session"));
 }
 
 #[test]
@@ -182,6 +218,10 @@ fn render_list_has_every_grant_and_instruction() {
     assert_eq!(
         lines[9],
         "git-credentials session only   the plain-text git credential files: every host and password stored there"
+    );
+    assert_eq!(
+        lines[10],
+        "ssh             session only   your ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them"
     );
     assert_eq!(
         lines.last().copied(),
