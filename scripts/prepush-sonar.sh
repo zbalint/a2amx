@@ -16,7 +16,7 @@ git clone -q . "$scratch"
 git -C "$scratch" update-ref refs/heads/develop "$base_sha"
 git -C "$scratch" checkout -q --detach "$head_sha"
 merge_base="$(git -C "$scratch" merge-base HEAD develop)"
-if [ "$merge_base" = "$head_sha" ]; then
+if [[ "$merge_base" = "$head_sha" ]]; then
   echo "HEAD is already in origin/develop: no new code to scan, the gate would be vacuous" >&2
   exit 2
 fi
@@ -36,7 +36,7 @@ cargo llvm-cov report --lcov --output-path lcov.info
 
 # Reports hold absolute paths; point them at the clone.
 sed "s#$PWD/#$scratch/#" lcov.info > "$scratch/lcov.info"
-if [ -f js.lcov ]; then sed "s#$PWD/#$scratch/#" js.lcov > "$scratch/js.lcov"; fi
+if [[ -f js.lcov ]]; then sed "s#$PWD/#$scratch/#" js.lcov > "$scratch/js.lcov"; fi
 
 cd "$scratch"
 sonar-scanner \
