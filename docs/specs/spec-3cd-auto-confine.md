@@ -68,8 +68,9 @@ read-only home and `npm install` fails. Credential grants have no `create`. Crea
 `~/.semgrep` or `~/.sonar` is not creating a credential: a token appears there only after a login.
 A table test in `tests/grant.rs` pins three invariants: a grant with a non-empty `detect` has
 `team_default_ok: true`; every `create` entry is one of that grant's `unhides`; `create` is empty for
-every grant with a non-empty `env`, for `gh`, `git-credentials`, `ssh`, `aws`, `gcloud`, `azure`, `kube`,
-`terraform`, `npm-token`, `pypi-token`, `cargo-token`, `netrc` and `huggingface-token`.
+`gh`, `git-credentials`, `ssh`, `aws`, `gcloud`, `azure`, `kube`, `terraform`, `npm-token`, `pypi-token`,
+`cargo-token`, `netrc` and `huggingface-token` (Amendment 1: not keyed on `env`, because `sonar` passes
+`SONAR_TOKEN` and still creates the empty `~/.sonar`).
 
 ## 3. `src/suggest.rs`: detection, pure
 
@@ -125,10 +126,10 @@ the user's own home and is trusted input.
 
 - `ConfineTable`: remove `build_paths`; add `auto: Option<bool>`.
 - `merge_confine` gains a parameter `global: bool` (true when `parse_with` has a `default_team`).
-- `auto` in `[session.confine]`: error `session {name}: auto belongs in the team's [confine] table, not [session.confine]`.
+- The `auto` key present in `[session.confine]`, with any value (`true` or `false`): error `session {name}: auto belongs in the team's [confine] table, not [session.confine]` (Amendment 1).
 - `auto = true` when `global` is false: error `[confine] auto is only read from the global team file; run a2amx confine suggest and paste the grants line into your team file`.
 - `auto = true` without `enabled = true` at team level: error `[confine] auto needs enabled = true`.
-- `auto = false` is accepted everywhere and means nothing.
+- `auto = false` in the team `[confine]` table of any team file (global, local or `--file`) is accepted and means nothing (Amendment 1).
 - `TeamSession` gains `#[serde(skip)] pub auto: bool`, set from the team table when `global`. The
   team-level `enabled` and session-level `enabled = false` interplay is unchanged: a session whose
   merged confinement is disabled gets `confine = None` and auto does nothing for it.
@@ -219,8 +220,9 @@ Tests, through public seams, literal expected values (new unless marked contract
    on `["cargo", "cache"]` (table order) is a fixed literal; empty input is a fixed literal.
 4. `team::parse_with`: with a default team, `[confine] enabled = true, auto = true` yields sessions
    with `auto == true`; without a default team the same file errors with the exact text in section 5;
-   `[session.confine] auto` errors; `auto = true` without `enabled` errors; `auto = false` parses
-   everywhere and leaves `auto == false`.
+   `[session.confine] auto = true` and `[session.confine] auto = false` each error; `auto = true`
+   without `enabled` errors; team-level `auto = false` parses in a global file and in a local file and
+   leaves `auto == false`.
 5. `confine::plan_*` (new tests, not contracts: the old code opened `~/.cache` whenever `build_paths`
    was true): no `build_paths` field exists; a Claude and an OMP plan list the harness config
    directory writable by default; a plan with no grants leaves `~/.cargo` and `~/.cache` read-only or
@@ -284,3 +286,19 @@ file.
 | the dry run prints harness-config and a `grants:` line from the plan | `src/confine.rs:2240-2245`, `src/main.rs:1158` | read by the consultant |
 | `ConfineRequest` fields are all `serde(default)`, so dropping one is wire-tolerant | `src/confine.rs:106-124` | read |
 | `.semgrep.yml`, `.semgrep.yaml`, `.semgrep` are semgrep's markers; first-run writes under `~/.semgrep` and `~/.sonar` | recall | UNVERIFIED |
+
+## Amendment 1
+
+The developer reported two contradictions (BLOCKED). Both were real and are resolved here; the
+sections above are edited to match and name this amendment.
+
+1. Section 2 required `sonar` to create `~/.sonar` and also required `create` to be empty for every
+   grant with a non-empty `env`, but `sonar` passes `SONAR_TOKEN` (`src/grant.rs` ~269 to ~275). The
+   `env` clause was a proxy for "credential location" and is dropped. The table invariant is: `create`
+   is empty for the named credential grants only (section 2). `sonar` keeps `create = ~/.sonar`: an
+   empty directory is not a credential, and the token reaches the session through the environment
+   under the existing `sonar` grant, not through this directory.
+2. Section 5 said `auto` in `[session.confine]` errors and also that `auto = false` is accepted
+   everywhere. Resolved: the key's presence in `[session.confine]` is an error with any value; a
+   team-level `auto = false` is accepted in the `[confine]` table of any team file and means nothing.
+   Section 9 test 4 states both.
