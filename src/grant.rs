@@ -137,7 +137,7 @@ static GRANTS: [Grant; 11] = [
     Grant {
         name: "gh",
         exposes: "your GitHub CLI login (~/.config/gh) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you",
-        team_default_ok: false,
+        team_default_ok: true,
         sockets: NO_PATHS,
         env: GH_ENV,
         own_config: false,
@@ -147,7 +147,7 @@ static GRANTS: [Grant; 11] = [
     Grant {
         name: "git-credentials",
         exposes: "the plain-text git credential files: every host and password stored there",
-        team_default_ok: false,
+        team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
         own_config: false,
@@ -157,7 +157,7 @@ static GRANTS: [Grant; 11] = [
     Grant {
         name: "ssh",
         exposes: "your ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them",
-        team_default_ok: false,
+        team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
         own_config: false,

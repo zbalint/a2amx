@@ -1173,7 +1173,7 @@ async fn dry_run_start(
         }
         for path in &plan.build_writes {
             output.push_str(&format!(
-                "  writable: {} (from build files)\n",
+                "  writable: {} (tool directory)\n",
                 path.display()
             ));
         }

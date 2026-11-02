@@ -21,7 +21,7 @@ const ECOSYSTEMS: [EcosystemInfo; 6] = [
         ecosystem: Ecosystem::Rust,
         label: "Rust",
         markers: &["Cargo.toml"],
-        write_paths: &["~/.cargo/registry"],
+        write_paths: &["~/.cargo"],
         note: "Rust: a Git dependency also needs ~/.cargo/git (untested).",
     },
     EcosystemInfo {
@@ -95,6 +95,15 @@ pub fn write_paths(found: &[(Ecosystem, &'static str)]) -> Vec<&'static str> {
         }
     }
     write_paths
+}
+
+const COMMON_WRITE_PATHS: [&str; 1] = ["~/.cache"];
+
+/// Return common tool directories followed by the unique ecosystem cache paths.
+pub fn default_write_paths(found: &[(Ecosystem, &'static str)]) -> Vec<&'static str> {
+    let mut paths = COMMON_WRITE_PATHS.to_vec();
+    paths.extend(write_paths(found));
+    paths
 }
 
 /// Render the confinement fragment and its ecosystem notes.

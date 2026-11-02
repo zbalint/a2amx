@@ -1710,11 +1710,17 @@ cwd = "."
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let registry = user_home.path().join(".cargo/registry");
-    assert!(!registry.exists());
+    let cargo = user_home.path().join(".cargo");
+    let cache = user_home.path().join(".cache");
+    assert!(!cargo.exists());
+    assert!(!cache.exists());
     assert!(stdout.contains(&format!(
-        "  writable: {} (from build files)\n",
-        registry.display()
+        "  writable: {} (tool directory)\n",
+        cargo.display()
+    )));
+    assert!(stdout.contains(&format!(
+        "  writable: {} (tool directory)\n",
+        cache.display()
     )));
 }
 
@@ -2910,33 +2916,17 @@ fn confine_table_rejects_old_keys_and_team_grants() {
         assert_eq!(error.to_string(), expected);
     }
 
-    let team_grant = team::parse(
-        "[confine]\ngrants = ['docker']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+    team::parse(
+        "[confine]\ngrants = ['gh', 'ssh', 'git-credentials']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
     )
-    .expect_err("team grant");
-    assert!(team_grant.to_string().contains("grant it in the session"));
-    let harness_config_team_grant = team::parse(
-        "[confine]\ngrants = ['harness-config']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
-    )
-    .expect_err("team harness-config grant");
-    assert!(
-        harness_config_team_grant
-            .to_string()
-            .contains("grant it in the session")
-    );
-    let gh_team_grant =
-        team::parse("[confine]\ngrants = ['gh']\n[[session]]\nname = 'worker'\ncommand = ['cat']")
-            .expect_err("team gh grant");
-    assert!(
-        gh_team_grant
-            .to_string()
-            .contains("grant it in the session")
-    );
-    assert!(
-        gh_team_grant
-            .to_string()
-            .contains("your GitHub CLI login (~/.config/gh)")
-    );
+    .expect("credential team grants");
+    for grant in ["docker", "harness-config"] {
+        let error = team::parse(&format!(
+            "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
+        ))
+        .expect_err("non-credential team grant");
+        assert!(error.to_string().contains("grant it in the session"));
+    }
 }
 
 #[test]

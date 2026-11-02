@@ -113,13 +113,16 @@ Use an optional team-level `[confine]` table for defaults and a `[session.confin
 table for session settings. `enabled` defaults to false; `default_hides` defaults to
 true, and `build_paths` defaults to true once confinement is enabled. `write`, `hide`,
 and `unhide` lists add team entries before session entries, while scalars override.
-`grants` and `keep_env` are per session only; run `a2amx confine list` for the valid
-grant names and see [Confinement](confinement.md#credential-environment-variables) for
-the closed credential environment list. A confined session with a recognized Rust,
-Node, Maven, or Gradle marker gets that ecosystem's cache paths writable automatically;
-set `build_paths = false` to opt out. Go and Python paths remain explicit recipes.
-A team-level `keep_env` is refused. Credential or privileged grants cannot be team defaults.
-For a session that pushes with `gh`, put `grants = ["gh"]` in its `[session.confine]` table.
+`keep_env` is per session only. The credential grants `gh`, `ssh`, and
+`git-credentials` may be set at team level when every session in the team should have that
+access; container grants and `harness-config` remain session-only. Run `a2amx confine list`
+for the valid grant names and see [Confinement](confinement.md#credential-environment-variables)
+for the closed credential environment list. A confined session with a recognized Rust, Node,
+Maven, or Gradle marker gets that ecosystem's cache paths writable automatically; set
+`build_paths = false` to opt out. Go and Python paths remain explicit recipes.
+A team-level `keep_env` is refused. A Claude or OMP session also gets its own harness config
+directory writable by default when build paths are enabled; use `grants = ["harness-config"]`
+for persistent writes, or `hide`/`unhide` the exact root to opt out of that default.
 Options on a disabled session need `enabled = true`; team options without any enabled
 value confine nothing. Lists accept at most 64 entries of at most 4096 bytes. Codex
 sessions cannot be confined.

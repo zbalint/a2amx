@@ -162,3 +162,18 @@ Live check by the owner after the install: a session started with only `[confine
 ## Review record
 
 (Appended at acceptance.)
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus (team file `--model opus`); developer OMP with
+openai-codex/gpt-5.6-luna (the advisor's model is not exposed in the session); tester OMP with
+openai-codex/gpt-5.6-luna. BLOCKED/amend cycles: 0.
+
+| Where found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Opening `~/.cargo` whole would make `~/.cargo/bin` writable, a PATH directory the code protects | New step: `protect_system_paths` runs again after the build writes |
+| Draft review | consultant | The draft named the wrong mechanism for mounting a nested hide after its writable parent | Rewritten around the existing `path_depth` mount order and the one-sided `is_within` skip rule |
+| Draft review | consultant | A skipped note for the implicit harness-config could not be built with the existing `Unresolved` shape | Reuse `Unresolved { option: "harness-config", .. }` |
+| Draft review | consultant | The label change was scoped to the notice only, missing the dry run in `src/main.rs`; several existing tests the changes break were not listed | Scope and test list extended |
+| Architect review | architect | One blank line missing before `const COMMON_WRITE_PATHS` in `src/suggest.rs` | Fixed by the architect during the tester pass |
+| Implementation | developer | A concurrent baseline run overlapped the deliberate red test edit; a restored `# fragment` marker was lost once and caught by `docs_examples` | Not used as evidence; marker restored, final run green |

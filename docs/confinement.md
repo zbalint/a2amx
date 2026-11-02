@@ -6,9 +6,9 @@ Confinement is a safety net for a trusted but fallible agent, not a security bou
 
 | Area | Default |
 | --- | --- |
-| Writable | The workspace, its Git directory, the harness's data paths, and a private `/tmp`; `write = ["~"]` deliberately opens the home directory. |
-| Read-only | The rest of the filesystem by default; a writable home still keeps `~/.a2amx`, existing `PATH` directories inside home, harness control files and directories, and this session's Git `hooks`, `config`, `config.worktree`, `core.hooksPath`, and team file read-only. |
-| Hidden | Secret locations such as `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.npmrc`, and `~/.docker`; the state and runtime directories, `/run/WSL`, `/mnt/wslg`, and the container sockets. |
+| Writable | The workspace, its Git directory, the harness's data paths, a private `/tmp`, and `~/.cache`; detected Rust, Node, Maven, and Gradle projects also open their tool caches (`~/.cargo`, `~/.npm`, `~/.m2/repository`, and Gradle caches). Claude and OMP sessions with build paths enabled also open their own harness config directory. `write = ["~"]` deliberately opens the home directory. |
+| Read-only | The rest of the filesystem by default; writable defaults still keep `~/.a2amx`, existing `PATH` directories inside home, harness control files and directories, and this session's Git `hooks`, `config`, `config.worktree`, `core.hooksPath`, and team file read-only. |
+| Hidden | Secret locations such as `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.npmrc`, and `~/.docker`; credential files under the writable tool directories, the state and runtime directories, `/run/WSL`, `/mnt/wslg`, and container sockets. |
 
 
 Hide and write are strict by default; you open what you name.
@@ -33,7 +33,7 @@ a2amx new --confine \
 
 `~` and `~/...` expand to your home directory. Absolute paths are accepted; other relative paths are relative to the session's working directory. Environment variables are not expanded, and `~user` forms are rejected. To reach a relative directory literally named `$x`, write `./$x`. A path that does not exist is retained in the dry run as an unresolved operator entry with its option and reason; missing defaults remain skipped. Each of the three lists accepts at most 64 entries.
 
-When confinement is enabled by `a2amx new --confine` or a team file, detected Rust, Node, Maven, and Gradle build files open their listed cache paths automatically. Set `build_paths = false` in the relevant confine table, or pass `--confine-no-build-paths`, to opt out. Go and Python remain the recipes below because their build paths are environment-specific or workspace-local.
+When confinement is enabled by `a2amx new --confine` or a team file, `~/.cache` is opened as a disposable common tool directory. Detected Rust, Node, Maven, and Gradle build files additionally open `~/.cargo`, `~/.npm`, `~/.m2/repository`, and the Gradle cache and wrapper directories. Claude and OMP sessions also open their own harness config directory by default when `build_paths` is true. Set `build_paths = false` in the relevant confine table, or pass `--confine-no-build-paths`, to opt out. Go and Python remain the recipes below because their build paths are environment-specific or workspace-local.
 
 ### Team file
 
@@ -52,13 +52,15 @@ The dry run shows the effective restrictions. An operator `write`, `hide`, or `u
 ### How the options combine
 
 The effective session setting uses the session table when a scalar is present, otherwise
-the team table, otherwise the default (`enabled = false`, `default_hides = true`). The
-`build_paths` scalar follows the same session-over-team precedence and defaults to true
+the team table, otherwise the default (`enabled = false`, `default_hides = true`).
+The `build_paths` scalar follows the same session-over-team precedence and defaults to true
 once confinement is enabled. The `write`, `hide`, and `unhide` lists add in team-then-session order, with exact duplicates
-kept once; `grants` is per session only. `enabled = false` needs no other key. A team table
+kept once. `grants` is per session except for the credential grants `gh`, `ssh`, and
+`git-credentials`, which may be set in the team table when every session in that team should
+have the access. `enabled = false` needs no other key. A team table
 with options but no `enabled` anywhere confines nothing, while team `enabled = false` and
-session `enabled = true` confines that session and still applies the team's lists. A
-credential or privileged grant must be named by the session that needs it, never team-wide.
+session `enabled = true` confines that session and still applies the team's lists. Container
+and harness-config grants remain session-only.
 
 ### Grants
 
@@ -72,13 +74,16 @@ credential or privileged grant must be named by the session that needs it, never
 | `lxd` | lxd and incus container daemon sockets: effectively root on the host | No; grant it per session. |
 | `snap` | snapd package management: installs and removes packages | No; grant it per session. |
 | `harness-config` | the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately | No; grant it per session. |
-| `gh` | your GitHub CLI login (`~/.config/gh`) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you | No; grant it per session. |
-| `git-credentials` | the plain-text git credential files: every host and password stored there | No; grant it per session. |
-| `ssh` | your ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them | No; grant it per session. |
+| `gh` | your GitHub CLI login (`~/.config/gh`) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you | Yes; team or session. |
+| `git-credentials` | the plain-text git credential files: every host and password stored there | Yes; team or session. |
+| `ssh` | your ssh keys and config (`~/.ssh`, read-only): the agent can log in to every host those keys open as you, and push with them | Yes; team or session. |
 
 Grant names are closed and validated before launch. Each runtime grant is a separate opt-in;
-`harness-config` is a separate session-only opt-in for the harness directory. `gh`,
-`git-credentials` and `ssh` are credential grants and must be named by the session that needs them.
+`harness-config` is a separate session-only opt-in for a persistent harness directory. Claude and
+OMP sessions with build paths enabled receive a temporary writable harness directory without
+naming that grant; `no_default_hides = true` also makes its default hidden control paths readable
+and writable. Hide or unhide the exact harness root to opt out of that implicit access. `gh`,
+`git-credentials` and `ssh` may be named at team level when all sessions should receive them.
 These grants do not make a session a sandbox. Run `a2amx confine list` for the current table
 and descriptions.
 
@@ -95,7 +100,7 @@ symlink, the grant opens its canonical target. Open it only for an agent you tru
 
 Open a directory when an accident in it is recoverable: a cache is disposable, and a toolchain can be reinstalled. Keep credentials, the repository itself, installed binaries, and state closed. Prefer the narrowest cache directory.
 
-When a tool reports `Read-only file system`, add the directory named in the error to `write` in the session's `[session.confine]` table, not `$HOME`, unless opening the whole home is your deliberate choice. `write = ["~"]` makes everything under home writable except the hides and protected launch inputs; the choice belongs to the user. Whatever you open stays writable for the next unconfined run too. The recipe entries below are caches; opening all of `~/.cargo` also opens `~/.cargo/bin` and `~/.cargo/config.toml`, while its `credentials` files stay hidden when they exist at launch.
+When a tool reports `Read-only file system`, add the directory named in the error to `write` in the session's `[session.confine]` table, not `$HOME`, unless opening the whole home is your deliberate choice. `write = ["~"]` makes everything under home writable except the hides and protected launch inputs; the choice belongs to the user. Whatever you open stays writable for the next unconfined run too. The default `~/.cargo` tool directory keeps `~/.cargo/bin` read-only when it is on `PATH`, so `cargo install` into that directory fails; set `CARGO_INSTALL_ROOT` to another writable location. `~/.cargo/env` and `~/.cargo/config.toml` are writable, and later builds execute the configuration they contain.
 
 ## What stays open
 
@@ -121,29 +126,31 @@ Existing settings, plugins and other regular control files in the harness direct
 
 Several confined sessions do not exclude one another while renewing because each has its own lock. Renewals that happen together may need one session restart. A confined session renewing while an unconfined harness of the same account also renews can end up logged out and needs the same restart; Claude re-reads the saved login after a 401. The refresh token lasts weeks, and an expired one needs the same normal-terminal login.
 
-Bubblewrap 0.11 or newer is required for the overlay (Ubuntu 24.04 ships 0.9, which keeps the previous behavior). An older version keeps the previous behavior with a plain notice line. The overlay uses memory (a tmpfs with no size bound). To make the harness config directory persistent and writable, add `grants = ["harness-config"]` in the session's `[session.confine]` table. This grant is session-only and cannot be set in a team-level table; without it, `write = ["~/.claude"]` remains the explicit persistent-write option.
+Bubblewrap 0.11 or newer is required for the overlay (Ubuntu 24.04 ships 0.9, which keeps the previous behavior). An older version keeps the previous behavior with a plain notice line. The overlay uses memory (a tmpfs with no size bound). Claude and OMP sessions with build paths enabled make their own harness config directory writable by default, but only the harness data is persistent; other writes are discarded at exit. To make the whole harness config directory persistent and writable, add `grants = ["harness-config"]` in the session's `[session.confine]` table. This grant is session-only and cannot be set in a team-level table; `no_default_hides = true` also opens the default hidden control paths. `write = ["~/.claude"]` remains the explicit persistent-write option.
 
-With build-path defaults enabled, Rust, Node, Maven, and Gradle markers cause the cache paths shown below to be opened automatically. The TOML fragments are still useful when `build_paths = false` or when adding an explicit path; they no longer need to be copied for the default case.
+With build-path defaults enabled, `~/.cache` is opened as a common disposable tool directory. Rust, Node, Maven, and Gradle markers additionally open their ecosystem cache paths automatically. The TOML fragments are still useful when `build_paths = false` or when adding an explicit path; they no longer need to be copied for the default case.
 
 ## Recipes by ecosystem
 
 ### Rust
 
-With `~/.cargo` read-only, a build that needs an uncached crate fails while creating a `.crate` file under `~/.cargo/registry`; the probe reported `humantime-2.0.0.crate` and `Read-only file system`. With only `~/.cargo/registry` writable, the build downloaded `humantime 2.0.1` and compiled. The workspace `target` directory needs no entry.
+With `~/.cargo` read-only, a build that needs an uncached crate fails while creating a `.crate` file under `~/.cargo/registry`; the probe reported `humantime-2.0.0.crate` and `Read-only file system`. The default for a Rust marker is the broader `~/.cargo` directory, which also covers registry, Git checkouts, and cargo-deny advisory databases. The workspace `target` directory needs no entry.
 
 ```toml
 # fragment
 [session.confine]
-write = ["~/.cargo/registry"]
+write = ["~/.cargo"]
 ```
 
 Equivalent command-line option:
 
 ```sh
-a2amx new --confine --confine-write ~/.cargo/registry -- cargo build
+a2amx new --confine --confine-write ~/.cargo -- cargo build
 ```
 
-Add `~/.cargo/git` for Git dependencies; that path was not tested. Opening all of `~/.cargo` also makes `~/.cargo/bin` (where the `cargo` and `rustc` proxies run unconfined) and `~/.cargo/config.toml` writable. The `~/.cargo/credentials` and `~/.cargo/credentials.toml` files remain hidden if they exist when the session starts.
+Add `~/.cargo/git` only when using an explicit narrower registry path. The default protects `~/.cargo/bin` when it is on `PATH`; `cargo install` there fails, so set `CARGO_INSTALL_ROOT` to a writable directory. `~/.cargo/config.toml` and `~/.cargo/env` remain writable and later builds run what they contain. The `~/.cargo/credentials` and `~/.cargo/credentials.toml` files remain hidden if they exist when the session starts.
+
+The defaults use the literal `~/.cargo` and `~/.cache` locations; `CARGO_HOME` and `XDG_CACHE_HOME` set elsewhere are not detected or honoured. `mv` or `rm` of `~/.cache/huggingface` acts on the host directory even though `~/.cache/huggingface/token` itself is hidden. A state directory under `~/.cache` makes that common cache an unresolved build path rather than a writable mount.
 
 ### Node with npm
 
@@ -379,7 +386,7 @@ HTTPS recipe above if that is preferable.
 
 ## A complete team file
 
-The following file sets team defaults in `[confine]` and uses `cwd = "."`. The architect session writes only in the workspace; the developer session also gets the narrow Rust and npm cache directories:
+The following file sets team defaults in `[confine]` and uses `cwd = "."`. Build-path defaults already open the common cache and detected ecosystem directories; the explicit lines below show how to opt into a narrower or additional path.
 
 ```toml
 team = "myproject"
@@ -398,5 +405,5 @@ role = "developer"
 command = ["omp"]
 cwd = "."
 [session.confine]
-write = ["~/.cargo/registry", "~/.npm"]
+write = ["~/.cargo", "~/.npm"]
 ```

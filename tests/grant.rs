@@ -16,6 +16,7 @@ fn grant_table_has_expected_rows() {
             vec![],
             vec![],
             false,
+            false,
         ),
         (
             "podman",
@@ -23,6 +24,7 @@ fn grant_table_has_expected_rows() {
             vec!["CONTAINER_HOST", "CONTAINER_CONNECTION"],
             vec![],
             vec![],
+            false,
             false,
         ),
         (
@@ -37,6 +39,7 @@ fn grant_table_has_expected_rows() {
             vec![],
             vec![],
             false,
+            false,
         ),
         (
             "crio",
@@ -45,6 +48,7 @@ fn grant_table_has_expected_rows() {
             vec![],
             vec![],
             false,
+            false,
         ),
         (
             "libvirt",
@@ -52,6 +56,7 @@ fn grant_table_has_expected_rows() {
             vec!["LIBVIRT_DEFAULT_URI"],
             vec![],
             vec![],
+            false,
             false,
         ),
         (
@@ -65,6 +70,7 @@ fn grant_table_has_expected_rows() {
             vec![],
             vec![],
             false,
+            false,
         ),
         (
             "snap",
@@ -73,14 +79,24 @@ fn grant_table_has_expected_rows() {
             vec![],
             vec![],
             false,
+            false,
         ),
-        ("harness-config", vec![], vec![], vec![], vec![], true),
+        (
+            "harness-config",
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            false,
+            true,
+        ),
         (
             "gh",
             vec![],
             vec!["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"],
             vec!["~/.config/gh"],
             vec![],
+            true,
             false,
         ),
         (
@@ -89,6 +105,7 @@ fn grant_table_has_expected_rows() {
             vec![],
             vec!["~/.git-credentials", "~/.config/git/credentials"],
             vec![],
+            true,
             false,
         ),
         (
@@ -97,15 +114,18 @@ fn grant_table_has_expected_rows() {
             vec![],
             vec!["~/.ssh"],
             vec!["/etc/ssh/ssh_config"],
+            true,
             false,
         ),
     ];
     let all = grant::all();
     assert_eq!(all.len(), expected.len());
-    for ((name, sockets, env, unhides, stand_ins, own_config), row) in expected.iter().zip(all) {
+    for ((name, sockets, env, unhides, stand_ins, team_default_ok, own_config), row) in
+        expected.iter().zip(all)
+    {
         assert_eq!(row.name, *name);
         assert!(!row.exposes.is_empty());
-        assert!(!row.team_default_ok);
+        assert_eq!(row.team_default_ok, *team_default_ok);
         assert_eq!(row.sockets, sockets.as_slice());
         assert_eq!(row.env, env.as_slice());
         assert_eq!(row.unhides, unhides.as_slice());
@@ -177,11 +197,20 @@ fn old_containers_name_reports_the_split_grants() {
     );
 }
 #[test]
-fn team_table_rejects_ssh_grant() {
-    let error =
-        team::parse("[confine]\ngrants = ['ssh']\n[[session]]\nname = 'worker'\ncommand = ['cat']")
-            .expect_err("team ssh grant");
-    assert!(error.to_string().contains("grant it in the session"));
+fn team_table_accepts_credential_grants_and_rejects_the_rest() {
+    for grant in ["gh", "ssh", "git-credentials"] {
+        team::parse(&format!(
+            "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
+        ))
+        .expect("credential grant is allowed team-wide");
+    }
+    for grant in ["docker", "harness-config"] {
+        let error = team::parse(&format!(
+            "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
+        ))
+        .expect_err("non-credential grant is session-only");
+        assert!(error.to_string().contains("grant it in the session"));
+    }
 }
 
 #[test]
@@ -199,9 +228,14 @@ fn render_list_has_every_grant_and_instruction() {
             "{line:?} has no separating space after {}",
             row.name
         );
+        let scope = if row.team_default_ok {
+            "team or session"
+        } else {
+            "session only"
+        };
         let scope_offset = after_name
-            .find("session only")
-            .expect("each rendered row reports the literal session-only scope");
+            .find(scope)
+            .expect("each rendered row reports its grant scope");
         assert!(
             scope_offset > 0
                 && after_name[..scope_offset]
@@ -213,15 +247,15 @@ fn render_list_has_every_grant_and_instruction() {
     }
     assert_eq!(
         lines[8],
-        "gh              session only   your GitHub CLI login (~/.config/gh) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you"
+        "gh              team or sessionyour GitHub CLI login (~/.config/gh) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you"
     );
     assert_eq!(
         lines[9],
-        "git-credentials session only   the plain-text git credential files: every host and password stored there"
+        "git-credentials team or sessionthe plain-text git credential files: every host and password stored there"
     );
     assert_eq!(
         lines[10],
-        "ssh             session only   your ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them"
+        "ssh             team or sessionyour ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them"
     );
     assert_eq!(
         lines.last().copied(),

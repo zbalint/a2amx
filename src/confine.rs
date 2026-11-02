@@ -648,7 +648,7 @@ pub fn ensure_build_paths(
     hidden.retain(|path| !unhidden.iter().any(|unhidden| unhidden == path));
 
     let found = crate::suggest::detect(|marker| cwd.join(marker).is_file());
-    for path in crate::suggest::write_paths(&found) {
+    for path in crate::suggest::default_write_paths(&found) {
         let source = user_path(path, &home);
         let record = |unresolved: &mut Vec<Unresolved>, reason: String| {
             unresolved.push(Unresolved {
@@ -974,7 +974,39 @@ pub fn plan_with_preflight(
     let empty_file = plan_empty_file(host, &builder.state_dir)?;
     builder.bind_workspace(&cwd)?;
     builder.bind_harness_data()?;
-    builder.bind_harness_config(&request.grants)?;
+    let mut effective_grants = request.grants.clone();
+    if request.build_paths
+        && matches!(harness, Harness::Claude | Harness::Omp)
+        && !request.grants.iter().any(|grant| grant == "harness-config")
+    {
+        let root = match harness {
+            Harness::Claude => builder.home.join(".claude"),
+            Harness::Omp => builder.home.join(".omp"),
+            Harness::Generic | Harness::Codex => unreachable!(),
+        };
+        let root = canonical_if_exists(&root);
+        let operator_root = root.as_ref().is_some_and(|root| {
+            request
+                .hide
+                .iter()
+                .chain(&request.unhide)
+                .map(|path| user_path(path, &builder.home))
+                .filter_map(|path| canonical_if_exists(&path))
+                .any(|path| path.as_path() == root.as_path())
+        });
+        if operator_root {
+            if let Some(root) = root {
+                builder.unresolved.push(Unresolved {
+                    option: "harness-config",
+                    path: root,
+                    reason: "operator hide or unhide of the harness root".into(),
+                });
+            }
+        } else {
+            effective_grants.push("harness-config".into());
+        }
+    }
+    builder.bind_harness_config(&effective_grants)?;
     builder.bind_operator_writes(request, path_var.as_deref())?;
     builder.hide_mandatory();
     builder.hide_defaults(request);
@@ -985,6 +1017,7 @@ pub fn plan_with_preflight(
     builder.apply_operator_hides(request)?;
     if request.build_paths {
         builder.bind_build_writes(&cwd);
+        builder.protect_system_paths(path_var.as_deref());
     }
     builder.finish(request, cwd, empty_file)
 }
@@ -1275,6 +1308,11 @@ impl<'a> PlanBuilder<'a> {
         {
             add_unique(&mut self.readonly, path);
         }
+        self.protect_system_paths(path_var);
+        Ok(())
+    }
+
+    fn protect_system_paths(&mut self, path_var: Option<&OsStr>) {
         if let Some(path) = canonical_if_exists(&self.home.join(".a2amx"))
             && is_within(&path, &self.home)
             && self.writable.iter().any(|write| is_within(&path, write))
@@ -1296,11 +1334,10 @@ impl<'a> PlanBuilder<'a> {
                 }
             }
         }
-        Ok(())
     }
     fn bind_build_writes(&mut self, cwd: &Path) {
         let found = crate::suggest::detect(|marker| cwd.join(marker).is_file());
-        for path in crate::suggest::write_paths(&found) {
+        for path in crate::suggest::default_write_paths(&found) {
             let source = user_path(path, &self.home);
             self.bind_build_path(source);
         }
@@ -1348,11 +1385,7 @@ impl<'a> PlanBuilder<'a> {
             unresolved(self, "cannot canonicalize".into());
             return;
         };
-        if self
-            .hidden
-            .iter()
-            .any(|hidden| paths_overlap(&path, hidden))
-        {
+        if self.hidden.iter().any(|hidden| is_within(&path, hidden)) {
             unresolved(self, "overlaps a hidden path".into());
             return;
         }
@@ -2136,10 +2169,7 @@ pub fn notice(plan: &Plan) -> String {
     text.push_str(&capped_paths(&generic_writable));
     text.push_str(".\n");
     for path in &plan.build_writes {
-        text.push_str(&format!(
-            "writable: {} (from build files)\n",
-            path.display()
-        ));
+        text.push_str(&format!("writable: {} (tool directory)\n", path.display()));
     }
     text.push_str("Read-only protected paths: ");
     text.push_str(&capped_paths(&plan.protected));
@@ -2168,9 +2198,15 @@ pub fn notice(plan: &Plan) -> String {
         text.push('\n');
     }
     if let Some(path) = &plan.harness_config {
+        let source = if plan.grants.iter().any(|grant| grant == "harness-config") {
+            "grant harness-config"
+        } else {
+            "default for this harness"
+        };
         text.push_str(&format!(
-            "{}: harness config, writable and persistent (grant harness-config).\n",
-            path.display()
+            "{}: harness config, writable and persistent ({}).\n",
+            path.display(),
+            source
         ));
     }
     if !plan.grants.is_empty() {

@@ -30,6 +30,15 @@ fn detect_reports_markers_in_fixed_order_and_uses_first_marker() {
 }
 
 #[test]
+fn default_write_paths_put_common_cache_before_detected_paths() {
+    let found = [(Ecosystem::Rust, "Cargo.toml")];
+    assert_eq!(
+        suggest::default_write_paths(&found),
+        vec!["~/.cache", "~/.cargo"]
+    );
+}
+
+#[test]
 fn write_paths_return_the_static_cache_union_in_table_order() {
     assert_eq!(
         suggest::write_paths(&[
@@ -38,7 +47,7 @@ fn write_paths_return_the_static_cache_union_in_table_order() {
             (Ecosystem::Gradle, "build.gradle"),
         ]),
         vec![
-            "~/.cargo/registry",
+            "~/.cargo",
             "~/.npm",
             "~/.gradle/caches",
             "~/.gradle/wrapper"
@@ -57,7 +66,7 @@ fn render_rust_and_node_is_the_documented_fragment() {
         "# Found: Cargo.toml (Rust), package.json (Node)\n\
 # Add this to the session's table in your team file, or pass --confine-write for each path. Confinement must be enabled (enabled = true here or in the team's [confine] table).\n\
 [session.confine]\n\
-write = [\"~/.cargo/registry\", \"~/.npm\"]\n\
+write = [\"~/.cargo\", \"~/.npm\"]\n\
 # Rust: a Git dependency also needs ~/.cargo/git (untested).\n\
 # Node: global installs and version-manager directories are not covered.\n\
 # More: docs/confinement.md, Recipes by ecosystem\n"
