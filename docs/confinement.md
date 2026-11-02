@@ -74,9 +74,9 @@ and harness-config grants remain session-only.
 | `lxd` | lxd and incus container daemon sockets: effectively root on the host | No; grant it per session. |
 | `snap` | snapd package management: installs and removes packages | No; grant it per session. |
 | `harness-config` | the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately | No; grant it per session. |
-| `gh` | your GitHub CLI login (`~/.config/gh`) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you | Yes; team or session. |
-| `git-credentials` | the plain-text git credential files: every host and password stored there | Yes; team or session. |
-| `ssh` | your ssh keys and config (`~/.ssh`, read-only): the agent can log in to every host those keys open as you, and push with them | Yes; team or session. |
+| `gh` | your GitHub CLI login (`~/.config/gh`, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login | Yes; team or session. |
+| `git-credentials` | the plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite | Yes; team or session. |
+| `ssh` | your ssh keys and config (`~/.ssh`, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them | Yes; team or session. |
 
 Grant names are closed and validated before launch. Each runtime grant is a separate opt-in;
 `harness-config` is a separate session-only opt-in for a persistent harness directory. Claude and
@@ -286,7 +286,7 @@ Rootless Docker and Podman cannot be used here: their sockets are under `$XDG_RU
 which is hidden and cannot be unhidden, even with the grant. Use an engine on another machine
 (`DOCKER_HOST` passes through with the grant and the network is open), or run the whole session
 in a container or VM instead of a2amx confinement. Reaching a remote engine needs its credentials,
-for example `~/.ssh` (use the `ssh` grant, which opens it read-only)
+for example `~/.ssh` (use the `ssh` grant, which opens it read-write)
 or TLS files under `~/.docker`; those are default hides and need an `unhide` entry. None of this remote-engine path was tested.
 
 Workloads the agent starts are not confined by a2amx. A socket created after the session starts
@@ -295,10 +295,10 @@ their host socket must be hidden.
 
 ## Credentials a tool needs
 
-Credential files are hidden by default. The `gh` grant exposes `~/.config/gh` read-only and
-returns `GH_TOKEN`, `GITHUB_TOKEN` and `GH_ENTERPRISE_TOKEN` to that session. The
-`git-credentials` grant exposes `~/.git-credentials` and `~/.config/git/credentials` read-only.
-Use the narrowest grant that matches the work:
+Credential files are hidden by default. The `gh` grant exposes `~/.config/gh` read-write
+and returns `GH_TOKEN`, `GITHUB_TOKEN` and `GH_ENTERPRISE_TOKEN` to that session. The
+`git-credentials` grant exposes `~/.git-credentials` and `~/.config/git/credentials`
+writable in place. Use the narrowest grant that matches the work:
 
 ```toml
 # fragment
@@ -306,21 +306,22 @@ Use the narrowest grant that matches the work:
 grants = ["gh"] # for a session that pushes or opens pull requests with gh
 ```
 
-`git push` over https needs the credential helper in the user's `~/.gitconfig`
-(`gh auth setup-git`); that file is readable but read-only inside, so run `gh auth setup-git`
-outside first. Run `gh` once outside before the first confined use too: a one-time migration of
-an old-format `hosts.yml` otherwise fails on the read-only mount. The read-only mount also
-breaks commands that rewrite `hosts.yml`, such as `gh auth refresh`, `auth switch` and
-`config set`; add an exact `write = ["~/.config/gh"]` entry when that write is deliberate.
+`git push` over https needs the credential helper in the user's `~/.gitconfig`; that file is
+readable but read-only inside, so run `gh auth setup-git` outside first. The writable `gh` mount
+means the one-time migration of an old-format `hosts.yml` can now run in the confined session.
+Commands such as `gh auth refresh`, `auth switch` and `config set` can now write that file in a
+confined session; those writes and refresh behavior remain untested.
 
-Use `git-credentials` only when the user keeps a plain-text store. With the store helper, git's
-write-back to the file fails on the read-only mount, likely non-fatal. A credential helper that
-is a Windows program reached through WSL interop does not work because `/run/WSL` is hidden.
-SSH pushes need an `ssh` grant; see [ssh and signed commits](#ssh-and-signed-commits). A `gh` token kept in the system
-keyring is unreachable because `~/.local/share/keyrings` and the session bus are hidden.
+Use `git-credentials` only when the user keeps a plain-text store. The files are writable
+in place, but a credential helper that replaces a file still fails: git's `store` helper
+writes a lock file in the read-only home directory and renames it. A credential helper
+that is a Windows program reached through WSL interop does not work because `/run/WSL` is
+hidden. SSH pushes need an `ssh` grant; see [ssh and signed commits](#ssh-and-signed-commits).
+A `gh` token kept in the system keyring is unreachable because `~/.local/share/keyrings`
+and the session bus are hidden.
 
 The maintainers read `gh`'s token from `hosts.yml` and ran `gh auth status` and
-`git push --dry-run` with the path unhidden read-only (2026-11-01). A real push, `gh pr create`
+`git push --dry-run` with the path unhidden (2026-11-01). A real push, `gh pr create`
 and this recipe in a fresh login are untested; the tests use fixtures.
 
 ### Credential environment variables
@@ -361,12 +362,13 @@ changes the environment of every confined session it launches.
 
 ### ssh and signed commits
 
-The grant opens `~/.ssh` read-only and mounts an empty file over `/etc/ssh/ssh_config`, so the
+The grant opens `~/.ssh` read-write and mounts an empty file over `/etc/ssh/ssh_config`, so the
 root-owned system configuration and its included files no longer break `ssh`. Settings from the
 system configuration therefore no longer apply; copy what you need into `~/.ssh/config`. An
-`Include` of a root-owned file there still fails. Because `~/.ssh` is read-only, `ssh` cannot add a
-host to `known_hosts`; add the host from outside first. A `ControlPath` under `~/.ssh` is also
-unusable; point it at `/tmp`.
+`Include` of a root-owned file there still fails. With the `ssh` grant, a separate `write` entry
+for a single file inside `~/.ssh` is redundant and makes that file a single-file bind that cannot
+be replaced by a rename (`ssh-keygen -R` fails), so drop it. A `ControlPath` under `~/.ssh` is
+also unusable; point it at `/tmp`.
 
 No `SSH_AUTH_SOCK` is passed through, so a passphrase-protected key cannot be used (F63). Signing
 commits with an unencrypted listed ssh key works; gpg signing is F54. With `no_default_hides`,

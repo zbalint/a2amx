@@ -161,3 +161,31 @@ After implementation, judged by these commands and by the architect at final rev
    - drop the harness-root and `~/.a2amx` refusal of 2.1: the harness-root alias test;
    - keep `protect_system_paths` inside the `build_paths` block (2.2): the `PATH`-directory alias test;
    - drop the skip in `unhide` (2.3): the exact-path `unhide` test.
+
+## Amendment 1 (2026-11-02, architect, before acceptance)
+
+Found at architect review of the first implementation, not reported as BLOCKED. Section 2.7 told the developer to
+drop the `gh auth setup-git` workaround from `docs/confinement.md`. That was wrong: `gh auth setup-git` writes
+`~/.gitconfig`, a home file no grant opens, so it stays read-only inside the session. The docs keep the sentence that
+`git push` over https needs the credential helper in `~/.gitconfig`, that the file is read-only inside, and that the user
+runs `gh auth setup-git` outside first. The other docs changes of 2.7 stand. The new docs text about `gh` writing
+`hosts.yml` is phrased as a capability, not as a tested result, until the tester pass of Acceptance 5 reports.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant a Claude session (model not reported); developer OMP
+`openai-codex/gpt-5.6-luna` (single model, no fallback); tester OMP `openai-codex/gpt-5.6-luna` (single model, no fallback; it first
+mislabelled itself and corrected it). BLOCKED/amend cycles: 0 BLOCKED; one architect amendment (Amendment 1).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review (pass 1) | Consultant | A grant path made writable skipped the write checks, so a symlinked grant path could expose home, `~/.a2amx` or the harness root | 2.1 validates the grant path like a write and refuses the install and harness roots |
+| Draft review (pass 1) | Consultant | `git-credentials` paths are single files: a rename or delete fails, so the text "change or delete" was false | 2.5 and 2.7 say "in place"; tester probe confirmed EBUSY |
+| Draft review (pass 1) | Consultant | The first 2.2 rule dropped system-path protection | Replaced by the narrower skip in `unhide` (2.3) and the moved `protect_system_paths` call (2.2) |
+| Draft review (pass 1) | Consultant | Two tests asserting read-only grants missing from the spec, replacement test undefined, unhide inside a grant ambiguous, fixture gap | Spec lists them and states the asserts |
+| Draft review (pass 2) | Consultant | The state-directory alias test passes on old code and cannot kill the 2.1 mutant; alias into the harness root bypassed the harness-config access; a contract-test mislabel | Alias-to-home test added, harness-root refusal added, labels fixed |
+| Architect review | Architect | Spec error: 2.7 told the developer to drop the `gh auth setup-git` caveat, but `~/.gitconfig` stays read-only | Amendment 1; docs restored |
+| Architect review | Architect | `apply_grant_unhides` grew nested checks (likely S3776 breach); `bind_harness_config` gained a nested match with an extra `unreachable!` | Extracted `check_grant_path_writable` and `session_harness_root`; `bind_harness_config` uses `let ... else` |
+| Architect review | Architect | Docs: `ssh` table row not equal to the exposure string, a lost blank line, an unverified capability sentence | Fixed by the developer |
+| Tester pass | Tester | Stale doc comment at `src/grant.rs:19` ("read-only") | Fixed |
+| Tester pass | Tester | Mutant removing `check_write_runtime_allowed` survives | Equivalent in effect: the runtime and state directories are already in `mandatory_hidden` before the grants; the call stays for parity with operator writes |

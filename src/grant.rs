@@ -16,7 +16,7 @@ pub struct Grant {
     pub env: &'static [&'static str],
     /// Whether this grant opens the current harness's own configuration directory.
     pub own_config: bool,
-    /// Home-relative or absolute paths made visible read-only when the grant is given.
+    /// Home-relative or absolute paths made visible and writable when the grant is given.
     pub unhides: &'static [&'static str],
     /// Absolute host files shown as empty when the grant is given.
     pub stand_ins: &'static [&'static str],
@@ -136,7 +136,7 @@ static GRANTS: [Grant; 11] = [
     },
     Grant {
         name: "gh",
-        exposes: "your GitHub CLI login (~/.config/gh) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you",
+        exposes: "your GitHub CLI login (~/.config/gh, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login",
         team_default_ok: true,
         sockets: NO_PATHS,
         env: GH_ENV,
@@ -146,7 +146,7 @@ static GRANTS: [Grant; 11] = [
     },
     Grant {
         name: "git-credentials",
-        exposes: "the plain-text git credential files: every host and password stored there",
+        exposes: "the plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite",
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -156,7 +156,7 @@ static GRANTS: [Grant; 11] = [
     },
     Grant {
         name: "ssh",
-        exposes: "your ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them",
+        exposes: "your ssh keys and config (~/.ssh, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them",
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,

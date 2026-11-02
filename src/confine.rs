@@ -1017,8 +1017,8 @@ pub fn plan_with_preflight(
     builder.apply_operator_hides(request)?;
     if request.build_paths {
         builder.bind_build_writes(&cwd);
-        builder.protect_system_paths(path_var.as_deref());
     }
+    builder.protect_system_paths(path_var.as_deref());
     builder.finish(request, cwd, empty_file)
 }
 
@@ -1170,6 +1170,14 @@ impl<'a> PlanBuilder<'a> {
         })
     }
 
+    fn session_harness_root(&self) -> Option<PathBuf> {
+        match self.harness {
+            Harness::Claude => Some(self.home.join(".claude")),
+            Harness::Omp => Some(self.home.join(".omp")),
+            Harness::Generic | Harness::Codex => None,
+        }
+    }
+
     fn bind_workspace(&mut self, cwd: &Path) -> Result<()> {
         let _ = add_validated_write(cwd, self.host, &mut self.writable, &mut self.skipped, false)?;
         if let Some((common, worktree)) = git_common_dir(cwd, &self.home) {
@@ -1227,13 +1235,8 @@ impl<'a> PlanBuilder<'a> {
         if !own_config {
             return Ok(());
         }
-        let root = match self.harness {
-            Harness::Claude => self.home.join(".claude"),
-            Harness::Omp => self.home.join(".omp"),
-            Harness::Generic => {
-                bail!("confinement grant \"harness-config\" needs a Claude or OMP session")
-            }
-            Harness::Codex => unreachable!("Codex confinement is rejected before planning"),
+        let Some(root) = self.session_harness_root() else {
+            bail!("confinement grant \"harness-config\" needs a Claude or OMP session")
         };
         let Some(root) = add_canonical_existing(&root, "harness config", &mut self.skipped) else {
             return Ok(());
@@ -1440,6 +1443,28 @@ impl<'a> PlanBuilder<'a> {
         }
     }
 
+    fn check_grant_path_writable(&self, grant: &str, entry: &str, path: &Path) -> Result<PathBuf> {
+        let path = check_write_allowed(path, &self.home, &self.state_dir, false)?;
+        check_write_runtime_allowed(&path, &self.runtime_dir, false)?;
+        if let Some(root) = canonical_if_exists(&self.home.join(".a2amx"))
+            && is_within(&path, &root)
+        {
+            bail!("confinement grant \"{grant}\" path {entry} is inside ~/.a2amx");
+        }
+        if self.harness_config.is_none()
+            && let Some(root) = self
+                .session_harness_root()
+                .and_then(|root| canonical_if_exists(&root))
+            && is_within(&path, &root)
+        {
+            bail!(
+                "confinement grant \"{grant}\" path {entry} is inside the harness root {}",
+                root.display()
+            );
+        }
+        Ok(path)
+    }
+
     fn apply_grant_unhides(&mut self, given: &[String], no_default_hides: bool) -> Result<()> {
         let given = given.iter().map(String::as_str).collect::<BTreeSet<_>>();
         let own_paths = grant::all()
@@ -1463,6 +1488,7 @@ impl<'a> PlanBuilder<'a> {
                     add_unique(&mut self.skipped, source);
                     continue;
                 };
+                let path = self.check_grant_path_writable(grant.name, name, &path)?;
                 for hidden_source in &default_hide_sources {
                     if own_paths.contains(hidden_source) {
                         continue;
@@ -1495,7 +1521,7 @@ impl<'a> PlanBuilder<'a> {
                 }
                 self.hidden.retain(|existing| existing != &path);
                 self.default_hidden.retain(|existing| existing != &path);
-                add_unique(&mut self.readonly, path.clone());
+                add_unique(&mut self.writable, path.clone());
                 self.grant_unhides.push((path, grant.name));
             }
         }
@@ -1591,7 +1617,13 @@ impl<'a> PlanBuilder<'a> {
             self.hidden.retain(|existing| existing != &path);
             self.default_hidden.retain(|existing| existing != &path);
             self.container_hidden.retain(|existing| existing != &path);
-            add_unique(&mut self.readonly, path);
+            if !self
+                .grant_unhides
+                .iter()
+                .any(|(granted, _)| granted == &path)
+            {
+                add_unique(&mut self.readonly, path);
+            }
         }
         Ok(())
     }

@@ -139,17 +139,17 @@ fn credential_grant_rows_have_exact_exposure_text() {
     let gh = grant::lookup("gh").expect("gh grant");
     assert_eq!(
         gh.exposes,
-        "your GitHub CLI login (~/.config/gh) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you"
+        "your GitHub CLI login (~/.config/gh, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login"
     );
     let git_credentials = grant::lookup("git-credentials").expect("git-credentials grant");
     assert_eq!(
         git_credentials.exposes,
-        "the plain-text git credential files: every host and password stored there"
+        "the plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite"
     );
     let ssh = grant::lookup("ssh").expect("ssh grant");
     assert_eq!(
         ssh.exposes,
-        "your ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them"
+        "your ssh keys and config (~/.ssh, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them"
     );
 }
 
@@ -247,15 +247,15 @@ fn render_list_has_every_grant_and_instruction() {
     }
     assert_eq!(
         lines[8],
-        "gh              team or sessionyour GitHub CLI login (~/.config/gh) and its tokens in the environment: the agent can push, open and merge pull requests and read private repositories as you"
+        "gh              team or sessionyour GitHub CLI login (~/.config/gh, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login"
     );
     assert_eq!(
         lines[9],
-        "git-credentials team or sessionthe plain-text git credential files: every host and password stored there"
+        "git-credentials team or sessionthe plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite"
     );
     assert_eq!(
         lines[10],
-        "ssh             team or sessionyour ssh keys and config (~/.ssh, read-only): the agent can log in to every host those keys open as you, and push with them"
+        "ssh             team or sessionyour ssh keys and config (~/.ssh, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them"
     );
     assert_eq!(
         lines.last().copied(),

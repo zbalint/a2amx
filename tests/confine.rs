@@ -584,7 +584,7 @@ fn runtime_grants_select_sockets_and_environment() {
 }
 
 #[test]
-fn credential_grants_lift_named_paths_read_only() {
+fn credential_grants_lift_named_paths_writable() {
     let fixture = Fixture::new();
     let gh = fixture.home.join(".config/gh");
     std::fs::create_dir_all(&gh).expect("gh directory");
@@ -610,7 +610,8 @@ fn credential_grants_lift_named_paths_read_only() {
         &fixture.host(),
     )
     .expect("gh plan");
-    assert!(granted.readonly.contains(&gh));
+    assert!(granted.writable.contains(&gh));
+    assert!(!granted.readonly.contains(&gh));
     assert!(!granted.protected.contains(&gh));
     assert!(!granted.hidden_paths().contains(&gh));
     let gh_string = gh.to_string_lossy().into_owned();
@@ -620,6 +621,11 @@ fn credential_grants_lift_named_paths_read_only() {
         .expect("gh wrapper");
     assert!(
         wrapped
+            .windows(3)
+            .any(|window| window == ["--bind", gh_string.as_str(), gh_string.as_str()])
+    );
+    assert!(
+        !wrapped
             .windows(3)
             .any(|window| window == ["--ro-bind", gh_string.as_str(), gh_string.as_str()])
     );
@@ -631,7 +637,7 @@ fn credential_grants_lift_named_paths_read_only() {
 }
 
 #[test]
-fn credential_grant_readonly_path_is_reprotected_inside_writable_parent() {
+fn credential_grant_stays_writable_inside_writable_parent() {
     let fixture = Fixture::new();
     let config = fixture.home.join(".config");
     let gh = config.join("gh");
@@ -652,24 +658,29 @@ fn credential_grant_readonly_path_is_reprotected_inside_writable_parent() {
     )
     .expect("gh writable-parent plan");
     assert!(granted.writable.contains(&config));
-    assert!(granted.protected.contains(&gh));
+    assert!(granted.writable.contains(&gh));
+    assert!(!granted.protected.contains(&gh));
+    assert!(!granted.readonly.contains(&gh));
     let config_string = config.to_string_lossy().into_owned();
     let gh_string = gh.to_string_lossy().into_owned();
     let wrapped = granted
         .with_bwrap(PathBuf::from("bwrap"))
         .wrap(vec!["true".into()])
         .expect("gh writable-parent wrapper");
-    let bind = wrapped
-        .windows(3)
-        .position(|window| window == ["--bind", config_string.as_str(), config_string.as_str()])
-        .expect("writable config bind");
-    let readonly = wrapped
-        .windows(3)
-        .position(|window| window == ["--ro-bind", gh_string.as_str(), gh_string.as_str()])
-        .expect("read-only gh bind");
     assert!(
-        readonly > bind,
-        "gh must be re-protected after its parent bind"
+        wrapped
+            .windows(3)
+            .any(|window| window == ["--bind", config_string.as_str(), config_string.as_str()])
+    );
+    assert!(
+        wrapped
+            .windows(3)
+            .any(|window| window == ["--bind", gh_string.as_str(), gh_string.as_str()])
+    );
+    assert!(
+        !wrapped
+            .windows(3)
+            .any(|window| window == ["--ro-bind", gh_string.as_str(), gh_string.as_str()])
     );
 }
 
@@ -799,11 +810,31 @@ fn git_credentials_grant_lifts_both_files_only() {
         &fixture.host(),
     )
     .expect("git credentials plan");
-    assert!(plan.readonly.contains(&git_credentials));
-    assert!(plan.readonly.contains(&git_config_credentials));
+    for path in [&git_credentials, &git_config_credentials] {
+        assert!(plan.writable.contains(path));
+        assert!(!plan.readonly.contains(path));
+        assert!(!plan.protected.contains(path));
+    }
     assert!(!plan.hidden_paths().contains(&git_credentials));
     assert!(!plan.hidden_paths().contains(&git_config_credentials));
     assert!(plan.hidden_paths().contains(&gh));
+    let wrapped = plan
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("git credentials wrapper");
+    for path in [&git_credentials, &git_config_credentials] {
+        let path = path.to_string_lossy();
+        assert!(
+            wrapped
+                .windows(3)
+                .any(|window| { window[0] == "--bind" && window[1] == path && window[2] == path })
+        );
+        assert!(
+            !wrapped.windows(3).any(|window| {
+                window[0] == "--ro-bind" && window[1] == path && window[2] == path
+            })
+        );
+    }
 }
 
 #[test]
@@ -864,9 +895,214 @@ fn grant_alias_to_hidden_path_is_rejected_but_unhidden_alias_is_allowed() {
         &allowed.host(),
     )
     .expect("unhidden alias plan");
+    let target = std::fs::canonicalize(target).expect("target canonical");
+    assert!(plan.writable.contains(&target));
+    assert!(!plan.readonly.contains(&target));
+    let target = target.to_string_lossy();
+    let wrapped = plan
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("unhidden alias wrapper");
     assert!(
-        plan.readonly
-            .contains(&std::fs::canonicalize(target).expect("target canonical"))
+        wrapped
+            .windows(3)
+            .any(|window| { window[0] == "--bind" && window[1] == target && window[2] == target })
+    );
+}
+#[test]
+fn grant_alias_to_home_is_rejected_as_a_write() {
+    let fixture = Fixture::new();
+    let config = fixture.home.join(".config");
+    std::fs::create_dir_all(&config).expect("config directory");
+    symlink(&fixture.home, config.join("gh")).expect("home alias");
+    let error = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            no_default_hides: true,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("grant alias to home must be rejected"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("writable path $HOME is not allowed")
+    );
+}
+
+#[test]
+fn grant_alias_into_state_is_rejected_as_a_write() {
+    let fixture = Fixture::new();
+    let target = fixture.state.join("inside");
+    std::fs::create_dir_all(&target).expect("state target");
+    let config = fixture.home.join(".config");
+    std::fs::create_dir_all(&config).expect("config directory");
+    symlink(&target, config.join("gh")).expect("state alias");
+    let error = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            no_default_hides: true,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("grant alias into state must be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("state directory"));
+}
+
+#[test]
+fn grant_alias_into_install_or_harness_is_rejected_without_access() {
+    let install = Fixture::new();
+    let install_target = install.home.join(".a2amx/bin");
+    std::fs::create_dir_all(&install_target).expect("install target");
+    let install_config = install.home.join(".config");
+    std::fs::create_dir_all(&install_config).expect("config directory");
+    symlink(&install_target, install_config.join("gh")).expect("install alias");
+    let error = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            no_default_hides: true,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &install.cwd,
+        &install.host(),
+    ) {
+        Ok(_) => panic!("grant alias into .a2amx must be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains(".a2amx"));
+
+    let harness = Fixture::new();
+    let harness_root = harness.home.join(".claude");
+    std::fs::create_dir_all(&harness_root).expect("Claude root");
+    let harness_config = harness.home.join(".config");
+    std::fs::create_dir_all(&harness_config).expect("config directory");
+    symlink(&harness_root, harness_config.join("gh")).expect("harness alias");
+    let error = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            build_paths: false,
+            no_default_hides: true,
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &harness.cwd,
+        &harness.host(),
+    ) {
+        Ok(_) => panic!("grant alias into harness root must be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("harness root"));
+
+    let allowed = confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            build_paths: true,
+            no_default_hides: true,
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &harness.cwd,
+        &harness.host(),
+    )
+    .expect("implicit harness config access permits alias");
+    let harness_root = std::fs::canonicalize(harness_root).expect("harness root canonical");
+    assert!(allowed.writable.contains(&harness_root));
+}
+
+#[test]
+fn grant_alias_to_path_directory_is_reprotected() {
+    let fixture = Fixture::new();
+    let path_dir = fixture.home.join(".local/bin");
+    std::fs::create_dir_all(&path_dir).expect("PATH directory");
+    let config = fixture.home.join(".config");
+    std::fs::create_dir_all(&config).expect("config directory");
+    symlink(&path_dir, config.join("gh")).expect("PATH alias");
+    let path_var = OsString::from(format!("{}:/usr/bin", path_dir.display()));
+    let plan = confine::plan_with_path(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+        Some(path_var),
+    )
+    .expect("PATH alias plan");
+    let path_dir = std::fs::canonicalize(path_dir).expect("PATH canonical");
+    assert!(plan.writable.contains(&path_dir));
+    assert!(plan.readonly.contains(&path_dir));
+    assert!(plan.protected.contains(&path_dir));
+    let path_dir = path_dir.to_string_lossy();
+    let wrapped = plan
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("PATH alias wrapper");
+    assert!(wrapped.windows(3).any(|window| {
+        window[0] == "--ro-bind" && window[1] == path_dir && window[2] == path_dir
+    }));
+}
+
+#[test]
+fn exact_unhide_of_grant_path_stays_writable() {
+    let fixture = Fixture::new();
+    let gh = fixture.home.join(".config/gh");
+    std::fs::create_dir_all(&gh).expect("gh directory");
+    let gh = std::fs::canonicalize(gh).expect("gh canonical");
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            unhide: vec!["~/.config/gh".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("exact grant unhide plan");
+    assert!(plan.writable.contains(&gh));
+    assert!(!plan.readonly.contains(&gh));
+}
+
+#[test]
+fn nested_unhide_inside_grant_stays_readonly_and_protected() {
+    let fixture = Fixture::new();
+    let ssh = fixture.home.join(".ssh");
+    let config = std::fs::canonicalize(ssh.join("config")).expect("ssh config canonical");
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["ssh".into()],
+            unhide: vec!["~/.ssh/config".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("nested grant unhide plan");
+    assert!(plan.readonly.contains(&config));
+    assert!(plan.protected.contains(&config));
+    let config = config.to_string_lossy();
+    let wrapped = plan
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("nested grant unhide wrapper");
+    assert!(
+        wrapped.windows(3).any(|window| {
+            window[0] == "--ro-bind" && window[1] == config && window[2] == config
+        })
     );
 }
 
@@ -981,6 +1217,9 @@ fn ssh_grant_unhides_home_ssh_and_stands_in_host_config() {
             &fixture.host(),
         )
         .expect("ssh grant plan");
+        assert!(plan.writable.contains(&ssh_dir));
+        assert!(!plan.readonly.contains(&ssh_dir));
+        assert!(!plan.protected.contains(&ssh_dir));
         assert!(!plan.hidden_paths().contains(&ssh_dir));
         let config_hidden = config
             .as_ref()
@@ -992,6 +1231,9 @@ fn ssh_grant_unhides_home_ssh_and_stands_in_host_config() {
             .expect("ssh grant wrapper");
         let ssh_dir = ssh_dir.to_string_lossy();
         assert!(wrapped.windows(3).any(|window| {
+            window[0] == "--bind" && window[1] == ssh_dir && window[2] == ssh_dir
+        }));
+        assert!(!wrapped.windows(3).any(|window| {
             window[0] == "--ro-bind" && window[1] == ssh_dir && window[2] == ssh_dir
         }));
         match &config {

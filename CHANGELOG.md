@@ -62,6 +62,12 @@ All notable user-visible changes are listed here. The format follows
   words are idle, working, starting and resetting. Additive protocol fields: `held` and `starting` on team
   members and `starting` on the status; an older daemon sends neither, so a newer client draws members by
   the old rules, and an older client ignores them (`docs/architecture.md`).
+- The `gh`, `git-credentials` and `ssh` grants now open their paths read-write instead of read-only, so
+  `ssh` can record a new host key, `ssh-keygen` can write keys, and `gh` can rewrite its `hosts.yml`. A
+  grant path is checked like a `write` entry: a symlink to your home directory (or above), into `~/.a2amx`,
+  or into the session's own harness directory without the harness-config access is refused when the plan is
+  built. The `git-credentials` files can be written in place but not replaced or deleted
+  (`a2amx confine list`, `docs/confinement.md`).
 
 ### Fixed
 
