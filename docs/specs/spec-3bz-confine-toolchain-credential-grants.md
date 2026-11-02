@@ -9,8 +9,9 @@ Public test seams: `grant::all`, `grant::lookup`, `grant::render_list`, `confine
 probe pattern in `tests/confine.rs` (`real_bubblewrap_hides_nested_credentials_but_allows_cache_writes`).
 
 Scope (may edit): `src/grant.rs`, `src/confine.rs`, `tests/grant.rs`, `tests/confine.rs`, `docs/confinement.md`,
-`docs/teams.md` (only the sentence naming the team-level grants).
-Does not touch: `src/cli.rs`, `src/daemon.rs`, `src/main.rs`, `src/team.rs`, `src/suggest.rs`, `src/wire.rs`,
+`docs/teams.md` (only the sentence naming the team-level grants), `src/team.rs` (only the grants merge, 2.4) and
+`tests/team.rs` (one test, 2.4).
+Does not touch: `src/cli.rs`, `src/daemon.rs`, `src/main.rs`, `src/suggest.rs`, `src/wire.rs`,
 `docs/cli.md`, `docs/backlog.md`, `CHANGELOG.md`, `a2amx.toml*`, other specs. The grant table keeps
 its shape (no new fields), so no other module changes.
 
@@ -80,7 +81,7 @@ host can be written and appended to, but not renamed over or deleted (probed in 
 
 A grant path that does not exist is not opened and is not an error (existing behaviour, test
 `granted_paths_may_be_missing_without_becoming_unresolved`). No grant creates a missing directory. A tool that has
-never run has no directory yet; the docs say so (2.4).
+never run has no directory yet; the docs say so (2.5).
 
 ### 2.2 A grant path with a symlink component is refused
 
@@ -119,7 +120,19 @@ credential files visible and writable; `cargo` alone leaves them hidden. Giving 
 opens only the credential files, and `~/.cargo` stays read-only (with `build_paths` false; until step 3 a Rust
 build file in the workspace makes `~/.cargo` writable by the build-path default).
 
-### 2.4 Docs
+### 2.4 Team-level grants are applied (found by the developer, Amendment 2)
+
+`src/team.rs:644` builds a session's grants from its own table only (`deduplicated_values(&[], own grants)`), while
+`src/team.rs:617-625` validates the team table's grants and the docs say they may be set team-wide. A team
+`[confine] grants = ["gh"]` therefore parses and is silently ignored since spec 3bk (git log -S on that line); the
+only test (tests/team.rs:2920-2922) checks that it parses. Change that one line to merge the team's grants before the
+session's, in the order the other lists use (`deduplicated_values(team grants, own grants)`); `keep_env` stays per
+session. Add one test in `tests/team.rs`: a team file with `[confine] enabled = true` and `grants = ['cargo-token']`
+and a session with its own `grants = ['go']` yields a `ConfineRequest` whose `grants` are `cargo-token` then `go`, and
+a session with no own grants yields `cargo-token`. The existing tests at tests/team.rs:2839 and :3057 keep passing
+(they use session grants only); the changelog line is the architect's.
+
+### 2.5 Docs
 
 `docs/confinement.md`, "Grants" table: add one row per new grant, taken from `a2amx confine list` (name, exposes
 text, Team default "Yes" for all new rows; the existing credential rows show how). Add a short subsection after the
@@ -191,7 +204,7 @@ Run from the main checkout, `develop`:
 - Mutation check (the tester, on a scratch copy): (a) restore the old two-direction overlap check on default hides
   -> the `cargo` plan test fails; (b) remove the symlink refusal -> the aliased-`gh`, aliased-`pip` and aliased-`cargo` tests fail; (c) drop `~/.cargo/credentials.toml` from `cargo-token` -> the table test fails;
   (d) change a team flag to false -> the team test fails.
-- Abuse cases (trust boundaries: a symlink planted in a writable location; a repo-shipped team file naming grants):
+- Abuse cases (trust boundaries: a symlink planted in a writable location; a repo-shipped team file naming grants, which must now actually apply, 2.4):
   the symlink tests in 4.2; a team file with `grants = ["cargo-token"]` parses (4.1) and its plan releases the env
   (4.4); `grants = ["docker"]` at team level still fails (4.1).
 - In-place probe (the tester, real bubblewrap, report only): for `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials.toml`
