@@ -90,12 +90,15 @@ credential path may be a file. One session could replace `~/.cache/pip` with a s
 code execution outside the session. None of those targets is a default hide, so the hide check does not catch it.
 The rule: `PlanBuilder::apply_grant_unhides` fails the plan, for every grant (the three existing path grants
 included), when any component of the grant path below the home directory is a symlink, using `symlink_component`
-(src/confine.rs:357) on the grant path as written under the (uncanonicalised) home. The error names the grant, the
+(src/confine.rs:357) on `source` as built in the loop (`user_path(name, &self.home)`, src/confine.rs:1486). `self.home` is
+already canonical, so every ancestor of `source` down to the home is a real directory and only components below the
+home can be symlinks; call the function unchanged. The check runs before the existing canonicalisation and hide
+checks, so a symlink is always reported by the symlink message. The error names the grant, the
 entry, the symlink and the way out: `confinement grant "python" path ~/.cache/pip passes through the symlink
 <link>; name the real path with a write entry instead`. This changes the existing 3by behaviour that a symlinked
 grant path opens its canonical target (the accepted-alias half of the test containing
 `resolves to the hidden path`, tests/confine.rs:~884-905) is updated; the `harness-config` symlink text (docs/confinement.md:~97) is a different grant and stays. The
-inside-a-hidden-path check below stays as defence in depth.
+inside-a-hidden-path check (2.3) stays as defence in depth even though a symlink can no longer reach it.
 
 ### 2.3 A hidden path inside a granted directory stays hidden
 
@@ -103,8 +106,8 @@ Today `PlanBuilder::apply_grant_unhides` (src/confine.rs:1481-1521) fails the pl
 hide overlap in either direction (`paths_overlap`), except hides that are the same grant's own paths. The `cargo`
 grant would therefore always fail: `~/.cargo/credentials` and `~/.cargo/credentials.toml` are default hides inside
 `~/.cargo`. Change the default-hide check only: it fails when the grant path **is or lies inside** the hidden path
-(`is_within(&path, &hidden)`, the `gh` aliased-to-`~/.ssh` case pinned by the test containing
-`confinement grant "gh" path ~/.config/gh resolves to the hidden path`). A hidden path **inside** the grant path is
+(`is_within(&path, &hidden)`). With 2.2 in force a symlink can no longer reach this direction (the old aliased-`gh`
+test now stops at the symlink message), so it stays as defence in depth with no test of its own; keep the message text. A hidden path **inside** the grant path is
 fine: it stays hidden (while the file exists at launch; a missing one is not hidden, so `cargo login` can create it
 when only `cargo` is given). `mounts()` already mounts the deeper hidden path after the writable parent (sort by depth),
 and `real_bubblewrap_hides_nested_credentials_but_allows_cache_writes` already shows it for a cache directory. The
@@ -137,7 +140,7 @@ step 3).
 | --- | --- | --- |
 | a grant's `unhides` paths become writable and are canonicalised, missing ones are skipped silently | src/confine.rs:1485-1525, tests/confine.rs `granted_paths_may_be_missing_without_becoming_unresolved` | read |
 | the default-hide overlap check bails in both directions | src/confine.rs:1492-1507 (`paths_overlap`, src/confine.rs:215) | read |
-| the aliased-`gh` test pins the "path is inside a hidden path" direction | tests/confine.rs:861-880 | read |
+| the aliased-`gh` test reaches the "path is inside a hidden path" bail through a symlink; 2.2 refuses the symlink first, so the test's first half now asserts the symlink message | tests/confine.rs:859-880 | read |
 | mounts are sorted by depth so a nested hidden path mounts after its writable parent | src/confine.rs:1797-1808 | read |
 | a nested credential stays hidden under a writable cache directory in real bubblewrap | tests/confine.rs:4220 | read; run by the tester |
 | every credential path in section 2.1 is already a default hide | src/confine.rs:71-101 (`DEFAULT_HIDES`, `DEFAULT_HIDES_EXTRA`) | read (`~/.aws`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.terraform.d`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials`, `~/.cargo/credentials.toml`, `~/.netrc`) |
@@ -161,12 +164,13 @@ Written first, each failing on the old code:
 2. `tests/confine.rs`: with grant `cargo` and a fixture that has `~/.cargo` with `credentials.toml` and a `bin`
    directory on PATH: the plan succeeds, `~/.cargo` is writable, `~/.cargo/credentials.toml` stays in
    `hidden_paths`, `~/.cargo/bin` is protected. With `cargo` and `cargo-token`: both credential files are visible and
-   writable. With `cargo-token` only: `~/.cargo` is not writable. The aliased-`gh` test stays unchanged and green.
-   Abuse cases: (a) `~/.cache/pip` a symlink to `~/.ssh` with grant `python` fails; (b) `~/.cache/pip` a symlink to a
-   plain directory outside every hide, with `python`, fails with the symlink message, and so does a symlinked
+   writable. With `cargo-token` only: `~/.cargo` is not writable.
+   Abuse cases (all fail with the symlink message of 2.2): (a) `~/.cache/pip` a symlink to `~/.ssh` with grant `python`
+   (this is the old aliased-`gh` first half rewritten: `~/.config/gh` -> `~/.ssh` with `gh`); (b) `~/.cache/pip` a symlink to a
+   plain directory outside every hide, with `python`, and so does a symlinked
    `~/.cargo` with `cargo`, a symlinked `~/.npmrc` with `npm-token`, and `~/.config/gh` a symlink to an unhidden
-   directory with `gh` (this replaces the old accepted-alias half of the test); (c) a symlinked directory above the
-   home does not trip the rule. All plan tests in this list use `build_paths: false` (the `ConfineRequest` default).
+   directory with `gh` (this replaces the old accepted-alias half of the test); (c) a home reached through a symlinked
+   directory (`host.home` is canonicalised) does not trip the rule. All plan tests in this list use `build_paths: false` (the `ConfineRequest` default).
 3. `tests/confine.rs`: one real-bubblewrap probe (skipped without bwrap, as the existing probe) for `cargo`:
    write a file in `~/.cargo`, cannot read or write `credentials.toml`, cannot write `~/.cargo/bin` when it is on PATH.
 4. `tests/confine.rs`: each of the nine credential grants and each toolchain grant given alone on a fixture with its
@@ -185,8 +189,7 @@ Run from the main checkout, `develop`:
 - `cargo run -q -- confine list` prints 28 grant rows then the instruction line; the 17 new rows match 2.1 (judge: the
   tester diffs the output against this table).
 - Mutation check (the tester, on a scratch copy): (a) restore the old two-direction overlap check on default hides
-  -> the `cargo` plan test fails; (b) make the check ignore the inside-a-hidden-path direction -> the aliased-`gh`
-  and aliased-`pip` tests fail; (c) drop `~/.cargo/credentials.toml` from `cargo-token` -> the table test fails;
+  -> the `cargo` plan test fails; (b) remove the symlink refusal -> the aliased-`gh`, aliased-`pip` and aliased-`cargo` tests fail; (c) drop `~/.cargo/credentials.toml` from `cargo-token` -> the table test fails;
   (d) change a team flag to false -> the team test fails.
 - Abuse cases (trust boundaries: a symlink planted in a writable location; a repo-shipped team file naming grants):
   the symlink tests in 4.2; a team file with `grants = ["cargo-token"]` parses (4.1) and its plan releases the env
@@ -194,7 +197,7 @@ Run from the main checkout, `develop`:
 - In-place probe (the tester, real bubblewrap, report only): for `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials.toml`
   and `~/.netrc` as single files, append works, rename over and delete fail, as for `git-credentials`; the report
   states the result per file.
-- Contract tests that already pass on the old code: the aliased-`gh` test and the missing-path test.
+- Contract test that already passes on the old code: the missing-path test. The symlink tests are red on the old code.
 - Known flaky: none known; rerun once, then record as pre-existing.
 
 ## 6. Out of scope
