@@ -33,6 +33,7 @@ lag the code.
 | U6 | A human typing exactly inside the paste-to-Enter window to force a real corrupted submission | docs |
 | U7 | Block behavior on Codex in the validation plan's recorded results | docs |
 | U8 | User-supplied `--mcp-config`, `--allowedTools`, and `--append-system-prompt` duplicate-flag behavior is unprobed (`--append-system-prompt` probably last-wins) | code |
+| U9 | Newer `huggingface_hub` may keep tokens at `~/.cache/huggingface/stored_tokens`, which is neither a default hide (`src/confine.rs:97-102`) nor unhidden by the `huggingface-token` grant (`src/grant.rs:85`). With the `cache` grant a session could read it without the Hugging Face grant. Check the library's source; if confirmed, hide it by default and unhide it under `huggingface-token`. A hide covers only a path that exists at session start | spec 3ca consultant, architect 2026-11-02 |
 
 ## Known issues
 
