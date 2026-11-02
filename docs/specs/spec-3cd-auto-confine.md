@@ -115,7 +115,11 @@ the user's own home and is trusted input.
   `create`, if the path does not exist and `create` is true, create it with `create_dir_all`;
   keep the checks the old function made for a missing path (inside the home, no symlink component,
   an ancestor that is writable, not hidden or under the state or runtime directory), recording a
-  skipped path as `Unresolved` with option `grant`.
+  skipped path as `Unresolved` with option `grant`. The records are informational: they never change
+  what the planner does with a path. `apply_grant_unhides` is unchanged and has no check on them
+  (Amendment 2): a missing path is skipped by the planner as before, and an existing grant path that
+  has a symlink component or overlaps the state directory still fails the plan with the existing
+  error texts ("passes through the symlink", "overlaps the state directory").
 - The implicit `harness-config` grant (lines ~978 to ~1009) no longer depends on a request field:
   it applies to every Claude and OMP session, keeping the operator hide/unhide exception and the
   `Unresolved` entry unchanged.
@@ -227,6 +231,11 @@ Tests, through public seams, literal expected values (new unless marked contract
    was true): no `build_paths` field exists; a Claude and an OMP plan list the harness config
    directory writable by default; a plan with no grants leaves `~/.cargo` and `~/.cache` read-only or
    hidden; `cache` opens `~/.cache`.
+5b. Pipeline contract tests (Amendment 2; they pass on the old code's plan alone, so they run
+   `ensure_grant_dirs` and then `plan_with_preflight`, as `team up` and the daemon do): the `cargo`
+   grant with `~/.cargo` a symlink fails with "passes through the symlink"; the `cache` grant with the
+   state directory inside `~/.cache` fails with "overlaps the state directory"; a missing `~/.npm` with
+   the `node` grant and `create = false` plans without error and lists it skipped.
 6. `ensure_grant_dirs(request, harness, host, create)`: with `create = true`, a fresh temp home and the `node` grant make `~/.npm`
    exist; with the `aws` grant `~/.aws` is not created; with `create = false` nothing is created; a
    symlinked `~/.npm` is recorded `Unresolved`, not created through.
@@ -302,3 +311,16 @@ sections above are edited to match and name this amendment.
    everywhere. Resolved: the key's presence in `[session.confine]` is an error with any value; a
    team-level `auto = false` is accepted in the `[confine]` table of any team file and means nothing.
    Section 9 test 4 states both.
+
+## Amendment 2
+
+The developer reported a conflict (BLOCKED) between the architect's review request for
+review item B and section 9 test 6. Resolved here, and the review item is withdrawn in its first form.
+
+The developer's `ensure_grant_dirs` records `Unresolved` for an existing symlinked or overlapping grant
+path (section 9 test 6 requires the symlink record), and its `apply_grant_unhides` skipped any path
+with such a record. Through the real pipeline that turned the 3by and 3ca errors (a symlinked grant
+path, a `cache` grant over the state directory) into a silent skip. The skip clause is unnecessary:
+the planner already skips a missing path, so the clause only suppressed the errors. Decision: keep
+the records (test 6 holds), remove the skip clause so `apply_grant_unhides` is unchanged, and pin the
+error behavior with the pipeline tests in section 9 test 5b. Section 4 states this.
