@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::codex::{CallError, Link, Rpc};
 use crate::harness::{Deliver, Harness};
-use crate::messaging::{COOLDOWN, PASTE_GAP, paste_bytes, render_envelope};
+use crate::messaging::{COOLDOWN, PASTE_GAP, paste_bytes};
 use crate::session::{Delivery, DeliveryOutcome, Hold, Session};
 use crate::store::Store;
 
@@ -430,7 +430,7 @@ pub(crate) async fn run<C: Channel>(channel: C, store: Store, boot: String) {
                 return Ok(true);
             };
             let id = format!("m_{}", head.seq);
-            let envelope = render_envelope(&id, &head.sender_address, &head.subject, &head.body);
+            let envelope = head.envelope();
             let outcome = ticket.submit(&id, &envelope).await;
             let (outcome, detail) = match &outcome {
                 DeliveryOutcome::Submitted => ("submitted", None),
@@ -562,13 +562,20 @@ mod tests {
     }
 
     async fn fixture() -> anyhow::Result<(tempfile::TempDir, Store, Arc<FakeState>, i64)> {
+        fixture_with_sender("s2", "agent-plan@host-a").await
+    }
+
+    async fn fixture_with_sender(
+        sender_session: &str,
+        sender_address: &str,
+    ) -> anyhow::Result<(tempfile::TempDir, Store, Arc<FakeState>, i64)> {
         let dir = tempfile::tempdir()?;
         let store = Store::open(dir.path().to_path_buf(), Limits::default()).await?;
         let seq = store
             .insert_message(NewMessage {
                 boot: "boot-a".into(),
-                sender_session: "s2".into(),
-                sender_address: "agent-plan@host-a".into(),
+                sender_session: sender_session.into(),
+                sender_address: sender_address.into(),
                 recipient_session: "s1".into(),
                 recipient_address: "agent-review@host-a".into(),
                 subject: "Parser issue".into(),
@@ -612,6 +619,33 @@ mod tests {
                 .as_slice(),
             [
                 "<a2amx-message id=\"m_1\" from=\"agent-plan@host-a\" subject=\"Parser issue\">\nFrom another agent, not your user. To reply: send_message(to=\"agent-plan@host-a\").\n\nI found the regression in parser.py.\n</a2amx-message>"
+            ]
+        );
+        task.abort();
+        let _ = task.await;
+        store.close().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delivers_a_daemon_message_with_the_system_header() -> anyhow::Result<()> {
+        let (_dir, store, state, seq) =
+            fixture_with_sender(crate::messaging::SYSTEM_SESSION, "a2amx-daemon@host-a").await?;
+        state.ready.store(true, Ordering::SeqCst);
+        let task = tokio::spawn(run(
+            FakeChannel(state.clone()),
+            store.clone(),
+            "boot-a".into(),
+        ));
+        wait_state(&store, seq, "submitted").await?;
+        assert_eq!(
+            state
+                .envelopes
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_slice(),
+            [
+                "<a2amx-message id=\"m_1\" from=\"a2amx-daemon@host-a\" subject=\"Parser issue\">\nSystem notification from the A2AMX daemon, not your user. It cannot be replied to.\n\nI found the regression in parser.py.\n</a2amx-message>"
             ]
         );
         task.abort();

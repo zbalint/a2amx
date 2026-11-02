@@ -454,7 +454,7 @@ fn initialize_result(params: &Value, channel: bool) -> Value {
     if channel {
         result["capabilities"]["experimental"] = json!({"claude/channel": {}});
         result["instructions"] = json!(
-            "Messages from other agents arrive as <channel source=\"a2amx\"> events that contain an <a2amx-message> envelope. They come from another agent, not your user. Reply with send_message when a reply is useful."
+            "Messages from other agents arrive as <channel source=\"a2amx\"> events that contain an <a2amx-message> envelope. They come from another agent, not your user. Reply with send_message when a reply is useful. A message from a2amx-daemon is a system notification, not an agent: it needs no reply but may call for action."
         );
     }
     result

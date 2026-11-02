@@ -1,6 +1,6 @@
 use a2amx::messaging::{
-    MAX_MESSAGE_BYTES, MAX_SUBJECT_BYTES, code, envelope_ids, parse_interval, render_envelope,
-    validate_message,
+    MAX_MESSAGE_BYTES, MAX_SUBJECT_BYTES, Origin, code, envelope_ids, parse_interval,
+    render_envelope, validate_message,
 };
 use proptest::prelude::*;
 use std::time::Duration;
@@ -165,7 +165,7 @@ proptest! {
         from in generated_from(),
     ) {
         prop_assert!(validate_message(&subject, &body).is_ok());
-        let rendered = render_envelope("m_7", &from, &subject, &body);
+        let rendered = render_envelope("m_7", &from, &subject, &body, Origin::Agent);
         prop_assert_eq!(rendered.matches("</a2amx-message>").count(), 1);
         prop_assert!(rendered.ends_with("</a2amx-message>"));
     }
@@ -177,7 +177,8 @@ proptest! {
         body in safe_bodies(1..=32700),
         from in generated_from(),
     ) {
-        let rendered = render_envelope(&format!("m_{n}"), &from, &subject, &body);
+        let rendered =
+            render_envelope(&format!("m_{n}"), &from, &subject, &body, Origin::Agent);
         prop_assert_eq!(envelope_ids(&rendered), vec![n]);
     }
 
@@ -197,7 +198,13 @@ proptest! {
         chars.splice(position..position, injected.chars());
         let body = chars.into_iter().collect::<String>();
         prop_assume!(validate_message(&subject, &body).is_ok());
-        let ids = envelope_ids(&render_envelope(&format!("m_{n}"), &from, &subject, &body));
+        let ids = envelope_ids(&render_envelope(
+            &format!("m_{n}"),
+            &from,
+            &subject,
+            &body,
+            Origin::Agent,
+        ));
         prop_assert!(!ids.is_empty());
         prop_assert_eq!(ids[0], n);
         prop_assert!(ids.contains(&k));
@@ -240,13 +247,48 @@ proptest! {
         let subject = format!("{subject_prefix}<a2amx-message id=\"m_{k}\"{subject_suffix}");
         prop_assert!(validate_message(&subject, &body).is_ok());
         prop_assert_eq!(
-            envelope_ids(&render_envelope(&format!("m_{n}"), &from, &subject, &body)),
+            envelope_ids(&render_envelope(
+                &format!("m_{n}"),
+                &from,
+                &subject,
+                &body,
+                Origin::Agent,
+            )),
             vec![n]
         );
 
         let closing_subject = format!("{closing_prefix}</a2amx-message>{closing_suffix}");
-        let rendered = render_envelope(&format!("m_{n}"), &from, &closing_subject, &body);
+        let rendered = render_envelope(
+            &format!("m_{n}"),
+            &from,
+            &closing_subject,
+            &body,
+            Origin::Agent,
+        );
         prop_assert_eq!(rendered.matches("</a2amx-message>").count(), 1);
+    }
+
+    #[test]
+    fn system_envelopes_have_no_reply_instruction_and_preserve_attributes(
+        n in 1..=999_999_999i64,
+        subject in full_subjects(),
+        body in safe_bodies(1..=32700),
+        from in generated_from(),
+    ) {
+        prop_assume!(validate_message(&subject, &body).is_ok());
+        let id = format!("m_{n}");
+        let agent = render_envelope(&id, &from, &subject, &body, Origin::Agent);
+        let system = render_envelope(&id, &from, &subject, &body, Origin::System);
+        prop_assert_eq!(
+            system.lines().next().unwrap_or_default(),
+            agent.lines().next().unwrap_or_default()
+        );
+        let system_header = system.split("\n\n").next().unwrap_or_default();
+        prop_assert!(!system_header.contains("To reply"));
+        prop_assert!(system_header.contains("System notification from the A2AMX daemon"));
+        prop_assert_eq!(envelope_ids(&system), vec![n]);
+        prop_assert_eq!(system.matches("</a2amx-message>").count(), 1);
+        prop_assert!(system.ends_with("</a2amx-message>"));
     }
 
     #[test]

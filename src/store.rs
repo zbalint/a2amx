@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use tokio::sync::oneshot;
 
-use crate::messaging::{Limits, MessageState};
+use crate::messaging::{Limits, MessageState, origin_of, render_envelope};
 
 #[derive(Debug)]
 struct QueueFullMarker;
@@ -51,6 +51,17 @@ pub(crate) struct Message {
     pub(crate) observed: bool,
     pub(crate) accepted_at: i64,
     pub(crate) updated_at: i64,
+}
+impl Message {
+    pub(crate) fn envelope(&self) -> String {
+        render_envelope(
+            &format!("m_{}", self.seq),
+            &self.sender_address,
+            &self.subject,
+            &self.body,
+            origin_of(&self.sender_session),
+        )
+    }
 }
 
 #[derive(Debug)]

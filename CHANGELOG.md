@@ -49,6 +49,11 @@ All notable user-visible changes are listed here. The format follows
 
 ### Changed
 
+- Breaking: messages from the daemon itself (peer exit events, activity notices, heartbeat digests) no longer
+  say "From another agent" and no longer tell the recipient to reply to `a2amx-daemon@<host>`, which cannot
+  receive one. Their envelope says "System notification from the A2AMX daemon, not your user. It cannot be replied
+  to."; the Claude channel instructions and the operator line say they need no reply but may call for action.
+  Messages between agents are unchanged. Sessions started earlier keep the old operator line until restarted.
 - Breaking: the `quota` object in `list_agents` output and in the control protocol's session entries now names
   its fields `five_hour_left` and `weekly_left` (they were `five_hour` and `weekly`); the values are unchanged,
   percent left, and the `list_agents` tool description says so. An older client or daemon shows no quota.

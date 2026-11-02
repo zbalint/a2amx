@@ -798,7 +798,7 @@ impl Runtime {
         for watcher in watchers {
             let message = NewMessage {
                 boot: self.boot.clone(),
-                sender_session: "daemon".into(),
+                sender_session: messaging::SYSTEM_SESSION.into(),
                 sender_address: sender_address.clone(),
                 recipient_session: watcher.id().0.clone(),
                 recipient_address: messaging::address(
@@ -946,7 +946,7 @@ impl Runtime {
         }
         let message = NewMessage {
             boot: self.boot.clone(),
-            sender_session: "daemon".into(),
+            sender_session: messaging::SYSTEM_SESSION.into(),
             sender_address: messaging::address(
                 Some(messaging::SYSTEM_SENDER),
                 messaging::SYSTEM_SENDER,
@@ -1099,7 +1099,7 @@ impl Runtime {
         let body = heartbeat_body(interval, &peers);
         let message = NewMessage {
             boot: self.boot.clone(),
-            sender_session: "daemon".into(),
+            sender_session: messaging::SYSTEM_SESSION.into(),
             sender_address: messaging::address(
                 Some(messaging::SYSTEM_SENDER),
                 messaging::SYSTEM_SENDER,
@@ -1353,13 +1353,7 @@ impl Runtime {
         if let [seq] = ids.as_slice()
             && let Some(message) = self.store.get(*seq).await?
             && self.is_awaiting_receipt(&message, session_id)
-            && inner
-                == messaging::channel_view(&messaging::render_envelope(
-                    &format!("m_{seq}"),
-                    &message.sender_address,
-                    &message.subject,
-                    &message.body,
-                ))
+            && inner == messaging::channel_view(&message.envelope())
         {
             self.store.record_receipt(*seq).await?;
             session.native_received();
@@ -1381,15 +1375,7 @@ impl Runtime {
                 && self.is_awaiting_receipt(&message, session_id)
             {
                 // The hook sees the envelope as the harness transformed it on paste.
-                let envelope = harness::paste_view(
-                    session.harness(),
-                    &messaging::render_envelope(
-                        &format!("m_{seq}"),
-                        &message.sender_address,
-                        &message.subject,
-                        &message.body,
-                    ),
-                );
+                let envelope = harness::paste_view(session.harness(), &message.envelope());
                 known.push((seq, envelope));
             }
         }

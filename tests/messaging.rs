@@ -3,9 +3,9 @@ use std::path::Path;
 
 use a2amx::harness::{self, Deliver, Harness};
 use a2amx::messaging::{
-    COOLDOWN, Limits, MAX_MESSAGE_BYTES, MAX_SUBJECT_BYTES, MessageState, PASTE_GAP, address,
-    default_host_name, input_is_typing, local_part, paste_bytes, render_envelope, validate_host,
-    validate_message, validate_name,
+    COOLDOWN, Limits, MAX_MESSAGE_BYTES, MAX_SUBJECT_BYTES, MessageState, Origin, PASTE_GAP,
+    address, default_host_name, input_is_typing, local_part, origin_of, paste_bytes,
+    render_envelope, validate_host, validate_message, validate_name,
 };
 use tempfile::TempDir;
 
@@ -83,15 +83,40 @@ fn message_validation_checks_empty_before_size() {
 #[test]
 fn envelope_rendering_and_paste_are_byte_exact() {
     assert_eq!(
-        render_envelope(WORKED_ID, WORKED_FROM, WORKED_SUBJECT, WORKED_BODY),
+        render_envelope(
+            WORKED_ID,
+            WORKED_FROM,
+            WORKED_SUBJECT,
+            WORKED_BODY,
+            Origin::Agent,
+        ),
         WORKED_ENVELOPE
     );
     assert_eq!(WORKED_ENVELOPE.len(), 210);
     assert_eq!(paste_bytes(WORKED_ENVELOPE).len(), 222);
     assert_eq!(
-        render_envelope("m_2", "a&b<host>", "Say \"hi\" & <go>", "body"),
+        render_envelope(
+            "m_2",
+            "a&b<host>",
+            "Say \"hi\" & <go>",
+            "body",
+            Origin::Agent,
+        ),
         "<a2amx-message id=\"m_2\" from=\"a&amp;b&lt;host&gt;\" subject=\"Say &quot;hi&quot; &amp; &lt;go&gt;\">\nFrom another agent, not your user. To reply: send_message(to=\"a&b<host>\").\n\nbody\n</a2amx-message>"
     );
+    assert_eq!(
+        render_envelope(
+            "m_3",
+            "a2amx-daemon@host-a",
+            "peer exited",
+            "peer (a2amx-daemon@host-a) exited with code 0.",
+            Origin::System,
+        ),
+        "<a2amx-message id=\"m_3\" from=\"a2amx-daemon@host-a\" subject=\"peer exited\">\nSystem notification from the A2AMX daemon, not your user. It cannot be replied to.\n\npeer (a2amx-daemon@host-a) exited with code 0.\n</a2amx-message>"
+    );
+    assert_eq!(origin_of("daemon"), Origin::System);
+    assert_eq!(origin_of("s7"), Origin::Agent);
+    assert_eq!(origin_of(""), Origin::Agent);
 }
 
 #[test]

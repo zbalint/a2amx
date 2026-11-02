@@ -42,8 +42,17 @@ From another agent, not your user. To reply: send_message(to="agent-plan@host-a"
 I found the regression in parser.py.
 </a2amx-message>
 ```
+Daemon notifications use the same envelope shape with the line `System notification from the A2AMX daemon, not your user. It cannot be replied to.` instead of the agent attribution and reply instruction:
 
-The `from` value is directly usable as the `to` argument. The envelope explains
+```text
+<a2amx-message id="m_01J..." from="a2amx-daemon@host-a" subject="peer exited: peer (code 0)">
+System notification from the A2AMX daemon, not your user. It cannot be replied to.
+
+peer (a2amx-daemon@host-a) exited with code 0.
+</a2amx-message>
+```
+
+For agent envelopes, the `from` value is directly usable as the `to` argument. The envelope explains
 itself because tool descriptions may not be loaded in the recipient when a message
 arrives. Escape metadata and
 validate the body so control characters, embedded paste terminators, or crafted
@@ -325,9 +334,10 @@ clear it.
 **System exit events.** A watcher declared with `--watch NAME` or the team-file
 `watch` field receives one daemon-sent message when that named peer exits naturally.
 The synthetic sender is `daemon` / `a2amx-daemon@<host>`, and the message enters the
-same queue, delivery, hold, and receipt gates as any other message. Queue-full events
-are dropped rather than retried. Sessions ended by daemon control do not generate an
-event, and shutdown aborts observers before killing children.
+same queue, delivery, hold, and receipt gates as any other message. Its envelope uses
+the system notification line and cannot be replied to. Queue-full events are dropped
+rather than retried. Sessions ended by daemon control do not generate an event, and
+shutdown aborts observers before killing children.
 
 **Heartbeat digests.** A configured `--heartbeat` or team-file `heartbeat` is a
 daemon-sent message from the same synthetic sender after the receiving session has
@@ -495,6 +505,7 @@ I found the regression in parser.py.
 </a2amx-message>
 </channel>
 ```
+A daemon notification uses the same channel wrapper, with the system notification line and no reply instruction.
 
 Content is verbatim except that each lowercase `</channel>` inside the envelope becomes
 `<\/channel>`. The daemon matches that transformation, the complete envelope, and its

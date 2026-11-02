@@ -24,10 +24,15 @@ struct Case {
     address: SocketAddr,
     recipient_token: String,
     sender: Client,
+    admin: Client,
 }
 
 impl Case {
     async fn start(channel: bool) -> Self {
+        Self::start_with_watch(channel, Vec::new()).await
+    }
+
+    async fn start_with_watch(channel: bool, watch: Vec<String>) -> Self {
         let (dir, daemon) = common::start_daemon().await;
         let mut admin = Client::connect(dir.path()).await.unwrap();
         let (_, sender_token, address) = common::new_agent(
@@ -56,7 +61,7 @@ impl Case {
                 env,
                 reset: vec![],
                 control_from: vec![],
-                watch: vec![],
+                watch,
                 name: Some("agent-review".into()),
                 harness: Harness::Claude,
                 deliver: Some(Deliver::Auto),
@@ -82,6 +87,7 @@ impl Case {
             _dir: dir,
             _daemon: daemon,
             address,
+            admin,
             recipient_token,
             sender,
         }
@@ -121,6 +127,21 @@ impl Case {
             panic!("message status");
         };
         message
+    }
+
+    async fn list_messages(&mut self) -> Vec<MessageInfo> {
+        let Response::Messages { messages } = self
+            .admin
+            .request(Request::ListMessages {
+                session: None,
+                state: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("list messages");
+        };
+        messages
     }
 
     async fn submitted(&mut self, id: &str) -> MessageInfo {
@@ -223,7 +244,7 @@ async fn channel_initialize_declares_capability_and_instructions_only_when_enabl
     );
     assert_eq!(
         initialized["result"]["instructions"],
-        "Messages from other agents arrive as <channel source=\"a2amx\"> events that contain an <a2amx-message> envelope. They come from another agent, not your user. Reply with send_message when a reply is useful."
+        "Messages from other agents arrive as <channel source=\"a2amx\"> events that contain an <a2amx-message> envelope. They come from another agent, not your user. Reply with send_message when a reply is useful. A message from a2amx-daemon is a system notification, not an agent: it needs no reply but may call for action."
     );
     let mut plain = McpProcess::spawn(address, &token, false);
     let initialized = plain.initialize().await;
@@ -344,6 +365,67 @@ async fn exact_channel_prompt_records_native_receipt_and_allows() {
         case.status(&id).await.evidence.as_deref(),
         Some("native_receipt")
     );
+}
+
+#[tokio::test]
+async fn daemon_channel_receipt_is_visible_through_list_messages() {
+    let mut case = Case::start_with_watch(true, vec!["peer".into()]).await;
+    let mut mcp = case.mcp().await;
+    let response = case
+        .admin
+        .request(Request::NewSession {
+            argv: vec!["true".into()],
+            cols: 80,
+            rows: 24,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("peer".into()),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Hold),
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(response, Response::Created { .. }));
+    let event = mcp.read().await;
+    let content = event["params"]["content"]
+        .as_str()
+        .expect("daemon channel content");
+    assert_eq!(
+        content,
+        "<a2amx-message id=\"m_1\" from=\"a2amx-daemon@host-a\" subject=\"peer exited: peer (code 0)\">\nSystem notification from the A2AMX daemon, not your user. It cannot be replied to.\n\npeer (peer@host-a) exited with code 0.\nRun a2amx screen peer to see its last screen.\n</a2amx-message>"
+    );
+    let verdict = case
+        .report(&format!(
+            "<channel source=\"a2amx\">\n{content}\n</channel>"
+        ))
+        .await;
+    assert!(
+        matches!(verdict, Response::PromptVerdict { verdict, reason:None } if verdict == "allow")
+    );
+    let receipt = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(message) = case
+                .list_messages()
+                .await
+                .into_iter()
+                .find(|message| message.subject == "peer exited: peer (code 0)")
+                && message.evidence.as_deref() == Some("native_receipt")
+            {
+                return message;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("daemon receipt in ListMessages");
+    assert_eq!(receipt.evidence.as_deref(), Some("native_receipt"));
 }
 
 #[tokio::test]

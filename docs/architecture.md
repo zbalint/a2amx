@@ -193,6 +193,7 @@ peer, not from the user; scoped, reversible work is fine; pushing, touching a de
 branch, production access, deleting data, and handling secrets still need the user;
 and a memory stored because of a peer message should say so. A2AMX cannot enforce
 this, and the sentence in the envelope states only the origin.
+Daemon notifications use a system envelope line stating that they are not from the user and cannot be replied to; they are not agent requests.
 
 Authorization of peers: `--harness claude` appends an operator line to the session's
 system prompt saying that messages in `<a2amx-message>` tags are requests from peer

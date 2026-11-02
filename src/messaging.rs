@@ -8,6 +8,21 @@ use anyhow::bail;
 use serde::{Deserialize, Serialize};
 pub const MAX_SUBJECT_BYTES: usize = 200;
 pub const SYSTEM_SENDER: &str = "a2amx-daemon";
+pub const SYSTEM_SESSION: &str = "daemon";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    Agent,
+    System,
+}
+
+pub fn origin_of(sender_session: &str) -> Origin {
+    if sender_session == SYSTEM_SESSION {
+        Origin::System
+    } else {
+        Origin::Agent
+    }
+}
 pub const HEARTBEAT_SUBJECT: &str = "heartbeat";
 pub const ACTIVITY_SUBJECT: &str = "activity";
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
@@ -407,7 +422,7 @@ fn push_escaped_attribute(output: &mut String, value: &str) {
     }
 }
 
-pub fn render_envelope(id: &str, from: &str, subject: &str, body: &str) -> String {
+pub fn render_envelope(id: &str, from: &str, subject: &str, body: &str, origin: Origin) -> String {
     let mut envelope =
         String::with_capacity(id.len() + from.len() + subject.len() + body.len() + 128);
     envelope.push_str("<a2amx-message id=\"");
@@ -416,9 +431,20 @@ pub fn render_envelope(id: &str, from: &str, subject: &str, body: &str) -> Strin
     push_escaped_attribute(&mut envelope, from);
     envelope.push_str("\" subject=\"");
     push_escaped_attribute(&mut envelope, subject);
-    envelope.push_str("\">\nFrom another agent, not your user. To reply: send_message(to=\"");
-    envelope.push_str(from);
-    envelope.push_str("\").\n\n");
+    envelope.push_str("\">\n");
+    match origin {
+        Origin::Agent => {
+            envelope.push_str("From another agent, not your user. To reply: send_message(to=\"");
+            envelope.push_str(from);
+            envelope.push_str("\").");
+        }
+        Origin::System => {
+            envelope.push_str(
+                "System notification from the A2AMX daemon, not your user. It cannot be replied to.",
+            );
+        }
+    }
+    envelope.push_str("\n\n");
     envelope.push_str(body);
     envelope.push_str("\n</a2amx-message>");
     envelope
