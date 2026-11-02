@@ -40,6 +40,35 @@ fn summary_activity_serializes_literals_and_old_payloads_remain_unknown() {
         }
     }
 }
+#[test]
+fn quota_info_serializes_percent_left_field_names() {
+    use a2amx::wire::QuotaInfo;
+
+    for (quota, expected) in [
+        (
+            QuotaInfo {
+                five_hour_left: Some(15),
+                weekly_left: None,
+                limit_reached: false,
+            },
+            serde_json::json!({"five_hour_left": 15}),
+        ),
+        (
+            QuotaInfo {
+                five_hour_left: Some(15),
+                weekly_left: Some(0),
+                limit_reached: true,
+            },
+            serde_json::json!({
+                "five_hour_left": 15,
+                "weekly_left": 0,
+                "limit_reached": true,
+            }),
+        ),
+    ] {
+        assert_eq!(serde_json::to_value(quota).unwrap(), expected);
+    }
+}
 
 #[test]
 fn length_prefixed_frame_round_trips() {
@@ -774,8 +803,8 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
         confined: false,
         starting: true,
         quota: Some(QuotaInfo {
-            five_hour: Some(15),
-            weekly: None,
+            five_hour_left: Some(15),
+            weekly_left: None,
             limit_reached: false,
         }),
         team: None,

@@ -137,8 +137,8 @@ message_status(id)
 reset_session(to)
 ```
 
-Each `list_agents()` entry includes `address`, `state`, `activity`, `attached`, optional
-`quota`, always-present `harness` (`claude`, `omp`, `codex`, or `generic`), optional
+Each `list_agents()` entry includes `address`, `state`, `activity`, `attached`, optional `quota` (`five_hour_left`, `weekly_left`: percent left, 100 = all left; `limit_reached`), always-present
+`harness` (`claude`, `omp`, `codex`, or `generic`), optional
 `team` (the team name only), `you` for the caller's own entry, and optional spawn directory
 `cwd`; `cwd` is not the process's live current directory. Sessions outside the caller's
 private-team visibility are not listed.

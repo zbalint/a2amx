@@ -31,10 +31,10 @@ fn read(rows: u16, lines: &[(u16, &str)]) -> Option<QuotaInfo> {
     read_with(Harness::Codex, rows, lines)
 }
 
-fn info(five_hour: Option<u8>, weekly: Option<u8>) -> Option<QuotaInfo> {
+fn info(five_hour_left: Option<u8>, weekly_left: Option<u8>) -> Option<QuotaInfo> {
     Some(QuotaInfo {
-        five_hour,
-        weekly,
+        five_hour_left,
+        weekly_left,
         ..Default::default()
     })
 }
@@ -174,10 +174,10 @@ fn short_and_empty_screens_are_handled() {
 
 #[test]
 fn exhausted_names_the_windows_at_zero() {
-    let exhausted = |five_hour, weekly| {
+    let exhausted = |five_hour_left, weekly_left| {
         QuotaInfo {
-            five_hour,
-            weekly,
+            five_hour_left,
+            weekly_left,
             ..Default::default()
         }
         .exhausted()
@@ -197,7 +197,7 @@ fn exhausted_names_the_windows_at_zero() {
     assert_eq!(
         QuotaInfo {
             limit_reached: true,
-            five_hour: Some(0),
+            five_hour_left: Some(0),
             ..Default::default()
         }
         .exhausted(),
@@ -439,8 +439,8 @@ async fn list_and_list_agents_report_a_claude_session_quota() {
     assert_eq!(
         quota,
         QuotaInfo {
-            five_hour: Some(0),
-            weekly: Some(80),
+            five_hour_left: Some(0),
+            weekly_left: Some(80),
             ..Default::default()
         }
     );
@@ -645,8 +645,8 @@ async fn send_message_reports_omp_limit_without_changing_delivery() {
 fn cell_preserves_screen_limit_with_windows() {
     assert_eq!(
         quota::cell(Some(QuotaInfo {
-            five_hour: Some(97),
-            weekly: Some(5),
+            five_hour_left: Some(97),
+            weekly_left: Some(5),
             limit_reached: true,
         })),
         "5h 97% wk 5% limit"
@@ -672,8 +672,8 @@ fn parses_omp_usage_windows() {
         Some(BTreeMap::from([(
             "openai-codex".to_owned(),
             QuotaInfo {
-                five_hour: Some(97),
-                weekly: Some(5),
+                five_hour_left: Some(97),
+                weekly_left: Some(5),
                 ..Default::default()
             },
         )]))
@@ -699,16 +699,16 @@ fn keeps_omp_usage_providers_separate() {
             (
                 "openai-codex".to_owned(),
                 QuotaInfo {
-                    five_hour: Some(100),
-                    weekly: Some(85),
+                    five_hour_left: Some(100),
+                    weekly_left: Some(85),
                     ..Default::default()
                 },
             ),
             (
                 "opencode-go".to_owned(),
                 QuotaInfo {
-                    five_hour: Some(100),
-                    weekly: Some(0),
+                    five_hour_left: Some(100),
+                    weekly_left: Some(0),
                     ..Default::default()
                 },
             ),
@@ -732,7 +732,7 @@ fn merges_omp_usage_reports_for_one_provider() {
         Some(BTreeMap::from([(
             "openai-codex".to_owned(),
             QuotaInfo {
-                weekly: Some(40),
+                weekly_left: Some(40),
                 ..Default::default()
             },
         )]))
@@ -753,8 +753,8 @@ fn rounds_and_clamps_omp_percentages() {
         Some(BTreeMap::from([(
             "openai-codex".to_owned(),
             QuotaInfo {
-                five_hour: Some(0),
-                weekly: Some(1),
+                five_hour_left: Some(0),
+                weekly_left: Some(1),
                 ..Default::default()
             },
         )]))
@@ -769,8 +769,8 @@ fn rounds_and_clamps_omp_percentages() {
         Some(BTreeMap::from([(
             "openai-codex".to_owned(),
             QuotaInfo {
-                five_hour: Some(100),
-                weekly: Some(0),
+                five_hour_left: Some(100),
+                weekly_left: Some(0),
                 ..Default::default()
             },
         )]))
@@ -788,7 +788,7 @@ fn omp_usage_may_report_one_window() {
         Some(BTreeMap::from([(
             "openai-codex".to_owned(),
             QuotaInfo {
-                five_hour: Some(40),
+                five_hour_left: Some(40),
                 ..Default::default()
             },
         )]))
@@ -827,8 +827,8 @@ fn omp_usage_ignores_identity_fields() {
         Some(BTreeMap::from([(
             "fictional-provider".to_owned(),
             QuotaInfo {
-                five_hour: Some(97),
-                weekly: Some(5),
+                five_hour_left: Some(97),
+                weekly_left: Some(5),
                 ..Default::default()
             },
         )]))
@@ -857,8 +857,8 @@ async fn list_and_list_agents_report_omp_usage_percentages() {
     assert_eq!(
         quota,
         QuotaInfo {
-            five_hour: Some(97),
-            weekly: Some(5),
+            five_hour_left: Some(97),
+            weekly_left: Some(5),
             ..Default::default()
         }
     );
@@ -933,16 +933,16 @@ async fn send_message_uses_recipient_omp_provider_quota() {
     assert_eq!(
         quota_of(&mut admin, &open_id).await,
         QuotaInfo {
-            five_hour: Some(97),
-            weekly: Some(5),
+            five_hour_left: Some(97),
+            weekly_left: Some(5),
             ..Default::default()
         }
     );
     assert_eq!(
         quota_of(&mut admin, &glm_id).await,
         QuotaInfo {
-            five_hour: Some(0),
-            weekly: Some(0),
+            five_hour_left: Some(0),
+            weekly_left: Some(0),
             ..Default::default()
         }
     );

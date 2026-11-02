@@ -393,8 +393,8 @@ fn spans_len(spans: &[Span]) -> usize {
 
 fn is_low_quota(quota: &QuotaInfo) -> bool {
     quota.limit_reached
-        || quota.five_hour.is_some_and(|percent| percent <= 15)
-        || quota.weekly.is_some_and(|percent| percent <= 15)
+        || quota.five_hour_left.is_some_and(|percent| percent <= 15)
+        || quota.weekly_left.is_some_and(|percent| percent <= 15)
 }
 
 fn hint_allowed(reason: &str, prefix: u8) -> bool {

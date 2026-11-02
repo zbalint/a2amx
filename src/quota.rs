@@ -94,8 +94,8 @@ pub fn parse_omp_usage(json: &str) -> Option<BTreeMap<String, QuotaInfo>> {
                 continue;
             };
             let slot = match window_id.as_str() {
-                "5h" => &mut info.five_hour,
-                "7d" => &mut info.weekly,
+                "5h" => &mut info.five_hour_left,
+                "7d" => &mut info.weekly_left,
                 _ => continue,
             };
             let percent = (fraction * 100.0).round().clamp(0.0, 100.0) as u8;
@@ -105,7 +105,7 @@ pub fn parse_omp_usage(json: &str) -> Option<BTreeMap<String, QuotaInfo>> {
             }
         }
     }
-    by_provider.retain(|_, info| info.five_hour.is_some() || info.weekly.is_some());
+    by_provider.retain(|_, info| info.five_hour_left.is_some() || info.weekly_left.is_some());
     (!by_provider.is_empty()).then_some(by_provider)
 }
 
@@ -114,7 +114,7 @@ pub fn cell(quota: Option<QuotaInfo>) -> String {
     let Some(quota) = quota else {
         return "-".to_owned();
     };
-    let windows = [("5h", quota.five_hour), ("wk", quota.weekly)];
+    let windows = [("5h", quota.five_hour_left), ("wk", quota.weekly_left)];
     let cell = windows
         .into_iter()
         .filter_map(|(label, percent)| percent.map(|percent| format!("{label} {percent}%")))
@@ -141,8 +141,8 @@ fn read_windows(screen: &Screen) -> Option<QuotaInfo> {
         for start in 0..text.len() {
             if let Some((window, percent)) = token_at(&text, start) {
                 let slot = match window {
-                    Window::FiveHour => &mut info.five_hour,
-                    Window::Weekly => &mut info.weekly,
+                    Window::FiveHour => &mut info.five_hour_left,
+                    Window::Weekly => &mut info.weekly_left,
                 };
                 slot.get_or_insert(percent);
             }

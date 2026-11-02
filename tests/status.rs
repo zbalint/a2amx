@@ -82,8 +82,8 @@ fn details_drop_in_priority_order_as_the_terminal_narrows() {
     info.harness = Some(Harness::Claude);
     info.pending = 2;
     info.quota = Some(QuotaInfo {
-        five_hour: Some(92),
-        weekly: Some(42),
+        five_hour_left: Some(92),
+        weekly_left: Some(42),
         limit_reached: false,
     });
     // E1: ordinary quota is hidden.
@@ -95,8 +95,8 @@ fn details_drop_in_priority_order_as_the_terminal_narrows() {
         )
     );
     info.quota = Some(QuotaInfo {
-        five_hour: Some(92),
-        weekly: Some(12),
+        five_hour_left: Some(92),
+        weekly_left: Some(12),
         limit_reached: false,
     });
     // E2-E6: harness, quota, activity, then pending are removed.
@@ -132,8 +132,8 @@ fn held_alert_keeps_priority_and_only_hints_releasable_holds() {
     info.harness = Some(Harness::Claude);
     info.pending = 2;
     info.quota = Some(QuotaInfo {
-        five_hour: Some(92),
-        weekly: Some(42),
+        five_hour_left: Some(92),
+        weekly_left: Some(42),
         limit_reached: false,
     });
     info.hold = Some("human_draft".into());
@@ -205,7 +205,7 @@ fn low_quota_boundary_resetting_and_held_activity_match_the_bar_contract() {
     );
     info.activity = None;
     info.quota = Some(QuotaInfo {
-        five_hour: Some(15),
+        five_hour_left: Some(15),
         ..Default::default()
     });
     // E14-E15.
@@ -214,7 +214,7 @@ fn low_quota_boundary_resetting_and_held_activity_match_the_bar_contract() {
         format!(" a │ 5h 15% {}", " ".repeat(27))
     );
     info.quota = Some(QuotaInfo {
-        five_hour: Some(16),
+        five_hour_left: Some(16),
         ..Default::default()
     });
     assert_eq!(
@@ -341,7 +341,7 @@ fn styled_bar_bytes_restore_cursor_and_foreground() {
     for (quota, span) in [
         (
             QuotaInfo {
-                five_hour: Some(15),
+                five_hour_left: Some(15),
                 ..Default::default()
             },
             "\x1b[38;5;221m5h 15%\x1b[38;5;252m",

@@ -49,6 +49,9 @@ All notable user-visible changes are listed here. The format follows
 
 ### Changed
 
+- Breaking: the `quota` object in `list_agents` output and in the control protocol's session entries now names
+  its fields `five_hour_left` and `weekly_left` (they were `five_hour` and `weekly`); the values are unchanged,
+  percent left, and the `list_agents` tool description says so. An older client or daemon shows no quota.
 - In a confined Generic session, Ctrl-C now reaches the command inside the sandbox instead of ending the
   session, so a shell, a Python REPL or a running command behaves as it does unconfined. Confining a Generic
   session now needs an `env` with `--ignore-signal` and `--default-signal` (GNU coreutils 8.31 or newer, or

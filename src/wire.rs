@@ -373,13 +373,14 @@ pub struct SessionSummary {
     pub activity_secs: Option<u64>,
 }
 
-/// Percent left per quota window, as the harness's status line last showed it.
+/// Percent left per quota window, as the harness's status line last showed it: `five_hour_left` and
+/// `weekly_left`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct QuotaInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub five_hour: Option<u8>,
+    pub five_hour_left: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub weekly: Option<u8>,
+    pub weekly_left: Option<u8>,
     /// The harness screen reported a usage limit in the conversation, with no window named.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub limit_reached: bool,
@@ -388,7 +389,7 @@ pub struct QuotaInfo {
 impl QuotaInfo {
     /// Which quota is exhausted: a named window, `"usage"`, or `None`.
     pub fn exhausted(&self) -> Option<&'static str> {
-        match (self.five_hour == Some(0), self.weekly == Some(0)) {
+        match (self.five_hour_left == Some(0), self.weekly_left == Some(0)) {
             (true, true) => Some("5h and weekly"),
             (true, false) => Some("5h"),
             (false, true) => Some("weekly"),
