@@ -266,6 +266,24 @@ fn grant_table_has_expected_rows() {
             true,
             false,
         ),
+        (
+            "cache",
+            vec![],
+            vec![],
+            vec!["~/.cache"],
+            vec![],
+            true,
+            false,
+        ),
+        (
+            "huggingface-token",
+            vec![],
+            vec!["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"],
+            vec!["~/.cache/huggingface/token"],
+            vec![],
+            true,
+            false,
+        ),
     ];
     let all = grant::all();
     assert_eq!(all.len(), expected.len());
@@ -365,6 +383,14 @@ fn grant_rows_have_exact_exposure_text() {
         (
             "netrc",
             "your ~/.netrc (read-write in place): every host login and password stored there, which the agent can also overwrite",
+        ),
+        (
+            "cache",
+            "your whole ~/.cache, read-write: every tool's cache and scratch data, including tool environments and hooks whose programs your own shell and builds outside the session run; the default hides under it (for example the Hugging Face token) stay hidden only while they exist when the session starts, and only until something moves them; a credential file created or renamed later is open to the agent, and a state directory under ~/.cache makes the grant fail",
+        ),
+        (
+            "huggingface-token",
+            "your Hugging Face login (~/.cache/huggingface/token, read-write in place) and the HF_TOKEN and HUGGING_FACE_HUB_TOKEN environment variables: the agent can act on your Hugging Face account and change the file",
         ),
     ];
     for (name, exposes) in expected {
@@ -478,6 +504,8 @@ fn team_table_accepts_new_grants_and_rejects_the_rest() {
         "pypi-token",
         "cargo-token",
         "netrc",
+        "cache",
+        "huggingface-token",
     ] {
         team::parse(&format!(
             "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
@@ -527,15 +555,15 @@ fn render_list_has_every_grant_and_instruction() {
     }
     assert_eq!(
         lines[8],
-        "gh              team or sessionyour GitHub CLI login (~/.config/gh, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login"
+        "gh                team or sessionyour GitHub CLI login (~/.config/gh, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login"
     );
     assert_eq!(
         lines[9],
-        "git-credentials team or sessionthe plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite"
+        "git-credentials   team or sessionthe plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite"
     );
     assert_eq!(
         lines[10],
-        "ssh             team or sessionyour ssh keys and config (~/.ssh, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them"
+        "ssh               team or sessionyour ssh keys and config (~/.ssh, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them"
     );
     assert_eq!(
         lines.last().copied(),

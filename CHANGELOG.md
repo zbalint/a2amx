@@ -7,6 +7,9 @@ All notable user-visible changes are listed here. The format follows
 
 ### Added
 
+- Confinement grants `cache` (the whole `~/.cache`, read-write; the default hides under it stay) and
+  `huggingface-token` (the Hugging Face login file and its two environment variables), so a team no longer needs a
+  raw `write` of `~/.cache` (`docs/confinement.md`).
 - Team line: a session in a team shows a row at the top of the attach screen, in the status bar's
   style, listing the team's members with an activity dot (grey for exited members). A click on a
   member, or the prefix then `1`-`9`, `n` or `p`, switches to it; a click on the team label opens the

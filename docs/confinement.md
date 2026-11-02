@@ -93,6 +93,8 @@ applies the team's lists.
 | `pypi-token` | your ~/.pypirc (read-write in place) and the PYPI_TOKEN and TWINE_PASSWORD environment variables: the agent can upload packages as you and change the file | Yes; team or session. |
 | `cargo-token` | your cargo registry login (~/.cargo/credentials and ~/.cargo/credentials.toml, read-write in place) and the CARGO_REGISTRY_TOKEN and CARGO_REGISTRIES_CRATES_IO_TOKEN environment variables: the agent can publish crates as you and change the file | Yes; team or session. |
 | `netrc` | your ~/.netrc (read-write in place): every host login and password stored there, which the agent can also overwrite | Yes; team or session. |
+| `cache` | your whole ~/.cache, read-write: every tool's cache and scratch data, including tool environments and hooks whose programs your own shell and builds outside the session run; the default hides under it (for example the Hugging Face token) stay hidden only while they exist when the session starts, and only until something moves them; a credential file created or renamed later is open to the agent, and a state directory under ~/.cache makes the grant fail | Yes; team or session. |
+| `huggingface-token` | your Hugging Face login (~/.cache/huggingface/token, read-write in place) and the HF_TOKEN and HUGGING_FACE_HUB_TOKEN environment variables: the agent can act on your Hugging Face account and change the file | Yes; team or session. |
 
 ### Choosing grants
 
@@ -177,7 +179,7 @@ a2amx new --confine --confine-write ~/.cargo -- cargo build
 
 Add `~/.cargo/git` only when using an explicit narrower registry path. The default protects `~/.cargo/bin` when it is on `PATH`; `cargo install` there fails, so set `CARGO_INSTALL_ROOT` to a writable directory. `~/.cargo/config.toml` and `~/.cargo/env` remain writable and later builds run what they contain. The `~/.cargo/credentials` and `~/.cargo/credentials.toml` files remain hidden if they exist when the session starts.
 
-The defaults use the literal `~/.cargo` and `~/.cache` locations; `CARGO_HOME` and `XDG_CACHE_HOME` set elsewhere are not detected or honoured. `mv` or `rm` of `~/.cache/huggingface` acts on the host directory even though `~/.cache/huggingface/token` itself is hidden. A state directory under `~/.cache` makes that common cache an unresolved build path rather than a writable mount.
+The defaults use the literal `~/.cargo` and `~/.cache` locations; `CARGO_HOME` and `XDG_CACHE_HOME` set elsewhere are not detected or honoured. The `cache` grant is the named way to open `~/.cache`, independent of build paths. The default hides under it protect only paths that exist when the session starts, so a token created or renamed afterwards is not hidden (`mv` of `~/.cache/huggingface` acts on the host). A state directory under `~/.cache` fails the grant, although a raw `write = ["~/.cache"]` plans. A `~/.cache` symlink is refused; name the real path with a `write` entry instead.
 
 ### Node with npm
 

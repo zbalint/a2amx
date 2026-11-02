@@ -2406,6 +2406,7 @@ mod tests {
             "pypi-token",
             "cargo-token",
             "netrc",
+            "huggingface-token",
         ];
         for grant in grant::all()
             .iter()

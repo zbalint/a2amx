@@ -81,8 +81,10 @@ const NPM_TOKEN_UNHIDES: &[&str] = &["~/.npmrc"];
 const PYPI_TOKEN_UNHIDES: &[&str] = &["~/.pypirc"];
 const CARGO_TOKEN_UNHIDES: &[&str] = &["~/.cargo/credentials", "~/.cargo/credentials.toml"];
 const NETRC_UNHIDES: &[&str] = &["~/.netrc"];
+const CACHE_UNHIDES: &[&str] = &["~/.cache"];
+const HUGGINGFACE_TOKEN_UNHIDES: &[&str] = &["~/.cache/huggingface/token"];
 
-static GRANTS: [Grant; 28] = [
+static GRANTS: [Grant; 30] = [
     Grant {
         name: "docker",
         exposes: "docker container daemon sockets: effectively root on the host",
@@ -363,6 +365,26 @@ static GRANTS: [Grant; 28] = [
         unhides: NETRC_UNHIDES,
         stand_ins: NO_PATHS,
     },
+    Grant {
+        name: "cache",
+        exposes: "your whole ~/.cache, read-write: every tool's cache and scratch data, including tool environments and hooks whose programs your own shell and builds outside the session run; the default hides under it (for example the Hugging Face token) stay hidden only while they exist when the session starts, and only until something moves them; a credential file created or renamed later is open to the agent, and a state directory under ~/.cache makes the grant fail",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: CACHE_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "huggingface-token",
+        exposes: "your Hugging Face login (~/.cache/huggingface/token, read-write in place) and the HF_TOKEN and HUGGING_FACE_HUB_TOKEN environment variables: the agent can act on your Hugging Face account and change the file",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: &["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"],
+        own_config: false,
+        unhides: HUGGINGFACE_TOKEN_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
 ];
 
 /// Return every grant in stable display order.
@@ -425,6 +447,12 @@ pub fn validate(names: &[String]) -> Result<()> {
 /// Render the grants in stable table order for `a2amx confine list`.
 pub fn render_list() -> String {
     let mut output = String::new();
+    let name_width = all()
+        .iter()
+        .map(|grant| grant.name.len())
+        .max()
+        .unwrap_or(0)
+        + 1;
     for grant in all() {
         let scope = if grant.team_default_ok {
             "team or session"
@@ -432,7 +460,7 @@ pub fn render_list() -> String {
             "session only"
         };
         output.push_str(&format!(
-            "{:<16}{:<15}{}\n",
+            "{:<name_width$}{:<15}{}\n",
             grant.name, scope, grant.exposes
         ));
     }

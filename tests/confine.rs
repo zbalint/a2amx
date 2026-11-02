@@ -806,6 +806,151 @@ fn cargo_token_grant_lifts_only_its_credential_files() {
     assert!(token_only.writable.contains(&credentials_toml));
 }
 #[test]
+fn cache_grant_keeps_the_default_hides() {
+    let fixture = Fixture::new();
+    let cache = fixture.home.join(".cache");
+    let token = cache.join("huggingface/token");
+    std::fs::create_dir_all(token.parent().expect("token parent")).expect("cache directories");
+    std::fs::write(&token, "token").expect("huggingface token");
+    let cache = std::fs::canonicalize(cache).expect("cache canonical");
+    let token = std::fs::canonicalize(token).expect("token canonical");
+
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["cache".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("cache grant plan");
+    assert!(plan.writable.contains(&cache));
+    assert!(plan.hidden_paths().contains(&token));
+}
+
+#[test]
+fn huggingface_token_grant_opens_only_the_token() {
+    let fixture = Fixture::new();
+    let cache = fixture.home.join(".cache");
+    let token = cache.join("huggingface/token");
+    std::fs::create_dir_all(token.parent().expect("token parent")).expect("cache directories");
+    std::fs::write(&token, "token").expect("huggingface token");
+    let cache = std::fs::canonicalize(cache).expect("cache canonical");
+    let token = std::fs::canonicalize(token).expect("token canonical");
+
+    let cache_and_token = confine::plan(
+        &ConfineRequest {
+            grants: vec!["cache".into(), "huggingface-token".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("cache and token grant plan");
+    assert!(cache_and_token.writable.contains(&cache));
+    assert!(!cache_and_token.hidden_paths().contains(&token));
+    let wrapped = cache_and_token
+        .with_bwrap(PathBuf::from("bwrap"))
+        .wrap(vec!["true".into()])
+        .expect("cache and token wrapper");
+    for name in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"] {
+        assert!(
+            !wrapped
+                .windows(2)
+                .any(|window| window == ["--unsetenv", name]),
+            "{name} remains unset"
+        );
+    }
+
+    let token_only = confine::plan(
+        &ConfineRequest {
+            grants: vec!["huggingface-token".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("token-only grant plan");
+    assert!(!token_only.writable.contains(&cache));
+    assert!(token_only.writable.contains(&token));
+    assert!(!token_only.hidden_paths().contains(&token));
+}
+
+#[test]
+fn cache_grant_with_narrower_grants() {
+    let fixture = Fixture::new();
+    let cache = fixture.home.join(".cache");
+    for path in [
+        cache.join("go-build"),
+        cache.join("pip"),
+        cache.join("uv"),
+        cache.join("pypoetry"),
+        cache.join("virtualenv"),
+        fixture.home.join(".local/share/uv"),
+        fixture.home.join(".local/share/pipx"),
+    ] {
+        std::fs::create_dir_all(path).expect("cache grant directory");
+    }
+    let cache = std::fs::canonicalize(cache).expect("cache canonical");
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["cache".into(), "go".into(), "python".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("overlapping cache grants plan");
+    assert!(plan.writable.contains(&cache));
+}
+
+#[test]
+fn cache_grant_refuses_a_state_directory_under_it() {
+    let fixture = Fixture::new();
+    let cache = fixture.home.join(".cache");
+    std::fs::create_dir_all(&cache).expect("cache directory");
+    let state = cache.join("state");
+    let empty = confine::ensure_empty_file(&state).expect("cache state empty file");
+    let mut host = fixture.host();
+    host.state_dir = state;
+    host.empty_file = empty;
+    let error = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["cache".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+    ) {
+        Ok(_) => panic!("cache grant must reject a nested state directory"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("overlaps the state directory"));
+
+    let raw_write = confine::plan(
+        &ConfineRequest {
+            write: vec!["~/.cache".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+    );
+    assert!(raw_write.is_ok());
+}
+
+#[test]
 fn gh_grant_opens_only_its_paths_and_conflicts_with_exact_hides() {
     let fixture = Fixture::new();
     let config = fixture.home.join(".config");
@@ -1262,7 +1407,7 @@ fn new_grants_open_only_existing_paths_and_release_only_their_environment() {
         "PGPASSWORD",
         "MYSQL_PWD",
     ];
-    let cases: [(&str, &[&str]); 17] = [
+    let cases: [(&str, &[&str]); 19] = [
         ("cargo", &["~/.cargo", "~/.rustup"]),
         ("go", &["~/go", "~/.cache/go-build"]),
         (
@@ -1304,6 +1449,8 @@ fn new_grants_open_only_existing_paths_and_release_only_their_environment() {
             &["~/.cargo/credentials", "~/.cargo/credentials.toml"],
         ),
         ("netrc", &["~/.netrc"]),
+        ("cache", &["~/.cache"]),
+        ("huggingface-token", &["~/.cache/huggingface/token"]),
     ];
 
     for (grant_name, entries) in cases {
@@ -1320,6 +1467,7 @@ fn new_grants_open_only_existing_paths_and_release_only_their_environment() {
                     | "~/.netrc"
                     | "~/.cargo/credentials"
                     | "~/.cargo/credentials.toml"
+                    | "~/.cache/huggingface/token"
             );
             if is_file {
                 std::fs::create_dir_all(path.parent().expect("grant file parent"))
@@ -4691,6 +4839,50 @@ fn real_bubblewrap_hides_nested_credentials_but_allows_cache_writes() -> anyhow:
         .context("run nested credential bwrap probe")?;
     assert_eq!(status.code(), Some(0));
     assert_eq!(std::fs::read_to_string(&credentials)?, "credentials");
+    assert_eq!(std::fs::read_to_string(&new_file)?, "x");
+    Ok(())
+}
+
+#[test]
+fn real_bubblewrap_cache_grant_hides_the_token_and_writes_the_cache() -> anyhow::Result<()> {
+    let fixture = Fixture::new();
+    let cache = fixture.home.join(".cache");
+    let token = cache.join("huggingface/token");
+    std::fs::create_dir_all(token.parent().expect("token parent"))?;
+    std::fs::write(&token, "token")?;
+    let bwrap = match confine::resolve_bwrap(None) {
+        Ok(path) => path,
+        Err(error) if !require_bwrap() => {
+            eprintln!("skipping cache grant bwrap test: {error:#}");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let plan = confine::plan_with_path(
+        &ConfineRequest {
+            grants: vec!["cache".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+        None,
+    )?
+    .with_bwrap(bwrap);
+    let new_file = cache.join("new");
+    let script = format!(
+        "set -eu; test ! -s '{}'; printf x > '{}'",
+        token.display(),
+        new_file.display()
+    );
+    let wrapped = plan.wrap(vec!["sh".into(), "-c".into(), script])?;
+    let status = Command::new(&wrapped[0])
+        .args(&wrapped[1..])
+        .status()
+        .context("run cache grant bwrap probe")?;
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&token)?, "token");
     assert_eq!(std::fs::read_to_string(&new_file)?, "x");
     Ok(())
 }
