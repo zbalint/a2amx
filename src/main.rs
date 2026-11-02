@@ -90,13 +90,16 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 Some(dir) => dir.clone(),
                 None => std::env::current_dir()?,
             };
+            let host_home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default();
             let found = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
                 let metadata = std::fs::metadata(&dir)
                     .with_context(|| format!("cannot read project directory {}", dir.display()))?;
                 if !metadata.is_dir() {
                     bail!("cannot read project directory {}", dir.display());
                 }
-                Ok(a2amx::suggest::detect(|name| dir.join(name).exists()))
+                Ok(auto_grants_for(&dir, &host_home))
             })
             .await??;
             write_stdout(a2amx::suggest::render(&found).into_bytes()).await?;
@@ -426,7 +429,6 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         confine_hide,
         confine_unhide,
         confine_no_default_hides,
-        confine_no_build_paths,
         mut confine_grant,
         confine_keep_env,
         reset,
@@ -450,8 +452,6 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     let has_confine_options = !confine_write.is_empty()
         || !confine_hide.is_empty()
         || !confine_unhide.is_empty()
-        || confine_no_default_hides
-        || confine_no_build_paths
         || !confine_grant.is_empty()
         || !confine_keep_env.is_empty();
     if has_confine_options && !confine {
@@ -503,7 +503,6 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             hide: confine_hide,
             unhide: confine_unhide,
             no_default_hides: confine_no_default_hides,
-            build_paths: !confine_no_build_paths,
             grants: confine_grant,
             keep_env: confine_keep_env,
             team_file: None,
@@ -663,13 +662,51 @@ fn resolved_confine_request(
         hide: resolve_confine_paths(cwd, "hide", &request.hide)?,
         unhide: resolve_confine_paths(cwd, "unhide", &request.unhide)?,
         no_default_hides: request.no_default_hides,
-        build_paths: request.build_paths,
         grants: request.grants.clone(),
         keep_env: request.keep_env.clone(),
         team_file: team_file
             .map(|path| path.to_string_lossy().into_owned())
             .or_else(|| request.team_file.clone()),
     })
+}
+
+const MAX_GIT_CONFIG_BYTES: usize = 65_536;
+
+fn auto_grants_for(dir: &Path, home: &Path) -> Vec<&'static str> {
+    let git_config = dir.join(".git");
+    let git_config = if git_config.is_dir() {
+        let config_path = git_config.join("config");
+        let regular = std::fs::metadata(&config_path)
+            .map(|metadata| metadata.is_file())
+            .unwrap_or(false);
+        if !regular {
+            None
+        } else {
+            let mut bytes = Vec::new();
+            std::fs::File::open(config_path).ok().and_then(|file| {
+                let read = file
+                    .take((MAX_GIT_CONFIG_BYTES + 1) as u64)
+                    .read_to_end(&mut bytes)
+                    .ok()?;
+                (read <= MAX_GIT_CONFIG_BYTES)
+                    .then(|| String::from_utf8(bytes).ok())
+                    .flatten()
+            })
+        }
+    } else {
+        None
+    };
+    a2amx::suggest::grants(
+        |name| dir.join(name).exists(),
+        git_config.as_deref(),
+        |path| {
+            if home.as_os_str().is_empty() {
+                return false;
+            }
+            let relative = path.strip_prefix("~/").unwrap_or(path);
+            home.join(relative).exists()
+        },
+    )
 }
 
 async fn create_session(
@@ -1107,8 +1144,7 @@ async fn dry_run_start(
             runtime_dir,
             empty_file: home.join("confine-empty"),
         };
-        let preflight =
-            a2amx::confine::ensure_build_paths(&request, harness, &resolved_cwd, &host, false);
+        let preflight = a2amx::confine::ensure_grant_dirs(&request, harness, &host, false);
         Some(
             a2amx::confine::plan_with_preflight(
                 &request,
@@ -1117,7 +1153,6 @@ async fn dry_run_start(
                 &host,
                 std::env::var_os("PATH"),
                 preflight,
-                true,
             )?
             .with_bwrap(PathBuf::from("bwrap")),
         )
@@ -1164,18 +1199,8 @@ async fn dry_run_start(
     }
 
     if let Some(plan) = &confine_plan {
-        for path in plan
-            .writable
-            .iter()
-            .filter(|path| **path != resolved_cwd && !plan.build_writes.contains(path))
-        {
+        for path in plan.writable.iter().filter(|path| **path != resolved_cwd) {
             output.push_str(&format!("  writable: {}\n", path.display()));
-        }
-        for path in &plan.build_writes {
-            output.push_str(&format!(
-                "  writable: {} (tool directory)\n",
-                path.display()
-            ));
         }
         for path in &plan.protected {
             output.push_str(&format!("  protected: {}\n", path.display()));
@@ -1237,8 +1262,7 @@ fn validate_team_session(
         runtime_dir,
         empty_file: home.join("confine-empty"),
     };
-    let preflight =
-        a2amx::confine::ensure_build_paths(&request, harness, &resolved_cwd, &host, false);
+    let preflight = a2amx::confine::ensure_grant_dirs(&request, harness, &host, false);
     a2amx::confine::plan_with_preflight(
         &request,
         harness,
@@ -1246,7 +1270,6 @@ fn validate_team_session(
         &host,
         std::env::var_os("PATH"),
         preflight,
-        false,
     )?;
     Ok(())
 }
@@ -1378,7 +1401,7 @@ async fn run_team_up(
         .map(|session| session.name.as_str());
     let mut client = Client::connect(&home).await?;
     let existing = request_sessions(&mut client).await?;
-    let actions = match team::plan(&wanted, &existing) {
+    let mut actions = match team::plan(&wanted, &existing) {
         Ok(actions) => actions,
         Err(conflicts) => {
             note_lost_messages(&home, &wanted).await;
@@ -1390,6 +1413,46 @@ async fn run_team_up(
         dir: &file_dir,
         file: team_file.as_deref(),
     };
+    let host_home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    for action in &mut actions {
+        let team::Action::Start(session) = action else {
+            continue;
+        };
+        if !session.auto || session.confine.is_none() {
+            continue;
+        }
+        let resolved_dir = session
+            .cwd
+            .as_deref()
+            .map_or_else(|| cwd.clone(), |path| origin.dir.join(path));
+        let scan_dir = resolved_dir.clone();
+        let scan_home = host_home.clone();
+        let found =
+            tokio::task::spawn_blocking(move || auto_grants_for(&scan_dir, &scan_home)).await?;
+        let Some(confine) = session.confine.as_mut() else {
+            continue;
+        };
+        let mut added = Vec::new();
+        for grant in found {
+            if !confine.grants.iter().any(|current| current == grant) {
+                confine.grants.push(grant.to_owned());
+                added.push(grant);
+            }
+        }
+        if !added.is_empty() {
+            write_stderr(
+                format!(
+                    "auto confinement for session {}: grants {}\n",
+                    session.name,
+                    added.join(", ")
+                )
+                .into_bytes(),
+            )
+            .await?;
+        }
+    }
     for action in &actions {
         if let team::Action::Start(session) = action {
             validate_team_session(&home, &cwd, origin, session)?;

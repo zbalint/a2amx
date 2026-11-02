@@ -302,6 +302,85 @@ fn grant_table_has_expected_rows() {
 }
 
 #[test]
+fn grant_detection_and_creation_invariants_hold() {
+    let detectable = [
+        ("cargo", &["Cargo.toml"][..], &["~/.cargo"][..]),
+        ("go", &["go.mod"][..], &["~/go", "~/.cache/go-build"][..]),
+        (
+            "python",
+            &["pyproject.toml", "requirements.txt"][..],
+            &["~/.cache/pip", "~/.cache/uv"][..],
+        ),
+        ("node", &["package.json"][..], &["~/.npm"][..]),
+        (
+            "java",
+            &[
+                "pom.xml",
+                "build.gradle",
+                "build.gradle.kts",
+                "settings.gradle",
+                "settings.gradle.kts",
+            ][..],
+            &["~/.m2/repository", "~/.gradle"][..],
+        ),
+        (
+            "c-cpp",
+            &["CMakeLists.txt", "conanfile.txt", "conanfile.py"][..],
+            &["~/.cache/ccache"][..],
+        ),
+        (
+            "semgrep",
+            &[".semgrep.yml", ".semgrep.yaml", ".semgrep"][..],
+            &["~/.semgrep"][..],
+        ),
+        (
+            "sonar",
+            &["sonar-project.properties"][..],
+            &["~/.sonar"][..],
+        ),
+    ];
+    for (name, detect, create) in detectable {
+        let row = grant::lookup(name).expect("detectable grant");
+        assert!(row.team_default_ok, "{name}");
+        assert_eq!(row.detect, detect, "{name}");
+        assert_eq!(row.create, create, "{name}");
+        assert!(row.create.iter().all(|path| row.unhides.contains(path)));
+    }
+    for row in grant::all() {
+        if !row.detect.is_empty() {
+            assert!(row.team_default_ok, "{}", row.name);
+        }
+        assert!(
+            row.create.iter().all(|path| row.unhides.contains(path)),
+            "{}",
+            row.name
+        );
+    }
+    for name in [
+        "gh",
+        "git-credentials",
+        "ssh",
+        "aws",
+        "gcloud",
+        "azure",
+        "kube",
+        "terraform",
+        "npm-token",
+        "pypi-token",
+        "cargo-token",
+        "netrc",
+        "huggingface-token",
+    ] {
+        assert!(
+            grant::lookup(name)
+                .expect("credential grant")
+                .create
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn grant_rows_have_exact_exposure_text() {
     let expected = [
         (

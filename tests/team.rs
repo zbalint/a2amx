@@ -707,6 +707,7 @@ cwd = "."
                 role: Some("architect".into()),
                 allow: Vec::new(),
                 confine: None,
+                auto: false,
                 team: None,
             },
             TeamSession {
@@ -722,6 +723,7 @@ cwd = "."
                 role: None,
                 allow: Vec::new(),
                 confine: None,
+                auto: false,
                 team: None,
             },
         ]
@@ -1143,6 +1145,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 role: None,
                 allow: Vec::new(),
                 confine: None,
+                auto: false,
                 team: None,
             },
             TeamSession {
@@ -1158,6 +1161,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 role: None,
                 allow: Vec::new(),
                 confine: None,
+                auto: false,
                 team: None,
             },
         ]
@@ -1678,17 +1682,18 @@ async fn dry_run_expands_home_relative_confine_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dry_run_reports_detected_build_cache_writes() {
+async fn dry_run_reports_auto_grants_and_skipped_tool_directories() {
     let (state, _daemon) = common::start_daemon().await;
     let project = tempfile::tempdir().unwrap();
     let user_home = tempfile::tempdir().unwrap();
     let runtime_dir = tempfile::tempdir().unwrap();
     std::fs::write(project.path().join("Cargo.toml"), "").unwrap();
     std::fs::write(
-        project.path().join("build-paths.toml"),
+        state.path().join("team.toml"),
         r#"
 [confine]
 enabled = true
+auto = true
 [[session]]
 name = "worker"
 command = ["sh", "-c", "echo worker"]
@@ -1701,7 +1706,7 @@ cwd = "."
         project.path(),
         user_home.path(),
         runtime_dir.path(),
-        &["team", "up", "--dry-run", "--file", "build-paths.toml"],
+        &["team", "up", "--dry-run"],
     )
     .unwrap();
     assert!(
@@ -1710,17 +1715,14 @@ cwd = "."
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let cargo = user_home.path().join(".cargo");
-    let cache = user_home.path().join(".cache");
-    assert!(!cargo.exists());
-    assert!(!cache.exists());
+    assert!(stdout.contains("  grants: cache, cargo\n"));
     assert!(stdout.contains(&format!(
-        "  writable: {} (tool directory)\n",
-        cargo.display()
+        "  hidden: {} (skipped missing)\n",
+        user_home.path().join(".cargo").display()
     )));
     assert!(stdout.contains(&format!(
-        "  writable: {} (tool directory)\n",
-        cache.display()
+        "  hidden: {} (skipped missing)\n",
+        user_home.path().join(".cache").display()
     )));
 }
 
@@ -2866,7 +2868,6 @@ enabled = false
             hide: vec![],
             unhide: vec![],
             no_default_hides: false,
-            build_paths: true,
             grants: vec!["docker".into()],
             keep_env: vec!["GITHUB_TOKEN".into()],
             team_file: None,
@@ -3032,53 +3033,55 @@ command = ["cat"]
 }
 
 #[test]
-fn confine_build_paths_defaults_and_overrides() {
-    let default =
-        team::parse("[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']")
-            .expect("build paths default");
-    assert!(default[0].confine.as_ref().expect("confined").build_paths);
-
-    let team_opt_out = team::parse(
-        "[confine]\nenabled = true\nbuild_paths = false\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+fn confine_auto_is_global_only_and_team_false_is_accepted() {
+    let global = team::parse_with(
+        "[confine]\nenabled = true\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        Some("project"),
     )
-    .expect("team opt out");
-    assert!(
-        !team_opt_out[0]
-            .confine
-            .as_ref()
-            .expect("confined")
-            .build_paths
+    .expect("global auto");
+    assert!(global[0].auto);
+
+    let local_error = team::parse(
+        "[confine]\nenabled = true\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+    )
+    .expect_err("local auto");
+    assert_eq!(
+        local_error.to_string(),
+        "[confine] auto is only read from the global team file; run a2amx confine suggest and paste the grants line into your team file"
     );
 
-    let session_opt_out = team::parse(
-        "[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nbuild_paths = false",
+    for value in ["true", "false"] {
+        let error = team::parse(&format!(
+            "[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nauto = {value}"
+        ))
+        .expect_err("session auto");
+        assert_eq!(
+            error.to_string(),
+            "session worker: auto belongs in the team's [confine] table, not [session.confine]"
+        );
+    }
+
+    let missing_enabled = team::parse_with(
+        "[confine]\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        Some("project"),
     )
-    .expect("session opt out");
-    assert!(
-        !session_opt_out[0]
-            .confine
-            .as_ref()
-            .expect("confined")
-            .build_paths
+    .expect_err("auto needs enabled");
+    assert_eq!(
+        missing_enabled.to_string(),
+        "[confine] auto needs enabled = true"
     );
 
-    let session_override = team::parse(
-        "[confine]\nenabled = true\nbuild_paths = false\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nbuild_paths = true",
+    let global_false = team::parse_with(
+        "[confine]\nauto = false\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        Some("project"),
     )
-    .expect("session override");
-    assert!(
-        session_override[0]
-            .confine
-            .as_ref()
-            .expect("confined")
-            .build_paths
-    );
+    .expect("global false");
+    assert!(!global_false[0].auto);
 
-    let missing_enabled = team::parse(
-        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nbuild_paths = false",
-    )
-    .expect_err("build paths needs enabled");
-    assert!(missing_enabled.to_string().contains("need enabled = true"));
+    let local_false =
+        team::parse("[confine]\nauto = false\n[[session]]\nname = 'worker'\ncommand = ['cat']")
+            .expect("local false");
+    assert!(!local_false[0].auto);
 }
 
 #[test]

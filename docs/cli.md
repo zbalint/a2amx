@@ -66,7 +66,11 @@ byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` a
 `a2amx confine list` prints the valid grant names, scope and one-line exposure
 description without contacting a daemon or reading `HOME`.
 
-`a2amx confine suggest [DIR]` checks whether the listed build files exist in the project directory, without reading their contents. It prints a TOML fragment with the matching `write` paths and recipe notes, needs neither a daemon nor `HOME`, and defaults to the current directory.
+`a2amx confine suggest [DIR]` checks project markers and, when `.git/config` is a
+regular file of at most 65,536 bytes, supported git remote forms. It prints one
+copyable TOML `grants = [...]` line with `cache` and matching grants in table order.
+It defaults to the current directory and does not need a daemon; credential probes use
+`HOME` when it is available.
 
 The repeatable path flags are `--confine-write PATH`, `--confine-hide PATH`, and
 `--confine-unhide PATH`; `--confine-grant NAME` opens one named runtime capability.
@@ -77,9 +81,10 @@ closed credential list.
 
 Relative paths are resolved against the session cwd. `--confine-no-default-hides`
 disables the optional home hides but never removes the mandatory hides: the state
-directory, the runtime directory, `/run/WSL` and `/mnt/wslg`. `--confine-no-build-paths`
-disables automatic Rust, Node, Maven, and Gradle cache writes. The private `/proc` and
-PID namespace are base options, and descriptor restrictions are a daemon property.
+directory, the runtime directory, `/run/WSL` and `/mnt/wslg`. Claude and OMP harness
+configuration roots are writable and persistent by default; `harness-config` names the
+same capability explicitly. There is no build-path switch. The private `/proc` and PID
+namespace are base options, and descriptor restrictions are a daemon property.
 Rootless runtime sockets under `$XDG_RUNTIME_DIR` remain hidden. These flags require
 `--confine`; path lists accept at most 64 entries and each entry is capped at 4096 bytes.
 

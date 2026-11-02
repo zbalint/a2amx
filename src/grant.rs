@@ -18,6 +18,10 @@ pub struct Grant {
     pub own_config: bool,
     /// Home-relative or absolute paths made visible and writable when the grant is given.
     pub unhides: &'static [&'static str],
+    /// Names in the session's working directory whose presence shows this grant is needed.
+    pub detect: &'static [&'static str],
+    /// Tool directories created when missing; always a subset of `unhides`.
+    pub create: &'static [&'static str],
     /// Absolute host files shown as empty when the grant is given.
     pub stand_ins: &'static [&'static str],
 }
@@ -94,6 +98,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NO_PATHS,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "podman",
@@ -104,6 +110,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NO_PATHS,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "containerd",
@@ -114,6 +122,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NO_PATHS,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "crio",
@@ -124,6 +134,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NO_PATHS,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "libvirt",
@@ -134,6 +146,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NO_PATHS,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "lxd",
@@ -144,6 +158,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NO_PATHS,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "snap",
@@ -154,6 +170,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NO_PATHS,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "harness-config",
@@ -164,6 +182,8 @@ static GRANTS: [Grant; 30] = [
         own_config: true,
         unhides: NO_PATHS,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "gh",
@@ -174,6 +194,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: GH_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "git-credentials",
@@ -184,6 +206,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: GIT_CREDENTIAL_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "ssh",
@@ -194,6 +218,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: SSH_UNHIDES,
         stand_ins: SSH_STAND_INS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "cargo",
@@ -204,6 +230,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: CARGO_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: &["Cargo.toml"],
+        create: &["~/.cargo"],
     },
     Grant {
         name: "go",
@@ -214,6 +242,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: GO_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: &["go.mod"],
+        create: &["~/go", "~/.cache/go-build"],
     },
     Grant {
         name: "python",
@@ -224,6 +254,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: PYTHON_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: &["pyproject.toml", "requirements.txt"],
+        create: &["~/.cache/pip", "~/.cache/uv"],
     },
     Grant {
         name: "node",
@@ -234,6 +266,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NODE_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: &["package.json"],
+        create: &["~/.npm"],
     },
     Grant {
         name: "java",
@@ -244,6 +278,14 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: JAVA_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: &[
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+        ],
+        create: &["~/.m2/repository", "~/.gradle"],
     },
     Grant {
         name: "c-cpp",
@@ -254,6 +296,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: C_CPP_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: &["CMakeLists.txt", "conanfile.txt", "conanfile.py"],
+        create: &["~/.cache/ccache"],
     },
     Grant {
         name: "semgrep",
@@ -264,6 +308,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: SEMGREP_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: &[".semgrep.yml", ".semgrep.yaml", ".semgrep"],
+        create: &["~/.semgrep"],
     },
     Grant {
         name: "sonar",
@@ -274,6 +320,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: SONAR_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: &["sonar-project.properties"],
+        create: &["~/.sonar"],
     },
     Grant {
         name: "aws",
@@ -284,6 +332,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: AWS_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "gcloud",
@@ -294,6 +344,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: GCLOUD_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "azure",
@@ -304,6 +356,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: AZURE_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "kube",
@@ -314,6 +368,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: KUBE_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "terraform",
@@ -324,6 +380,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: TERRAFORM_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "npm-token",
@@ -334,6 +392,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NPM_TOKEN_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "pypi-token",
@@ -344,6 +404,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: PYPI_TOKEN_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "cargo-token",
@@ -354,6 +416,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: CARGO_TOKEN_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "netrc",
@@ -364,6 +428,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: NETRC_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
     Grant {
         name: "cache",
@@ -374,6 +440,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: CACHE_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: &["~/.cache"],
     },
     Grant {
         name: "huggingface-token",
@@ -384,6 +452,8 @@ static GRANTS: [Grant; 30] = [
         own_config: false,
         unhides: HUGGINGFACE_TOKEN_UNHIDES,
         stand_ins: NO_PATHS,
+        detect: NO_PATHS,
+        create: NO_PATHS,
     },
 ];
 

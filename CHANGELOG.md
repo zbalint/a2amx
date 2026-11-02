@@ -40,12 +40,15 @@ All notable user-visible changes are listed here. The format follows
 - Confinement grant `ssh` (session only): makes `~/.ssh` readable and shows the root-owned `/etc/ssh/ssh_config`
   as an empty file, so `ssh` and `git push` over ssh work in a confined session. `~/.ssh` stays read-only
   and no ssh agent is passed through, so a passphrase-protected key cannot be used (`docs/confinement.md`).
-- Confinement works for daily use by default: with build-path detection on, a session can also write `~/.cache`
-  and, for a Rust project, the whole `~/.cargo` (its `bin` stays read-only when it is on `PATH`), and a Claude
-  or OMP session gets its own harness config directory writable without the `harness-config` grant. A hidden
-  path nested inside a writable directory (`~/.cargo/credentials.toml`) stays hidden. The `gh`, `ssh` and
-  `git-credentials` grants may now be set team-wide. The launch notice labels these paths `(tool directory)`.
-  Opt out with `--confine-no-build-paths` or `build_paths = false` (`docs/confinement.md`, `docs/teams.md`).
+- Confinement default set and auto mode: a confined session opens only its working directory, the git
+  directory, a private `/tmp` and, for Claude and OMP, the harness's own config directory (persistent). There is
+  no `~/.cache` or tool-directory default, no `build_paths` key and no `--confine-no-build-paths` flag; tool
+  directories open through grants (`cargo`, `node`, `cache` and the others), which now create their missing tool
+  directories (`~/.cargo`, `~/.npm`) when a real session starts. The `gh`, `ssh` and `git-credentials` grants may
+  be set team-wide. `a2amx confine suggest` prints a `grants` line. New `[confine] auto = true` in the global team
+  file (`<state home>/team.toml`, needs `enabled = true`) detects the project's markers and its git remote at each
+  start and adds the matching grants plus `cache`; it is weaker than explicit grants, and a local team file,
+  `--file` or `[session.confine]` that sets it is an error (`docs/confinement.md`, `docs/teams.md`).
 
 ### Changed
 

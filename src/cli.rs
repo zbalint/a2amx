@@ -68,8 +68,6 @@ pub enum Command {
         confine_unhide: Vec<String>,
         #[arg(long)]
         confine_no_default_hides: bool,
-        #[arg(long)]
-        confine_no_build_paths: bool,
         /// Grant a named capability to a confined session; repeatable.
         #[arg(long = "confine-grant")]
         confine_grant: Vec<String>,

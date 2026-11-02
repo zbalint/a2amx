@@ -114,8 +114,6 @@ pub struct ConfineRequest {
     #[serde(default)]
     pub no_default_hides: bool,
     #[serde(default)]
-    pub build_paths: bool,
-    #[serde(default)]
     pub grants: Vec<String>,
     #[serde(default)]
     pub keep_env: Vec<String>,
@@ -161,7 +159,6 @@ pub struct Plan {
     pub cwd: PathBuf,
     pub harness: Harness,
     pub writable: Vec<PathBuf>,
-    pub build_writes: Vec<PathBuf>,
     pub readonly: Vec<PathBuf>,
     pub protected: Vec<PathBuf>,
     pub hidden: Vec<PathBuf>,
@@ -603,21 +600,17 @@ pub fn ensure_data_dirs(harness: Harness, home: &Path) -> Result<()> {
     }
     Ok(())
 }
-/// Best-effort creation for detected build caches before the confinement plan is built.
+/// Best-effort creation for the tool directories requested by grants.
 ///
-/// The planner repeats the checks and records any skipped path as `unresolved`; this
-/// phase only makes a fresh user's cache directories available to that planner.
-pub fn ensure_build_paths(
+/// The planner repeats the path checks and records missing paths as skipped in
+/// dry runs; this phase only creates safe directories for a real daemon start.
+pub fn ensure_grant_dirs(
     request: &ConfineRequest,
     harness: Harness,
-    cwd: &Path,
     host: &Host,
     create: bool,
 ) -> Vec<Unresolved> {
     let mut unresolved = Vec::new();
-    if !request.build_paths {
-        return unresolved;
-    }
     let Ok(home) = fs::canonicalize(&host.home) else {
         return unresolved;
     };
@@ -647,55 +640,67 @@ pub fn ensure_build_paths(
         .collect::<Vec<_>>();
     hidden.retain(|path| !unhidden.iter().any(|unhidden| unhidden == path));
 
-    let found = crate::suggest::detect(|marker| cwd.join(marker).is_file());
-    for path in crate::suggest::default_write_paths(&found) {
-        let source = user_path(path, &home);
-        let record = |unresolved: &mut Vec<Unresolved>, reason: String| {
-            unresolved.push(Unresolved {
-                option: "build",
-                path: source.clone(),
-                reason,
-            });
+    for name in &request.grants {
+        let Ok(grant) = grant::lookup(name) else {
+            continue;
         };
-        if source.exists() {
+        for relative in grant.create {
+            let source = user_path(relative, &home);
+            let record = |unresolved: &mut Vec<Unresolved>, reason: String| {
+                unresolved.push(Unresolved {
+                    option: "grant",
+                    path: source.clone(),
+                    reason,
+                });
+            };
+            if source.exists() {
+                if let Ok(canonical) = fs::canonicalize(&source)
+                    && (paths_overlap(&canonical, &state_dir)
+                        || paths_overlap(&canonical, &runtime_dir)
+                        || hidden.iter().any(|hidden| is_within(&canonical, hidden)))
+                {
+                    record(&mut unresolved, "path overlaps protected location".into());
+                    continue;
+                }
+                if let Some(path) = symlink_component(&source) {
+                    record(
+                        &mut unresolved,
+                        format!("symlink component: {}", path.display()),
+                    );
+                }
+                continue;
+            }
             if let Some(path) = symlink_component(&source) {
                 record(
                     &mut unresolved,
                     format!("symlink component: {}", path.display()),
                 );
+                continue;
             }
-            continue;
-        }
-        if let Some(path) = symlink_component(&source) {
-            record(
-                &mut unresolved,
-                format!("symlink component: {}", path.display()),
-            );
-            continue;
-        }
-        let Some(ancestor) = source.ancestors().find(|path| path.exists()) else {
-            record(&mut unresolved, "no existing ancestor".into());
-            continue;
-        };
-        let Ok(ancestor) = fs::canonicalize(ancestor) else {
-            record(&mut unresolved, "ancestor cannot be canonicalized".into());
-            continue;
-        };
-        if !is_within(&ancestor, &home)
-            || paths_overlap(&ancestor, &state_dir)
-            || paths_overlap(&ancestor, &runtime_dir)
-            || (ancestor != home
-                && check_write_allowed(&ancestor, &home, &state_dir, false).is_err())
-            || hidden.iter().any(|hidden| is_within(&ancestor, hidden))
-        {
-            record(&mut unresolved, "ancestor is not writable".into());
-            continue;
-        }
-        if !create {
-            continue;
-        }
-        if let Err(error) = fs::create_dir_all(&source) {
-            record(&mut unresolved, error.to_string());
+            let Some(ancestor) = source.ancestors().find(|path| path.exists()) else {
+                record(&mut unresolved, "no existing ancestor".into());
+                continue;
+            };
+            let Ok(ancestor) = fs::canonicalize(ancestor) else {
+                record(&mut unresolved, "ancestor cannot be canonicalized".into());
+                continue;
+            };
+            if !is_within(&ancestor, &home)
+                || paths_overlap(&ancestor, &state_dir)
+                || paths_overlap(&ancestor, &runtime_dir)
+                || (ancestor != home
+                    && check_write_allowed(&ancestor, &home, &state_dir, false).is_err())
+                || hidden.iter().any(|hidden| is_within(&ancestor, hidden))
+            {
+                record(&mut unresolved, "ancestor is not writable".into());
+                continue;
+            }
+            if !create {
+                continue;
+            }
+            if let Err(error) = fs::create_dir_all(&source) {
+                record(&mut unresolved, error.to_string());
+            }
         }
     }
     unresolved
@@ -949,10 +954,10 @@ pub fn plan_with_path(
     host: &Host,
     path_var: Option<OsString>,
 ) -> Result<Plan> {
-    plan_with_preflight(request, harness, cwd, host, path_var, Vec::new(), false)
+    plan_with_preflight(request, harness, cwd, host, path_var, Vec::new())
 }
 
-/// Build a plan after the daemon's best-effort build-cache preflight.
+/// Build a plan after the grant-directory preflight.
 pub fn plan_with_preflight(
     request: &ConfineRequest,
     harness: Harness,
@@ -960,13 +965,11 @@ pub fn plan_with_preflight(
     host: &Host,
     path_var: Option<OsString>,
     preflight: Vec<Unresolved>,
-    allow_missing_build_writes: bool,
 ) -> Result<Plan> {
     check_request_limits(request, harness)?;
     crate::grant::validate(&request.grants)?;
     let mut builder = PlanBuilder::new(host, harness)?;
     builder.unresolved.extend(preflight);
-    builder.allow_missing_build_writes = allow_missing_build_writes;
     let cwd = canonical_existing(cwd, "cwd")?;
     if !cwd.is_dir() {
         bail!("cwd is not a directory: {}", cwd.display());
@@ -975,8 +978,7 @@ pub fn plan_with_preflight(
     builder.bind_workspace(&cwd)?;
     builder.bind_harness_data()?;
     let mut effective_grants = request.grants.clone();
-    if request.build_paths
-        && matches!(harness, Harness::Claude | Harness::Omp)
+    if matches!(harness, Harness::Claude | Harness::Omp)
         && !request.grants.iter().any(|grant| grant == "harness-config")
     {
         let root = match harness {
@@ -1015,9 +1017,6 @@ pub fn plan_with_preflight(
     builder.apply_grant_stand_ins(&request.grants);
     builder.release_operator_writes()?;
     builder.apply_operator_hides(request)?;
-    if request.build_paths {
-        builder.bind_build_writes(&cwd);
-    }
     builder.protect_system_paths(path_var.as_deref());
     builder.finish(request, cwd, empty_file)
 }
@@ -1074,8 +1073,6 @@ struct PlanBuilder<'a> {
     state_dir: PathBuf,
     runtime_dir: PathBuf,
     writable: Vec<PathBuf>,
-    build_writes: Vec<PathBuf>,
-    allow_missing_build_writes: bool,
     readonly: Vec<PathBuf>,
     hidden: Vec<PathBuf>,
     skipped: Vec<PathBuf>,
@@ -1154,8 +1151,6 @@ impl<'a> PlanBuilder<'a> {
             state_dir: canonical_existing(&host.state_dir, "state directory")?,
             runtime_dir: canonical_existing(&host.runtime_dir, "runtime directory")?,
             writable: Vec::new(),
-            build_writes: Vec::new(),
-            allow_missing_build_writes: false,
             readonly: Vec::new(),
             hidden: Vec::new(),
             skipped: Vec::new(),
@@ -1252,6 +1247,8 @@ impl<'a> PlanBuilder<'a> {
             .collect::<Vec<_>>();
         self.writable
             .retain(|path| !data_paths.iter().any(|data| data == path));
+        self.skipped
+            .retain(|path| !data_paths.iter().any(|data| data == path));
         self.harness_config = Some(root.clone());
         add_unique(&mut self.writable, root);
         Ok(())
@@ -1337,74 +1334,6 @@ impl<'a> PlanBuilder<'a> {
                 }
             }
         }
-    }
-    fn bind_build_writes(&mut self, cwd: &Path) {
-        let found = crate::suggest::detect(|marker| cwd.join(marker).is_file());
-        for path in crate::suggest::default_write_paths(&found) {
-            let source = user_path(path, &self.home);
-            self.bind_build_path(source);
-        }
-    }
-
-    fn bind_build_path(&mut self, source: PathBuf) {
-        if self
-            .unresolved
-            .iter()
-            .any(|item| item.option == "build" && item.path == source)
-        {
-            add_unique(&mut self.skipped, source.clone());
-            return;
-        }
-        let unresolved = |builder: &mut Self, reason: String| {
-            add_unique(&mut builder.skipped, source.clone());
-            builder.unresolved.push(Unresolved {
-                option: "build",
-                path: source.clone(),
-                reason,
-            });
-        };
-        if !is_within(&source, &self.home) {
-            unresolved(self, "outside home".into());
-            return;
-        }
-        if let Some(path) = symlink_component(&source) {
-            unresolved(self, format!("symlink component: {}", path.display()));
-            return;
-        }
-        if !source.exists() {
-            if self.allow_missing_build_writes {
-                add_unique(&mut self.writable, source.clone());
-                add_unique(&mut self.build_writes, source);
-            } else {
-                unresolved(self, "not found".into());
-            }
-            return;
-        }
-        if !source.is_dir() {
-            unresolved(self, "not a directory".into());
-            return;
-        }
-        let Ok(path) = fs::canonicalize(&source) else {
-            unresolved(self, "cannot canonicalize".into());
-            return;
-        };
-        if self.hidden.iter().any(|hidden| is_within(&path, hidden)) {
-            unresolved(self, "overlaps a hidden path".into());
-            return;
-        }
-        let path = match check_write_allowed(&path, &self.home, &self.state_dir, false) {
-            Ok(path) => path,
-            Err(error) => {
-                unresolved(self, error.to_string());
-                return;
-            }
-        };
-        if let Err(error) = check_write_runtime_allowed(&path, &self.runtime_dir, false) {
-            unresolved(self, error.to_string());
-            return;
-        }
-        add_unique(&mut self.writable, path.clone());
-        add_unique(&mut self.build_writes, path);
     }
 
     fn hide_mandatory(&mut self) {
@@ -1692,7 +1621,6 @@ impl<'a> PlanBuilder<'a> {
         self.mandatory_hidden.sort();
         self.default_hidden.sort();
         self.container_hidden.sort();
-        self.build_writes.sort();
         self.skipped.sort();
         self.unresolved.sort_by(|left, right| {
             left.option
@@ -1711,7 +1639,6 @@ impl<'a> PlanBuilder<'a> {
             cwd,
             harness: self.harness,
             writable: self.writable,
-            build_writes: self.build_writes,
             readonly: self.readonly,
             protected,
             hidden: self.hidden,
@@ -2198,19 +2125,11 @@ pub fn notice(plan: &Plan) -> String {
             Cow::Owned(reordered)
         }
     };
-    let generic_writable = writable
-        .iter()
-        .filter(|path| !plan.build_writes.contains(path))
-        .cloned()
-        .collect::<Vec<_>>();
     let mut text = String::new();
     text.push_str("This session is confined.\n");
     text.push_str("Writable locations: ");
-    text.push_str(&capped_paths(&generic_writable));
+    text.push_str(&capped_paths(&writable));
     text.push_str(".\n");
-    for path in &plan.build_writes {
-        text.push_str(&format!("writable: {} (tool directory)\n", path.display()));
-    }
     text.push_str("Read-only protected paths: ");
     text.push_str(&capped_paths(&plan.protected));
     text.push_str(".\n");
@@ -2339,7 +2258,6 @@ mod tests {
             cwd: PathBuf::from("/workspace"),
             harness: Harness::Generic,
             writable: (0..100).map(|n| PathBuf::from(format!("/w/{n}"))).collect(),
-            build_writes: vec![PathBuf::from("/w/0")],
             readonly: Vec::new(),
             protected: Vec::new(),
             hidden: Vec::new(),

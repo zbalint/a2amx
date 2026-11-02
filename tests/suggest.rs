@@ -2,128 +2,138 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-use a2amx::suggest::{self, Ecosystem};
+use a2amx::suggest;
 
 #[test]
-fn detect_reports_markers_in_fixed_order_and_uses_first_marker() {
+fn detect_finds_cargo_marker() {
+    assert_eq!(suggest::detect(|name| name == "Cargo.toml"), vec!["cargo"]);
+}
+
+#[test]
+fn detect_follows_grant_table_order() {
     assert_eq!(
-        suggest::detect(|name| name == "Cargo.toml"),
-        vec![(Ecosystem::Rust, "Cargo.toml")]
+        suggest::detect(|name| matches!(name, "go.mod" | "package.json")),
+        vec!["go", "node"]
     );
+}
+
+#[test]
+fn detect_supports_each_java_marker() {
+    for marker in [
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+    ] {
+        assert_eq!(suggest::detect(|name| name == marker), vec!["java"]);
+    }
+}
+
+#[test]
+fn detect_finds_analyzers_and_nothing_else() {
     assert_eq!(
-        suggest::detect(|name| name == "build.gradle.kts"),
-        vec![(Ecosystem::Gradle, "build.gradle.kts")]
-    );
-    assert_eq!(
-        suggest::detect(|name| matches!(name, "build.gradle" | "build.gradle.kts")),
-        vec![(Ecosystem::Gradle, "build.gradle")]
-    );
-    assert_eq!(
-        suggest::detect(|name| matches!(name, "Cargo.toml" | "package.json" | "pom.xml")),
-        vec![
-            (Ecosystem::Rust, "Cargo.toml"),
-            (Ecosystem::Node, "package.json"),
-            (Ecosystem::Maven, "pom.xml"),
-        ]
+        suggest::detect(|name| matches!(name, ".semgrep" | "sonar-project.properties")),
+        vec!["semgrep", "sonar"]
     );
     assert!(suggest::detect(|_| false).is_empty());
 }
 
 #[test]
-fn default_write_paths_put_common_cache_before_detected_paths() {
-    let found = [(Ecosystem::Rust, "Cargo.toml")];
+fn ssh_remote_forms_are_detected_once() {
+    for value in [
+        "git@host-a:team/repo.git",
+        "gitea@host-a:x.git",
+        "host-a:repo",
+        "ssh://host-a/repo",
+        "git+ssh://host-a/repo",
+    ] {
+        let config = format!("[remote \"origin\"]\n\turl = {value}\n");
+        assert_eq!(
+            suggest::git_remote_grants(&config, |_| false),
+            vec!["ssh"],
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn https_remote_grants_follow_available_credentials() {
+    let config = "[remote \"origin\"]\nurl = \"https://example.invalid/a.git\"\n";
     assert_eq!(
-        suggest::default_write_paths(&found),
-        vec!["~/.cache", "~/.cargo"]
+        suggest::git_remote_grants(config, |path| {
+            matches!(path, "~/.config/gh" | "~/.git-credentials")
+        }),
+        vec!["gh", "git-credentials"]
+    );
+    assert_eq!(
+        suggest::git_remote_grants(config, |path| path == "~/.config/gh"),
+        vec!["gh"]
+    );
+    assert_eq!(
+        suggest::git_remote_grants(config, |path| path == "~/.config/git/credentials"),
+        vec!["git-credentials"]
+    );
+    assert!(suggest::git_remote_grants(config, |_| false).is_empty());
+}
+
+#[test]
+fn git_remote_parser_counts_pushurl_and_ignores_other_sections() {
+    let config = "[remote \"origin\"]\nurl=git@host-a:x.git\npushurl = https://example.invalid/x.git\n\
+[url \"https://example.invalid/\"]\ninsteadOf = host-a:\n";
+    assert_eq!(
+        suggest::git_remote_grants(config, |path| path == "~/.config/gh"),
+        vec!["gh", "ssh"]
+    );
+    for value in ["http://example.invalid/x", "file:///tmp/repo", "/tmp/repo"] {
+        let config = format!("[remote \"origin\"]\nurl = {value}\n");
+        assert!(suggest::git_remote_grants(&config, |_| true).is_empty());
+    }
+}
+
+#[test]
+fn git_remote_parser_accepts_mixed_case_url_keys() {
+    let config = "[remote \"origin\"]\nURL = git@host-a:team/demo.git\nPushURL = https://example.invalid/team/demo.git\n";
+    assert_eq!(
+        suggest::git_remote_grants(config, |path| path == "~/.config/gh"),
+        vec!["gh", "ssh"]
     );
 }
 
 #[test]
-fn write_paths_return_the_static_cache_union_in_table_order() {
+fn grants_adds_cache_and_deduplicates_in_table_order() {
+    let config = "[remote \"origin\"]\nurl = git@host-a:repo.git\n";
     assert_eq!(
-        suggest::write_paths(&[
-            (Ecosystem::Rust, "Cargo.toml"),
-            (Ecosystem::Node, "package.json"),
-            (Ecosystem::Gradle, "build.gradle"),
-        ]),
-        vec![
-            "~/.cargo",
-            "~/.npm",
-            "~/.gradle/caches",
-            "~/.gradle/wrapper"
-        ]
+        suggest::grants(
+            |name| matches!(name, "Cargo.toml" | "package.json"),
+            Some(config),
+            |_| false
+        ),
+        vec!["ssh", "cargo", "node", "cache"]
     );
 }
 
 #[test]
-fn render_rust_and_node_is_the_documented_fragment() {
-    let found = [
-        (Ecosystem::Rust, "Cargo.toml"),
-        (Ecosystem::Node, "package.json"),
-    ];
+fn render_cargo_and_cache_is_a_single_grants_line() {
     assert_eq!(
-        suggest::render(&found),
-        "# Found: Cargo.toml (Rust), package.json (Node)\n\
-# Add this to the session's table in your team file, or pass --confine-write for each path. Confinement must be enabled (enabled = true here or in the team's [confine] table).\n\
-[session.confine]\n\
-write = [\"~/.cargo\", \"~/.npm\"]\n\
-# Rust: a Git dependency also needs ~/.cargo/git (untested).\n\
-# Node: global installs and version-manager directories are not covered.\n\
-# More: docs/confinement.md, Recipes by ecosystem\n"
+        suggest::render(&["cargo", "cache"]),
+        "# Suggested grants:\n\
+grants = [\"cargo\", \"cache\"]\n"
     );
 }
 
 #[test]
-fn render_gradle_includes_both_write_paths() {
-    assert_eq!(
-        suggest::render(&[(Ecosystem::Gradle, "build.gradle")]),
-        "# Found: build.gradle (Gradle)\n\
-# Add this to the session's table in your team file, or pass --confine-write for each path. Confinement must be enabled (enabled = true here or in the team's [confine] table).\n\
-[session.confine]\n\
-write = [\"~/.gradle/caches\", \"~/.gradle/wrapper\"]\n\
-# Gradle: gradle.properties and init.d stay closed; do not open all of ~/.gradle.\n\
-# More: docs/confinement.md, Recipes by ecosystem\n"
-    );
-}
-
-#[test]
-fn render_go_and_python_without_write_paths_has_notes_only() {
-    let found = [
-        (Ecosystem::Go, "go.mod"),
-        (Ecosystem::Python, "pyproject.toml"),
-    ];
-    let rendered = suggest::render(&found);
-    assert_eq!(
-        rendered,
-        "# Found: go.mod (Go), pyproject.toml (Python)\n\
-# Go: run go env GOMODCACHE GOCACHE and add both paths as write entries; do not open ~/go/bin.\n\
-# Python: a virtual environment inside the workspace needs no write entry.\n\
-# More: docs/confinement.md, Recipes by ecosystem\n"
-    );
-    assert!(!rendered.contains("[session.confine]"));
-    assert!(!rendered.contains("write ="));
-    assert!(!rendered.contains("Add this to"));
-}
-
-#[test]
-fn render_empty_has_the_no_known_build_files_message() {
+fn render_empty_is_a_single_empty_grants_line() {
     assert_eq!(
         suggest::render(&[]),
-        "# No known build files here. The workspace itself needs no write entry.\n\
-# Run the tool once, read the failing path, and see docs/confinement.md, Recipes by ecosystem.\n"
+        "# Suggested grants:\n\
+grants = []\n"
     );
 }
 
 #[test]
-fn rendered_all_ecosystems_parse_as_a_session_confine_fragment() {
-    let fragment = suggest::render(&[
-        (Ecosystem::Rust, "Cargo.toml"),
-        (Ecosystem::Node, "package.json"),
-        (Ecosystem::Go, "go.mod"),
-        (Ecosystem::Maven, "pom.xml"),
-        (Ecosystem::Gradle, "build.gradle"),
-        (Ecosystem::Python, "pyproject.toml"),
-    ]);
+fn rendered_grants_parse_as_a_team_confine_fragment() {
+    let fragment = suggest::render(&["cargo", "cache"]);
     let team_file = format!(
         "team = \"x\"\n\
 [confine]\n\
@@ -131,9 +141,10 @@ enabled = true\n\
 [[session]]\n\
 name = \"x\"\n\
 command = [\"cat\"]\n\
+[session.confine]\n\
 {fragment}"
     );
-    a2amx::team::parse(&team_file).expect("rendered fragment parses");
+    a2amx::team::parse(&team_file).expect("rendered grants parse");
 }
 
 #[test]
@@ -151,11 +162,7 @@ fn binary_suggests_the_fragment_for_files_in_an_explicit_directory() {
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     assert_eq!(
         output.stdout,
-        suggest::render(&[
-            (Ecosystem::Rust, "Cargo.toml"),
-            (Ecosystem::Maven, "pom.xml"),
-        ])
-        .as_bytes()
+        suggest::render(&["cargo", "java", "cache"]).as_bytes()
     );
 }
 
@@ -195,10 +202,9 @@ fn binary_suggests_from_the_current_directory_when_dir_is_omitted() {
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     assert_eq!(
         output.stdout,
-        suggest::render(&[(Ecosystem::Node, "package.json")]).as_bytes()
+        suggest::render(&["node", "cache"]).as_bytes()
     );
 }
-
 #[test]
 fn binary_suggests_static_text_for_a_directory_with_newline_and_hash() {
     let root = tempdir().expect("temporary root");
@@ -214,7 +220,6 @@ fn binary_suggests_static_text_for_a_directory_with_newline_and_hash() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         output.stdout,
-        suggest::render(&[(Ecosystem::Rust, "Cargo.toml")]).as_bytes()
+        suggest::render(&["cargo", "cache"]).as_bytes()
     );
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("injected"));
 }

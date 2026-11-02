@@ -324,3 +324,30 @@ path, a `cache` grant over the state directory) into a silent skip. The skip cla
 the planner already skips a missing path, so the clause only suppressed the errors. Decision: keep
 the records (test 6 holds), remove the skip clause so `apply_grant_unhides` is unchanged, and pin the
 error behavior with the pipeline tests in section 9 test 5b. Section 4 states this.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (its model is not exposed to the architect; two
+review rounds, not fresh because `reset_session` was refused); developer and tester OMP
+`openai-codex/gpt-5.6-luna` (planning and working; the advisor slot is not exposed). BLOCKED/amend
+cycles: 2 (Amendment 1, Amendment 2).
+
+| Where found | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The draft changed two of the four places that build a session's confinement request (`team up` builds it in the validate, dry-run and real-start paths, and `new --confine` in a fourth), so the dry run and the real session would list different grants | One pre-pass in `run_team_up`; `resolved_confine_request` unchanged |
+| Draft review (second pass) | consultant | The pre-pass ran before `team::plan`, and the stated reason ("a second `team up` compares equal") was false: `plan` compares only name, exit and team scope, so running sessions were scanned and printed for | Moved after `plan`, over `Action::Start` sessions only |
+| Draft review | consultant | Missing `harness` argument for `ensure_grant_dirs`; `cache`-first order contradicted table order; a table test that could not fail; the git URL rule underspecified; `semgrep` and `sonar` lacked `create`; one test claimed as a contract was new; push wording contradicted the git detector; scope gaps (`a2amx.toml.example`, the `AGENTS.md` row); the capped read should not trust the stat size | Spec edited for each before lock |
+| Implementation | developer (BLOCKED 1) | Section 2 required `sonar` to create `~/.sonar` and `create` empty for every grant with an `env`, but `sonar` passes `SONAR_TOKEN`; section 5 said `auto = false` is accepted everywhere and that the session key errors | Amendment 1; both the architect and the consultant missed it in two reviews |
+| Tester pass | tester | `.git` and `.git/config` symlinks to a regular file or directory are followed | Settled as design (the check follows symlinks; a device or directory target is rejected); section 10 wording could be read as rejecting symlinks, no code change |
+| Tester pass | tester | `docs/confinement.md` still said Go and Python remain explicit recipes, contradicting the auto table | Docs fixed |
+| Tester pass | tester | The auto docs omitted the push conditions the spec's section 7 requires | Docs fixed in `docs/confinement.md` and `docs/teams.md` |
+| Tester pass | tester | Mutation survivor: a case-sensitive `url` key comparison passed the whole suggest suite | Mixed-case key test added |
+| Tester pass and architect review | tester, architect | With `HOME` unset the host paths resolved against the current directory, so `confine suggest` reported `gh` for a project containing `.config/gh` | Host-path probing finds nothing without a home; regression tests added |
+| Architect review | architect | The developer's `apply_grant_unhides` skip of preflight records turned the 3by and 3ca errors (a symlinked grant path, a `cache` grant over the state directory) into a silent skip through the real pipeline; the plan-only tests missed it | Skip clause removed; pipeline tests added (section 9 test 5b) |
+| Architect review | architect | The fix request for the previous row conflicted with section 9 test 6, so the developer reported BLOCKED | Amendment 2; the preflight records stay informational |
+| Implementation | developer | Disclosed survivor: relaxing the git config cap to 65,537 bytes was not detected | Exact 65,536 and 65,537-byte boundary test added; both cap mutants killed |
+| Architect review | architect | A `detect` comment promised a `team_default_ok` filter the code lacked; two stray blank-line edits | Fixed by the developer |
+| Process | architect | The architect briefed the consultant with a paraphrase that lost the baseline (auto is judged against an unconfined agent), and wrote section 6 from a partial read of the call sites | Consult corrected after the owner spoke to the consultant; the call-site grep is now part of the gate |
+
+Known behavior notes: `docs/confinement.md` says `confine suggest` needs no `HOME`; without it https host-path
+grants are not detected. Following a `.git` file's `gitdir:` pointer is deferred (backlog F65).

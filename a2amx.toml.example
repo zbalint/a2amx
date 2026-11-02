@@ -43,13 +43,17 @@ reset = ["/clear"]
 control_from = ["architect"]
 
 # --- confinement example ---
+# # A local file lists grants explicitly; auto = true is only valid in the
+# # global <state home>/team.toml file. `a2amx confine suggest` prints a
+# # copyable grants line for this local table.
+# [confine]
+# enabled = true
+# grants = ["cargo", "cache"]
 # [[session]]
 # name = "worker"
 # command = ["omp"]
 # [session.confine]
 # enabled = true
-# build_paths = true # set false to keep ecosystem caches read-only
-# write = ["~/.cargo/registry", "~/.npm"]
 # grants = ["gh"] # for a session that pushes or opens pull requests with gh
-# keep_env = ["NPM_TOKEN"] # for a session that publishes with npm; see docs/confinement.md
+# keep_env = ["NPM_TOKEN"] # for a session that publishes with npm
 # --- end confinement example ---

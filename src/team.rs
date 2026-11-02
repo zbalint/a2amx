@@ -47,6 +47,8 @@ pub struct TeamSession {
     #[serde(skip)]
     pub confine: Option<crate::confine::ConfineRequest>,
     #[serde(skip)]
+    pub auto: bool,
+    #[serde(skip)]
     pub team: Option<TeamScope>,
 }
 
@@ -62,7 +64,7 @@ struct ConfineTable {
     #[serde(default)]
     unhide: Vec<String>,
     #[serde(default)]
-    build_paths: Option<bool>,
+    auto: Option<bool>,
     #[serde(default)]
     grants: Vec<String>,
     #[serde(default)]
@@ -438,6 +440,7 @@ pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<
         confine,
         session,
     } = file;
+    let global = default_team.is_some();
     if team.is_some() && default_team.is_some() {
         bail!("the global team file must not set team; the team is named after the directory");
     }
@@ -457,7 +460,16 @@ pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<
             })
             .transpose()?;
         let mut session = session_from_table(index, table)?;
-        session.confine = merge_confine(&session.name, confine.as_ref(), own_confine.as_ref())?;
+        session.confine = merge_confine(
+            &session.name,
+            confine.as_ref(),
+            own_confine.as_ref(),
+            global,
+        )?;
+        session.auto = global
+            && confine
+                .as_ref()
+                .is_some_and(|table| table.auto == Some(true));
         sessions.push(session);
     }
     let base_names: HashSet<String> = sessions
@@ -601,9 +613,25 @@ fn merge_confine(
     session_name: &str,
     team: Option<&ConfineTable>,
     own: Option<&ConfineTable>,
+    global: bool,
 ) -> anyhow::Result<Option<crate::confine::ConfineRequest>> {
     if let Some(table) = team {
         validate_confine_syntax("[confine] ", table)?;
+        if table.auto == Some(true) {
+            if !global {
+                bail!(
+                    "[confine] auto is only read from the global team file; run a2amx confine suggest and paste the grants line into your team file"
+                );
+            }
+            if table.enabled != Some(true) {
+                bail!("[confine] auto needs enabled = true");
+            }
+        }
+    }
+    if own.is_some_and(|table| table.auto.is_some()) {
+        bail!(
+            "session {session_name}: auto belongs in the team's [confine] table, not [session.confine]"
+        );
     }
     if team.is_some_and(|table| !table.keep_env.is_empty()) {
         bail!(
@@ -653,7 +681,6 @@ fn merge_confine(
             || !table.grants.is_empty()
             || !table.keep_env.is_empty()
             || table.default_hides.is_some()
-            || table.build_paths.is_some()
     });
     if !enabled {
         if own_has_options {
@@ -673,16 +700,11 @@ fn merge_confine(
         .and_then(|table| table.default_hides)
         .or_else(|| team.and_then(|table| table.default_hides))
         .unwrap_or(true);
-    let build_paths = own
-        .and_then(|table| table.build_paths)
-        .or_else(|| team.and_then(|table| table.build_paths))
-        .unwrap_or(true);
     Ok(Some(crate::confine::ConfineRequest {
         write,
         hide,
         unhide,
         no_default_hides: !default_hides,
-        build_paths,
         grants,
         keep_env,
         team_file: None,
@@ -869,6 +891,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             role: None,
             allow: Vec::new(),
             confine: None,
+            auto: false,
             team: None,
         });
     }

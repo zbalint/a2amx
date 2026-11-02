@@ -110,19 +110,33 @@ Within a `[[session]]` table, `name` may be omitted when `role` is set; the role
 ### Confinement settings
 
 Use an optional team-level `[confine]` table for defaults and a `[session.confine]`
-table for session settings. `enabled` defaults to false; `default_hides` defaults to
-true, and `build_paths` defaults to true once confinement is enabled. `write`, `hide`,
-and `unhide` lists add team entries before session entries, while scalars override.
-`grants` may be set at team level for every grant except container grants and
-`harness-config`, which remain session-only. Run `a2amx confine list` for the valid grant
-names and see [Confinement](confinement.md#credential-environment-variables) for the
-closed credential environment list.
-A confined session with a recognized Rust, Node,
-Maven, or Gradle marker gets that ecosystem's cache paths writable automatically; set
-`build_paths = false` to opt out. Go and Python paths remain explicit recipes.
-A team-level `keep_env` is refused. A Claude or OMP session also gets its own harness config
-directory writable by default when build paths are enabled; use `grants = ["harness-config"]`
-for persistent writes, or `hide`/`unhide` the exact root to opt out of that default.
+table for session settings. `enabled` defaults to false, and `default_hides` defaults
+to true. `write`, `hide`, and `unhide` lists add team entries before session entries,
+while scalars override. A team-level `grants` list applies to every session; container
+grants and `harness-config` remain session-only. Run `a2amx confine list` for valid
+grant names and see [Confinement](confinement.md#credential-environment-variables)
+for the closed credential environment list.
+
+`auto = true` is accepted only in the global `<state home>/team.toml` `[confine]`
+table, and requires `enabled = true`. It detects project markers and git remotes at
+each start and adds the matching grants plus `cache`; local `a2amx.toml` files and
+explicit `--file` inputs must not set the key. `auto = false` is accepted anywhere
+in a team `[confine]` table and means nothing. Session-level `auto` is always an
+error. Run `a2amx confine suggest` to print a copyable grants fragment for a local
+team file. Auto detection reads only a regular `.git/config` of at most 65,536 bytes,
+does not follow worktree `.git` files, and treats unreadable or invalid input as no
+git grants.
+
+Under `auto`, `git push` works only when a remote is detected. A `.git` file for a
+worktree or submodule, and a local team file, require an explicit grant. HTTPS pushes
+through `gh` also require `gh auth setup-git`.
+
+A confined Claude or OMP session gets its harness configuration root writable and
+persistent by default. This default is equivalent to the `harness-config` behavior;
+there is no separate build-path switch. Tool directories named by grants are created
+only when a real session starts. Dry runs list missing grant directories as skipped;
+credential grants never create files or directories.
+
 Options on a disabled session need `enabled = true`; team options without any enabled
 value confine nothing. Lists accept at most 64 entries of at most 4096 bytes. Codex
 sessions cannot be confined.

@@ -1,161 +1,90 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ecosystem {
-    Rust,
-    Node,
-    Go,
-    Maven,
-    Gradle,
-    Python,
-}
+//! Pure project and git detection for confinement grants.
 
-struct EcosystemInfo {
-    ecosystem: Ecosystem,
-    label: &'static str,
-    markers: &'static [&'static str],
-    write_paths: &'static [&'static str],
-    note: &'static str,
-}
+use crate::grant;
 
-const ECOSYSTEMS: [EcosystemInfo; 6] = [
-    EcosystemInfo {
-        ecosystem: Ecosystem::Rust,
-        label: "Rust",
-        markers: &["Cargo.toml"],
-        write_paths: &["~/.cargo"],
-        note: "Rust: a Git dependency also needs ~/.cargo/git (untested).",
-    },
-    EcosystemInfo {
-        ecosystem: Ecosystem::Node,
-        label: "Node",
-        markers: &["package.json"],
-        write_paths: &["~/.npm"],
-        note: "Node: global installs and version-manager directories are not covered.",
-    },
-    EcosystemInfo {
-        ecosystem: Ecosystem::Go,
-        label: "Go",
-        markers: &["go.mod"],
-        write_paths: &[],
-        note: "Go: run go env GOMODCACHE GOCACHE and add both paths as write entries; do not open ~/go/bin.",
-    },
-    EcosystemInfo {
-        ecosystem: Ecosystem::Maven,
-        label: "Maven",
-        markers: &["pom.xml"],
-        write_paths: &["~/.m2/repository"],
-        note: "Maven: ~/.m2/settings.xml can hold passwords; add hide = [\"~/.m2/settings.xml\"] when the agent does not need it.",
-    },
-    EcosystemInfo {
-        ecosystem: Ecosystem::Gradle,
-        label: "Gradle",
-        markers: &[
-            "build.gradle",
-            "build.gradle.kts",
-            "settings.gradle",
-            "settings.gradle.kts",
-        ],
-        write_paths: &["~/.gradle/caches", "~/.gradle/wrapper"],
-        note: "Gradle: gradle.properties and init.d stay closed; do not open all of ~/.gradle.",
-    },
-    EcosystemInfo {
-        ecosystem: Ecosystem::Python,
-        label: "Python",
-        markers: &["pyproject.toml", "requirements.txt"],
-        write_paths: &[],
-        note: "Python: a virtual environment inside the workspace needs no write entry.",
-    },
-];
-
-/// Which ecosystems have a marker file, each with the first marker found.
-pub fn detect(has_file: impl Fn(&str) -> bool) -> Vec<(Ecosystem, &'static str)> {
-    ECOSYSTEMS
+/// Grants whose marker exists, in grant-table order; only grants a team table may name.
+pub fn detect(has_file: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    grant::all()
         .iter()
-        .filter_map(|info| {
-            info.markers
-                .iter()
-                .copied()
-                .find(|marker| has_file(marker))
-                .map(|marker| (info.ecosystem, marker))
+        .filter(|grant| {
+            grant.team_default_ok
+                && !grant.detect.is_empty()
+                && grant.detect.iter().any(|marker| has_file(marker))
         })
+        .map(|grant| grant.name)
         .collect()
 }
-/// Return the unique writable cache paths for the detected ecosystems.
-pub fn write_paths(found: &[(Ecosystem, &'static str)]) -> Vec<&'static str> {
-    let mut write_paths = Vec::new();
-    for info in &ECOSYSTEMS {
-        if found
-            .iter()
-            .any(|(ecosystem, _)| *ecosystem == info.ecosystem)
+
+/// Grants requested by the remotes in a git config, in grant-table order.
+pub fn git_remote_grants(config: &str, has_host_path: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    let mut found = Vec::new();
+    let mut in_remote = false;
+    for raw_line in config.lines() {
+        let line = raw_line.trim();
+        if line.starts_with('[') {
+            in_remote = line.starts_with("[remote ");
+            continue;
+        }
+        if !in_remote {
+            continue;
+        }
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        if !(key.trim().eq_ignore_ascii_case("url") || key.trim().eq_ignore_ascii_case("pushurl")) {
+            continue;
+        }
+        let value = raw_value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .unwrap_or(value);
+        if value.starts_with("ssh://")
+            || value.starts_with("git+ssh://")
+            || (!value.contains("://") && value.contains(':'))
         {
-            for path in info.write_paths {
-                if !write_paths.contains(path) {
-                    write_paths.push(*path);
-                }
+            found.push("ssh");
+        } else if value.starts_with("https://") {
+            if has_host_path("~/.config/gh") {
+                found.push("gh");
+            }
+            if has_host_path("~/.git-credentials") || has_host_path("~/.config/git/credentials") {
+                found.push("git-credentials");
             }
         }
     }
-    write_paths
+    table_order(found)
 }
 
-const COMMON_WRITE_PATHS: [&str; 1] = ["~/.cache"];
-
-/// Return common tool directories followed by the unique ecosystem cache paths.
-pub fn default_write_paths(found: &[(Ecosystem, &'static str)]) -> Vec<&'static str> {
-    let mut paths = COMMON_WRITE_PATHS.to_vec();
-    paths.extend(write_paths(found));
-    paths
+/// What auto adds and `confine suggest` prints: cache plus detected grants.
+pub fn grants(
+    has_file: impl Fn(&str) -> bool,
+    git_config: Option<&str>,
+    has_host_path: impl Fn(&str) -> bool,
+) -> Vec<&'static str> {
+    let mut found = detect(has_file);
+    if let Some(config) = git_config {
+        found.extend(git_remote_grants(config, has_host_path));
+    }
+    found.push("cache");
+    table_order(found)
 }
 
-/// Render the confinement fragment and its ecosystem notes.
-pub fn render(found: &[(Ecosystem, &'static str)]) -> String {
-    if found.is_empty() {
-        return "# No known build files here. The workspace itself needs no write entry.\n# Run the tool once, read the failing path, and see docs/confinement.md, Recipes by ecosystem.\n".to_owned();
-    }
-
-    let mut output = String::new();
-    output.push_str("# Found: ");
-    for (index, (ecosystem, marker)) in found.iter().enumerate() {
-        if index > 0 {
-            output.push_str(", ");
-        }
-        output.push_str(marker);
-        output.push_str(" (");
-        if let Some(info) = info_for(*ecosystem) {
-            output.push_str(info.label);
-        }
-        output.push(')');
-    }
-    output.push('\n');
-
-    let write_paths = write_paths(found);
-    if !write_paths.is_empty() {
-        output.push_str("# Add this to the session's table in your team file, or pass --confine-write for each path. Confinement must be enabled (enabled = true here or in the team's [confine] table).\n");
-        output.push_str("[session.confine]\nwrite = [");
-        for (index, path) in write_paths.iter().enumerate() {
-            if index > 0 {
-                output.push_str(", ");
-            }
-            output.push('\"');
-            output.push_str(path);
-            output.push('\"');
-        }
-        output.push_str("]\n");
-    }
-
-    for info in &ECOSYSTEMS {
-        if found
-            .iter()
-            .any(|(ecosystem, _)| *ecosystem == info.ecosystem)
-        {
-            output.push_str("# ");
-            output.push_str(info.note);
-            output.push('\n');
-        }
-    }
-    output.push_str("# More: docs/confinement.md, Recipes by ecosystem\n");
-    output
+/// Render one copyable grants line.
+pub fn render(found: &[&'static str]) -> String {
+    let names = found
+        .iter()
+        .map(|name| format!("\"{name}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("# Suggested grants:\ngrants = [{names}]\n")
 }
 
-fn info_for(ecosystem: Ecosystem) -> Option<&'static EcosystemInfo> {
-    ECOSYSTEMS.iter().find(|info| info.ecosystem == ecosystem)
+fn table_order(found: impl IntoIterator<Item = &'static str>) -> Vec<&'static str> {
+    let found = found.into_iter().collect::<std::collections::HashSet<_>>();
+    grant::all()
+        .iter()
+        .filter(|grant| found.contains(grant.name))
+        .map(|grant| grant.name)
+        .collect()
 }

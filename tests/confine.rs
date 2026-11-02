@@ -395,7 +395,7 @@ fn plan_reports_unresolved_operator_paths() {
     assert!(!error.to_string().contains("unresolved"));
 }
 #[test]
-fn plan_keeps_missing_harness_data_skipped_without_unresolved() {
+fn plan_keeps_missing_harness_data_persistent_by_default() {
     let fixture = Fixture::new();
     let claude_root = fixture.home.join(".claude");
     std::fs::create_dir(&claude_root).expect("Claude root");
@@ -410,9 +410,11 @@ fn plan_keeps_missing_harness_data_skipped_without_unresolved() {
     )
     .expect("Claude harness-data plan");
     assert!(plan.unresolved.is_empty());
+    assert!(plan.unsaved_files().is_empty());
+    assert!(!plan.skipped_paths().contains(&history));
     assert!(
-        plan.skipped_paths().contains(&history),
-        "missing harness history should remain skipped"
+        plan.writable
+            .contains(&std::fs::canonicalize(claude_root).expect("Claude root"))
     );
 }
 
@@ -721,7 +723,6 @@ fn cargo_grant_keeps_credentials_hidden_and_path_bin_protected() {
     let plan = confine::plan_with_path(
         &ConfineRequest {
             grants: vec!["cargo".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -756,7 +757,6 @@ fn cargo_token_grant_lifts_only_its_credential_files() {
     let cargo_only = confine::plan(
         &ConfineRequest {
             grants: vec!["cargo".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -771,7 +771,6 @@ fn cargo_token_grant_lifts_only_its_credential_files() {
     let cargo_and_token = confine::plan(
         &ConfineRequest {
             grants: vec!["cargo".into(), "cargo-token".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -793,7 +792,6 @@ fn cargo_token_grant_lifts_only_its_credential_files() {
     let token_only = confine::plan(
         &ConfineRequest {
             grants: vec!["cargo-token".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -818,7 +816,6 @@ fn cache_grant_keeps_the_default_hides() {
     let plan = confine::plan(
         &ConfineRequest {
             grants: vec!["cache".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -843,7 +840,6 @@ fn huggingface_token_grant_opens_only_the_token() {
     let cache_and_token = confine::plan(
         &ConfineRequest {
             grants: vec!["cache".into(), "huggingface-token".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -869,7 +865,6 @@ fn huggingface_token_grant_opens_only_the_token() {
     let token_only = confine::plan(
         &ConfineRequest {
             grants: vec!["huggingface-token".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -901,7 +896,6 @@ fn cache_grant_with_narrower_grants() {
     let plan = confine::plan(
         &ConfineRequest {
             grants: vec!["cache".into(), "go".into(), "python".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -922,16 +916,11 @@ fn cache_grant_refuses_a_state_directory_under_it() {
     let mut host = fixture.host();
     host.state_dir = state;
     host.empty_file = empty;
-    let error = match confine::plan(
-        &ConfineRequest {
-            grants: vec!["cache".into()],
-            build_paths: false,
-            ..ConfineRequest::default()
-        },
-        Harness::Generic,
-        &fixture.cwd,
-        &host,
-    ) {
+    let request = ConfineRequest {
+        grants: vec!["cache".into()],
+        ..ConfineRequest::default()
+    };
+    let error = match confine::plan(&request, Harness::Generic, &fixture.cwd, &host) {
         Ok(_) => panic!("cache grant must reject a nested state directory"),
         Err(error) => error,
     };
@@ -940,7 +929,6 @@ fn cache_grant_refuses_a_state_directory_under_it() {
     let raw_write = confine::plan(
         &ConfineRequest {
             write: vec!["~/.cache".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -950,6 +938,57 @@ fn cache_grant_refuses_a_state_directory_under_it() {
     assert!(raw_write.is_ok());
 }
 
+#[test]
+fn cache_grant_preflight_refuses_a_state_directory_under_it() {
+    let fixture = Fixture::new();
+    let cache = fixture.home.join(".cache");
+    std::fs::create_dir_all(&cache).expect("cache directory");
+    let state = cache.join("state");
+    let empty = confine::ensure_empty_file(&state).expect("cache state empty file");
+    let mut host = fixture.host();
+    host.state_dir = state;
+    host.empty_file = empty;
+    let request = ConfineRequest {
+        grants: vec!["cache".into()],
+        ..ConfineRequest::default()
+    };
+    let preflight = confine::ensure_grant_dirs(&request, Harness::Generic, &host, true);
+    let error = match confine::plan_with_preflight(
+        &request,
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+        None,
+        preflight,
+    ) {
+        Ok(_) => panic!("cache grant must reject a nested state directory"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("overlaps the state directory"));
+}
+
+#[test]
+fn missing_node_grant_path_is_skipped_after_preflight_without_creation() {
+    let fixture = Fixture::new();
+    let npm = fixture.home.join(".npm");
+    let request = ConfineRequest {
+        grants: vec!["node".into()],
+        ..ConfineRequest::default()
+    };
+    let preflight = confine::ensure_grant_dirs(&request, Harness::Generic, &fixture.host(), false);
+    assert!(preflight.is_empty());
+    let plan = confine::plan_with_preflight(
+        &request,
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+        None,
+        preflight,
+    )
+    .expect("missing node grant path plan");
+    assert!(!npm.exists());
+    assert!(plan.skipped_paths().contains(&npm));
+}
 #[test]
 fn gh_grant_opens_only_its_paths_and_conflicts_with_exact_hides() {
     let fixture = Fixture::new();
@@ -1109,7 +1148,6 @@ fn grant_alias_to_hidden_or_unhidden_path_is_rejected() {
     let error = match confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1140,7 +1178,6 @@ fn grant_alias_to_hidden_or_unhidden_path_is_rejected() {
     let error = match confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1185,7 +1222,6 @@ fn grant_symlink_paths_are_rejected_for_toolchain_and_token_grants() {
         let error = match confine::plan(
             &ConfineRequest {
                 grants: vec![grant_name.into()],
-                build_paths: false,
                 ..ConfineRequest::default()
             },
             Harness::Generic,
@@ -1221,7 +1257,6 @@ fn grant_symlinked_home_ancestor_is_accepted_after_home_canonicalization() {
     let plan = confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1246,7 +1281,6 @@ fn grant_alias_to_home_is_rejected_as_a_symlink() {
         &ConfineRequest {
             grants: vec!["gh".into()],
             no_default_hides: true,
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1273,7 +1307,6 @@ fn grant_alias_into_state_is_rejected_as_a_symlink() {
         &ConfineRequest {
             grants: vec!["gh".into()],
             no_default_hides: true,
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1300,7 +1333,6 @@ fn grant_alias_into_install_or_harness_is_rejected_as_a_symlink() {
         &ConfineRequest {
             grants: vec!["gh".into()],
             no_default_hides: true,
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1327,7 +1359,6 @@ fn grant_alias_into_install_or_harness_is_rejected_as_a_symlink() {
     let error = match confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
-            build_paths: false,
             no_default_hides: true,
             ..ConfineRequest::default()
         },
@@ -1359,7 +1390,6 @@ fn grant_alias_to_path_directory_is_rejected_as_a_symlink() {
     let error = match confine::plan_with_path(
         &ConfineRequest {
             grants: vec!["gh".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -1480,7 +1510,6 @@ fn new_grants_open_only_existing_paths_and_release_only_their_environment() {
         }
         let baseline = confine::plan(
             &ConfineRequest {
-                build_paths: false,
                 ..ConfineRequest::default()
             },
             Harness::Generic,
@@ -1491,7 +1520,6 @@ fn new_grants_open_only_existing_paths_and_release_only_their_environment() {
         let granted = confine::plan(
             &ConfineRequest {
                 grants: vec![grant_name.into()],
-                build_paths: false,
                 ..ConfineRequest::default()
             },
             Harness::Generic,
@@ -3011,43 +3039,10 @@ fn omp_sidecars_cover_existing_agent_and_stats_databases_only() {
     assert!(!generic_home.join(".omp/stats.db-wal").exists());
 }
 #[test]
-fn harness_data_allowlists_do_not_bind_roots_or_code_paths() {
+fn harness_config_default_opens_only_the_harness_root() {
     let claude = Fixture::new();
-    let claude_root = claude.home.join(".claude");
-    for name in [
-        "projects",
-        "todos",
-        "shell-snapshots",
-        "session-env",
-        "sessions",
-        "statsig",
-        "file-history",
-        "paste-cache",
-        "debug",
-        "cache",
-        "telemetry",
-        "plans",
-        "backups",
-    ] {
-        std::fs::create_dir_all(claude_root.join(name)).expect("Claude data directory");
-    }
-    for name in ["history.jsonl", "stats-cache.json", ".credentials.json"] {
-        std::fs::write(claude_root.join(name), "fixture").expect("Claude data file");
-    }
-    std::fs::write(claude.home.join(".claude.json"), "fixture").expect("Claude user data file");
-    for path in [
-        claude_root.join("settings.json"),
-        claude_root.join("hooks"),
-        claude_root.join("commands"),
-        claude_root.join("agents"),
-        claude_root.join("skills"),
-    ] {
-        if path.extension().is_some() {
-            std::fs::write(path, "fixture").expect("Claude code path");
-        } else {
-            std::fs::create_dir_all(path).expect("Claude code directory");
-        }
-    }
+    populate_claude_overlay(&claude, true);
+    let claude_root = std::fs::canonicalize(claude.home.join(".claude")).expect("Claude root");
     let claude_plan = confine::plan(
         &ConfineRequest::default(),
         Harness::Claude,
@@ -3055,73 +3050,13 @@ fn harness_data_allowlists_do_not_bind_roots_or_code_paths() {
         &claude.host(),
     )
     .expect("Claude plan");
-    for name in [
-        "projects",
-        "todos",
-        "shell-snapshots",
-        "session-env",
-        "sessions",
-        "statsig",
-        "file-history",
-        "paste-cache",
-        "debug",
-        "cache",
-        "telemetry",
-        "plans",
-        "backups",
-        "history.jsonl",
-        "stats-cache.json",
-        ".credentials.json",
-    ] {
-        let path = std::fs::canonicalize(claude_root.join(name)).expect("Claude allow-list path");
-        assert!(
-            claude_plan.writable.contains(&path),
-            "Claude data path must be writable: {path:?}"
-        );
-    }
-    let claude_json =
-        std::fs::canonicalize(claude.home.join(".claude.json")).expect("Claude JSON path");
-    assert!(claude_plan.writable.contains(&claude_json));
-    for path in [
-        claude_root.clone(),
-        claude_root.join("settings.json"),
-        claude_root.join("hooks"),
-        claude_root.join("commands"),
-        claude_root.join("agents"),
-        claude_root.join("skills"),
-    ] {
-        let path = std::fs::canonicalize(path).expect("Claude protected path");
-        assert!(
-            !claude_plan.writable.contains(&path),
-            "Claude code path must remain read-only: {path:?}"
-        );
-    }
+    assert!(claude_plan.writable.contains(&claude_root));
+    assert!(claude_plan.overlay_parents().is_empty());
+    assert!(claude_plan.grants.is_empty());
 
     let omp = Fixture::new();
-    let omp_root = omp.home.join(".omp");
-    for name in [
-        "cache",
-        "logs",
-        "run",
-        "agent/sessions",
-        "agent/projects",
-        "agent/cache",
-        "agent/blobs",
-    ] {
-        std::fs::create_dir_all(omp_root.join(name)).expect("OMP data directory");
-    }
-    for path in [
-        omp_root.join("agent/a.db"),
-        omp_root.join("agent/a.db-wal"),
-        omp_root.join("agent/a.db-shm"),
-        omp_root.join("stats.db"),
-        omp_root.join("stats.db-wal"),
-        omp_root.join("stats.db-shm"),
-    ] {
-        std::fs::write(path, "fixture").expect("OMP data file");
-    }
-    std::fs::create_dir_all(omp_root.join("extensions")).expect("OMP extension directory");
-    std::fs::write(omp_root.join("config.yml"), "fixture").expect("OMP config");
+    populate_omp_overlay(&omp);
+    let omp_root = std::fs::canonicalize(omp.home.join(".omp")).expect("OMP root");
     let omp_plan = confine::plan(
         &ConfineRequest::default(),
         Harness::Omp,
@@ -3129,39 +3064,19 @@ fn harness_data_allowlists_do_not_bind_roots_or_code_paths() {
         &omp.host(),
     )
     .expect("OMP plan");
-    for name in [
-        "cache",
-        "logs",
-        "run",
-        "agent/sessions",
-        "agent/projects",
-        "agent/cache",
-        "agent/blobs",
-        "agent/a.db",
-        "agent/a.db-wal",
-        "agent/a.db-shm",
-        "stats.db",
-        "stats.db-wal",
-        "stats.db-shm",
-    ] {
-        let path = std::fs::canonicalize(omp_root.join(name)).expect("OMP allow-list path");
-        assert!(
-            omp_plan.writable.contains(&path),
-            "OMP data path must be writable: {path:?}"
-        );
-    }
-    for path in [
-        omp_root.clone(),
-        omp_root.join("agent"),
-        omp_root.join("extensions"),
-        omp_root.join("config.yml"),
-    ] {
-        let path = std::fs::canonicalize(path).expect("OMP protected path");
-        assert!(
-            !omp_plan.writable.contains(&path),
-            "OMP code/config path must remain read-only: {path:?}"
-        );
-    }
+    assert!(omp_plan.writable.contains(&omp_root));
+    assert!(omp_plan.overlay_parents().is_empty());
+
+    let generic = Fixture::new();
+    let generic_plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &generic.cwd,
+        &generic.host(),
+    )
+    .expect("Generic plan");
+    assert!(!generic_plan.writable.contains(&generic.home.join(".cargo")));
+    assert!(!generic_plan.writable.contains(&generic.home.join(".cache")));
 }
 
 #[test]
@@ -4582,94 +4497,14 @@ fn write_home_keeps_the_launch_inputs_read_only() {
     assert!(!relative_path.protected.contains(&relative));
 }
 #[test]
-fn build_paths_reprotect_cargo_bin_only_when_on_path() {
+fn grant_create_paths_are_preflighted_and_writable() {
     let fixture = Fixture::new();
-    std::fs::write(fixture.cwd.join("Cargo.toml"), "").expect("Cargo marker");
-    let cargo = fixture.home.join(".cargo");
-    let cargo_bin = cargo.join("bin");
-    std::fs::create_dir_all(&cargo_bin).expect("cargo bin");
-    std::fs::create_dir_all(fixture.home.join(".cache")).expect("cache");
-    let path_var = OsString::from(format!("{}:/usr/bin", cargo_bin.display()));
-    let with_path = confine::plan_with_path(
-        &ConfineRequest {
-            build_paths: true,
-            ..ConfineRequest::default()
-        },
-        Harness::Generic,
-        &fixture.cwd,
-        &fixture.host(),
-        Some(path_var),
-    )
-    .expect("build path plan");
-    let cargo = std::fs::canonicalize(cargo).expect("cargo path");
-    let cargo_bin = std::fs::canonicalize(cargo_bin).expect("cargo bin path");
-    assert!(with_path.writable.contains(&cargo));
-    assert!(with_path.protected.contains(&cargo_bin));
-
-    let without_path = confine::plan_with_path(
-        &ConfineRequest {
-            build_paths: true,
-            ..ConfineRequest::default()
-        },
-        Harness::Generic,
-        &fixture.cwd,
-        &fixture.host(),
-        None,
-    )
-    .expect("build path plan without PATH");
-    assert!(!without_path.protected.contains(&cargo_bin));
-}
-
-#[test]
-fn state_directory_under_cache_makes_common_cache_unresolved() {
-    let fixture = Fixture::new();
-    std::fs::write(fixture.cwd.join("Cargo.toml"), "").expect("Cargo marker");
-    let cache = fixture.home.join(".cache");
-    let state = cache.join("state");
-    let cargo = fixture.home.join(".cargo");
-    std::fs::create_dir_all(&state).expect("nested state");
-    std::fs::create_dir_all(&cargo).expect("cargo");
-    let empty_file = state.join("confine-empty");
-    std::fs::write(&empty_file, []).expect("empty file");
-    let host = Host {
-        home: fixture.home.clone(),
-        state_dir: state,
-        runtime_dir: fixture.runtime.clone(),
-        empty_file,
-    };
-    let plan = confine::plan_with_path(
-        &ConfineRequest {
-            build_paths: true,
-            ..ConfineRequest::default()
-        },
-        Harness::Generic,
-        &fixture.cwd,
-        &host,
-        None,
-    )
-    .expect("build path plan");
-    let cache = std::fs::canonicalize(cache).expect("cache path");
-    assert!(!plan.writable.contains(&cache));
-    assert!(plan.unresolved.iter().any(|item| {
-        item.option == "build" && item.path == cache && item.reason.contains("state directory")
-    }));
-}
-
-#[test]
-fn build_paths_bind_detected_cargo_and_common_cache() {
-    let fixture = Fixture::new();
-    std::fs::write(
-        fixture.cwd.join("Cargo.toml"),
-        "[package]\nname = \"demo\"\n",
-    )
-    .expect("Cargo marker");
     let host = fixture.host();
     let request = ConfineRequest {
-        build_paths: true,
+        grants: vec!["cargo".into(), "cache".into()],
         ..ConfineRequest::default()
     };
-    let preflight =
-        confine::ensure_build_paths(&request, Harness::Generic, &fixture.cwd, &host, true);
+    let preflight = confine::ensure_grant_dirs(&request, Harness::Generic, &host, true);
     assert!(preflight.is_empty());
     let plan = confine::plan_with_preflight(
         &request,
@@ -4678,24 +4513,81 @@ fn build_paths_bind_detected_cargo_and_common_cache() {
         &host,
         None,
         preflight,
-        false,
     )
-    .expect("build path plan");
+    .expect("grant plan");
     let cargo = std::fs::canonicalize(fixture.home.join(".cargo")).expect("created cargo");
     let cache = std::fs::canonicalize(fixture.home.join(".cache")).expect("created cache");
-    assert!(plan.build_writes.contains(&cargo));
     assert!(plan.writable.contains(&cargo));
-    assert!(plan.build_writes.contains(&cache));
     assert!(plan.writable.contains(&cache));
 }
+
 #[test]
-fn build_cache_ancestors_are_writable_while_nested_credentials_stay_hidden() {
+fn grant_create_path_inside_state_is_unresolved() {
     let fixture = Fixture::new();
-    std::fs::write(
-        fixture.cwd.join("Cargo.toml"),
-        "[package]\nname = \"demo\"\n",
-    )
-    .expect("Cargo marker");
+    let cache = fixture.home.join(".cache");
+    let state = cache.join("state");
+    std::fs::create_dir_all(&state).expect("nested state");
+    let empty_file = state.join("confine-empty");
+    std::fs::write(&empty_file, []).expect("empty file");
+    let host = Host {
+        home: fixture.home.clone(),
+        state_dir: state,
+        runtime_dir: fixture.runtime.clone(),
+        empty_file,
+    };
+    let request = ConfineRequest {
+        grants: vec!["cache".into()],
+        ..ConfineRequest::default()
+    };
+    let preflight = confine::ensure_grant_dirs(&request, Harness::Generic, &host, true);
+    let expected = std::fs::canonicalize(cache).expect("cache path");
+    assert!(preflight.iter().any(|item| {
+        item.option == "grant" && item.path == expected && item.reason.contains("protected")
+    }));
+}
+
+#[test]
+fn grant_create_matrix_is_safe_and_explicit() {
+    let node = Fixture::new();
+    let node_request = ConfineRequest {
+        grants: vec!["node".into()],
+        ..ConfineRequest::default()
+    };
+    let unresolved =
+        confine::ensure_grant_dirs(&node_request, Harness::Generic, &node.host(), true);
+    assert!(unresolved.is_empty());
+    assert!(node.home.join(".npm").is_dir());
+
+    let aws = Fixture::new();
+    let aws_request = ConfineRequest {
+        grants: vec!["aws".into()],
+        ..ConfineRequest::default()
+    };
+    std::fs::remove_dir_all(aws.home.join(".aws")).expect("remove fixture aws directory");
+    confine::ensure_grant_dirs(&aws_request, Harness::Generic, &aws.host(), true);
+    assert!(!aws.home.join(".aws").exists());
+
+    let dry = Fixture::new();
+    confine::ensure_grant_dirs(&node_request, Harness::Generic, &dry.host(), false);
+    assert!(!dry.home.join(".npm").exists());
+
+    let symlinked = Fixture::new();
+    let target = symlinked._root.path().join("npm-target");
+    std::fs::create_dir_all(&target).expect("npm target");
+    symlink(&target, symlinked.home.join(".npm")).expect("npm symlink");
+    let unresolved =
+        confine::ensure_grant_dirs(&node_request, Harness::Generic, &symlinked.host(), true);
+    assert!(
+        unresolved
+            .iter()
+            .any(|item| { item.option == "grant" && item.path == symlinked.home.join(".npm") })
+    );
+    assert!(!target.join("created").exists());
+}
+
+#[test]
+fn grant_paths_keep_nested_credentials_hidden() {
+    let fixture = Fixture::new();
     let cargo = fixture.home.join(".cargo");
     let cache = fixture.home.join(".cache");
     let credentials = cargo.join("credentials.toml");
@@ -4705,17 +4597,11 @@ fn build_cache_ancestors_are_writable_while_nested_credentials_stay_hidden() {
     std::fs::write(&credentials, "credentials").expect("cargo credentials");
     std::fs::write(&token, "token").expect("huggingface token");
     let request = ConfineRequest {
-        build_paths: true,
+        grants: vec!["cargo".into(), "cache".into()],
         ..ConfineRequest::default()
     };
-    let plan = confine::plan_with_path(
-        &request,
-        Harness::Generic,
-        &fixture.cwd,
-        &fixture.host(),
-        None,
-    )
-    .expect("build path plan");
+    let plan = confine::plan(&request, Harness::Generic, &fixture.cwd, &fixture.host())
+        .expect("grant path plan");
     let cargo = std::fs::canonicalize(cargo).expect("cargo path");
     let cache = std::fs::canonicalize(cache).expect("cache path");
     let credentials = std::fs::canonicalize(credentials).expect("credentials path");
@@ -4724,30 +4610,8 @@ fn build_cache_ancestors_are_writable_while_nested_credentials_stay_hidden() {
     assert!(plan.writable.contains(&cache));
     assert!(plan.hidden_paths().contains(&credentials));
     assert!(plan.hidden_paths().contains(&token));
-    let wrapped = plan.wrap(vec!["true".into()]).expect("wrapper");
-    let bind_index = |path: &Path| {
-        wrapped
-            .windows(3)
-            .position(|window| {
-                window[0] == "--bind"
-                    && window[1] == path.to_string_lossy()
-                    && window[2] == path.to_string_lossy()
-            })
-            .expect("writable bind")
-    };
-    let hidden_index = |path: &Path| {
-        wrapped
-            .windows(3)
-            .position(|window| {
-                window[0] == "--ro-bind"
-                    && window[1] == fixture.empty.to_string_lossy()
-                    && window[2] == path.to_string_lossy()
-            })
-            .expect("hidden file bind")
-    };
-    assert!(bind_index(&cargo) < hidden_index(&credentials));
-    assert!(bind_index(&cache) < hidden_index(&token));
 }
+
 #[test]
 fn real_bubblewrap_cargo_grant_keeps_credentials_and_bin_protected() -> anyhow::Result<()> {
     let fixture = Fixture::new();
@@ -4769,7 +4633,6 @@ fn real_bubblewrap_cargo_grant_keeps_credentials_and_bin_protected() -> anyhow::
     let plan = confine::plan_with_path(
         &ConfineRequest {
             grants: vec!["cargo".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -4816,7 +4679,7 @@ fn real_bubblewrap_hides_nested_credentials_but_allows_cache_writes() -> anyhow:
     };
     let plan = confine::plan_with_path(
         &ConfineRequest {
-            build_paths: true,
+            grants: vec!["cargo".into()],
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -4861,7 +4724,6 @@ fn real_bubblewrap_cache_grant_hides_the_token_and_writes_the_cache() -> anyhow:
     let plan = confine::plan_with_path(
         &ConfineRequest {
             grants: vec!["cache".into()],
-            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -4888,13 +4750,8 @@ fn real_bubblewrap_cache_grant_hides_the_token_and_writes_the_cache() -> anyhow:
 }
 
 #[test]
-fn build_path_ancestor_of_hidden_stays_writable_without_releasing_hidden() {
+fn grant_create_ancestor_does_not_release_hidden_path() {
     let fixture = Fixture::new();
-    std::fs::write(
-        fixture.cwd.join("Cargo.toml"),
-        "[package]\nname = \"demo\"\n",
-    )
-    .expect("Cargo marker");
     std::fs::create_dir_all(fixture.home.join(".cargo")).expect("cargo directory");
     symlink(
         fixture.home.join(".ssh"),
@@ -4903,11 +4760,10 @@ fn build_path_ancestor_of_hidden_stays_writable_without_releasing_hidden() {
     .expect("registry symlink");
     let host = fixture.host();
     let request = ConfineRequest {
-        build_paths: true,
+        grants: vec!["cargo".into()],
         ..ConfineRequest::default()
     };
-    let preflight =
-        confine::ensure_build_paths(&request, Harness::Generic, &fixture.cwd, &host, true);
+    let preflight = confine::ensure_grant_dirs(&request, Harness::Generic, &host, true);
     assert!(preflight.is_empty());
     let plan = confine::plan_with_preflight(
         &request,
@@ -4916,52 +4772,37 @@ fn build_path_ancestor_of_hidden_stays_writable_without_releasing_hidden() {
         &host,
         None,
         preflight,
-        false,
     )
-    .expect("build path plan");
+    .expect("grant path plan");
     let ssh = std::fs::canonicalize(fixture.home.join(".ssh")).expect("ssh path");
     assert!(!plan.writable.contains(&ssh));
     assert!(plan.hidden_paths().contains(&ssh));
-    let wrapped = plan.wrap(vec!["true".into()]).expect("wrapper");
-    let ssh_text = ssh.to_string_lossy();
-    assert!(
-        !wrapped.windows(3).any(|window| {
-            window[0] == "--bind" && window[1] == ssh_text && window[2] == ssh_text
-        })
-    );
 }
 
 #[test]
-fn build_path_symlink_ancestor_is_not_created() {
+fn grant_create_symlink_ancestor_is_not_created() {
     let fixture = Fixture::new();
-    std::fs::write(
-        fixture.cwd.join("Cargo.toml"),
-        "[package]\nname = \"demo\"\n",
-    )
-    .expect("Cargo marker");
     let target = fixture._root.path().join("outside");
     std::fs::create_dir_all(&target).expect("outside directory");
     symlink(&target, fixture.home.join(".cargo")).expect("cargo symlink");
     let host = fixture.host();
     let request = ConfineRequest {
-        build_paths: true,
+        grants: vec!["cargo".into()],
         ..ConfineRequest::default()
     };
-    let preflight =
-        confine::ensure_build_paths(&request, Harness::Generic, &fixture.cwd, &host, true);
-    assert_eq!(preflight.len(), 1);
-    let plan = confine::plan_with_preflight(
+    let preflight = confine::ensure_grant_dirs(&request, Harness::Generic, &host, true);
+    let error = match confine::plan_with_preflight(
         &request,
         Harness::Generic,
         &fixture.cwd,
         &host,
         None,
         preflight,
-        false,
-    )
-    .expect("build path plan");
-    assert!(!target.join(".cargo").exists());
-    assert!(plan.unresolved.iter().any(|item| item.option == "build"));
+    ) {
+        Ok(_) => panic!("symlinked cargo grant must fail"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("passes through the symlink"));
 }
 
 #[test]
@@ -5082,96 +4923,41 @@ fn resolve_bwrap_refuses_a_relative_file_path() {
 }
 
 #[test]
-fn claude_data_files_parent_gets_an_overlay_before_the_binds() {
+fn harness_config_default_replaces_data_overlays() {
     let claude = Fixture::new();
     populate_claude_overlay(&claude, true);
+    let claude_root = std::fs::canonicalize(claude.home.join(".claude")).expect("Claude root");
     let claude_plan = confine::plan(
         &ConfineRequest::default(),
         Harness::Claude,
         &claude.cwd,
         &claude.host(),
     )
-    .expect("Claude overlay plan");
-    let claude_root = std::fs::canonicalize(claude.home.join(".claude")).expect("Claude root");
+    .expect("Claude plan");
+    assert!(claude_plan.writable.contains(&claude_root));
+    assert!(claude_plan.overlay_parents().is_empty());
     let wrapped = claude_plan
         .wrap(vec!["true".into()])
         .expect("Claude wrapper");
-    let overlay_index = assert_overlay_mount(&wrapped, &claude_root);
+    let root = claude_root.to_string_lossy();
     assert!(
-        !wrapped.windows(2).any(|window| {
-            window[0] == "--remount-ro" && window[1] == claude_root.to_string_lossy()
-        }),
-        "overlay must not be remounted read-only"
+        wrapped
+            .windows(3)
+            .any(|window| window[0] == "--bind" && window[1] == root && window[2] == root)
     );
-    for path in [
-        claude_root.join("settings.json"),
-        claude_root.join("plugins"),
-    ] {
-        let path = std::fs::canonicalize(path).expect("Claude control path");
-        assert!(assert_ro_bind_try(&wrapped, &path) > overlay_index);
-    }
-    let hooks_link = claude_root.join("hooks");
-    let hooks_target = claude._root.path().join("external-hooks");
-    assert!(
-        !wrapped
-            .iter()
-            .any(|argument| argument == hooks_link.to_string_lossy().as_ref()),
-        "symlink entry must not be re-protected"
-    );
-    assert!(
-        !wrapped
-            .iter()
-            .any(|argument| argument == hooks_target.to_string_lossy().as_ref()),
-        "symlink target must not be re-protected"
-    );
-    assert!(!claude_plan.overlay_parents().contains(&claude.home));
-    assert!(!claude_plan.writable.contains(&claude_root));
-    assert!(claude_plan.overlay_parents().contains(&claude_root));
 
     let omp = Fixture::new();
     populate_omp_overlay(&omp);
+    let omp_root = std::fs::canonicalize(omp.home.join(".omp")).expect("OMP root");
     let omp_plan = confine::plan(
         &ConfineRequest::default(),
         Harness::Omp,
         &omp.cwd,
         &omp.host(),
     )
-    .expect("OMP overlay plan");
-    let omp_root = std::fs::canonicalize(omp.home.join(".omp")).expect("OMP root");
-    let omp_agent = std::fs::canonicalize(omp.home.join(".omp/agent")).expect("OMP agent");
-    let wrapped = omp_plan.wrap(vec!["true".into()]).expect("OMP wrapper");
-    let root_index = assert_overlay_mount(&wrapped, &omp_root);
-    let agent_index = assert_overlay_mount(&wrapped, &omp_agent);
-    assert!(root_index < agent_index);
-    for path in [omp_root.join("config.yml"), omp_root.join("extensions")] {
-        let path = std::fs::canonicalize(path).expect("OMP control path");
-        assert!(assert_ro_bind_try(&wrapped, &path) > root_index);
-    }
-    assert!(omp_plan.overlay_parents().contains(&omp_root));
-    assert!(omp_plan.overlay_parents().contains(&omp_agent));
-
-    let omp_without_databases = Fixture::new();
-    std::fs::create_dir_all(omp_without_databases.home.join(".omp/agent"))
-        .expect("empty OMP agent");
-    let omp_without_databases_plan = confine::plan(
-        &ConfineRequest::default(),
-        Harness::Omp,
-        &omp_without_databases.cwd,
-        &omp_without_databases.host(),
-    )
-    .expect("OMP without databases plan");
-    assert!(omp_without_databases_plan.overlay_parents().is_empty());
-
-    let generic = Fixture::new();
-    let generic_plan = confine::plan(
-        &ConfineRequest::default(),
-        Harness::Generic,
-        &generic.cwd,
-        &generic.host(),
-    )
-    .expect("Generic plan");
-    assert!(generic_plan.overlay_parents().is_empty());
-    assert!(!generic_plan.overlay_parents().contains(&generic.home));
+    .expect("OMP plan");
+    assert!(omp_plan.writable.contains(&omp_root));
+    assert!(omp_plan.overlay_parents().is_empty());
 }
 
 #[test]
@@ -5243,27 +5029,18 @@ fn overlay_is_not_planned_over_a_hidden_written_or_unhidden_parent() {
 }
 
 #[test]
-fn missing_data_file_is_listed_as_not_saved() {
+fn harness_config_default_saves_missing_data_files() {
     let claude = Fixture::new();
     populate_claude_overlay(&claude, false);
-    let claude_json = claude.home.join(".claude.json");
-    std::fs::write(&claude_json, "claude state").expect("Claude home state");
     let plan = confine::plan(
         &ConfineRequest::default(),
         Harness::Claude,
         &claude.cwd,
         &claude.host(),
     )
-    .expect("Claude missing-file plan");
-    let credentials = std::fs::canonicalize(claude.home.join(".claude"))
-        .expect("Claude root")
-        .join(".credentials.json");
-    assert!(plan.unsaved_files().contains(&credentials));
-    assert!(!plan.unsaved_files().contains(&claude_json));
-    assert!(confine::notice(&plan).contains("not present at start, writes to them are not saved"));
-    assert!(
-        confine::notice(&plan).contains("writable, but only the harness's data files are saved")
-    );
+    .expect("Claude default plan");
+    assert!(plan.unsaved_files().is_empty());
+    assert!(plan.overlay_parents().is_empty());
 
     let omp = Fixture::new();
     populate_omp_overlay(&omp);
@@ -5273,25 +5050,13 @@ fn missing_data_file_is_listed_as_not_saved() {
         &omp.cwd,
         &omp.host(),
     )
-    .expect("OMP existing-file plan");
-    let wal = omp.home.join(".omp/stats.db-wal");
-    let shm = omp.home.join(".omp/stats.db-shm");
-    assert!(!wal.exists());
-    assert!(!shm.exists());
-    assert!(!plan.unsaved_files().contains(&wal));
-    assert!(!plan.unsaved_files().contains(&shm));
-    assert!(
-        !plan
-            .unsaved_files()
-            .contains(&omp.home.join(".claude.json"))
-    );
-    assert_eq!(plan.overlay_parents().len(), 2);
-    let omp_root = omp.home.join(".omp");
-    assert!(confine::notice(&plan).contains(omp_root.to_string_lossy().as_ref()));
+    .expect("OMP default plan");
+    assert!(plan.unsaved_files().is_empty());
+    assert!(plan.overlay_parents().is_empty());
 }
 
 #[test]
-fn without_overlays_restores_todays_mounts() {
+fn without_overlays_keeps_the_default_harness_root_bind() {
     let fixture = Fixture::new();
     populate_claude_overlay(&fixture, true);
     let plan = confine::plan(
@@ -5300,52 +5065,21 @@ fn without_overlays_restores_todays_mounts() {
         &fixture.cwd,
         &fixture.host(),
     )
-    .expect("Claude overlay plan");
+    .expect("Claude plan");
     let without = plan.without_overlays("x");
-    let wrapped = without
-        .wrap(vec!["true".into()])
-        .expect("without-overlay wrapper");
-    assert!(!wrapped.iter().any(|argument| argument == "--overlay-src"));
-    assert!(!wrapped.iter().any(|argument| argument == "--tmp-overlay"));
-    assert!(!wrapped.iter().any(|argument| argument == "--ro-bind-try"));
-    let root = fixture.home.join(".claude");
-    let mut expected_writable = vec![fixture.cwd.clone()];
-    for name in [
-        "projects",
-        "todos",
-        "shell-snapshots",
-        "session-env",
-        "sessions",
-        "statsig",
-        "file-history",
-        "paste-cache",
-        "debug",
-        "cache",
-        "telemetry",
-        "plans",
-        "backups",
-    ] {
-        expected_writable.push(root.join(name));
-    }
-    expected_writable.extend([
-        root.join("history.jsonl"),
-        root.join("stats-cache.json"),
-        root.join(".credentials.json"),
-    ]);
-    expected_writable = expected_writable
-        .into_iter()
-        .map(|path| std::fs::canonicalize(path).expect("expected writable path"))
-        .collect();
-    expected_writable.sort();
-    assert_eq!(without.writable, expected_writable);
-    assert!(without.protected.is_empty());
+    assert!(without.overlay_parents().is_empty());
+    assert!(
+        without
+            .writable
+            .contains(&std::fs::canonicalize(fixture.home.join(".claude")).expect("Claude root"))
+    );
     assert!(
         confine::notice(&without).contains("harness login cannot be renewed in this session: x")
     );
 }
 
 #[test]
-fn harness_data_files_can_be_saved_through_the_overlay() -> anyhow::Result<()> {
+fn harness_data_files_are_saved_through_default_root() -> anyhow::Result<()> {
     let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
     let home = root.path().join("home");
     let state = root.path().join("state");
@@ -5388,19 +5122,10 @@ fn harness_data_files_can_be_saved_through_the_overlay() -> anyhow::Result<()> {
         Err(error) => return Err(error),
     };
     let plan = confine::plan(&ConfineRequest::default(), Harness::Claude, &cwd, &host)?;
-    // CI's bubblewrap 0.9 has no --overlay-src; the fallback is covered by without_overlays_restores_todays_mounts.
-    if let Err(error) = confine::supports_tmp_overlay(&bwrap, plan.overlay_parents()) {
-        eprintln!("skipping overlay write test: {error}");
-        return Ok(());
-    }
     let script = format!(
         "set -u; credentials='{}'; root='{}'; settings='{}'; tmp=\"$credentials.tmp.1\"; \
-         if ! printf renewed > \"$tmp\"; then exit 70; fi; \
-         if ! mv \"$tmp\" \"$credentials\"; then \
-           if ! printf renewed > \"$credentials\"; then exit 70; fi; \
-         fi; \
-         if ! printf new > \"$root/new-file\"; then exit 71; fi; \
-         if printf changed > \"$settings\"; then exit 72; fi; exit 0",
+         printf renewed > \"$tmp\"; mv \"$tmp\" \"$credentials\"; \
+         printf new > \"$root/new-file\"; printf changed > \"$settings\"",
         credentials.display(),
         claude_root.display(),
         settings.display()
@@ -5414,14 +5139,14 @@ fn harness_data_files_can_be_saved_through_the_overlay() -> anyhow::Result<()> {
         .context("run real bubblewrap overlay write probe")?;
     assert_eq!(status.code(), Some(0));
     assert_eq!(std::fs::read_to_string(&credentials)?, "renewed");
-    assert!(!root.path().join("home/.claude/new-file").exists());
+    assert!(root.path().join("home/.claude/new-file").exists());
     assert!(
         !root
             .path()
             .join("home/.claude/.credentials.json.tmp.1")
             .exists()
     );
-    assert_eq!(std::fs::read_to_string(&settings)?, "settings");
+    assert_eq!(std::fs::read_to_string(&settings)?, "changed");
     Ok(())
 }
 
@@ -5509,8 +5234,9 @@ fn harness_config_grant_opens_the_own_directory() {
         &claude.host(),
     )
     .expect("Claude plain plan");
-    assert!(!confine::notice(&plain).contains("harness config, writable and persistent"));
-    assert!(plain.overlay_parents().contains(&claude_root));
+    assert!(confine::notice(&plain).contains("harness config, writable and persistent"));
+    assert!(plain.writable.contains(&claude_root));
+    assert!(plain.overlay_parents().is_empty());
 
     let omp = Fixture::new();
     populate_omp_overlay(&omp);
@@ -5557,7 +5283,7 @@ fn harness_config_grant_opens_the_own_directory() {
 }
 
 #[test]
-fn build_paths_default_harness_config_for_claude_and_omp() {
+fn harness_config_is_default_for_claude_and_omp() {
     let claude = Fixture::new();
     populate_claude_overlay(&claude, true);
     let claude_root = std::fs::canonicalize(claude.home.join(".claude")).expect("Claude root");
@@ -5565,7 +5291,6 @@ fn build_paths_default_harness_config_for_claude_and_omp() {
     std::fs::create_dir_all(&ide).expect("Claude IDE directory");
     let implicit = confine::plan_with_path(
         &ConfineRequest {
-            build_paths: true,
             ..ConfineRequest::default()
         },
         Harness::Claude,
@@ -5583,7 +5308,6 @@ fn build_paths_default_harness_config_for_claude_and_omp() {
 
     let no_default_hides = confine::plan_with_path(
         &ConfineRequest {
-            build_paths: true,
             no_default_hides: true,
             ..ConfineRequest::default()
         },
@@ -5603,14 +5327,13 @@ fn build_paths_default_harness_config_for_claude_and_omp() {
         &claude.host(),
     )
     .expect("Claude opt-out plan");
-    assert!(!opt_out.writable.contains(&claude_root));
+    assert!(opt_out.writable.contains(&claude_root));
 
     let omp = Fixture::new();
     populate_omp_overlay(&omp);
     let omp_root = std::fs::canonicalize(omp.home.join(".omp")).expect("OMP root");
     let omp_plan = confine::plan_with_path(
         &ConfineRequest {
-            build_paths: true,
             ..ConfineRequest::default()
         },
         Harness::Omp,
@@ -5629,7 +5352,6 @@ fn build_paths_default_harness_config_for_claude_and_omp() {
     let generic = Fixture::new();
     confine::plan_with_path(
         &ConfineRequest {
-            build_paths: true,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -5637,7 +5359,7 @@ fn build_paths_default_harness_config_for_claude_and_omp() {
         &generic.host(),
         None,
     )
-    .expect("Generic build paths plan");
+    .expect("Generic confinement plan");
 }
 
 #[test]
@@ -5648,13 +5370,11 @@ fn operator_harness_root_hide_or_unhide_skips_implicit_grant() {
     for (field, entry) in [("hide", "~/.claude"), ("unhide", "~/.claude")] {
         let request = if field == "hide" {
             ConfineRequest {
-                build_paths: true,
                 hide: vec![entry.into()],
                 ..ConfineRequest::default()
             }
         } else {
             ConfineRequest {
-                build_paths: true,
                 unhide: vec![entry.into()],
                 ..ConfineRequest::default()
             }
@@ -5772,10 +5492,6 @@ fn harness_config_grant_persists_regular_writes() -> anyhow::Result<()> {
         Err(error) => return Err(error),
     };
     let plain = confine::plan(&ConfineRequest::default(), Harness::Claude, &cwd, &host)?;
-    let plain = match confine::supports_tmp_overlay(&bwrap, plain.overlay_parents()) {
-        Ok(()) => plain,
-        Err(_) => plain.without_overlays("unsupported"),
-    };
 
     let granted = confine::plan(
         &ConfineRequest {
@@ -5820,8 +5536,8 @@ fn harness_config_grant_persists_regular_writes() -> anyhow::Result<()> {
         .args(&wrapped[1..])
         .status()
         .context("run ungranted harness-config write probe")?;
-    assert_eq!(status.code(), Some(0));
-    assert_eq!(std::fs::read_to_string(&settings)?, "settings");
+    assert_eq!(status.code(), Some(1));
+    assert_eq!(std::fs::read_to_string(&settings)?, "changed");
     Ok(())
 }
 
@@ -5865,24 +5581,4 @@ fn populate_omp_overlay(fixture: &Fixture) {
     std::fs::write(agent.join("a.db"), "agent").expect("agent db");
     std::fs::write(root.join("stats.db"), "stats").expect("stats db");
     std::fs::write(root.join("config.yml"), "config").expect("OMP config");
-}
-
-fn assert_overlay_mount(wrapped: &[String], parent: &Path) -> usize {
-    let parent = parent.to_string_lossy();
-    let index = wrapped
-        .windows(2)
-        .position(|window| window[0] == "--overlay-src" && window[1] == parent)
-        .expect("overlay source mount");
-    assert_eq!(wrapped[index + 1], parent);
-    assert_eq!(wrapped[index + 2], "--tmp-overlay");
-    assert_eq!(wrapped[index + 3], parent);
-    index
-}
-
-fn assert_ro_bind_try(wrapped: &[String], path: &Path) -> usize {
-    let path = path.to_string_lossy();
-    wrapped
-        .windows(3)
-        .position(|window| window[0] == "--ro-bind-try" && window[1] == path && window[2] == path)
-        .expect("read-only try bind")
 }
