@@ -10,8 +10,10 @@ use std::process::Command;
 use a2amx::client::Client;
 use a2amx::confine::{self, ConfineRequest, Host};
 use a2amx::daemon::{Daemon, DaemonConfig};
+use a2amx::grant;
 use a2amx::harness::Harness;
 use a2amx::messaging::Limits;
+use a2amx::team;
 use a2amx::wire::{ClientFrame, Request, Response};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -707,6 +709,103 @@ fn exact_write_lifts_a_granted_credential_path() {
 }
 
 #[test]
+fn cargo_grant_keeps_credentials_hidden_and_path_bin_protected() {
+    let fixture = Fixture::new();
+    let cargo = fixture.home.join(".cargo");
+    let credentials = cargo.join("credentials.toml");
+    let cargo_bin = cargo.join("bin");
+    std::fs::create_dir_all(&cargo_bin).expect("cargo bin");
+    std::fs::write(&credentials, "credentials").expect("cargo credentials");
+    std::fs::write(cargo_bin.join("cargo-install"), "binary").expect("cargo binary");
+    let path_var = OsString::from(format!("{}:/usr/bin", cargo_bin.display()));
+    let plan = confine::plan_with_path(
+        &ConfineRequest {
+            grants: vec!["cargo".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+        Some(path_var),
+    )
+    .expect("cargo grant plan");
+    let cargo = std::fs::canonicalize(cargo).expect("cargo canonical");
+    let credentials = std::fs::canonicalize(credentials).expect("credentials canonical");
+    let cargo_bin = std::fs::canonicalize(cargo_bin).expect("cargo bin canonical");
+    assert!(plan.writable.contains(&cargo));
+    assert!(plan.hidden_paths().contains(&credentials));
+    assert!(plan.protected.contains(&cargo_bin));
+    assert!(!plan.writable.contains(&credentials));
+}
+
+#[test]
+fn cargo_token_grant_lifts_only_its_credential_files() {
+    let fixture = Fixture::new();
+    let cargo = fixture.home.join(".cargo");
+    let credentials = cargo.join("credentials");
+    let credentials_toml = cargo.join("credentials.toml");
+    std::fs::create_dir_all(&cargo).expect("cargo directory");
+    std::fs::write(&credentials, "credentials").expect("cargo credentials");
+    std::fs::write(&credentials_toml, "credentials").expect("cargo credentials toml");
+    let cargo = std::fs::canonicalize(cargo).expect("cargo canonical");
+    let credentials = std::fs::canonicalize(credentials).expect("credentials canonical");
+    let credentials_toml =
+        std::fs::canonicalize(credentials_toml).expect("credentials toml canonical");
+
+    let cargo_only = confine::plan(
+        &ConfineRequest {
+            grants: vec!["cargo".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("cargo-only grant plan");
+    assert!(cargo_only.writable.contains(&cargo));
+    assert!(cargo_only.hidden_paths().contains(&credentials));
+    assert!(cargo_only.hidden_paths().contains(&credentials_toml));
+
+    let cargo_and_token = confine::plan(
+        &ConfineRequest {
+            grants: vec!["cargo".into(), "cargo-token".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("cargo and token grant plan");
+    for path in [&cargo, &credentials, &credentials_toml] {
+        assert!(
+            cargo_and_token.writable.contains(path),
+            "not writable: {path:?}"
+        );
+        assert!(
+            !cargo_and_token.hidden_paths().contains(path),
+            "still hidden: {path:?}"
+        );
+    }
+
+    let token_only = confine::plan(
+        &ConfineRequest {
+            grants: vec!["cargo-token".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("token-only grant plan");
+    assert!(!token_only.writable.contains(&cargo));
+    assert!(token_only.writable.contains(&credentials));
+    assert!(token_only.writable.contains(&credentials_toml));
+}
+#[test]
 fn gh_grant_opens_only_its_paths_and_conflicts_with_exact_hides() {
     let fixture = Fixture::new();
     let config = fixture.home.join(".config");
@@ -856,14 +955,16 @@ fn granted_paths_may_be_missing_without_becoming_unresolved() {
 }
 
 #[test]
-fn grant_alias_to_hidden_path_is_rejected_but_unhidden_alias_is_allowed() {
+fn grant_alias_to_hidden_or_unhidden_path_is_rejected() {
     let fixture = Fixture::new();
     let config = fixture.home.join(".config");
     std::fs::create_dir_all(&config).expect("config directory");
-    symlink(fixture.home.join(".ssh"), config.join("gh")).expect("gh alias");
+    let hidden_alias = config.join("gh");
+    symlink(fixture.home.join(".ssh"), &hidden_alias).expect("gh hidden alias");
     let error = match confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
+            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -876,49 +977,131 @@ fn grant_alias_to_hidden_path_is_rejected_but_unhidden_alias_is_allowed() {
     assert!(
         error
             .to_string()
-            .contains("confinement grant \"gh\" path ~/.config/gh resolves to the hidden path")
+            .contains("confinement grant \"gh\" path ~/.config/gh passes through the symlink")
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&hidden_alias.display().to_string())
     );
 
-    let allowed = Fixture::new();
-    let allowed_config = allowed.home.join(".config");
-    let target = allowed.home.join("unhidden-target");
-    std::fs::create_dir_all(&allowed_config).expect("allowed config directory");
-    std::fs::create_dir_all(&target).expect("allowed target");
-    symlink(&target, allowed_config.join("gh")).expect("allowed gh alias");
-    let plan = confine::plan(
+    let plain = Fixture::new();
+    let plain_config = plain.home.join(".config");
+    let target = plain.home.join("unhidden-target");
+    std::fs::create_dir_all(&plain_config).expect("plain config directory");
+    std::fs::create_dir_all(&target).expect("plain target");
+    let plain_alias = plain_config.join("gh");
+    symlink(&target, &plain_alias).expect("gh plain alias");
+    let error = match confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
+            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
-        &allowed.cwd,
-        &allowed.host(),
-    )
-    .expect("unhidden alias plan");
-    let target = std::fs::canonicalize(target).expect("target canonical");
-    assert!(plan.writable.contains(&target));
-    assert!(!plan.readonly.contains(&target));
-    let target = target.to_string_lossy();
-    let wrapped = plan
-        .with_bwrap(PathBuf::from("bwrap"))
-        .wrap(vec!["true".into()])
-        .expect("unhidden alias wrapper");
+        &plain.cwd,
+        &plain.host(),
+    ) {
+        Ok(_) => panic!("gh alias to a plain path must fail"),
+        Err(error) => error,
+    };
     assert!(
-        wrapped
-            .windows(3)
-            .any(|window| { window[0] == "--bind" && window[1] == target && window[2] == target })
+        error
+            .to_string()
+            .contains("confinement grant \"gh\" path ~/.config/gh passes through the symlink")
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&plain_alias.display().to_string())
     );
 }
+
 #[test]
-fn grant_alias_to_home_is_rejected_as_a_write() {
+fn grant_symlink_paths_are_rejected_for_toolchain_and_token_grants() {
+    for (grant_name, entry, target_is_file) in [
+        ("python", "~/.cache/pip", false),
+        ("cargo", "~/.cargo", false),
+        ("npm-token", "~/.npmrc", true),
+    ] {
+        let fixture = Fixture::new();
+        let source = fixture
+            .home
+            .join(entry.strip_prefix("~/").expect("home entry"));
+        let target = fixture._root.path().join("plain-target");
+        if target_is_file {
+            std::fs::write(&target, "target").expect("plain target file");
+        } else {
+            std::fs::create_dir_all(&target).expect("plain target directory");
+        }
+        std::fs::create_dir_all(source.parent().expect("symlink parent"))
+            .expect("symlink parent directory");
+        symlink(&target, &source).expect("grant symlink");
+        let error = match confine::plan(
+            &ConfineRequest {
+                grants: vec![grant_name.into()],
+                build_paths: false,
+                ..ConfineRequest::default()
+            },
+            Harness::Generic,
+            &fixture.cwd,
+            &fixture.host(),
+        ) {
+            Ok(_) => panic!("{grant_name} symlink must fail"),
+            Err(error) => error,
+        };
+        let text = error.to_string();
+        assert!(
+            text.contains(&format!(
+                "confinement grant \"{grant_name}\" path {entry} passes through the symlink"
+            )),
+            "unexpected error: {text}"
+        );
+        assert!(
+            text.contains(&source.display().to_string()),
+            "unexpected error: {text}"
+        );
+    }
+}
+
+#[test]
+fn grant_symlinked_home_ancestor_is_accepted_after_home_canonicalization() {
+    let fixture = Fixture::new();
+    let config = fixture.home.join(".config/gh");
+    std::fs::create_dir_all(&config).expect("gh directory");
+    let home_link = fixture._root.path().join("home-link");
+    symlink(&fixture.home, &home_link).expect("home link");
+    let mut host = fixture.host();
+    host.home = home_link;
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["gh".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+    )
+    .expect("canonical home plan");
+    assert!(
+        plan.writable
+            .contains(&std::fs::canonicalize(config).expect("gh canonical"))
+    );
+}
+
+#[test]
+fn grant_alias_to_home_is_rejected_as_a_symlink() {
     let fixture = Fixture::new();
     let config = fixture.home.join(".config");
     std::fs::create_dir_all(&config).expect("config directory");
-    symlink(&fixture.home, config.join("gh")).expect("home alias");
+    let alias = config.join("gh");
+    symlink(&fixture.home, &alias).expect("home alias");
     let error = match confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
             no_default_hides: true,
+            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -928,25 +1111,24 @@ fn grant_alias_to_home_is_rejected_as_a_write() {
         Ok(_) => panic!("grant alias to home must be rejected"),
         Err(error) => error,
     };
-    assert!(
-        error
-            .to_string()
-            .contains("writable path $HOME is not allowed")
-    );
+    assert!(error.to_string().contains("passes through the symlink"));
+    assert!(error.to_string().contains(&alias.display().to_string()));
 }
 
 #[test]
-fn grant_alias_into_state_is_rejected_as_a_write() {
+fn grant_alias_into_state_is_rejected_as_a_symlink() {
     let fixture = Fixture::new();
     let target = fixture.state.join("inside");
     std::fs::create_dir_all(&target).expect("state target");
     let config = fixture.home.join(".config");
     std::fs::create_dir_all(&config).expect("config directory");
-    symlink(&target, config.join("gh")).expect("state alias");
+    let alias = config.join("gh");
+    symlink(&target, &alias).expect("state alias");
     let error = match confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
             no_default_hides: true,
+            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -956,21 +1138,24 @@ fn grant_alias_into_state_is_rejected_as_a_write() {
         Ok(_) => panic!("grant alias into state must be rejected"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("state directory"));
+    assert!(error.to_string().contains("passes through the symlink"));
+    assert!(error.to_string().contains(&alias.display().to_string()));
 }
 
 #[test]
-fn grant_alias_into_install_or_harness_is_rejected_without_access() {
+fn grant_alias_into_install_or_harness_is_rejected_as_a_symlink() {
     let install = Fixture::new();
     let install_target = install.home.join(".a2amx/bin");
     std::fs::create_dir_all(&install_target).expect("install target");
     let install_config = install.home.join(".config");
     std::fs::create_dir_all(&install_config).expect("config directory");
-    symlink(&install_target, install_config.join("gh")).expect("install alias");
+    let install_alias = install_config.join("gh");
+    symlink(&install_target, &install_alias).expect("install alias");
     let error = match confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
             no_default_hides: true,
+            build_paths: false,
             ..ConfineRequest::default()
         },
         Harness::Generic,
@@ -980,14 +1165,20 @@ fn grant_alias_into_install_or_harness_is_rejected_without_access() {
         Ok(_) => panic!("grant alias into .a2amx must be rejected"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains(".a2amx"));
+    assert!(error.to_string().contains("passes through the symlink"));
+    assert!(
+        error
+            .to_string()
+            .contains(&install_alias.display().to_string())
+    );
 
     let harness = Fixture::new();
     let harness_root = harness.home.join(".claude");
     std::fs::create_dir_all(&harness_root).expect("Claude root");
     let harness_config = harness.home.join(".config");
     std::fs::create_dir_all(&harness_config).expect("config directory");
-    symlink(&harness_root, harness_config.join("gh")).expect("harness alias");
+    let harness_alias = harness_config.join("gh");
+    symlink(&harness_root, &harness_alias).expect("harness alias");
     let error = match confine::plan(
         &ConfineRequest {
             grants: vec!["gh".into()],
@@ -1002,34 +1193,25 @@ fn grant_alias_into_install_or_harness_is_rejected_without_access() {
         Ok(_) => panic!("grant alias into harness root must be rejected"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("harness root"));
-
-    let allowed = confine::plan(
-        &ConfineRequest {
-            grants: vec!["gh".into()],
-            build_paths: true,
-            no_default_hides: true,
-            ..ConfineRequest::default()
-        },
-        Harness::Claude,
-        &harness.cwd,
-        &harness.host(),
-    )
-    .expect("implicit harness config access permits alias");
-    let harness_root = std::fs::canonicalize(harness_root).expect("harness root canonical");
-    assert!(allowed.writable.contains(&harness_root));
+    assert!(error.to_string().contains("passes through the symlink"));
+    assert!(
+        error
+            .to_string()
+            .contains(&harness_alias.display().to_string())
+    );
 }
 
 #[test]
-fn grant_alias_to_path_directory_is_reprotected() {
+fn grant_alias_to_path_directory_is_rejected_as_a_symlink() {
     let fixture = Fixture::new();
     let path_dir = fixture.home.join(".local/bin");
     std::fs::create_dir_all(&path_dir).expect("PATH directory");
     let config = fixture.home.join(".config");
     std::fs::create_dir_all(&config).expect("config directory");
-    symlink(&path_dir, config.join("gh")).expect("PATH alias");
+    let alias = config.join("gh");
+    symlink(&path_dir, &alias).expect("PATH alias");
     let path_var = OsString::from(format!("{}:/usr/bin", path_dir.display()));
-    let plan = confine::plan_with_path(
+    let error = match confine::plan_with_path(
         &ConfineRequest {
             grants: vec!["gh".into()],
             build_paths: false,
@@ -1039,20 +1221,222 @@ fn grant_alias_to_path_directory_is_reprotected() {
         &fixture.cwd,
         &fixture.host(),
         Some(path_var),
+    ) {
+        Ok(_) => panic!("grant alias into PATH must be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("passes through the symlink"));
+    assert!(error.to_string().contains(&alias.display().to_string()));
+}
+
+#[test]
+fn new_grants_open_only_existing_paths_and_release_only_their_environment() {
+    const CREDENTIAL_ENV: [&str; 29] = [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITLAB_TOKEN",
+        "GITLAB_PRIVATE_TOKEN",
+        "CI_JOB_TOKEN",
+        "BITBUCKET_TOKEN",
+        "NPM_TOKEN",
+        "NODE_AUTH_TOKEN",
+        "PYPI_TOKEN",
+        "TWINE_PASSWORD",
+        "CARGO_REGISTRY_TOKEN",
+        "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+        "AZURE_CLIENT_SECRET",
+        "ARM_CLIENT_SECRET",
+        "VAULT_TOKEN",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "SONAR_TOKEN",
+        "SENTRY_AUTH_TOKEN",
+        "DIGITALOCEAN_ACCESS_TOKEN",
+        "HCLOUD_TOKEN",
+        "CLOUDFLARE_API_TOKEN",
+        "NETLIFY_AUTH_TOKEN",
+        "VERCEL_TOKEN",
+        "FLY_API_TOKEN",
+        "HEROKU_API_KEY",
+        "PGPASSWORD",
+        "MYSQL_PWD",
+    ];
+    let cases: [(&str, &[&str]); 17] = [
+        ("cargo", &["~/.cargo", "~/.rustup"]),
+        ("go", &["~/go", "~/.cache/go-build"]),
+        (
+            "python",
+            &[
+                "~/.cache/pip",
+                "~/.cache/uv",
+                "~/.local/share/uv",
+                "~/.cache/pypoetry",
+                "~/.cache/virtualenv",
+                "~/.local/share/pipx",
+            ],
+        ),
+        (
+            "node",
+            &[
+                "~/.npm",
+                "~/.yarn/berry",
+                "~/.local/share/pnpm",
+                "~/.bun/install/cache",
+            ],
+        ),
+        ("java", &["~/.m2/repository", "~/.gradle"]),
+        (
+            "c-cpp",
+            &["~/.cache/ccache", "~/.ccache", "~/.conan2", "~/.cmake"],
+        ),
+        ("semgrep", &["~/.semgrep"]),
+        ("sonar", &["~/.sonar"]),
+        ("aws", &["~/.aws"]),
+        ("gcloud", &["~/.config/gcloud"]),
+        ("azure", &["~/.azure"]),
+        ("kube", &["~/.kube"]),
+        ("terraform", &["~/.terraform.d"]),
+        ("npm-token", &["~/.npmrc"]),
+        ("pypi-token", &["~/.pypirc"]),
+        (
+            "cargo-token",
+            &["~/.cargo/credentials", "~/.cargo/credentials.toml"],
+        ),
+        ("netrc", &["~/.netrc"]),
+    ];
+
+    for (grant_name, entries) in cases {
+        let fixture = Fixture::new();
+        let mut expected = Vec::new();
+        for &entry in entries {
+            let path = fixture
+                .home
+                .join(entry.strip_prefix("~/").expect("home-relative grant path"));
+            let is_file = matches!(
+                entry,
+                "~/.npmrc"
+                    | "~/.pypirc"
+                    | "~/.netrc"
+                    | "~/.cargo/credentials"
+                    | "~/.cargo/credentials.toml"
+            );
+            if is_file {
+                std::fs::create_dir_all(path.parent().expect("grant file parent"))
+                    .expect("grant file parent");
+                std::fs::write(&path, "credential").expect("grant file");
+            } else {
+                std::fs::create_dir_all(&path).expect("grant directory");
+            }
+            expected.push(std::fs::canonicalize(path).expect("grant path canonical"));
+        }
+        let baseline = confine::plan(
+            &ConfineRequest {
+                build_paths: false,
+                ..ConfineRequest::default()
+            },
+            Harness::Generic,
+            &fixture.cwd,
+            &fixture.host(),
+        )
+        .expect("baseline grant matrix plan");
+        let granted = confine::plan(
+            &ConfineRequest {
+                grants: vec![grant_name.into()],
+                build_paths: false,
+                ..ConfineRequest::default()
+            },
+            Harness::Generic,
+            &fixture.cwd,
+            &fixture.host(),
+        )
+        .expect("grant matrix plan");
+        let mut added = granted
+            .writable
+            .iter()
+            .filter(|path| !baseline.writable.contains(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        added.sort();
+        expected.sort();
+        assert_eq!(
+            added, expected,
+            "unexpected writable paths for {grant_name}"
+        );
+
+        let ssh = std::fs::canonicalize(fixture.home.join(".ssh")).expect("ssh canonical");
+        assert!(
+            granted.hidden_paths().contains(&ssh),
+            "unrelated ssh hide lifted by {grant_name}"
+        );
+        let aws = std::fs::canonicalize(fixture.home.join(".aws")).expect("aws canonical");
+        if grant_name == "aws" {
+            assert!(!granted.hidden_paths().contains(&aws));
+        } else {
+            assert!(
+                granted.hidden_paths().contains(&aws),
+                "unrelated aws hide lifted by {grant_name}"
+            );
+        }
+
+        let wrapped = granted
+            .with_bwrap(PathBuf::from("bwrap"))
+            .wrap(vec!["true".into()])
+            .expect("grant matrix wrapper");
+        let row = grant::lookup(grant_name).expect("grant row");
+        for name in CREDENTIAL_ENV {
+            let unset = wrapped
+                .windows(2)
+                .any(|window| window == ["--unsetenv", name]);
+            assert_eq!(
+                unset,
+                !row.env.contains(&name),
+                "unexpected environment release for {grant_name}: {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn team_file_cargo_token_grant_releases_environment() {
+    let sessions = team::parse(
+        r#"
+[confine]
+enabled = true
+grants = ["cargo-token"]
+[[session]]
+name = "worker"
+command = ["cat"]
+"#,
     )
-    .expect("PATH alias plan");
-    let path_dir = std::fs::canonicalize(path_dir).expect("PATH canonical");
-    assert!(plan.writable.contains(&path_dir));
-    assert!(plan.readonly.contains(&path_dir));
-    assert!(plan.protected.contains(&path_dir));
-    let path_dir = path_dir.to_string_lossy();
+    .expect("team cargo-token grant");
+    let request = sessions[0]
+        .confine
+        .clone()
+        .expect("team confinement request");
+    assert_eq!(request.grants, vec!["cargo-token"]);
+    let fixture = Fixture::new();
+    let plan = confine::plan(&request, Harness::Generic, &fixture.cwd, &fixture.host())
+        .expect("team cargo-token plan");
     let wrapped = plan
         .with_bwrap(PathBuf::from("bwrap"))
         .wrap(vec!["true".into()])
-        .expect("PATH alias wrapper");
-    assert!(wrapped.windows(3).any(|window| {
-        window[0] == "--ro-bind" && window[1] == path_dir && window[2] == path_dir
-    }));
+        .expect("team cargo-token wrapper");
+    assert!(
+        wrapped
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "NPM_TOKEN"])
+    );
+    assert!(
+        !wrapped
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "CARGO_REGISTRY_TOKEN"])
+    );
+    assert!(
+        !wrapped
+            .windows(2)
+            .any(|window| window == ["--unsetenv", "CARGO_REGISTRIES_CRATES_IO_TOKEN"])
+    );
 }
 
 #[test]
@@ -4216,6 +4600,57 @@ fn build_cache_ancestors_are_writable_while_nested_credentials_stay_hidden() {
     assert!(bind_index(&cargo) < hidden_index(&credentials));
     assert!(bind_index(&cache) < hidden_index(&token));
 }
+#[test]
+fn real_bubblewrap_cargo_grant_keeps_credentials_and_bin_protected() -> anyhow::Result<()> {
+    let fixture = Fixture::new();
+    let cargo = fixture.home.join(".cargo");
+    let credentials = cargo.join("credentials.toml");
+    let cargo_bin = cargo.join("bin");
+    std::fs::create_dir_all(&cargo_bin)?;
+    std::fs::write(&credentials, "credentials")?;
+    std::fs::write(cargo_bin.join("installed"), "binary")?;
+    let bwrap = match confine::resolve_bwrap(None) {
+        Ok(path) => path,
+        Err(error) if !require_bwrap() => {
+            eprintln!("skipping cargo grant bwrap test: {error:#}");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let path_var = OsString::from(format!("{}:/usr/bin", cargo_bin.display()));
+    let plan = confine::plan_with_path(
+        &ConfineRequest {
+            grants: vec!["cargo".into()],
+            build_paths: false,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+        Some(path_var),
+    )?
+    .with_bwrap(bwrap);
+    let new_file = cargo.join("new");
+    let bin_file = cargo_bin.join("new");
+    let script = format!(
+        "set -eu; test ! -s '{}'; ! printf x > '{}'; ! printf x > '{}'; printf y > '{}'",
+        credentials.display(),
+        credentials.display(),
+        bin_file.display(),
+        new_file.display()
+    );
+    let wrapped = plan.wrap(vec!["sh".into(), "-c".into(), script])?;
+    let status = Command::new(&wrapped[0])
+        .args(&wrapped[1..])
+        .status()
+        .context("run cargo grant bwrap probe")?;
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(std::fs::read_to_string(&credentials)?, "credentials");
+    assert_eq!(std::fs::read_to_string(&new_file)?, "y");
+    assert!(!bin_file.exists());
+    Ok(())
+}
+
 #[test]
 fn real_bubblewrap_hides_nested_credentials_but_allows_cache_writes() -> anyhow::Result<()> {
     let fixture = Fixture::new();

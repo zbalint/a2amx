@@ -227,3 +227,21 @@ like. `CHANGELOG.md` (the architect adds the line). Any change to `Grant`'s fiel
 the table is data, not logic. `apply_grant_unhides` is near the cognitive-complexity limit (30): the change replaces
 one call with another and adds no branch; the developer hand-counts the function's cognitive complexity before and after
 and extracts a helper if the change adds a branch; the architect reads the Sonar gate after the push.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant a Claude session (model not reported); developer OMP
+`openai-codex/gpt-5.6-luna` (single model, no fallback; smol and advisor slots not exposed); tester OMP
+`openai-codex/gpt-5.6-luna` (single model, no fallback). BLOCKED/amend cycles: 2 (Amendment 1 after a BLOCKED, Amendment 2 after a
+developer question about a spec claim that was false).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant | A toolchain grant path under the default-writable `~/.cache` could be replaced by a symlink in one session and opened read-write by the next; the hide check would not catch it | 2.2: every grant path with a symlink component is refused (all grants); tests with planted symlinks |
+| Draft review | Consultant | The new `go` grant makes the typos `g`, `gx`, `gj` ambiguous, so `grant_validation_rejects_repeats_and_suggests_close_names` would fail | 4.1 names the new ambiguous cases and adds `ghh` |
+| Draft review | Consultant | Docs in three places (one outside the scope) said only `gh`, `ssh` and `git-credentials` may be team-wide | Scope adds `docs/teams.md`; 2.5 replaces the sentence |
+| Draft review | Consultant | Test 4.4 could not pass as worded; toolchain texts undersold that files in them are run by the user's own builds; grants do not gate `AWS_*`, `KUBECONFIG` and similar names; `cargo-token` hides only an existing file | Reworded; texts and docs say it; the claim is limited to "while it exists" |
+| Implementation (BLOCKED) | Developer | 2.2 (symlink message first) contradicted 4.2/5 (aliased-`gh` test unchanged) and `symlink_component` checks all ancestors | Amendment 1: symlink check first, the test now asserts the symlink message, `symlink_component` unchanged because the home is canonical |
+| Implementation | Developer | Team-level `[confine] grants` were validated but never applied (`src/team.rs`, since spec 3bk); the spec's claim that a team `cargo-token` releases its env was false | Amendment 2: merge team grants before session grants, one test; the claims table had checked the gate, not the use |
+| Architect review | Architect | After a review-driven rule change I did not re-run the same-fact-twice check across 4.2, 5 and the claims table | Cause of the first cycle; next specs trace each claim from config to effect |
+| Tester pass | Tester | no problems found (nine mutants killed, in-place probe: append works, rename and delete give EBUSY for `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials.toml`, `~/.netrc`) | - |

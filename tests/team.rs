@@ -2876,6 +2876,42 @@ enabled = false
 }
 
 #[test]
+fn confine_table_merges_team_grants_before_session_grants() {
+    let sessions = team::parse(
+        r#"
+[confine]
+enabled = true
+grants = ["cargo-token"]
+[[session]]
+name = "with-own"
+command = ["cat"]
+[session.confine]
+grants = ["go"]
+[[session]]
+name = "without-own"
+command = ["cat"]
+"#,
+    )
+    .expect("team grants");
+    assert_eq!(
+        sessions[0]
+            .confine
+            .as_ref()
+            .expect("with-own confinement")
+            .grants,
+        vec!["cargo-token", "go"]
+    );
+    assert_eq!(
+        sessions[1]
+            .confine
+            .as_ref()
+            .expect("without-own confinement")
+            .grants,
+        vec!["cargo-token"]
+    );
+}
+
+#[test]
 fn confine_table_rejects_old_keys_and_team_grants() {
     let old_inputs = [
         (

@@ -1484,6 +1484,14 @@ impl<'a> PlanBuilder<'a> {
         {
             for name in grant.unhides {
                 let source = user_path(name, &self.home);
+                if let Some(path) = symlink_component(&source) {
+                    bail!(
+                        "confinement grant \"{}\" path {} passes through the symlink {}; name the real path with a write entry instead",
+                        grant.name,
+                        name,
+                        path.display()
+                    );
+                }
                 let Some(path) = canonical_if_exists(&source) else {
                     add_unique(&mut self.skipped, source);
                     continue;
@@ -1496,7 +1504,7 @@ impl<'a> PlanBuilder<'a> {
                     let Some(hidden) = canonical_if_exists(hidden_source) else {
                         continue;
                     };
-                    if paths_overlap(&path, &hidden) {
+                    if is_within(&path, &hidden) {
                         bail!(
                             "confinement grant \"{}\" path {} resolves to the hidden path {}",
                             grant.name,
@@ -2380,12 +2388,29 @@ mod tests {
         assert!(skipped.is_empty());
     }
     #[test]
-    fn grant_unhides_are_default_hide_sources() {
+    fn credential_grant_unhides_are_default_hide_sources() {
         let defaults = DEFAULT_HIDES
             .into_iter()
             .chain(DEFAULT_HIDES_EXTRA)
             .collect::<BTreeSet<_>>();
-        for grant in grant::all() {
+        let credential_grants = [
+            "gh",
+            "git-credentials",
+            "ssh",
+            "aws",
+            "gcloud",
+            "azure",
+            "kube",
+            "terraform",
+            "npm-token",
+            "pypi-token",
+            "cargo-token",
+            "netrc",
+        ];
+        for grant in grant::all()
+            .iter()
+            .filter(|grant| credential_grants.contains(&grant.name))
+        {
             for path in grant.unhides {
                 assert!(
                     defaults.contains(path),

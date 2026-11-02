@@ -641,7 +641,10 @@ fn merge_confine(
         team.map_or(&[][..], |table| &table.unhide),
         own.map_or(&[][..], |table| &table.unhide),
     );
-    let grants = deduplicated_values(&[], own.map_or(&[][..], |table| &table.grants));
+    let grants = deduplicated_values(
+        team.map_or(&[][..], |table| &table.grants),
+        own.map_or(&[][..], |table| &table.grants),
+    );
     let keep_env = deduplicated_values(&[], own.map_or(&[][..], |table| &table.keep_env));
     let own_has_options = own.is_some_and(|table| {
         !table.write.is_empty()

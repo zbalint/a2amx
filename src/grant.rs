@@ -52,8 +52,37 @@ const GH_ENV: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"];
 const GIT_CREDENTIAL_UNHIDES: &[&str] = &["~/.git-credentials", "~/.config/git/credentials"];
 const SSH_UNHIDES: &[&str] = &["~/.ssh"];
 const SSH_STAND_INS: &[&str] = &["/etc/ssh/ssh_config"];
+const CARGO_UNHIDES: &[&str] = &["~/.cargo", "~/.rustup"];
+const GO_UNHIDES: &[&str] = &["~/go", "~/.cache/go-build"];
+const PYTHON_UNHIDES: &[&str] = &[
+    "~/.cache/pip",
+    "~/.cache/uv",
+    "~/.local/share/uv",
+    "~/.cache/pypoetry",
+    "~/.cache/virtualenv",
+    "~/.local/share/pipx",
+];
+const NODE_UNHIDES: &[&str] = &[
+    "~/.npm",
+    "~/.yarn/berry",
+    "~/.local/share/pnpm",
+    "~/.bun/install/cache",
+];
+const JAVA_UNHIDES: &[&str] = &["~/.m2/repository", "~/.gradle"];
+const C_CPP_UNHIDES: &[&str] = &["~/.cache/ccache", "~/.ccache", "~/.conan2", "~/.cmake"];
+const SEMGREP_UNHIDES: &[&str] = &["~/.semgrep"];
+const SONAR_UNHIDES: &[&str] = &["~/.sonar"];
+const AWS_UNHIDES: &[&str] = &["~/.aws"];
+const GCLOUD_UNHIDES: &[&str] = &["~/.config/gcloud"];
+const AZURE_UNHIDES: &[&str] = &["~/.azure"];
+const KUBE_UNHIDES: &[&str] = &["~/.kube"];
+const TERRAFORM_UNHIDES: &[&str] = &["~/.terraform.d"];
+const NPM_TOKEN_UNHIDES: &[&str] = &["~/.npmrc"];
+const PYPI_TOKEN_UNHIDES: &[&str] = &["~/.pypirc"];
+const CARGO_TOKEN_UNHIDES: &[&str] = &["~/.cargo/credentials", "~/.cargo/credentials.toml"];
+const NETRC_UNHIDES: &[&str] = &["~/.netrc"];
 
-static GRANTS: [Grant; 11] = [
+static GRANTS: [Grant; 28] = [
     Grant {
         name: "docker",
         exposes: "docker container daemon sockets: effectively root on the host",
@@ -163,6 +192,176 @@ static GRANTS: [Grant; 11] = [
         own_config: false,
         unhides: SSH_UNHIDES,
         stand_ins: SSH_STAND_INS,
+    },
+    Grant {
+        name: "cargo",
+        exposes: "the Rust toolchain, read-write: ~/.cargo (registry and git caches, installed crates; its bin directory stays read-only when it is on PATH) and ~/.rustup (installed toolchains), whose programs and settings (config.toml, env) your own builds outside the session run; your registry login stays hidden while it exists unless you also give cargo-token",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: CARGO_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "go",
+        exposes: "the Go toolchain, read-write: ~/go (module cache, downloaded toolchains and installed binaries, which your own builds outside the session may run) and ~/.cache/go-build; ~/.netrc stays hidden unless you also give netrc",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: GO_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "python",
+        exposes: "the Python tool caches, read-write: pip, uv, poetry, virtualenv and pipx data under ~/.cache and ~/.local/share, including tool environments whose programs your own shell may run; ~/.pypirc stays hidden unless you also give pypi-token",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: PYTHON_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "node",
+        exposes: "the JavaScript package caches, read-write: ~/.npm, ~/.yarn/berry, ~/.local/share/pnpm and ~/.bun/install/cache; ~/.npmrc stays hidden unless you also give npm-token",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: NODE_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "java",
+        exposes: "the Java build caches, read-write: ~/.m2/repository and the whole ~/.gradle, where a gradle.properties you wrote may hold repository passwords the agent can then read and an init.d script is run by every gradle build you start outside the session",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: JAVA_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "c-cpp",
+        exposes: "the C and C++ build caches, read-write: ccache, conan and cmake data in ~/.cache/ccache, ~/.ccache, ~/.conan2 and ~/.cmake, which your own builds outside the session use",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: C_CPP_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "semgrep",
+        exposes: "semgrep's data directory ~/.semgrep, read-write: its settings file holds the login token if you ran semgrep login",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: SEMGREP_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "sonar",
+        exposes: "sonar-scanner's data directory ~/.sonar, read-write, and the SONAR_TOKEN environment variable: the agent can run analyses and publish results to your SonarQube or SonarCloud project as you",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: &["SONAR_TOKEN"],
+        own_config: false,
+        unhides: SONAR_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "aws",
+        exposes: "your AWS CLI configuration and credentials (~/.aws, read-write, including cached SSO tokens): the agent acts in your AWS accounts as you and can change or delete the files",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: AWS_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "gcloud",
+        exposes: "your Google Cloud CLI login (~/.config/gcloud, read-write): the agent acts in your Google Cloud projects as you and can change or delete the login",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: GCLOUD_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "azure",
+        exposes: "your Azure CLI login (~/.azure, read-write) and the AZURE_CLIENT_SECRET and ARM_CLIENT_SECRET environment variables: the agent acts in your Azure subscriptions as you and can change or delete the login",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: &["AZURE_CLIENT_SECRET", "ARM_CLIENT_SECRET"],
+        own_config: false,
+        unhides: AZURE_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "kube",
+        exposes: "your kubectl configuration (~/.kube, read-write): the cluster credentials in it let the agent act in your clusters as you, and it can change or delete them",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: KUBE_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "terraform",
+        exposes: "terraform's user directory (~/.terraform.d, read-write): the saved Terraform Cloud or registry tokens in it let the agent act as you, and it can change or delete them",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: TERRAFORM_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "npm-token",
+        exposes: "your ~/.npmrc (read-write in place) and the NPM_TOKEN and NODE_AUTH_TOKEN environment variables: the agent can publish packages as you and change the file",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: &["NPM_TOKEN", "NODE_AUTH_TOKEN"],
+        own_config: false,
+        unhides: NPM_TOKEN_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "pypi-token",
+        exposes: "your ~/.pypirc (read-write in place) and the PYPI_TOKEN and TWINE_PASSWORD environment variables: the agent can upload packages as you and change the file",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: &["PYPI_TOKEN", "TWINE_PASSWORD"],
+        own_config: false,
+        unhides: PYPI_TOKEN_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "cargo-token",
+        exposes: "your cargo registry login (~/.cargo/credentials and ~/.cargo/credentials.toml, read-write in place) and the CARGO_REGISTRY_TOKEN and CARGO_REGISTRIES_CRATES_IO_TOKEN environment variables: the agent can publish crates as you and change the file",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: &["CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_CRATES_IO_TOKEN"],
+        own_config: false,
+        unhides: CARGO_TOKEN_UNHIDES,
+        stand_ins: NO_PATHS,
+    },
+    Grant {
+        name: "netrc",
+        exposes: "your ~/.netrc (read-write in place): every host login and password stored there, which the agent can also overwrite",
+        team_default_ok: true,
+        sockets: NO_PATHS,
+        env: NO_PATHS,
+        own_config: false,
+        unhides: NETRC_UNHIDES,
+        stand_ins: NO_PATHS,
     },
 ];
 

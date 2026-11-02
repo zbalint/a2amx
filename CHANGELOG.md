@@ -68,8 +68,18 @@ All notable user-visible changes are listed here. The format follows
   or into the session's own harness directory without the harness-config access is refused when the plan is
   built. The `git-credentials` files can be written in place but not replaced or deleted
   (`a2amx confine list`, `docs/confinement.md`).
+- New grants, all read-write and settable at team or session level: toolchain caches `cargo`, `go`,
+  `python`, `node`, `java`, `c-cpp`; analyser data `semgrep` and `sonar` (with `SONAR_TOKEN`); and the credential
+  stores that are hidden by default, `aws`, `gcloud`, `azure`, `kube`, `terraform`, `npm-token`, `pypi-token`,
+  `cargo-token` and `netrc`. A grant path that does not exist is not opened, and a hidden credential file inside a
+  granted directory (`~/.cargo/credentials.toml`) stays hidden unless its own grant is given. **Breaking:** a grant
+  path that passes through a symlink is now refused when the plan is built (it used to open the symlink's target);
+  name the real path with a `write` entry (`a2amx confine list`, `docs/confinement.md`).
 
 ### Fixed
+
+- A team-level `[confine] grants` list was accepted but never applied to the team's sessions; it is now merged
+  before each session's own grants (`docs/teams.md`).
 
 - A mouse drag that starts in the session and ends on the team line is forwarded to the session at the
   grid's first row instead of a row lower.

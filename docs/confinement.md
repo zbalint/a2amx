@@ -55,12 +55,11 @@ The effective session setting uses the session table when a scalar is present, o
 the team table, otherwise the default (`enabled = false`, `default_hides = true`).
 The `build_paths` scalar follows the same session-over-team precedence and defaults to true
 once confinement is enabled. The `write`, `hide`, and `unhide` lists add in team-then-session order, with exact duplicates
-kept once. `grants` is per session except for the credential grants `gh`, `ssh`, and
-`git-credentials`, which may be set in the team table when every session in that team should
-have the access. `enabled = false` needs no other key. A team table
-with options but no `enabled` anywhere confines nothing, while team `enabled = false` and
-session `enabled = true` confines that session and still applies the team's lists. Container
-and harness-config grants remain session-only.
+kept once. `grants` is per session by default; every grant may be set in the team table
+except container grants and `harness-config`, which remain session-only. `enabled = false`
+needs no other key. A team table with options but no `enabled` anywhere confines nothing,
+while team `enabled = false` and session `enabled = true` confines that session and still
+applies the team's lists.
 
 ### Grants
 
@@ -77,15 +76,43 @@ and harness-config grants remain session-only.
 | `gh` | your GitHub CLI login (`~/.config/gh`, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login | Yes; team or session. |
 | `git-credentials` | the plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite | Yes; team or session. |
 | `ssh` | your ssh keys and config (`~/.ssh`, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them | Yes; team or session. |
+| `cargo` | the Rust toolchain, read-write: ~/.cargo (registry and git caches, installed crates; its bin directory stays read-only when it is on PATH) and ~/.rustup (installed toolchains), whose programs and settings (config.toml, env) your own builds outside the session run; your registry login stays hidden while it exists unless you also give cargo-token | Yes; team or session. |
+| `go` | the Go toolchain, read-write: ~/go (module cache, downloaded toolchains and installed binaries, which your own builds outside the session may run) and ~/.cache/go-build; ~/.netrc stays hidden unless you also give netrc | Yes; team or session. |
+| `python` | the Python tool caches, read-write: pip, uv, poetry, virtualenv and pipx data under ~/.cache and ~/.local/share, including tool environments whose programs your own shell may run; ~/.pypirc stays hidden unless you also give pypi-token | Yes; team or session. |
+| `node` | the JavaScript package caches, read-write: ~/.npm, ~/.yarn/berry, ~/.local/share/pnpm and ~/.bun/install/cache; ~/.npmrc stays hidden unless you also give npm-token | Yes; team or session. |
+| `java` | the Java build caches, read-write: ~/.m2/repository and the whole ~/.gradle, where a gradle.properties you wrote may hold repository passwords the agent can then read and an init.d script is run by every gradle build you start outside the session | Yes; team or session. |
+| `c-cpp` | the C and C++ build caches, read-write: ccache, conan and cmake data in ~/.cache/ccache, ~/.ccache, ~/.conan2 and ~/.cmake, which your own builds outside the session use | Yes; team or session. |
+| `semgrep` | semgrep's data directory ~/.semgrep, read-write: its settings file holds the login token if you ran semgrep login | Yes; team or session. |
+| `sonar` | sonar-scanner's data directory ~/.sonar, read-write, and the SONAR_TOKEN environment variable: the agent can run analyses and publish results to your SonarQube or SonarCloud project as you | Yes; team or session. |
+| `aws` | your AWS CLI configuration and credentials (~/.aws, read-write, including cached SSO tokens): the agent acts in your AWS accounts as you and can change or delete the files | Yes; team or session. |
+| `gcloud` | your Google Cloud CLI login (~/.config/gcloud, read-write): the agent acts in your Google Cloud projects as you and can change or delete the login | Yes; team or session. |
+| `azure` | your Azure CLI login (~/.azure, read-write) and the AZURE_CLIENT_SECRET and ARM_CLIENT_SECRET environment variables: the agent acts in your Azure subscriptions as you and can change or delete the login | Yes; team or session. |
+| `kube` | your kubectl configuration (~/.kube, read-write): the cluster credentials in it let the agent act in your clusters as you, and it can change or delete them | Yes; team or session. |
+| `terraform` | terraform's user directory (~/.terraform.d, read-write): the saved Terraform Cloud or registry tokens in it let the agent act as you, and it can change or delete them | Yes; team or session. |
+| `npm-token` | your ~/.npmrc (read-write in place) and the NPM_TOKEN and NODE_AUTH_TOKEN environment variables: the agent can publish packages as you and change the file | Yes; team or session. |
+| `pypi-token` | your ~/.pypirc (read-write in place) and the PYPI_TOKEN and TWINE_PASSWORD environment variables: the agent can upload packages as you and change the file | Yes; team or session. |
+| `cargo-token` | your cargo registry login (~/.cargo/credentials and ~/.cargo/credentials.toml, read-write in place) and the CARGO_REGISTRY_TOKEN and CARGO_REGISTRIES_CRATES_IO_TOKEN environment variables: the agent can publish crates as you and change the file | Yes; team or session. |
+| `netrc` | your ~/.netrc (read-write in place): every host login and password stored there, which the agent can also overwrite | Yes; team or session. |
 
-Grant names are closed and validated before launch. Each runtime grant is a separate opt-in;
-`harness-config` is a separate session-only opt-in for a persistent harness directory. Claude and
-OMP sessions with build paths enabled receive a temporary writable harness directory without
-naming that grant; `no_default_hides = true` also makes its default hidden control paths readable
-and writable. Hide or unhide the exact harness root to opt out of that implicit access. `gh`,
-`git-credentials` and `ssh` may be named at team level when all sessions should receive them.
-These grants do not make a session a sandbox. Run `a2amx confine list` for the current table
-and descriptions.
+### Choosing grants
+
+A grant is all or nothing and read-write. Toolchain grants open caches, never credentials.
+A credential grant lifts its own hide only. A path that does not exist is not opened, so
+run the tool once outside the session or use a `write` line after it exists. An
+environment-relocated directory (`CARGO_HOME`, `GOPATH`, `GRADLE_USER_HOME`,
+`XDG_CACHE_HOME` and the like) is not followed; use `write` for the real path. A grant
+lifts only the hide of its own path: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN`, `GOOGLE_APPLICATION_CREDENTIALS`, `KUBECONFIG` and `TF_TOKEN_*` are
+not in the closed credential list and reach every session either way. A grant path that
+is a symlink is refused.
+
+Grant names are closed and validated before launch. Each grant is a separate opt-in;
+`harness-config` is a separate session-only opt-in for a persistent harness directory.
+Claude and OMP sessions with build paths enabled receive a temporary writable harness
+directory without naming that grant; `no_default_hides = true` also makes its default
+hidden control paths readable and writable. Hide or unhide the exact harness root to opt
+out of that implicit access. These grants do not make a session a sandbox. Run
+`a2amx confine list` for the current table and descriptions.
 
 `harness-config` is deliberately broad: the agent can change settings, hooks, instructions and
 programs under `~/.claude` or `~/.omp`, and a running session of that harness—including your own
