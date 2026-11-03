@@ -23,6 +23,15 @@ cargo fmt --check
   from `target/`; development builds must not replace its executable.
 - Run the test suite as an ordinary user; tests that spawn the `a2amx` binary are refused when run as root.
 
+## Scratch files
+
+Scratch copies, mutation copies and any extra `CARGO_TARGET_DIR` go in the gitignored
+`target/` directory (for example `target/scratch/<spec>/`), never in `~/.cache`, the home
+directory, or another place the owner has not named. Whoever creates a scratch directory
+deletes it before reporting. Prefer mutating one file in the checkout and restoring it by
+checksum over building a second copy. The WSL2 virtual disk grows with every build and does
+not shrink when files are deleted, and a full host disk has crashed the VM before.
+
 ## Rust conventions
 
 - No `unwrap()` or `expect()` outside tests (enforced by clippy lints). Return
