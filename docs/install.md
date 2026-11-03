@@ -35,6 +35,16 @@ signature and the workflow identity. The build-from-source route above is unchan
 a2amx and its daemon refuse to run as root or under `sudo`; install and run them as an ordinary
 user. There is no override, and containers must use a non-root user too.
 
+## Requirements for confinement
+
+Using `a2amx new --confine`, or a `[confine]` table with `enabled = true` in a team file, needs `bwrap` (bubblewrap)
+on the daemon's startup `PATH`; the request is refused when it is missing. A confined
+Generic session also needs an `env` that supports `--ignore-signal` and
+`--default-signal` (GNU coreutils 8.31 or newer, or uutils). When the login overlay of a
+harness directory that is not already writable is needed, bubblewrap 0.11 or newer is
+needed; otherwise, open the harness directory with `write`. See
+[Confinement](confinement.md).
+
 ## Dev build versus live install
 
 Build and test from the repository with `cargo build` and `cargo test`. Install a release

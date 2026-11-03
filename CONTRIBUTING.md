@@ -28,8 +28,12 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-The conventions the code follows are in [AGENTS.md](AGENTS.md), and the design is in
-[docs/architecture.md](docs/architecture.md).
+Inside an a2amx-hosted session, run `env -u A2AMX_BIN -u NO_COLOR cargo test`; tests that
+start the `a2amx` binary are refused as root. The OMP extension tests need Node 22 or newer
+and skip without it unless `A2AMX_REQUIRE_NODE=1`.
+
+See [AGENTS.md](AGENTS.md) for the rest of the repository commands and conventions;
+the design is in [docs/architecture.md](docs/architecture.md).
 
 ## Public repository rules
 

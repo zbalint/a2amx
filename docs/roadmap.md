@@ -18,6 +18,13 @@ through a channel, OMP through an extension, and Codex through a private app-ser
 The Claude prompt-submit hook records receipts and blocks terminal submissions that
 mix a peer envelope with a human draft. Native channels provide their own receipts.
 Names, quota reporting, the attach status line, and team management are implemented.
+
+Sessions may opt into bubblewrap confinement with named grants for the tools and
+credentials they may use; global auto mode asks before opening a grant the user has
+never accepted. `confine list`, `confine show`, and `confine suggest` expose grant
+names, effective plans, and copyable project grants. Team sessions also show a
+clickable member line on the attach screen. See [Confinement](confinement.md) and the
+[CLI reference](cli.md).
 See [Architecture](architecture.md#implemented-messaging-core) and
 [Delivery](delivery.md) for the implementation boundaries.
 
@@ -38,7 +45,7 @@ Make what exists on one machine dependable and explainable before adding more.
   reset would be refused (F18, absorbing G7 and G9).
 - `team status` distinguishes a session that is running from one that is ready to work,
   for example one stopped at a startup dialog (F19, with I16).
-- A stable test suite: the flaky PTY tests fixed (I7, I9, I14) and tests isolated from
+- A stable test suite: the flaky PTY tests fixed (I7, I14) and tests isolated from
   the environment of the session that runs them (I13).
 - A decision on whether a message body may contain an opening envelope tag (I11).
 - The heartbeat shows what a busy peer is doing, not only how long it has been busy (F12).

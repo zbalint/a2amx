@@ -109,3 +109,18 @@ Run as `env -u A2AMX_BIN -u NO_COLOR`.
    output.
 7. `cargo test --test docs_examples` still passes (no TOML block was touched) and `cargo fmt --check`
    passes. Judge: command output.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant a2amx-consultant (Claude Code, model not
+exposed to the architect); developer and tester OMP with `openai-codex/gpt-5.6-luna`, advisor models not
+exposed.
+
+BLOCKED/amend cycles: 1 before the lock (the consultant's review covered this spec together with 3cj; its
+findings for this spec were amended in the draft), 0 after.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft | consultant | The claim that Codex gets the operator line was only a lead from the first review | Consultant read the code (`src/codex.rs`, `src/harness.rs`, `src/daemon.rs`, `docs/delivery.md`) and confirmed it; spec 3.1 and the claims table updated |
+| Draft | consultant | "Remove every closed ID" from the roadmap's flaky-test sentence was ambiguous for I14 | Spec states the result, `(I7, I14)` |
+| Architect review | architect | The spec's own text for the install page said "`confine = ...` in a team file", a key that spec 3bk replaced with `[confine]` and `enabled = true`; the developer followed the spec | Architect corrected the one phrase in `docs/install.md` |
