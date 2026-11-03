@@ -521,6 +521,18 @@ pub fn render_accepted(names: &BTreeSet<String>) -> String {
 
 pub const CONSENT_QUESTION: &str = "Accept these for auto mode on all projects? [y/N] ";
 
+/// Render the refusal shown when auto grants are not accepted.
+pub fn consent_refusal(new: &[(String, String)]) -> String {
+    let names = new
+        .iter()
+        .map(|(grant, _)| grant.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "auto confinement would open: {names}; run a2amx team up on a terminal to accept them, or pass --yes for this run"
+    )
+}
+
 /// Render the grant reasons and exposure text shown before auto-grant consent.
 pub fn consent_lines(new: &[(String, String)], rows: &[Grant]) -> String {
     let mut output = String::new();
@@ -658,4 +670,22 @@ fn edit_distance(left: &str, right: &str) -> usize {
         previous = current;
     }
     previous[right.chars().count()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consent_refusal_names_grants_in_order_and_hints_yes() {
+        let new = vec![
+            ("cache".to_owned(), "cache files".to_owned()),
+            ("cargo".to_owned(), "Cargo files".to_owned()),
+        ];
+
+        assert_eq!(
+            consent_refusal(&new),
+            "auto confinement would open: cache, cargo; run a2amx team up on a terminal to accept them, or pass --yes for this run"
+        );
+    }
 }

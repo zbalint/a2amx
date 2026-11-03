@@ -407,6 +407,28 @@ async fn confirm(prompt: &str, refusal: &str) -> anyhow::Result<bool> {
     ))
 }
 
+/// `--yes` applies to this run only and is not saved.
+async fn confirm_new_grants(
+    home: &Path,
+    accepted: &BTreeSet<String>,
+    new_grants: &[(String, String)],
+    yes: bool,
+) -> anyhow::Result<()> {
+    let lines = a2amx::grant::consent_lines(new_grants, a2amx::grant::all());
+    if yes {
+        write_stderr(lines.into_bytes()).await?;
+        return Ok(());
+    }
+    let prompt = format!("{lines}{}", a2amx::grant::CONSENT_QUESTION);
+    let refusal = a2amx::grant::consent_refusal(new_grants);
+    if !confirm(&prompt, &refusal).await? {
+        bail!("auto grants not accepted; nothing started");
+    }
+    let mut accepted = accepted.clone();
+    accepted.extend(new_grants.iter().map(|(grant, _)| grant.clone()));
+    save_accepted_grants(home, &accepted).await
+}
+
 async fn run_stop(home: PathBuf, yes: bool, now: bool) -> anyhow::Result<()> {
     let Ok(mut client) = Client::connect(&home).await else {
         return write_stdout(b"no daemon running\n".to_vec()).await;
@@ -760,6 +782,35 @@ fn auto_grants_for(dir: &Path, home: &Path) -> Vec<(&'static str, String)> {
             home.join(relative).exists()
         },
     )
+}
+
+async fn resolve_auto_grants(
+    actions: &mut [team::Action],
+    cwd: &Path,
+    origin: TeamOrigin<'_>,
+) -> anyhow::Result<()> {
+    let host_home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    for action in actions {
+        let team::Action::Start(session) = action else {
+            continue;
+        };
+        if session.auto_confine().is_none() {
+            continue;
+        }
+        let resolved_dir = session
+            .cwd
+            .as_deref()
+            .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
+        let scan_home = host_home.clone();
+        let found =
+            tokio::task::spawn_blocking(move || auto_grants_for(&resolved_dir, &scan_home)).await?;
+        if let Some(confine) = session.auto_confine_mut() {
+            confine.apply_auto(found);
+        }
+    }
+    Ok(())
 }
 
 async fn create_session(
@@ -1253,71 +1304,14 @@ async fn dry_run_start(
     for (label, value) in session_details(session) {
         output.push_str(&format!("  {label}: {value}\n"));
     }
-    let mode = confine_plan
-        .as_ref()
-        .map_or("off", |plan| if plan.auto { "auto" } else { "manual" });
-    output.push_str(&format!("  confinement: {mode}\n"));
-    if let Some(plan) = &confine_plan
-        && plan.auto
-    {
-        for reason in &plan.reasons {
-            output.push_str(&format!("  {}: {}\n", reason.grant, reason.reason));
-        }
-        let not_accepted = plan
-            .reasons
-            .iter()
-            .filter(|reason| !accepted.contains(&reason.grant))
-            .map(|reason| reason.grant.as_str())
-            .collect::<Vec<_>>();
-        if !not_accepted.is_empty() {
-            output.push_str(&format!(
-                "  not yet accepted: {}\n",
-                not_accepted.join(", ")
-            ));
-        }
-    }
-    if let Some(plan) = &confine_plan
-        && !plan.grants.is_empty()
-    {
-        output.push_str(&format!("  grants: {}\n", plan.grants.join(", ")));
-    }
-    if let Some(plan) = &confine_plan
-        && !plan.keep_env.is_empty()
-    {
-        output.push_str(&format!("  keep_env: {}\n", plan.keep_env.join(", ")));
-    }
-
     if let Some(plan) = &confine_plan {
-        for path in plan.writable.iter().filter(|path| **path != resolved_cwd) {
-            output.push_str(&format!("  writable: {}\n", path.display()));
-        }
-        for path in &plan.protected {
-            output.push_str(&format!("  protected: {}\n", path.display()));
-        }
-        for path in plan.hidden_paths() {
-            output.push_str(&format!("  hidden: {}\n", path.display()));
-        }
-        for path in plan.overlay_parents() {
-            output.push_str(&format!("  overlay: {}\n", path.display()));
-        }
-        for path in plan.unsaved_files() {
-            output.push_str(&format!("  unsaved: {}\n", path.display()));
-        }
-        for unresolved in &plan.unresolved {
-            output.push_str(&format!(
-                "  unresolved: {} ({}: {})\n",
-                unresolved.path.display(),
-                unresolved.option,
-                unresolved.reason
-            ));
-        }
-        for path in plan
-            .skipped_paths()
-            .iter()
-            .filter(|path| !plan.unresolved.iter().any(|item| item.path == **path))
-        {
-            output.push_str(&format!("  hidden: {} (skipped missing)\n", path.display()));
-        }
+        output.push_str(&a2amx::confine::dry_run_lines(
+            plan,
+            &resolved_cwd,
+            accepted,
+        ));
+    } else {
+        output.push_str("  confinement: off\n");
     }
     output.push_str(&format!("  command: {}\n", redact_argv(&command)));
     if harness == Harness::Omp {
@@ -1532,43 +1526,7 @@ async fn run_team_up(
         dir: &file_dir,
         file: team_file.as_deref(),
     };
-    let host_home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    for action in &mut actions {
-        let team::Action::Start(session) = action else {
-            continue;
-        };
-        if !session.auto || session.confine.is_none() {
-            continue;
-        }
-        let resolved_dir = session
-            .cwd
-            .as_deref()
-            .map_or_else(|| cwd.clone(), |path| origin.dir.join(path));
-        let scan_dir = resolved_dir.clone();
-        let scan_home = host_home.clone();
-        let found =
-            tokio::task::spawn_blocking(move || auto_grants_for(&scan_dir, &scan_home)).await?;
-        let Some(confine) = session.confine.as_mut() else {
-            continue;
-        };
-        let mut added = Vec::new();
-        for (grant, reason) in found {
-            if !confine.grants.iter().any(|current| current == grant) {
-                confine.grants.push(grant.to_owned());
-                added.push((grant, reason));
-            }
-        }
-        confine.auto = true;
-        confine.reasons = added
-            .iter()
-            .map(|(grant, reason)| a2amx::wire::GrantReason {
-                grant: (*grant).to_owned(),
-                reason: reason.clone(),
-            })
-            .collect();
-    }
+    resolve_auto_grants(&mut actions, &cwd, origin).await?;
     for action in &actions {
         if let team::Action::Start(session) = action {
             validate_team_session(&home, &cwd, origin, session)?;
@@ -1577,74 +1535,20 @@ async fn run_team_up(
     let has_auto = actions.iter().any(|action| {
         matches!(
             action,
-            team::Action::Start(session) if session.auto && session.confine.is_some()
+            team::Action::Start(session) if session.auto_confine().is_some()
         )
     });
-    let mut accepted = if has_auto {
+    let accepted = if has_auto {
         load_accepted_grants(&home).await?
     } else {
         BTreeSet::new()
     };
-    let mut new_grants = Vec::new();
-    let mut seen = BTreeSet::new();
-    for action in &actions {
-        let team::Action::Start(session) = action else {
-            continue;
-        };
-        if !session.auto {
-            continue;
-        }
-        let Some(confine) = session.confine.as_ref() else {
-            continue;
-        };
-        for reason in &confine.reasons {
-            if !accepted.contains(&reason.grant) && seen.insert(reason.grant.clone()) {
-                new_grants.push((reason.grant.clone(), reason.reason.clone()));
-            }
-        }
-    }
-    for action in &actions {
-        let team::Action::Start(session) = action else {
-            continue;
-        };
-        let Some(confine) = session.confine.as_ref() else {
-            continue;
-        };
-        let explicit = confine
-            .grants
-            .iter()
-            .filter(|grant| !confine.reasons.iter().any(|reason| reason.grant == **grant))
-            .cloned()
-            .collect::<Vec<_>>();
-        let notices = a2amx::grant::escape_notice(&session.name, &explicit, a2amx::grant::all());
-        if !notices.is_empty() {
-            let output = notices
-                .into_iter()
-                .map(|notice| format!("{notice}\n"))
-                .collect::<String>();
-            write_stderr(output.into_bytes()).await?;
-        }
+    let new_grants = team::new_auto_grants(&actions, &accepted);
+    for output in team::escape_notices(&actions, a2amx::grant::all()) {
+        write_stderr(output.into_bytes()).await?;
     }
     if !dry_run && !new_grants.is_empty() {
-        let lines = a2amx::grant::consent_lines(&new_grants, a2amx::grant::all());
-        if yes {
-            write_stderr(lines.into_bytes()).await?;
-        } else {
-            let prompt = format!("{lines}{}", a2amx::grant::CONSENT_QUESTION);
-            let names = new_grants
-                .iter()
-                .map(|(grant, _)| grant.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let refusal = format!(
-                "auto confinement would open: {names}; run a2amx team up on a terminal to accept them, or pass --yes for this run"
-            );
-            if !confirm(&prompt, &refusal).await? {
-                bail!("auto grants not accepted; nothing started");
-            }
-            accepted.extend(new_grants.iter().map(|(grant, _)| grant.clone()));
-            save_accepted_grants(&home, &accepted).await?;
-        }
+        confirm_new_grants(&home, &accepted, &new_grants, yes).await?;
     }
     write_auto_summaries(&actions).await?;
     if dry_run {

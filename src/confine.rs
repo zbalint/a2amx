@@ -126,6 +126,33 @@ pub struct ConfineRequest {
     pub team_file: Option<String>,
 }
 
+impl ConfineRequest {
+    /// Merge detected grants into this request and record only newly added grants.
+    pub fn apply_auto(&mut self, found: Vec<(&'static str, String)>) {
+        let mut added = Vec::new();
+        for (grant, reason) in found {
+            if !self.grants.iter().any(|current| current == grant) {
+                self.grants.push(grant.to_owned());
+                added.push(GrantReason {
+                    grant: grant.to_owned(),
+                    reason,
+                });
+            }
+        }
+        self.auto = true;
+        self.reasons = added;
+    }
+
+    /// Return grants that were explicitly requested rather than auto-detected.
+    pub fn explicit_grants(&self) -> Vec<String> {
+        self.grants
+            .iter()
+            .filter(|grant| !self.reasons.iter().any(|reason| reason.grant == **grant))
+            .cloned()
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unresolved {
     pub option: &'static str,
@@ -2149,6 +2176,66 @@ fn truncate_before_closing(mut text: String) -> String {
     text
 }
 
+/// Render the confinement lines in a team's dry-run report.
+pub fn dry_run_lines(plan: &Plan, resolved_cwd: &Path, accepted: &BTreeSet<String>) -> String {
+    let mode = if plan.auto { "auto" } else { "manual" };
+    let mut output = format!("  confinement: {mode}\n");
+    if plan.auto {
+        for reason in &plan.reasons {
+            output.push_str(&format!("  {}: {}\n", reason.grant, reason.reason));
+        }
+        let not_accepted = plan
+            .reasons
+            .iter()
+            .filter(|reason| !accepted.contains(&reason.grant))
+            .map(|reason| reason.grant.as_str())
+            .collect::<Vec<_>>();
+        if !not_accepted.is_empty() {
+            output.push_str(&format!(
+                "  not yet accepted: {}\n",
+                not_accepted.join(", ")
+            ));
+        }
+    }
+    if !plan.grants.is_empty() {
+        output.push_str(&format!("  grants: {}\n", plan.grants.join(", ")));
+    }
+    if !plan.keep_env.is_empty() {
+        output.push_str(&format!("  keep_env: {}\n", plan.keep_env.join(", ")));
+    }
+    for path in plan.writable.iter().filter(|path| **path != resolved_cwd) {
+        output.push_str(&format!("  writable: {}\n", path.display()));
+    }
+    for path in &plan.protected {
+        output.push_str(&format!("  protected: {}\n", path.display()));
+    }
+    for path in plan.hidden_paths() {
+        output.push_str(&format!("  hidden: {}\n", path.display()));
+    }
+    for path in plan.overlay_parents() {
+        output.push_str(&format!("  overlay: {}\n", path.display()));
+    }
+    for path in plan.unsaved_files() {
+        output.push_str(&format!("  unsaved: {}\n", path.display()));
+    }
+    for unresolved in &plan.unresolved {
+        output.push_str(&format!(
+            "  unresolved: {} ({}: {})\n",
+            unresolved.path.display(),
+            unresolved.option,
+            unresolved.reason
+        ));
+    }
+    for path in plan
+        .skipped_paths()
+        .iter()
+        .filter(|path| !plan.unresolved.iter().any(|item| item.path == **path))
+    {
+        output.push_str(&format!("  hidden: {} (skipped missing)\n", path.display()));
+    }
+    output
+}
+
 /// Render the operator-facing notice from the exact mount plan.
 pub fn notice(plan: &Plan) -> String {
     let writable: Cow<'_, [PathBuf]> = match plan.writable.iter().position(|path| path == &plan.cwd)
@@ -2433,5 +2520,129 @@ mod tests {
                 "harness credential {name} must remain set"
             );
         }
+    }
+
+    #[test]
+    fn apply_auto_keeps_requested_grants_and_records_only_additions() {
+        let mut request = ConfineRequest {
+            grants: vec!["cache".to_owned()],
+            ..ConfineRequest::default()
+        };
+
+        request.apply_auto(vec![
+            ("cache", "already requested".to_owned()),
+            ("cargo", "detected cargo files".to_owned()),
+        ]);
+
+        assert_eq!(request.grants, ["cache", "cargo"]);
+        assert!(request.auto);
+        assert_eq!(
+            request.reasons,
+            [GrantReason {
+                grant: "cargo".to_owned(),
+                reason: "detected cargo files".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn apply_auto_sets_auto_when_no_grant_is_added() {
+        let mut request = ConfineRequest {
+            grants: vec!["cache".to_owned()],
+            ..ConfineRequest::default()
+        };
+
+        request.apply_auto(vec![("cache", "already requested".to_owned())]);
+
+        assert!(request.auto);
+        assert!(request.reasons.is_empty());
+    }
+
+    #[test]
+    fn explicit_grants_exclude_auto_added_grants() {
+        let request = ConfineRequest {
+            grants: vec!["manual".to_owned(), "cache".to_owned()],
+            reasons: vec![GrantReason {
+                grant: "cache".to_owned(),
+                reason: "detected cache".to_owned(),
+            }],
+            ..ConfineRequest::default()
+        };
+
+        assert_eq!(request.explicit_grants(), ["manual"]);
+    }
+
+    fn dry_run_plan() -> Plan {
+        Plan {
+            bwrap: PathBuf::from("bwrap"),
+            empty_file: PathBuf::from("/dev/null"),
+            state_dir: PathBuf::from("/state"),
+            cwd: PathBuf::from("/plan-cwd"),
+            harness: Harness::Generic,
+            writable: vec![PathBuf::from("/resolved-cwd"), PathBuf::from("/other")],
+            readonly: Vec::new(),
+            protected: Vec::new(),
+            hidden: Vec::new(),
+            skipped: vec![PathBuf::from("/missing")],
+            unresolved: Vec::new(),
+            grants: vec!["cache".to_owned()],
+            effective_grants: Vec::new(),
+            auto: true,
+            reasons: vec![GrantReason {
+                grant: "cache".to_owned(),
+                reason: "detected cache".to_owned(),
+            }],
+            write: Vec::new(),
+            keep_env: Vec::new(),
+            mandatory_hidden: Vec::new(),
+            default_hidden: Vec::new(),
+            container_hidden: Vec::new(),
+            overlay_parents: Vec::new(),
+            overlay_protected: Vec::new(),
+            unsaved_files: Vec::new(),
+            overlay_notice: None,
+            harness_config: None,
+        }
+    }
+
+    #[test]
+    fn dry_run_lines_list_auto_grants_not_yet_accepted() {
+        let text = dry_run_lines(
+            &dry_run_plan(),
+            Path::new("/resolved-cwd"),
+            &BTreeSet::new(),
+        );
+
+        assert!(text.contains("  confinement: auto\n"));
+        assert!(text.contains("  cache: detected cache\n"));
+        assert!(text.contains("  not yet accepted: cache\n"));
+        assert!(text.contains("  hidden: /missing (skipped missing)\n"));
+    }
+
+    #[test]
+    fn dry_run_lines_uses_resolved_cwd_when_filtering_writable_paths() {
+        let text = dry_run_lines(
+            &dry_run_plan(),
+            Path::new("/resolved-cwd"),
+            &BTreeSet::new(),
+        );
+
+        assert!(!text.contains("  writable: /resolved-cwd\n"));
+        assert!(text.contains("  writable: /other\n"));
+    }
+
+    #[test]
+    fn dry_run_lines_only_lists_unaccepted_reason_for_mixed_set() {
+        let mut plan = dry_run_plan();
+        plan.reasons.push(GrantReason {
+            grant: "cargo".to_owned(),
+            reason: "detected Cargo files".to_owned(),
+        });
+        let accepted = BTreeSet::from(["cache".to_owned()]);
+
+        let text = dry_run_lines(&plan, Path::new("/resolved-cwd"), &accepted);
+
+        assert!(text.contains("  not yet accepted: cargo\n"));
+        assert!(!text.contains("  not yet accepted: cache"));
     }
 }

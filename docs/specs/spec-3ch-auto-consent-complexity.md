@@ -96,3 +96,20 @@ point; a closure adds one nesting level; `?`, `let ... else` and method chains a
 about 21, `dry_run_start` about 6, `dry_run_lines` about 16; every function at 25 or less. The architect confirms with the
 Sonar scan, and the developer reports the count calibrated against Sonar's earlier values (32 for `dry_run_start` and 45
 for `run_team_up` at `0633233`).
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness (exact model not exposed to the architect, not
+fresh because its reset was refused); developer OMP `openai-codex/gpt-5.6-luna`; tester on OMP (model not reported).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| After the push gate of spec 3cf (pre-push scan) | architect, Sonar | Spec 3cf's review never hand-counted the two functions it grew; both went past 30 | This spec |
+| Draft review | consultant | The first draft only moved code into private helpers in `main.rs`, which the owner rejected; its own 25 target was likely missed (about 27) | Spec rewritten around pure decisions in `team`, `confine` and `grant`, scope widened, tests named |
+| Draft review | consultant | Scope, "no new pub item" and "test count equals baseline" contradicted the new shape; the counting rule was wrong for `match` and closures | Sections 0, 2 and 4 rewritten |
+| Implementation | developer | Clippy flagged a `let ... else` in `escape_notices` | Replaced with `?` |
+| Tester pass | tester | No test pinned a mixed accepted set in `dry_run_lines` | Test added |
+| Architect review | architect | New items glued to neighbours without blank lines | Fixed |
+| Consultant design read | consultant | `accept_new_grants` suggested `--yes` saves; the auto-and-confine condition was written out three times | Renamed `confirm_new_grants` with a doc line; `TeamSession::auto_confine` added |
+| Architect review | architect | The addendum said "remove the repeated test" for a repeated condition; the developer had to ask | Clarified (`m_5340`) |
