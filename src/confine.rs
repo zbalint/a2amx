@@ -600,26 +600,21 @@ pub fn ensure_data_dirs(harness: Harness, home: &Path) -> Result<()> {
     }
     Ok(())
 }
-/// Best-effort creation for the tool directories requested by grants.
-///
-/// The planner repeats the path checks and records missing paths as skipped in
-/// dry runs; this phase only creates safe directories for a real daemon start.
-pub fn ensure_grant_dirs(
+struct GrantDirScope {
+    home: PathBuf,
+    state_dir: PathBuf,
+    runtime_dir: PathBuf,
+    hidden: Vec<PathBuf>,
+}
+
+fn grant_dir_scope(
     request: &ConfineRequest,
     harness: Harness,
     host: &Host,
-    create: bool,
-) -> Vec<Unresolved> {
-    let mut unresolved = Vec::new();
-    let Ok(home) = fs::canonicalize(&host.home) else {
-        return unresolved;
-    };
-    let Ok(state_dir) = fs::canonicalize(&host.state_dir) else {
-        return unresolved;
-    };
-    let Ok(runtime_dir) = fs::canonicalize(&host.runtime_dir) else {
-        return unresolved;
-    };
+) -> Option<GrantDirScope> {
+    let home = fs::canonicalize(&host.home).ok()?;
+    let state_dir = fs::canonicalize(&host.state_dir).ok()?;
+    let runtime_dir = fs::canonicalize(&host.runtime_dir).ok()?;
     let mut hidden = if request.no_default_hides {
         Vec::new()
     } else {
@@ -639,67 +634,90 @@ pub fn ensure_grant_dirs(
         .filter_map(|path| canonical_if_exists(&path))
         .collect::<Vec<_>>();
     hidden.retain(|path| !unhidden.iter().any(|unhidden| unhidden == path));
+    Some(GrantDirScope {
+        home,
+        state_dir,
+        runtime_dir,
+        hidden,
+    })
+}
 
+fn grant_dir_problem(source: &Path, scope: &GrantDirScope) -> Option<String> {
+    if source.exists() {
+        if let Ok(canonical) = fs::canonicalize(source)
+            && (paths_overlap(&canonical, &scope.state_dir)
+                || paths_overlap(&canonical, &scope.runtime_dir)
+                || scope
+                    .hidden
+                    .iter()
+                    .any(|hidden| is_within(&canonical, hidden)))
+        {
+            return Some("path overlaps protected location".into());
+        }
+        if let Some(path) = symlink_component(source) {
+            return Some(format!("symlink component: {}", path.display()));
+        }
+        return None;
+    }
+    if let Some(path) = symlink_component(source) {
+        return Some(format!("symlink component: {}", path.display()));
+    }
+    let Some(ancestor) = source.ancestors().find(|path| path.exists()) else {
+        return Some("no existing ancestor".into());
+    };
+    let Ok(ancestor) = fs::canonicalize(ancestor) else {
+        return Some("ancestor cannot be canonicalized".into());
+    };
+    if !is_within(&ancestor, &scope.home)
+        || paths_overlap(&ancestor, &scope.state_dir)
+        || paths_overlap(&ancestor, &scope.runtime_dir)
+        || (ancestor != scope.home
+            && check_write_allowed(&ancestor, &scope.home, &scope.state_dir, false).is_err())
+        || scope
+            .hidden
+            .iter()
+            .any(|hidden| is_within(&ancestor, hidden))
+    {
+        return Some("ancestor is not writable".into());
+    }
+    None
+}
+
+/// Best-effort creation for the tool directories requested by grants.
+///
+/// The planner repeats the path checks and records missing paths as skipped in
+/// dry runs; this phase only creates safe directories for a real daemon start.
+pub fn ensure_grant_dirs(
+    request: &ConfineRequest,
+    harness: Harness,
+    host: &Host,
+    create: bool,
+) -> Vec<Unresolved> {
+    let Some(scope) = grant_dir_scope(request, harness, host) else {
+        return Vec::new();
+    };
+    let mut unresolved = Vec::new();
     for name in &request.grants {
         let Ok(grant) = grant::lookup(name) else {
             continue;
         };
         for relative in grant.create {
-            let source = user_path(relative, &home);
-            let record = |unresolved: &mut Vec<Unresolved>, reason: String| {
+            let source = user_path(relative, &scope.home);
+            if let Some(reason) = grant_dir_problem(&source, &scope) {
                 unresolved.push(Unresolved {
                     option: "grant",
-                    path: source.clone(),
+                    path: source,
                     reason,
                 });
-            };
-            if source.exists() {
-                if let Ok(canonical) = fs::canonicalize(&source)
-                    && (paths_overlap(&canonical, &state_dir)
-                        || paths_overlap(&canonical, &runtime_dir)
-                        || hidden.iter().any(|hidden| is_within(&canonical, hidden)))
-                {
-                    record(&mut unresolved, "path overlaps protected location".into());
-                    continue;
-                }
-                if let Some(path) = symlink_component(&source) {
-                    record(
-                        &mut unresolved,
-                        format!("symlink component: {}", path.display()),
-                    );
-                }
-                continue;
-            }
-            if let Some(path) = symlink_component(&source) {
-                record(
-                    &mut unresolved,
-                    format!("symlink component: {}", path.display()),
-                );
-                continue;
-            }
-            let Some(ancestor) = source.ancestors().find(|path| path.exists()) else {
-                record(&mut unresolved, "no existing ancestor".into());
-                continue;
-            };
-            let Ok(ancestor) = fs::canonicalize(ancestor) else {
-                record(&mut unresolved, "ancestor cannot be canonicalized".into());
-                continue;
-            };
-            if !is_within(&ancestor, &home)
-                || paths_overlap(&ancestor, &state_dir)
-                || paths_overlap(&ancestor, &runtime_dir)
-                || (ancestor != home
-                    && check_write_allowed(&ancestor, &home, &state_dir, false).is_err())
-                || hidden.iter().any(|hidden| is_within(&ancestor, hidden))
+            } else if create
+                && !source.exists()
+                && let Err(error) = fs::create_dir_all(&source)
             {
-                record(&mut unresolved, "ancestor is not writable".into());
-                continue;
-            }
-            if !create {
-                continue;
-            }
-            if let Err(error) = fs::create_dir_all(&source) {
-                record(&mut unresolved, error.to_string());
+                unresolved.push(Unresolved {
+                    option: "grant",
+                    path: source,
+                    reason: error.to_string(),
+                });
             }
         }
     }

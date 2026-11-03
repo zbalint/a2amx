@@ -34,6 +34,7 @@ lag the code.
 | U7 | Block behavior on Codex in the validation plan's recorded results | docs |
 | U8 | User-supplied `--mcp-config`, `--allowedTools`, and `--append-system-prompt` duplicate-flag behavior is unprobed (`--append-system-prompt` probably last-wins) | code |
 | U9 | Newer `huggingface_hub` may keep tokens at `~/.cache/huggingface/stored_tokens`, which is neither a default hide (`src/confine.rs:97-102`) nor unhidden by the `huggingface-token` grant (`src/grant.rs:85`). With the `cache` grant a session could read it without the Hugging Face grant. Check the library's source; if confirmed, hide it by default and unhide it under `huggingface-token`. A hide covers only a path that exists at session start | spec 3ca consultant, architect 2026-11-02 |
+| U10 | In `grant_dir_problem` (`src/confine.rs`), the `check_write_allowed(&ancestor, ...)` clause of the missing-path ancestor test has no test that fails when it is removed (spec 3cd developer mutation, round 3). The clause was inherited from the old build-path preflight. Add a tests-only case: a missing grant directory whose nearest existing ancestor `check_write_allowed` rejects is recorded `ancestor is not writable` and not created | spec 3cd, developer 2026-11-03 |
 
 ## Known issues
 

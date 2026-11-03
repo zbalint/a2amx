@@ -6,6 +6,7 @@ mod common;
 use common::start_daemon;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use tokio::process::Command as AsyncCommand;
 fn run_binary(
     state: &Path,
     cwd: &Path,
@@ -309,7 +310,7 @@ async fn global_without_auto_has_no_automatic_grants() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_up_reuses_auto_grants_and_running_session_is_not_rescanned() {
-    let bwrap = Command::new("bwrap").arg("--version").output();
+    let bwrap = AsyncCommand::new("bwrap").arg("--version").output().await;
     if !matches!(bwrap, Ok(output) if output.status.success()) {
         eprintln!("skipping real auto start test: bubblewrap unavailable");
         return;
@@ -317,9 +318,10 @@ async fn real_up_reuses_auto_grants_and_running_session_is_not_rescanned() {
     let state = tempfile::tempdir().expect("state");
     let project = tempfile::tempdir().expect("project");
     let bwrap = String::from_utf8(
-        Command::new("which")
+        AsyncCommand::new("which")
             .arg("bwrap")
             .output()
+            .await
             .expect("which bwrap")
             .stdout,
     )
