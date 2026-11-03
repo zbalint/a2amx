@@ -21,22 +21,36 @@ fn toml_blocks(markdown: &str) -> Vec<String> {
     blocks
 }
 
-#[test]
-fn toml_examples_in_the_confinement_guide_parse() {
-    let guide = include_str!("../docs/confinement.md");
-    let mut parsed_guide_blocks = 0;
-    for block in toml_blocks(guide) {
+fn parse_complete_blocks(markdown: &str, label: &str) -> usize {
+    let mut parsed_blocks = 0;
+    for block in toml_blocks(markdown) {
         if block.lines().next() == Some("# fragment") {
             continue;
         }
-        if let Err(error) = a2amx::team::parse(&block) {
-            panic!("confinement guide TOML did not parse: {error}\n{block}");
+        let result = if block.lines().next() == Some("# global team file") {
+            a2amx::team::parse_with(&block, Some("demo"))
+        } else {
+            a2amx::team::parse(&block)
+        };
+        if let Err(error) = result {
+            panic!("{label} TOML did not parse: {error}\n{block}");
         }
-        parsed_guide_blocks += 1;
+        parsed_blocks += 1;
     }
+    parsed_blocks
+}
+
+#[test]
+fn toml_examples_in_the_confinement_guide_parse() {
+    let guide = include_str!("../docs/confinement.md");
+    let parsed_guide_blocks = parse_complete_blocks(guide, "confinement guide");
     assert!(
         parsed_guide_blocks > 0,
         "the confinement guide must contain a complete TOML example"
+    );
+    assert!(
+        guide.lines().any(|line| line == "# global team file"),
+        "the confinement guide must contain a global team file marker"
     );
 
     let example = include_str!("../a2amx.toml.example");
@@ -70,6 +84,16 @@ fn toml_examples_in_the_confinement_guide_parse() {
     if let Err(error) = a2amx::team::parse(&reconstructed) {
         panic!("a2amx.toml.example confinement block did not parse: {error}");
     }
+}
+
+#[test]
+fn toml_examples_in_getting_started_parse() {
+    let guide = include_str!("../docs/getting-started.md");
+    let parsed_blocks = parse_complete_blocks(guide, "getting-started guide");
+    assert!(
+        parsed_blocks >= 2,
+        "the getting-started guide must contain at least two complete TOML examples, found {parsed_blocks}"
+    );
 }
 
 #[test]

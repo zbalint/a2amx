@@ -7,6 +7,7 @@ All notable user-visible changes are listed here. The format follows
 
 ### Added
 
+- A start-to-finish guide, `docs/getting-started.md` ("Your first team"): install, a team file, grant suggestion, the dry-run preview, inspecting the running team and stopping it, with output from the installed binary, and a section on auto mode with a global team file in `docs/confinement.md`. The README quick start points to it, its `list` sample shows the `CONFINE` column, and `docs_examples` now parses the complete TOML examples of both pages.
 - Auto confinement asks first. `a2amx team up` lists each grant that global `auto` would add and has not
   yet been accepted, with the reason and what the grant opens, and waits for a yes; the accepted names are
   kept in `auto-grants` in the state directory, so a grant is asked about once for all projects (delete the

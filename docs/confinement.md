@@ -36,6 +36,12 @@ a2amx new --confine \
 
 `--confine-grant NAME` opens one named capability, `--confine-keep-env NAME` returns one listed credential environment variable to this session, and `--confine-no-default-hides` disables optional home hides while keeping mandatory hides.
 
+For example, run OMP with Rust and cache access without Docker:
+
+```sh
+a2amx new --confine --confine-grant cargo --confine-grant cache -- omp
+```
+
 `~` and `~/...` expand to your home directory. Absolute paths are accepted; other relative paths are relative to the session's working directory. Environment variables are not expanded, and `~user` forms are rejected. To reach a relative directory literally named `$x`, write `./$x`. A path that does not exist is retained in the dry run as an unresolved operator entry with its option and reason; missing defaults remain skipped. Each of the three lists accepts at most 64 entries.
 
 When confinement is enabled by `a2amx new --confine` or a team file, no cache grant is
@@ -63,6 +69,69 @@ a2amx team up --dry-run
 ```
 
 The dry run shows the effective restrictions. An operator `write`, `hide`, or `unhide` entry that cannot be resolved is printed as `unresolved: PATH (write|hide|unhide: REASON)`; missing default hides and other optional paths remain `hidden: PATH (skipped missing)`.
+
+### Auto mode in one file
+
+To let a global team file detect the grants a project needs, put this file at
+`<state home>/team.toml`. The state home is selected in this order: `--home`,
+`A2AMX_HOME`, `$XDG_STATE_HOME/a2amx`, then `$HOME/.local/state/a2amx` (see
+[the CLI reference](cli.md#state-directory-and-attachment)).
+
+```toml
+# global team file
+[confine]
+enabled = true
+auto = true
+
+[[session]]
+name = "builder"
+command = ["omp"]
+cwd = "."
+attach = true
+```
+
+The first `a2amx team up` prints each detected grant and its exposure, then asks
+`Accept these for auto mode on all projects?`. Answering yes keeps the accepted grant
+names in `<state home>/auto-grants`; they apply to later projects using this global
+file. `a2amx team up --yes` accepts the grants for that run without writing the file.
+The detection rules are in [Automatic grant detection](#automatic-grant-detection);
+the global file does not repeat them.
+
+Answering `n` leaves the team stopped:
+
+```text
+using global team file /home/user/.local/state/a2amx/team.toml as team proj
+cargo: Cargo.toml found (the Rust toolchain, read-write: ~/.cargo ...)
+cache: always added by auto (your whole ~/.cache ...)
+Accept these for auto mode on all projects? [y/N] n
+a2amx: auto grants not accepted; nothing started
+```
+
+Without a terminal, a global auto run refuses instead of accepting silently:
+
+```text
+a2amx: auto confinement would open: cargo, cache; run a2amx team up on a terminal to accept them, or pass --yes for this run
+```
+
+The dry run never prompts or writes `auto-grants`; it reports the new names as
+`not yet accepted`:
+
+```text
+using global team file /home/user/.local/state/a2amx/team.toml as team proj
+auto confinement for session proj-builder: grants cargo, cache
+would start proj-builder
+  harness: omp
+  cwd: /home/user/demo/proj/.
+  confinement: auto
+  cargo: Cargo.toml found
+  cache: always added by auto
+  not yet accepted: cargo, cache
+  grants: cache, cargo
+  writable: /home/user/demo/proj/.git
+  protected: /home/user/demo/proj/.git/config
+  hidden: /home/user/.local/state/a2amx
+  ...
+```
 
 ### How the options combine
 
@@ -557,6 +626,32 @@ No `SSH_AUTH_SOCK` is passed through, so a passphrase-protected key cannot be us
 commits with an unencrypted listed ssh key works; gpg signing is F54. With `default_hides = false`
 in a team file (or `--confine-no-default-hides` on the command line), `~/.ssh` is visible
 without the grant, but the system configuration still breaks `ssh`. Keep the HTTPS recipe above if that is preferable.
+
+## Cloud CLIs and registry tokens
+
+Give a session the grants for the cloud, cluster, infrastructure, or registry tools it uses:
+
+```toml
+# fragment
+[session.confine]
+grants = ["aws", "kube"]
+```
+
+These ten credential grants are described in the [grants table](#grants):
+
+- [`aws`](#grants) — AWS CLI configuration and credentials.
+- [`gcloud`](#grants) — Google Cloud CLI login.
+- [`azure`](#grants) — Azure CLI login and Azure secret variables.
+- [`kube`](#grants) — kubectl configuration.
+- [`terraform`](#grants) — Terraform's user directory.
+- [`netrc`](#grants) — the user's `.netrc` file.
+- [`huggingface-token`](#grants) — the Hugging Face login and token variables.
+- [`npm-token`](#grants) — `.npmrc` and the NPM token variables.
+- [`pypi-token`](#grants) — `.pypirc` and the PyPI token variables.
+- [`cargo-token`](#grants) — Cargo registry credentials and token variables.
+
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, and
+`GOOGLE_APPLICATION_CREDENTIALS` stay set; see [Credential environment variables](#credential-environment-variables).
 
 ## Troubleshooting
 

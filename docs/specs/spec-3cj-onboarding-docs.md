@@ -207,3 +207,22 @@ Run as `env -u A2AMX_BIN -u NO_COLOR` (see `AGENTS.md`).
    is a finding.
 7. `rg -n "/home/zbalint|scratchpad|claude-1000" docs/getting-started.md docs/confinement.md README.md`
    matches nothing (no personal path leaks into the public docs). Judge: command output.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant a2amx-consultant (Claude Code, model not
+exposed to the architect); developer and tester OMP with `openai-codex/gpt-5.6-luna`, advisor models not
+exposed.
+
+BLOCKED/amend cycles: 1 before the lock (consultant review of the draft, amended in the draft), 0 after.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft | consultant | The walkthrough taught a local `a2amx.toml`, but three samples came from a global auto-mode file with another session, so the page could never print them | Walkthrough uses the local file with explicit grants; the global `auto = true` file is taught only in `confinement.md` |
+| Draft | consultant | The method lacked the project setup (`git init`, a remote) that makes git detection find the fictional remote, did not require `A2AMX_HOME` for every command, did not map the scratch home in output paths, and relied on `pgrep`, which sees only the caller's processes under `bwrap --unshare-pid` | Method rewritten; acceptance uses `a2amx daemon status` |
+| Draft | consultant | Helper return type stated twice differently; mutation (b) had no position; section 4.3 title promised registry tokens it did not list and its placement split the credentials sections | Fixed in the draft |
+| Draft | consultant | 3ck claim "Codex gets the operator line" was only a lead | Consultant verified it with the code lines; 3ck updated |
+| Implementation | architect | Internal sample ids (S1 to S5) leaked into the public docs; the opening paragraph described samples the page does not show; a sentence was duplicated; the global example used `sleep 600` | Fix request, one round; the spec's sample table used the ids without saying they are internal |
+| Tester pass | tester | The non-terminal refusal sample omits the `using global team file ...` line printed before it | Accepted as is: the sample shows the refusal message verbatim |
+| Architect review | architect | `a2amx confine --help` still describes `confine suggest` as printing a `[session.confine]` fragment | Out of scope; backlog F74 |
+| Architect review | architect | Four `auto_confine` PTY tests fail inside a confined session (the daemon takes `HOME` from its inherited environment) | Environmental, not caused by this diff; backlog F75 |

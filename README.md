@@ -24,16 +24,16 @@ A2AMX owns the sessions under PTYs, delivers through each supported harness's na
 
 ## Example
 
-This run used a temporary state directory and a freshly installed build.
+The daemon command below prints its listening address and returns; the session rows are illustrative.
 
-Start the daemon in one terminal:
+Start the daemon; it detaches by default, so this command returns to your shell:
 
 ```sh
 $ a2amx daemon start
 listening on 127.0.0.1:34613
 ```
 
-Start each session in its own terminal; `a2amx new` attaches the terminal, so use two more terminals:
+Start each session in its own terminal; `a2amx new` attaches its own terminal, so use two terminals for these commands:
 
 ```sh
 $ a2amx new --name planner -- claude
@@ -46,10 +46,9 @@ $ a2amx new --name reviewer -- omp
 Detach each with Ctrl-B d, then inspect the sessions from any terminal:
 
 ```text
-$ a2amx list
-ID  NAME      HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA          SIZE
-s1  planner   claude   running  3s      working   3s        no        0        -     -              80x24
-s2  reviewer  omp      running  3s      working   3s        no        0        -     5h 81% wk 54%  80x24
+ID  NAME      HARNESS  CONFINE  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE
+s1  planner   claude   off      running  3s      working   3s        no        0        -     -              80x24
+s2  reviewer  omp      off      running  3s      working   3s        no        0        -     5h 81% wk 54%  80x24
 ```
 
 The planner agent calls `send_message` to `reviewer`; the reviewer receives it as an attributed peer message.
@@ -61,6 +60,7 @@ The planner agent calls `send_message` to `reviewer`; the reviewer receives it a
 - **Native delivery:** Claude Code uses a channel, OMP an extension, and Codex a private app-server.
 - **Draft protection:** delivery holds when automatic input could mix with a human's unfinished composition.
 - **Operator controls:** attach, switch, scroll, inspect, reset, and stop sessions from the CLI.
+- **Confinement:** opt-in protection for trusted sessions that keeps accidental writes away from protected paths.
 - **Teams and status:** group sessions with visibility rules, roles, watches, heartbeats, activity transition notices, and quota status.
 
 ## Quick start
@@ -73,6 +73,8 @@ export PATH="$HOME/.a2amx/bin:$PATH"
 a2amx daemon start
 ```
 
+For a start-to-finish confined team, follow [Your first team](docs/getting-started.md); it covers the team file, grant suggestion, preview, session inspection, messaging, and shutdown.
+
 Then start the two sessions from [the example above](#example). See [Installation](docs/install.md) for install details.
 
 ## Compatibility and limits
@@ -81,6 +83,7 @@ Then start the two sessions from [the example above](#example). See [Installatio
 - Claude Code, OMP, and Codex have native delivery profiles. Other commands are held unless explicitly opted into blind delivery.
 - The daemon currently owns one machine; cross-host routing and remote launch are not built.
 - Agents cannot launch other sessions. Teams provide visibility and coordination, not OS-user or process isolation.
+- Confinement is opt-in (`--confine`), a safety net against accidents by a trusted agent rather than a sandbox; it needs `bwrap` on the daemon's `PATH`. See [Confinement](docs/confinement.md).
 - PTY bytes do not prove prompt submission. Receipts report harness evidence, not model processing.
 - A2AMX is not an agent planner, an LLM orchestration framework, a memory system, or a container management platform, and has no LLM of its own.
 
@@ -89,6 +92,7 @@ Then start the two sessions from [the example above](#example). See [Installatio
 All code, tests and documentation are written by AI agents; no human writes or hand-edits them (apart from a GitHub-generated initial commit and the OpenSSF Scorecard workflow template). Specifications, implementation, testing and review are done by separate agent roles on different models. Every push is checked in CI by `cargo test`, `clippy` and `rustfmt`, and CI fails when the SonarQube quality gate fails; the architect also runs the same gate locally before pushing, because CI runs after the push and does not stop it. A human sets the project's direction and decides what is released, but does not review every change line by line, and there has been no independent security audit. See [How A2AMX is built](docs/how-this-is-built.md).
 
 ## Documentation
+- [Your first team](docs/getting-started.md) — install, create a team, suggest confinement grants, preview, inspect, message, and stop it.
 - [CLI reference](docs/cli.md) — commands, attachment controls, list columns, quota, and reset.
 - [Teams](docs/teams.md) — configure team files, visibility, watches, heartbeats, activity notices, and team commands.
 - [Harnesses and delivery](docs/harnesses.md) — choose profiles and interpret channels, hooks, and receipts.
