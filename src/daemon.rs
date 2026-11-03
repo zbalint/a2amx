@@ -2199,6 +2199,7 @@ async fn list_sessions(runtime: &Runtime) -> anyhow::Result<Response> {
                 hold_reason: hold_reason.map(str::to_owned),
                 quota,
                 harness: session.harness(),
+                confine: session.confine_info(),
                 cwd: session
                     .cwd()
                     .map(|path| path.to_string_lossy().into_owned()),
@@ -2259,6 +2260,7 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
                     .is_some_and(|viewer| session.id() == viewer.id()),
                 quota: session_quota(session, omp_usage.as_ref()),
                 harness: session.harness(),
+                confine: session.confine_info(),
                 cwd: session
                     .cwd()
                     .map(|path| path.to_string_lossy().into_owned()),
@@ -2612,6 +2614,7 @@ async fn attachment_status(
         harness: Some(session.harness()),
         activity,
         confined: session.confined(),
+        confine_auto: session.confine_auto(),
         starting,
         quota: session_quota(session, runtime.omp_usage().as_ref()),
         team: session.team().cloned(),

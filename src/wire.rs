@@ -338,6 +338,20 @@ impl Activity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantReason {
+    pub grant: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfineInfo {
+    pub auto: bool,
+    pub grants: Vec<String>,
+    pub write: Vec<String>,
+    pub reasons: Vec<GrantReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub id: String,
     pub argv: Vec<String>,
@@ -364,6 +378,8 @@ pub struct SessionSummary {
     pub harness: Harness,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confine: Option<ConfineInfo>,
     /// `None` for an exited session; `None` is unknown or exited, never idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<Activity>,
@@ -423,6 +439,8 @@ pub struct AgentSummary {
     /// `None` for an exited session; `None` is unknown or exited, never idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<Activity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confine: Option<ConfineInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -470,6 +488,8 @@ pub struct StatusInfo {
     pub starting: bool,
     #[serde(default, skip_serializing_if = "is_default")]
     pub confined: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub confine_auto: bool,
     #[serde(default)]
     pub quota: Option<QuotaInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

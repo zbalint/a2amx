@@ -23,7 +23,7 @@ use crate::delivery;
 use crate::emulator::{Emulator, Size, window_size};
 use crate::harness::{self, Deliver, Harness};
 use crate::messaging;
-use crate::wire::{Activity, BridgeDown};
+use crate::wire::{Activity, BridgeDown, ConfineInfo};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionId(pub String);
@@ -105,6 +105,7 @@ pub struct Session {
     token: String,
     codex: Option<Arc<crate::codex::Link>>,
     confined: bool,
+    confine: Option<ConfineInfo>,
     input_gate: tokio::sync::Mutex<()>,
     message_notify: Notify,
     shared: Arc<Shared>,
@@ -380,6 +381,10 @@ impl Session {
 
     pub fn spawn(id: SessionId, spec: SessionSpec) -> anyhow::Result<Self> {
         let confined = spec.confine.is_some();
+        let confine = spec
+            .confine
+            .as_ref()
+            .map(crate::confine::Plan::confine_info);
         let original_argv = spec.argv;
         let launch_argv = if let Some(plan) = spec.confine.as_ref() {
             let notice = crate::confine::notice(plan);
@@ -478,6 +483,7 @@ impl Session {
             token: spec.token,
             codex: spec.codex,
             confined,
+            confine,
             shared,
             input_gate: tokio::sync::Mutex::new(()),
             message_notify: Notify::new(),
@@ -498,6 +504,12 @@ impl Session {
 
     pub fn confined(&self) -> bool {
         self.confined
+    }
+    pub fn confine_info(&self) -> Option<ConfineInfo> {
+        self.confine.clone()
+    }
+    pub fn confine_auto(&self) -> bool {
+        self.confine.as_ref().is_some_and(|info| info.auto)
     }
 
     pub fn id(&self) -> &SessionId {

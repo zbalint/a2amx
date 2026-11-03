@@ -17,6 +17,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::grant;
 use crate::harness::Harness;
+use crate::wire::{ConfineInfo, GrantReason};
 
 pub const MAX_LIST_ENTRIES: usize = 64;
 pub const MAX_PATH_BYTES: usize = 4096;
@@ -116,6 +117,10 @@ pub struct ConfineRequest {
     #[serde(default)]
     pub grants: Vec<String>,
     #[serde(default)]
+    pub auto: bool,
+    #[serde(default)]
+    pub reasons: Vec<GrantReason>,
+    #[serde(default)]
     pub keep_env: Vec<String>,
     #[serde(default)]
     pub team_file: Option<String>,
@@ -165,6 +170,10 @@ pub struct Plan {
     pub skipped: Vec<PathBuf>,
     pub unresolved: Vec<Unresolved>,
     pub grants: Vec<String>,
+    pub effective_grants: Vec<String>,
+    pub auto: bool,
+    pub reasons: Vec<GrantReason>,
+    pub write: Vec<String>,
     pub keep_env: Vec<String>,
     pub mandatory_hidden: Vec<PathBuf>,
     pub default_hidden: Vec<PathBuf>,
@@ -1036,7 +1045,7 @@ pub fn plan_with_preflight(
     builder.release_operator_writes()?;
     builder.apply_operator_hides(request)?;
     builder.protect_system_paths(path_var.as_deref());
-    builder.finish(request, cwd, empty_file)
+    builder.finish(request, cwd, empty_file, effective_grants)
 }
 
 fn check_request_limits(request: &ConfineRequest, harness: Harness) -> Result<()> {
@@ -1588,6 +1597,7 @@ impl<'a> PlanBuilder<'a> {
         request: &ConfineRequest,
         cwd: PathBuf,
         empty_file: PathBuf,
+        mut effective_grants: Vec<String>,
     ) -> Result<Plan> {
         self.readonly
             .retain(|path| !self.explicit_writes.contains(path));
@@ -1648,6 +1658,8 @@ impl<'a> PlanBuilder<'a> {
 
         let mut grants = request.grants.clone();
         grants.sort();
+        effective_grants.sort();
+        effective_grants.dedup();
         let mut keep_env = request.keep_env.clone();
         keep_env.sort();
         let plan = Plan {
@@ -1663,6 +1675,10 @@ impl<'a> PlanBuilder<'a> {
             skipped: self.skipped,
             unresolved: self.unresolved,
             grants,
+            effective_grants,
+            auto: request.auto,
+            reasons: request.reasons.clone(),
+            write: request.write.clone(),
             keep_env,
             mandatory_hidden: self.mandatory_hidden,
             default_hidden: self.default_hidden,
@@ -1710,6 +1726,14 @@ impl Plan {
 
     pub fn is_confined(&self) -> bool {
         true
+    }
+    pub fn confine_info(&self) -> ConfineInfo {
+        ConfineInfo {
+            auto: self.auto,
+            grants: self.effective_grants.clone(),
+            write: self.write.clone(),
+            reasons: self.reasons.clone(),
+        }
     }
 
     fn mounts(&self) -> Vec<Mount> {
@@ -2282,6 +2306,10 @@ mod tests {
             skipped: Vec::new(),
             unresolved: Vec::new(),
             grants: Vec::new(),
+            effective_grants: Vec::new(),
+            auto: false,
+            reasons: Vec::new(),
+            write: Vec::new(),
             keep_env: Vec::new(),
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),

@@ -102,7 +102,8 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 Ok(auto_grants_for(&dir, &host_home))
             })
             .await??;
-            write_stdout(a2amx::suggest::render(&found).into_bytes()).await?;
+            let grants = found.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+            write_stdout(a2amx::suggest::render(&grants).into_bytes()).await?;
             return Ok(std::process::ExitCode::SUCCESS);
         }
         _ => {}
@@ -160,6 +161,9 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         Command::Screen { session, rows } => run_screen(home, session, rows).await,
         Command::Messages { session, state } => run_messages(home, session, state).await,
         Command::Cancel { message } => run_cancel(home, message).await,
+        Command::Confine {
+            action: ConfineAction::Show { session },
+        } => run_confine_show(home, session).await,
         Command::Confine { .. } | Command::Mcp { .. } | Command::Hook | Command::OmpBridge => {
             unreachable!("early dispatch returned before resolving home")
         }
@@ -505,6 +509,8 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             no_default_hides: confine_no_default_hides,
             grants: confine_grant,
             keep_env: confine_keep_env,
+            auto: false,
+            reasons: Vec::new(),
             team_file: None,
         };
         Some(resolved_confine_request(&request, &cwd, None)?)
@@ -663,6 +669,8 @@ fn resolved_confine_request(
         unhide: resolve_confine_paths(cwd, "unhide", &request.unhide)?,
         no_default_hides: request.no_default_hides,
         grants: request.grants.clone(),
+        auto: request.auto,
+        reasons: request.reasons.clone(),
         keep_env: request.keep_env.clone(),
         team_file: team_file
             .map(|path| path.to_string_lossy().into_owned())
@@ -672,7 +680,7 @@ fn resolved_confine_request(
 
 const MAX_GIT_CONFIG_BYTES: usize = 65_536;
 
-fn auto_grants_for(dir: &Path, home: &Path) -> Vec<&'static str> {
+fn auto_grants_for(dir: &Path, home: &Path) -> Vec<(&'static str, String)> {
     let git_config = dir.join(".git");
     let git_config = if git_config.is_dir() {
         let config_path = git_config.join("config");
@@ -696,7 +704,7 @@ fn auto_grants_for(dir: &Path, home: &Path) -> Vec<&'static str> {
     } else {
         None
     };
-    a2amx::suggest::grants(
+    a2amx::suggest::explain(
         |name| dir.join(name).exists(),
         git_config.as_deref(),
         |path| {
@@ -975,6 +983,12 @@ fn team_detail(team: Option<&TeamScope>) -> Option<String> {
         format!("{}, {visibility}, allow: {allow}", team.name)
     })
 }
+fn session_confinement_mode(session: &SessionSummary) -> &'static str {
+    session
+        .confine
+        .as_ref()
+        .map_or("off", |info| if info.auto { "auto" } else { "manual" })
+}
 
 async fn run_team_status(
     home: PathBuf,
@@ -985,12 +999,19 @@ async fn run_team_status(
     let mut client = Client::connect(&home).await?;
     let existing = request_sessions(&mut client).await?;
     let entries = team::inspect(&wanted, &existing);
-    let mut output = String::from("NAME TEAM STATE NOTE\n");
+    let mut output = String::from("NAME TEAM STATE CONFINE NOTE\n");
     let mut has_conflict = false;
     for (session, entry) in wanted.iter().zip(entries) {
-        let (state, note) = match entry.state {
-            team::EntryState::Missing => ("missing".to_owned(), "-".to_owned()),
-            team::EntryState::Running { id } => ("running".to_owned(), id),
+        let (state, confine, note) = match entry.state {
+            team::EntryState::Missing => ("missing".to_owned(), String::new(), "-".to_owned()),
+            team::EntryState::Running { id } => {
+                let mode = existing
+                    .iter()
+                    .find(|current| current.id == id)
+                    .map_or("off", session_confinement_mode)
+                    .to_owned();
+                ("running".to_owned(), mode, id)
+            }
             team::EntryState::Conflict { id, reason } => {
                 has_conflict = true;
                 let state = match &reason {
@@ -1002,14 +1023,15 @@ async fn run_team_status(
                     .split_once("; ")
                     .map_or(full.as_str(), |(_, note)| note)
                     .to_owned();
-                (state.to_owned(), note)
+                (state.to_owned(), String::new(), note)
             }
         };
         output.push_str(&format!(
-            "{} {} {} {}\n",
+            "{} {} {} {} {}\n",
             session.name,
             team_label(session.team.as_ref()),
             state,
+            confine,
             note
         ));
     }
@@ -1106,12 +1128,17 @@ async fn dry_run_report(
     cwd: &Path,
     origin: TeamOrigin<'_>,
     actions: Vec<team::Action>,
+    existing: &[SessionSummary],
 ) -> anyhow::Result<String> {
     let mut output = String::new();
     for action in actions {
         match action {
             team::Action::AlreadyRunning { name, id } => {
-                output.push_str(&format!("already running {name} {id}\n"));
+                let mode = existing
+                    .iter()
+                    .find(|session| session.id == id)
+                    .map_or("off", session_confinement_mode);
+                output.push_str(&format!("already running {name} {id} (confine {mode})\n"));
             }
             team::Action::Start(session) => {
                 output.push_str(&dry_run_start(home, cwd, origin, &session).await?);
@@ -1179,14 +1206,17 @@ async fn dry_run_start(
     for (label, value) in session_details(session) {
         output.push_str(&format!("  {label}: {value}\n"));
     }
-    output.push_str(&format!(
-        "  confinement: {}\n",
-        if confine_plan.is_some() {
-            "confined"
-        } else {
-            "unconfined"
+    let mode = confine_plan
+        .as_ref()
+        .map_or("off", |plan| if plan.auto { "auto" } else { "manual" });
+    output.push_str(&format!("  confinement: {mode}\n"));
+    if let Some(plan) = &confine_plan
+        && plan.auto
+    {
+        for reason in &plan.reasons {
+            output.push_str(&format!("  {}: {}\n", reason.grant, reason.reason));
         }
-    ));
+    }
     if let Some(plan) = &confine_plan
         && !plan.grants.is_empty()
     {
@@ -1435,18 +1465,30 @@ async fn run_team_up(
             continue;
         };
         let mut added = Vec::new();
-        for grant in found {
+        for (grant, reason) in found {
             if !confine.grants.iter().any(|current| current == grant) {
                 confine.grants.push(grant.to_owned());
-                added.push(grant);
+                added.push((grant, reason));
             }
         }
+        confine.auto = true;
+        confine.reasons = added
+            .iter()
+            .map(|(grant, reason)| a2amx::wire::GrantReason {
+                grant: (*grant).to_owned(),
+                reason: reason.clone(),
+            })
+            .collect();
         if !added.is_empty() {
             write_stderr(
                 format!(
                     "auto confinement for session {}: grants {}\n",
                     session.name,
-                    added.join(", ")
+                    added
+                        .iter()
+                        .map(|(grant, _)| *grant)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
                 .into_bytes(),
             )
@@ -1459,7 +1501,7 @@ async fn run_team_up(
         }
     }
     if dry_run {
-        let output = dry_run_report(&home, &cwd, origin, actions).await?;
+        let output = dry_run_report(&home, &cwd, origin, actions, &existing).await?;
         write_stdout(output.into_bytes()).await?;
         note_lost_messages(&home, &wanted).await;
         return Ok(());
@@ -1472,7 +1514,14 @@ async fn run_team_up(
     for action in actions {
         let (name, id) = match action {
             team::Action::AlreadyRunning { name, id } => {
-                write_stdout(format!("already running {name} {id}\n").into_bytes()).await?;
+                let mode = existing
+                    .iter()
+                    .find(|session| session.id == id)
+                    .map_or("off", session_confinement_mode);
+                write_stdout(
+                    format!("already running {name} {id} (confine {mode})\n").into_bytes(),
+                )
+                .await?;
                 (name, id)
             }
             team::Action::Start(session) => {
@@ -1703,6 +1752,58 @@ async fn run_list(
         in_team && visible_to_viewer
     });
     write_stdout(format_session_table(&sessions, details).into_bytes()).await
+}
+async fn run_confine_show(home: PathBuf, reference: Option<String>) -> anyhow::Result<()> {
+    let mut client = Client::connect(&home).await?;
+    let sessions = request_sessions(&mut client).await?;
+    if sessions.is_empty() {
+        if let Some(reference) = reference {
+            bail!("unknown session {reference}");
+        }
+        write_stdout(b"no sessions\n".to_vec()).await?;
+        return Ok(());
+    }
+    let selected = match reference.as_deref() {
+        Some(reference) => {
+            let session = sessions
+                .iter()
+                .find(|session| {
+                    session.id == reference || session.name.as_deref() == Some(reference)
+                })
+                .ok_or_else(|| anyhow!("unknown session {reference}"))?;
+            vec![session]
+        }
+        None => sessions.iter().collect(),
+    };
+    let mut output = String::new();
+    for session in selected {
+        let name = session.name.as_deref().unwrap_or("-");
+        let mode = session_confinement_mode(session);
+        output.push_str(&format!(
+            "{name} {} {} confine {mode}\n",
+            session.id,
+            session.harness.as_str()
+        ));
+        let Some(info) = &session.confine else {
+            continue;
+        };
+        output.push_str("GRANT  SOURCE\n");
+        for grant in &info.grants {
+            let source = info
+                .reasons
+                .iter()
+                .find(|reason| reason.grant == *grant)
+                .map_or_else(
+                    || "set".to_owned(),
+                    |reason| format!("auto: {}", reason.reason),
+                );
+            output.push_str(&format!("{grant}  {source}\n"));
+        }
+        if !info.write.is_empty() {
+            output.push_str(&format!("write: {}\n", info.write.join(", ")));
+        }
+    }
+    write_stdout(output.into_bytes()).await
 }
 
 async fn run_kill(
@@ -2763,13 +2864,13 @@ fn terminal_size_with_default() -> anyhow::Result<(u16, u16)> {
     ))
 }
 
-const SESSION_HEADERS: [&str; 12] = [
-    "ID", "NAME", "HARNESS", "STATE", "UPTIME", "ACTIVITY", "IN-STATE", "ATTACHED", "PENDING",
-    "HELD", "QUOTA", "SIZE",
+const SESSION_HEADERS: [&str; 13] = [
+    "ID", "NAME", "HARNESS", "CONFINE", "STATE", "UPTIME", "ACTIVITY", "IN-STATE", "ATTACHED",
+    "PENDING", "HELD", "QUOTA", "SIZE",
 ];
-const DETAIL_HEADERS: [&str; 14] = [
-    "ID", "NAME", "HARNESS", "STATE", "UPTIME", "ACTIVITY", "IN-STATE", "ATTACHED", "PENDING",
-    "HELD", "QUOTA", "SIZE", "CWD", "COMMAND",
+const DETAIL_HEADERS: [&str; 15] = [
+    "ID", "NAME", "HARNESS", "CONFINE", "STATE", "UPTIME", "ACTIVITY", "IN-STATE", "ATTACHED",
+    "PENDING", "HELD", "QUOTA", "SIZE", "CWD", "COMMAND",
 ];
 const PICKER_HEADERS: [&str; 11] = [
     "ID", "NAME", "HARNESS", "STATE", "ACTIVITY", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
@@ -2949,6 +3050,7 @@ fn format_session_table(sessions: &[SessionSummary], details: bool) -> String {
                 id,
                 name,
                 harness,
+                session_confinement_mode(session).to_owned(),
                 state,
                 session
                     .uptime_secs

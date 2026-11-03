@@ -138,9 +138,9 @@ async fn kill_exited_removes_only_exited_sessions_and_frees_names() -> anyhow::R
     let listing = String::from_utf8(run_binary(dir.path(), &["list"])?.stdout)?;
     for id in ["s1", "s2"] {
         let cells = common::list_cells(&listing, id);
-        assert!(cells[3].starts_with("exited("));
-        assert_eq!(cells[4], "-");
-        assert_eq!(cells[6], "-");
+        assert!(cells[4].starts_with("exited("));
+        assert_eq!(cells[5], "-");
+        assert_eq!(cells[7], "-");
     }
 
     let removed = run_binary(dir.path(), &["kill", "--exited"])?;
@@ -161,9 +161,9 @@ async fn kill_exited_removes_only_exited_sessions_and_frees_names() -> anyhow::R
     let rows: Vec<Vec<_>> = listing
         .lines()
         .skip(1)
-        .map(|line| line.split_whitespace().take(4).collect())
+        .map(|line| line.split_whitespace().take(5).collect())
         .collect();
-    assert_eq!(rows, [["s3", "agent-live", "generic", "running"]]);
+    assert_eq!(rows, [["s3", "agent-live", "generic", "off", "running"]]);
     let reused = run_binary(
         dir.path(),
         &[
@@ -364,15 +364,18 @@ async fn default_list_is_lean_and_details_show_cwd_and_command() -> anyhow::Resu
     assert_eq!(
         plain.lines().next(),
         Some(
-            "ID  NAME        HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE",
+            "ID  NAME        HARNESS  CONFINE  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE",
         ),
     );
     let cells = common::list_cells(&plain, "s1");
-    assert_eq!(cells.len(), 12);
-    assert_eq!(&cells[..4], ["s1", "agent-plan", "generic", "running"]);
-    assert_eq!(cells[5], "working");
-    assert!(is_duration_cell(cells[4]));
-    assert!(is_duration_cell(cells[6]));
+    assert_eq!(cells.len(), 13);
+    assert_eq!(
+        &cells[..5],
+        ["s1", "agent-plan", "generic", "off", "running"]
+    );
+    assert_eq!(cells[6], "working");
+    assert!(is_duration_cell(cells[5]));
+    assert!(is_duration_cell(cells[7]));
     assert!(!plain.contains("sleep 30"));
     assert!(!plain.contains(&dir.path().to_string_lossy().into_owned()));
     let details = run_binary(dir.path(), &["list", "--details"])?;

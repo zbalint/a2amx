@@ -69,6 +69,55 @@ pub fn grants(
     found.push("cache");
     table_order(found)
 }
+/// Explain each grant that auto mode would add, preserving grant-table order.
+pub fn explain(
+    has_file: impl Fn(&str) -> bool,
+    git_config: Option<&str>,
+    has_host_path: impl Fn(&str) -> bool,
+) -> Vec<(&'static str, String)> {
+    let detected = detect(&has_file);
+    let remotes: Vec<&'static str> = git_config
+        .map(|config| git_remote_grants(config, &has_host_path))
+        .unwrap_or_default();
+    let mut found: Vec<(&'static str, String)> = grant::all()
+        .iter()
+        .filter_map(|grant| {
+            if detected.contains(&grant.name) {
+                // detect() selected this grant, so one of its markers is present.
+                let marker = grant
+                    .detect
+                    .iter()
+                    .copied()
+                    .find(|marker| has_file(marker))?;
+                Some((grant.name, format!("{marker} found")))
+            } else if remotes.contains(&grant.name) {
+                Some((grant.name, remote_reason(grant.name).to_owned()))
+            } else {
+                None
+            }
+        })
+        // `cache` is not a detector outcome and is always added.
+        .chain(std::iter::once((
+            "cache",
+            "always added by auto".to_owned(),
+        )))
+        .collect();
+    // The same grant can come from both a marker and a remote (none do today, but
+    // grant names are the only join); keep first in table order.
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|(name, _)| seen.insert(*name));
+    found
+}
+
+/// The fixed reason the section 3 table words for each remote-detected grant.
+fn remote_reason(name: &str) -> &'static str {
+    match name {
+        "ssh" => "git remote uses ssh",
+        "gh" => "git remote uses https and ~/.config/gh exists",
+        "git-credentials" => "git remote uses https and a git credentials file exists",
+        _ => "claimed by a git remote",
+    }
+}
 
 /// Render one copyable grants line.
 pub fn render(found: &[&'static str]) -> String {

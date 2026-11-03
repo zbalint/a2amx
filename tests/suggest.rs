@@ -112,6 +112,63 @@ fn grants_adds_cache_and_deduplicates_in_table_order() {
         vec!["ssh", "cargo", "node", "cache"]
     );
 }
+#[test]
+fn explain_reports_a_repeated_remote_once() {
+    let config = "[remote \"origin\"]\nurl = https://example.invalid/a.git\n\
+[remote \"upstream\"]\nurl = https://example.invalid/b.git\n";
+    assert_eq!(
+        suggest::explain(|_| false, Some(config), |path| path == "~/.config/gh"),
+        vec![
+            ("gh", "git remote uses https and ~/.config/gh exists".into()),
+            ("cache", "always added by auto".into()),
+        ]
+    );
+}
+
+#[test]
+fn explain_reports_marker_remote_and_cache_reasons() {
+    let ssh = "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n";
+    assert_eq!(
+        suggest::explain(|name| name == "Cargo.toml", Some(ssh), |_| false),
+        vec![
+            ("ssh", "git remote uses ssh".into()),
+            ("cargo", "Cargo.toml found".into()),
+            ("cache", "always added by auto".into()),
+        ]
+    );
+
+    let https = "[remote \"origin\"]\nurl = https://example.invalid/team/demo.git\n";
+    assert_eq!(
+        suggest::explain(
+            |_| false,
+            Some(https),
+            |path| matches!(path, "~/.config/gh" | "~/.git-credentials")
+        ),
+        vec![
+            ("gh", "git remote uses https and ~/.config/gh exists".into()),
+            (
+                "git-credentials",
+                "git remote uses https and a git credentials file exists".into()
+            ),
+            ("cache", "always added by auto".into()),
+        ]
+    );
+}
+
+#[test]
+fn explain_uses_the_first_marker_in_grant_order() {
+    assert_eq!(
+        suggest::explain(
+            |name| matches!(name, "pom.xml" | "build.gradle"),
+            None,
+            |_| false
+        ),
+        vec![
+            ("java", "pom.xml found".into()),
+            ("cache", "always added by auto".into()),
+        ]
+    );
+}
 
 #[test]
 fn render_cargo_and_cache_is_a_single_grants_line() {

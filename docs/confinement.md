@@ -164,6 +164,22 @@ outside the sandbox within minutes. Symlinked entries such as `hooks`, `agents` 
 can be replaced for good, which breaks a setup managed elsewhere. If `~/.claude` is itself a
 symlink, the grant opens its canonical target. Open it only for an agent you trust with that.
 
+## Inspecting a session's effective confinement
+
+The attach status line shows a dim `[confined]` tag for manually configured confinement
+and `[confined auto]` when global auto detection added grants.
+
+`a2amx list` and `a2amx list --details` add a `CONFINE` column immediately after
+`HARNESS`. It is `off` for an unconfined session, `manual` for explicit confinement,
+and `auto` when global auto detection was enabled. The value remains available for
+exited sessions.
+
+Use `a2amx confine show [SESSION]` to read the daemon's recorded confinement plan;
+omit `SESSION` to show every session. The output lists the session's mode, effective
+grants, their source (`set` or `auto: REASON`), and explicit writable paths. For an
+automatic session, the `auto: REASON` rows explain which project marker, git remote, or
+cache caused each detected grant.
+
 ## The method: open what an honest mistake can recover from
 
 Open a directory when an accident in it is recoverable: a cache is disposable, and a toolchain can be reinstalled. Keep credentials, the repository itself, installed binaries, and state closed. Prefer the narrowest cache directory.
@@ -465,6 +481,7 @@ HTTPS recipe above if that is preferable.
 | A file written under `/tmp` is not seen by a peer session | `/tmp` is private per session. | Use a directory in the workspace. |
 | Another session cannot find a helper daemon that one session started | A recorded process id is wrong across sessions, and a socket or file under `/tmp` or `$XDG_RUNTIME_DIR` is not shared. | Find the helper by a port or a shared writable directory; see [Background processes](harnesses.md#background-processes). |
 | A path in `write`, `hide`, or `unhide` is reported as `unresolved` in `--dry-run` | The operator path could not be canonicalized; the reason is shown as `not found`, `permission denied`, or another filesystem error. | Create or correct the path, or fix its permissions. Missing default hides continue to use `(skipped missing)`. |
+| I do not know what a session may touch | The effective confinement plan is recorded by the daemon. | Run `a2amx confine show [SESSION]`. |
 
 ## A complete team file
 

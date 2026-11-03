@@ -97,6 +97,7 @@ fn fake_sessions(team: &TeamScope) -> Vec<SessionSummary> {
         hold_reason: None,
         quota: None,
         harness: Harness::Generic,
+        confine: None,
         cwd: None,
         activity: Some(Activity::Idle),
         uptime_secs: Some(1),
@@ -133,6 +134,7 @@ fn fake_status(session: &str, team: &TeamScope) -> StatusInfo {
         harness: Some(Harness::Generic),
         activity: Some(Activity::Idle),
         confined: false,
+        confine_auto: false,
         starting: false,
         quota: None,
         team: Some(team.clone()),
@@ -784,7 +786,7 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
         .trim();
     let name_width = generated_name.len().max("NAME".len());
     let expected_header = format!(
-        "ID  {:<name_width$}  HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE",
+        "ID  {:<name_width$}  HARNESS  CONFINE  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE",
         "NAME",
         name_width = name_width,
     );
@@ -794,13 +796,13 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     let header = listing.lines().next().unwrap_or_default();
     assert_eq!(header, expected_header);
     let cells = common::list_cells(&listing, "s1");
-    assert_eq!(cells.len(), 12);
+    assert_eq!(cells.len(), 13);
     assert_eq!(cells[0], "s1");
     assert_ne!(cells[1], "-");
     a2amx::messaging::validate_name(cells[1])?;
-    assert_eq!(&cells[2..4], ["generic", "running"]);
-    assert_eq!(cells[5], "working");
-    for index in [4, 6] {
+    assert_eq!(&cells[2..5], ["generic", "off", "running"]);
+    assert_eq!(cells[6], "working");
+    for index in [5, 7] {
         let bytes = cells[index].as_bytes();
         assert!(bytes.len() >= 2);
         assert!(
@@ -814,11 +816,9 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     let explicit = run_binary(second_dir.path(), &["list"], &environment)?;
     assert_eq!(explicit.status.code(), Some(0));
     let explicit_listing = String::from_utf8(explicit.stdout)?;
-    assert!(
-        explicit_listing.starts_with(
-            "ID  NAME  HARNESS  STATE  UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\n",
-        )
-    );
+    assert!(explicit_listing.starts_with(
+        "ID  NAME  HARNESS  CONFINE  STATE  UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\n",
+    ));
     assert!(!explicit_listing.contains("s1"));
     Ok(())
 }
@@ -965,13 +965,16 @@ async fn named_session_appears_in_the_list_table() -> anyhow::Result<()> {
     assert!(output.status.success());
     let listing = String::from_utf8(output.stdout)?;
     assert!(listing.starts_with(
-        "ID  NAME        HARNESS  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\n",
+        "ID  NAME        HARNESS  CONFINE  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\n",
     ));
     let cells = common::list_cells(&listing, "s1");
-    assert_eq!(cells.len(), 12);
-    assert_eq!(&cells[..4], ["s1", "agent-plan", "generic", "running"]);
-    assert_eq!(cells[5], "working");
-    for index in [4, 6] {
+    assert_eq!(cells.len(), 13);
+    assert_eq!(
+        &cells[..5],
+        ["s1", "agent-plan", "generic", "off", "running"]
+    );
+    assert_eq!(cells[6], "working");
+    for index in [5, 7] {
         let bytes = cells[index].as_bytes();
         assert!(bytes.len() >= 2);
         assert!(
@@ -1105,14 +1108,14 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     assert_eq!(cells[0], "s1");
     assert_ne!(cells[1], "-");
     a2amx::messaging::validate_name(cells[1])?;
-    assert_eq!(&cells[2..4], ["generic", "running"]);
-    assert_eq!(cells[5], "busy");
-    assert_eq!(cells[7], "yes");
-    assert_eq!(cells[8], "0");
-    assert_eq!(cells[9], "human_draft");
-    assert_eq!(cells[10], "-");
-    assert_eq!(cells[11], "80x22");
-    for index in [4, 6] {
+    assert_eq!(&cells[2..5], ["generic", "off", "running"]);
+    assert_eq!(cells[6], "busy");
+    assert_eq!(cells[8], "yes");
+    assert_eq!(cells[9], "0");
+    assert_eq!(cells[10], "human_draft");
+    assert_eq!(cells[11], "-");
+    assert_eq!(cells[12], "80x22");
+    for index in [5, 7] {
         let bytes = cells[index].as_bytes();
         assert!(bytes.len() >= 2);
         assert!(
@@ -1136,11 +1139,11 @@ async fn attached_input_sets_hold_and_prefix_release_clears_it() -> anyhow::Resu
     assert_eq!(cells[0], "s1");
     assert_ne!(cells[1], "-");
     a2amx::messaging::validate_name(cells[1])?;
-    assert_eq!(&cells[2..4], ["generic", "running"]);
-    assert_eq!(cells[5], "working");
-    assert_eq!(cells[7], "yes");
-    assert_eq!(cells[8], "0");
-    assert_eq!(cells[9], "-");
+    assert_eq!(&cells[2..5], ["generic", "off", "running"]);
+    assert_eq!(cells[6], "working");
+    assert_eq!(cells[8], "yes");
+    assert_eq!(cells[9], "0");
+    assert_eq!(cells[10], "-");
 
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;

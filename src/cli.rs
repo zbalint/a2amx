@@ -176,6 +176,11 @@ pub enum Command {
 pub enum ConfineAction {
     /// List the named confinement grants.
     List,
+    /// Show the confinement mode and grants of running or exited sessions.
+    Show {
+        /// Session name or id; omit to show every session.
+        session: Option<String>,
+    },
     /// Print a [session.confine] fragment for the build tools found in DIR.
     Suggest {
         /// Project directory; defaults to the current directory.

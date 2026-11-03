@@ -14,6 +14,7 @@ fn info(address: &str) -> StatusInfo {
         harness: None,
         activity: None,
         confined: false,
+        confine_auto: false,
         starting: false,
         quota: None,
         team: None,
@@ -50,6 +51,15 @@ fn confined_status_shows_dim_confined_tag() {
     let rendered = status::render("agent-plan", Some(&status), 2, 80, 24);
     let text = String::from_utf8(rendered).expect("utf8 status");
     assert!(text.contains("\x1b[2m[confined]\x1b[22m"));
+}
+#[test]
+fn auto_confined_status_shows_mode_tag() {
+    let mut status = info("agent-plan@host-a");
+    status.confined = true;
+    status.confine_auto = true;
+    let rendered = status::render("agent-plan", Some(&status), 2, 80, 24);
+    let text = String::from_utf8(rendered).expect("utf8 status");
+    assert!(text.contains("\x1b[2m[confined auto]\x1b[22m"));
 }
 
 #[test]

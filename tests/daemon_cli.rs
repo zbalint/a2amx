@@ -1122,7 +1122,7 @@ fn screen_does_not_resize_or_detach_an_attached_session() {
         .unwrap();
     let before = stdout(&run(&home, &["list"]));
     let before_cells = common::list_cells(&before, "s1");
-    let before_size = before_cells[11].to_owned();
+    let before_size = before_cells[12].to_owned();
 
     let output = screen_until(&home, &["screen", "s1"], "attached\n");
     assert!(output.status.success(), "stderr: {}", stderr(&output));
@@ -1130,8 +1130,8 @@ fn screen_does_not_resize_or_detach_an_attached_session() {
 
     let after = stdout(&run(&home, &["list"]));
     let after_cells = common::list_cells(&after, "s1");
-    assert_eq!(after_cells[7], "yes");
-    assert_eq!(after_cells[11], before_size);
+    assert_eq!(after_cells[8], "yes");
+    assert_eq!(after_cells[12], before_size);
 }
 
 #[test]
@@ -1177,7 +1177,7 @@ fn screen_reads_the_last_screen_after_exit() {
             .find(|line| line.starts_with("s1 "))
             .is_some_and(|line| {
                 line.split_whitespace()
-                    .nth(3)
+                    .nth(4)
                     .is_some_and(|state| state.starts_with("exited("))
             })
         {

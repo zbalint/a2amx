@@ -181,26 +181,30 @@ a five-session team can take roughly ten to twenty seconds when all sessions are
 The command does not detect whether its caller is one of the selected agents; the state
 directory is the trust boundary. Use `--except` for the session running the command.
 
-`a2amx team status` also needs a running daemon and prints one `NAME TEAM STATE NOTE`
+`a2amx team status` also needs a running daemon and prints one `NAME TEAM STATE CONFINE NOTE`
 row per wanted session in file order. `TEAM` is the configured team name, with a
 ` (private)` suffix for private teams, or `-` when ungrouped. `STATE` is `missing`,
-`running`, `exited`, or `team-mismatch`; `running` means only that the name and team
-scope match, not that the command, cwd, role, or other settings are current. It exits
-0 when `team up` would proceed (including missing sessions) and 1 when `team up` would
-refuse because of a conflict. A conflict note uses the same remediation text as
-`team up`; status returns that exit code directly without an `a2amx:` error line.
+`running`, `exited`, or `team-mismatch`; `CONFINE` is `off`, `manual`, or `auto` for
+running sessions and is blank when the session is missing or conflicts. `running` means
+only that the name and team scope match, not that the command, cwd, role, or other settings
+are current. It exits 0 when `team up` would proceed (including missing sessions) and 1
+when `team up` would refuse because of a conflict. A conflict note uses the same remediation
+text as `team up`; status returns that exit code directly without an `a2amx:` error line.
 
 `a2amx team up --dry-run` uses the same daemon list and conflict preflight, then prints
 `would start`/`already running` rows and the resolved harness, cwd, team visibility and
 allow list, role, attachment, watch, controller, heartbeat, confinement, writable and
 protected paths, final hidden paths, unresolved operator paths with their option and
-filesystem reason, skipped missing defaults, and redacted command for
-each session that would start. Paths accept absolute names, `~`, `~/...`, or other
-relative names resolved against the session cwd; `$VAR`, `~user`, and empty entries
-are rejected. A relative directory literally named `$x` is written `./$x`. It needs a
-running daemon, exits 1 on the same conflicts, and never creates sessions or installs
-the OMP extension. `--dry-run` cannot be combined with `--detach` or inline
-`NAME=EXECUTABLE` items.
+filesystem reason, skipped missing defaults, and redacted command for each session that
+would start. The confinement line is `confinement: off`, `confinement: manual`, or
+`confinement: auto`; automatic sessions also print one `  <grant>: <reason>` line per
+detected grant, such as `  cache: always added by auto`. Already-running rows include
+their current mode as `(confine off|manual|auto)`.
+Paths accept absolute names, `~`, `~/...`, or other relative names resolved against the
+session cwd; `$VAR`, `~user`, and empty entries are rejected. A relative directory literally
+named `$x` is written `./$x`. It needs a running daemon, exits 1 on the same conflicts, and
+never creates sessions or installs the OMP extension. `--dry-run` cannot be combined with
+`--detach` or inline `NAME=EXECUTABLE` items.
 
 After `team up`, `team status`, or a dry run, the command may print
 `note: N message(s) to this team were lost in a daemon restart; see a2amx messages

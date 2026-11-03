@@ -1,7 +1,8 @@
 use a2amx::emulator::Scroll;
 use a2amx::wire::{
-    Activity, ClientFrame, FrameDecoder, MAX_FRAME_LEN, MessageInfo, Request, Response,
-    ServerFrame, SessionSummary, TeamMember, encode_frame,
+    Activity, AgentSummary, ClientFrame, ConfineInfo, FrameDecoder, GrantReason, MAX_FRAME_LEN,
+    MessageInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
+    encode_frame,
 };
 
 #[test]
@@ -328,6 +329,7 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             hold_reason: None,
             quota: None,
             harness: Default::default(),
+            confine: None,
             team: None,
             cwd: None,
             activity: None,
@@ -360,6 +362,7 @@ fn session_summary_durations_round_trip_when_present() {
             hold_reason: None,
             quota: None,
             harness: Default::default(),
+            confine: None,
             team: None,
             cwd: None,
             activity: Some(Activity::Working),
@@ -581,6 +584,7 @@ fn messaging_control_variants_round_trip() {
                 you: false,
                 quota: None,
                 harness: Default::default(),
+                confine: None,
                 cwd: None,
                 activity: None,
             }],
@@ -617,6 +621,7 @@ fn messaging_control_variants_round_trip() {
             you: false,
             quota: None,
             harness: Harness::Omp,
+            confine: None,
             cwd: Some("/tmp/agent".into()),
             activity: None,
         }],
@@ -721,6 +726,7 @@ fn additive_visibility_fields_round_trip() {
             hold_reason: Some("human_draft".into()),
             quota: None,
             harness: Default::default(),
+            confine: None,
             team: None,
             cwd: None,
             activity: None,
@@ -789,6 +795,47 @@ fn additive_visibility_fields_round_trip() {
         status
     );
 }
+#[test]
+fn confinement_visibility_fields_are_backward_compatible() {
+    let old_session: SessionSummary = serde_json::from_value(serde_json::json!({
+        "id": "s-old",
+        "argv": ["sh"],
+        "cols": 80,
+        "rows": 24,
+        "exit_code": null,
+        "attached": false
+    }))
+    .expect("old session payload");
+    assert_eq!(old_session.confine, None);
+
+    let old_agent: AgentSummary = serde_json::from_value(serde_json::json!({
+        "address": "agent-old@host-a",
+        "state": "running",
+        "attached": false
+    }))
+    .expect("old agent payload");
+    assert_eq!(old_agent.confine, None);
+
+    let old_status: StatusInfo =
+        serde_json::from_value(serde_json::json!({"address": "agent-old@host-a", "pending": 0}))
+            .expect("old status payload");
+    assert!(!old_status.confine_auto);
+
+    let confine = ConfineInfo {
+        auto: true,
+        grants: vec!["cache".into(), "ssh".into()],
+        write: vec!["~/.cache".into()],
+        reasons: vec![GrantReason {
+            grant: "cache".into(),
+            reason: "always added by auto".into(),
+        }],
+    };
+    let encoded = serde_json::to_value(&confine).expect("confinement payload");
+    assert_eq!(
+        serde_json::from_value::<ConfineInfo>(encoded).unwrap(),
+        confine
+    );
+}
 
 #[test]
 fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
@@ -801,6 +848,7 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
         harness: Some(Harness::Claude),
         activity: Some(Activity::Working),
         confined: false,
+        confine_auto: false,
         starting: true,
         quota: Some(QuotaInfo {
             five_hour_left: Some(15),
@@ -877,6 +925,8 @@ fn status_members_default_omit_and_round_trip() {
     let empty = serde_json::to_value(&old).unwrap();
     assert!(empty.get("members").is_none());
     assert!(empty.get("starting").is_none());
+    assert!(empty.get("confine_auto").is_none());
+    assert!(empty.get("confined").is_none());
 
     let old_member: TeamMember = serde_json::from_value(
         serde_json::json!({"id":"old","name":"old","activity":"idle","exited":false}),
@@ -894,6 +944,7 @@ fn status_members_default_omit_and_round_trip() {
         activity: None,
         quota: None,
         confined: false,
+        confine_auto: false,
         starting: true,
         team: None,
         role: None,
@@ -1004,6 +1055,8 @@ fn confine_request_round_trips_and_defaults_missing_fields() {
             unhide: vec![],
             no_default_hides: true,
             grants: vec![],
+            auto: false,
+            reasons: vec![],
             keep_env: vec!["GITHUB_TOKEN".into()],
             team_file: Some("/workspace/team.toml".into()),
         },

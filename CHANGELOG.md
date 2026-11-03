@@ -7,6 +7,13 @@ All notable user-visible changes are listed here. The format follows
 
 ### Added
 
+- Confinement is visible. The status line shows `[confined auto]` or `[confined]`; `list` and `team status` gain a
+  `CONFINE` column (`off`, `manual`, `auto`); `team up --dry-run` prints the mode and, for auto, the reason for
+  each grant it added; the new `a2amx confine show [SESSION]` prints a running session's mode, grants and
+  operator `write` entries; and the MCP `list_agents` result carries each agent's `confine`, so a peer can tell
+  what another agent can reach. Additive protocol fields (`confine` on session and agent summaries,
+  `confine_auto` on the status frame, `auto` and `reasons` on the confinement request); an older client or
+  daemon ignores them (`docs/confinement.md`, `docs/cli.md`).
 - Confinement grants `cache` (the whole `~/.cache`, read-write; the default hides under it stay) and
   `huggingface-token` (the Hugging Face login file and its two environment variables), so a team no longer needs a
   raw `write` of `~/.cache` (`docs/confinement.md`).

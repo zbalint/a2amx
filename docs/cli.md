@@ -18,6 +18,7 @@ a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx kill --exited              # remove every exited session without prompting
 a2amx reset <id|name>               # type the configured reset sequence
 a2amx screen <id|name> [--rows N]   # read visible screen text without attaching
+a2amx confine show [<id|name>]  # show recorded confinement mode and grants
 a2amx daemon start --host-name host-a  # names this host in addresses (name@host-a)
 # --harness is inferred from the command name when omitted (claude, codex, omp)
 a2amx new --name agent-plan --harness claude -- claude
@@ -88,11 +89,32 @@ namespace are base options, and descriptor restrictions are a daemon property.
 Rootless runtime sockets under `$XDG_RUNTIME_DIR` remain hidden. These flags require
 `--confine`; path lists accept at most 64 entries and each entry is capped at 4096 bytes.
 
-The session status line adds a dim `[confined]` tag immediately after the session name.
+The session status line adds a dim `[confined]` tag immediately after the session name,
+or `[confined auto]` when global auto detection added grants. `a2amx list` and
+`a2amx list --details` add `CONFINE` immediately after `HARNESS`; it is `off`, `manual`,
+or `auto`, including for exited sessions.
 `a2amx team up --dry-run` reports confinement, writable/protected paths, the final hidden
 paths, and missing paths skipped from the launch plan. A socket or file created on the host
 after launch is visible when it is outside every launch-time hide; start container daemons
 before a confined session if their socket must be hidden.
+
+`a2amx confine show [<id|name>]` reads the daemon's recorded plan. Omit the reference to
+show every session. It prints the mode, effective grants, each grant's source, and
+explicit writable paths. Automatic grants include their detector reason:
+
+```text
+$ a2amx confine show agent-plan
+agent-plan s1 generic confine manual
+GRANT  SOURCE
+cargo  set
+write: /tmp/a2amx-doc-project
+```
+
+For `a2amx team up --dry-run`, each session that would start includes
+`confinement: off`, `confinement: manual`, or `confinement: auto`; automatic sessions
+also print one `  <grant>: <reason>` line per detected grant, such as
+`  cache: always added by auto`. An already-running session is reported with its mode,
+for example `already running agent-plan s1 (confine manual)`.
 
 See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.
 

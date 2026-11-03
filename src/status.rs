@@ -252,6 +252,7 @@ pub fn render(
     let mut show_team = team.is_some();
     let mut show_harness = harness.is_some();
     let mut show_confined = info.is_some_and(|info| info.confined);
+    let confine_auto = info.is_some_and(|info| info.confine_auto);
     let mut show_pending = pending.is_some();
     let mut show_hint = hold_reason
         .as_deref()
@@ -260,7 +261,7 @@ pub fn render(
     loop {
         let left = left_spans(
             &name,
-            show_confined,
+            show_confined.then_some(confine_auto),
             show_activity.then_some(activity).flatten(),
             show_quota
                 .then(|| quota.as_ref().map(|(text, limit)| (text.as_str(), *limit)))
@@ -304,7 +305,7 @@ pub fn render(
 
     let left = left_spans(
         &name,
-        show_confined,
+        show_confined.then_some(confine_auto),
         show_activity.then_some(activity).flatten(),
         show_quota
             .then(|| quota.as_ref().map(|(text, limit)| (text.as_str(), *limit)))
@@ -415,7 +416,7 @@ fn hold_text(reason: &str, hinted: bool, prefix: u8) -> String {
 
 fn left_spans(
     name: &str,
-    confined: bool,
+    confined: Option<bool>,
     activity: Option<DotState>,
     quota: Option<(&str, bool)>,
     role: Option<&str>,
@@ -427,8 +428,13 @@ fn left_spans(
         Span::styled(NAME_OPEN, name, NAME_CLOSE),
         Span::plain(" "),
     ];
-    if confined {
-        spans.push(Span::styled("\x1b[2m", "[confined]", "\x1b[22m"));
+    if let Some(confine_auto) = confined {
+        let tag = if confine_auto {
+            "[confined auto]"
+        } else {
+            "[confined]"
+        };
+        spans.push(Span::styled("\x1b[2m", tag, "\x1b[22m"));
         spans.push(Span::plain(" "));
     }
     if let Some(activity) = activity {

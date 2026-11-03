@@ -207,3 +207,24 @@ rerun it once and record it as pre-existing if it passes.
 | `tests/team.rs:1449` pins the header `NAME TEAM STATE NOTE\n` | `tests/team.rs:1449` | grep |
 | `session_value_rows` feeds the tables and the picker | `src/main.rs:2780`, `:2811`, `:2932`, `:3487` | read |
 | Wire derives have no `deny_unknown_fields`; new fields follow the `Option`+`skip_serializing_if` and `is_default` style | `src/wire.rs` | read (consultant) |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5 (not fresh: its session could not be reset by the architect); developer and tester OMP, working slot openai-codex/gpt-5.6-luna, advisor slot openai-codex/gpt-5.6-luna (the developer's advisor model was not exposed). BLOCKED/amend cycles: 1 (the developer's BLOCKED was a misreading of three function signatures, retracted without an amendment).
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Opus 5.5 | Section 1 listed the deferred items as rejected while grilling, but no owner turn rejected them | Reworded as the architect's deferrals |
+| Draft review | consultant, Opus 5.5 | `ConfineRequest` is built as a full literal in `src/team.rs`, outside the scope list | `src/team.rs` added to scope |
+| Draft review | consultant, Opus 5.5 | "grants, table order" contradicted `Plan.grants` (sorted by name); the implicit `harness-config` never reached `Plan.grants` | Sorted by name, implicit grant included |
+| Draft review | consultant, Opus 5.5 | The auto plus explicit `cargo` scenario would show `cargo` as auto-found, contradicting the stderr line | Reasons only for grants auto added |
+| Draft review | consultant, Opus 5.5 | `suggest::detect` returns names only; Acceptance 2 named an input that cannot occur; Acceptance 8 was not a real test; `tests/team.rs:1449` pin unlisted | New `suggest::explain`, real abuse tests, pin listed |
+| Draft review | consultant, Opus 5.5 | Peers need the operator `write` entries to know what another agent can reach | `write` added to `ConfineInfo` |
+| Implementation | developer, gpt-5.6-luna | BLOCKED claimed three test files held struct literals; they hold function signatures | Retracted, no amendment; the architect had not run the full struct-literal inventory before lock (gate step 10) |
+| Architect review | architect, Sonnet 5.5 | `explain` copied the git-remote parser instead of reusing `git_remote_grants` | Rebuilt on `detect` and `git_remote_grants` (fix round 1) |
+| Architect review | architect, Sonnet 5.5 | A stray doc-comment hunk in `src/wire.rs`; the section 5 docs were missing from the first report | Removed; docs added |
+| Tester pass | tester, gpt-5.6-luna | Mutation survivor: `session_confinement_mode` forced to `off` passed the suite; four gaps (default `confine_auto`, grant sorting and implicit grant, reset with auto reasons) | Tests added in fix round 1 |
+| Architect review | architect, Sonnet 5.5 | Mutation survivor: `auto` set only when grants were added passed the suite | Test added in fix round 2 |
+| Tester pass | tester, gpt-5.6-luna | Linker SIGBUS: `/tmp` was 93% full | Target directory moved to `~/.cache`; not a spec problem |
+
+Follow-up, not fixed here (backlog F72): `confine show` labels the implicit `harness-config` grant `set`, which the operator did not set.

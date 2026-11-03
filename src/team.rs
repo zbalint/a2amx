@@ -707,6 +707,8 @@ fn merge_confine(
         no_default_hides: !default_hides,
         grants,
         keep_env,
+        auto: false,
+        reasons: Vec::new(),
         team_file: None,
     }))
 }

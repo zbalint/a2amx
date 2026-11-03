@@ -3080,6 +3080,39 @@ fn harness_config_default_opens_only_the_harness_root() {
 }
 
 #[test]
+fn confine_info_grants_are_sorted_deduplicated_and_include_implicit_harness_config() {
+    let claude = Fixture::new();
+    populate_claude_overlay(&claude, false);
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["ssh".into(), "cache".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &claude.cwd,
+        &claude.host(),
+    )
+    .expect("Claude plan");
+    assert_eq!(plan.grants, vec!["cache", "ssh"]);
+    let info = plan.confine_info();
+    assert_eq!(info.grants, vec!["cache", "harness-config", "ssh"]);
+    assert_eq!(info.write, Vec::<String>::new());
+
+    // An impersonal request that already names harness-config must not duplicate it.
+    let granted = confine::plan(
+        &ConfineRequest {
+            grants: vec!["harness-config".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &claude.cwd,
+        &claude.host(),
+    )
+    .expect("explicit harness-config plan");
+    assert_eq!(granted.confine_info().grants, vec!["harness-config"]);
+}
+
+#[test]
 fn path_lists_and_argv_sizes_are_capped() {
     let fixture = Fixture::new();
     let too_many = ConfineRequest {

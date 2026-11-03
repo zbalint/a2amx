@@ -415,6 +415,7 @@ fn summary(name: &str, id: &str, exit_code: Option<i32>) -> SessionSummary {
         hold_reason: None,
         quota: None,
         harness: Default::default(),
+        confine: None,
         cwd: None,
         activity: None,
         team: None,
@@ -1446,9 +1447,9 @@ command = ["cat"]
     );
     assert!(status.stderr.is_empty());
     let stdout = String::from_utf8(status.stdout).unwrap();
-    assert!(stdout.contains("NAME TEAM STATE NOTE\n"));
-    assert!(stdout.contains("running - running s1\n"));
-    assert!(stdout.contains("missing - missing -\n"));
+    assert!(stdout.contains("NAME TEAM STATE CONFINE NOTE\n"));
+    assert!(stdout.contains("running - running off s1\n"));
+    assert!(stdout.contains("missing - missing  -\n"));
 
     let after = run_binary(dir.path(), &["list"]).unwrap().stdout;
     assert_eq!(after, before);
@@ -1677,7 +1678,7 @@ async fn dry_run_expands_home_relative_confine_paths() {
         String::from_utf8_lossy(&plain_output.stderr)
     );
     let plain_stdout = String::from_utf8(plain_output.stdout).unwrap();
-    assert!(plain_stdout.contains("  confinement: confined\n"));
+    assert!(plain_stdout.contains("  confinement: manual\n"));
     assert!(!plain_stdout.contains("  grants: "));
 }
 
@@ -1826,7 +1827,7 @@ async fn dry_run_prints_exact_private_team_report() {
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  confinement: unconfined\n  command: cat\n"
+        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  confinement: off\n  command: cat\n"
     );
 }
 
@@ -1860,7 +1861,7 @@ async fn dry_run_prints_exact_already_running_report() {
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "already running running s1\n"
+        "already running running s1 (confine off)\n"
     );
 }
 
@@ -1993,10 +1994,10 @@ async fn up_starts_in_order_and_skips_running_sessions_without_attachment() {
     let listed = String::from_utf8(listed.stdout).unwrap();
     for (id, name) in [("s1", "architect"), ("s2", "developer")] {
         let cells = common::list_cells(&listed, id);
-        assert_eq!(&cells[..4], [id, name, "generic", "running"]);
-        assert_eq!(cells[5], "working");
-        assert_eq!(cells[7], "no");
-        for index in [4, 6] {
+        assert_eq!(&cells[..5], [id, name, "generic", "off", "running"]);
+        assert_eq!(cells[6], "working");
+        assert_eq!(cells[8], "no");
+        for index in [5, 7] {
             let bytes = cells[index].as_bytes();
             assert!(bytes.len() >= 2);
             assert!(
@@ -2011,7 +2012,7 @@ async fn up_starts_in_order_and_skips_running_sessions_without_attachment() {
     assert!(second.status.success());
     assert_eq!(
         second.stdout,
-        b"already running architect s1\nalready running developer s2\n"
+        b"already running architect s1 (confine off)\nalready running developer s2 (confine off)\n"
     );
     let listed_again = run_binary(dir.path(), &["list"]).unwrap();
     assert_eq!(listed_again.stdout, listed.as_bytes());
@@ -2053,7 +2054,11 @@ async fn down_kills_only_named_team_sessions_and_reports_missing_names() {
         b"no session architect\nno session developer\n"
     );
     let listed = String::from_utf8(run_binary(dir.path(), &["list"]).unwrap().stdout).unwrap();
-    assert!(listed.contains("s3  unrelated  generic  running"));
+    let cells = common::list_cells(&listed, "s3");
+    assert_eq!(
+        &cells[..5],
+        ["s3", "unrelated", "generic", "off", "running"]
+    );
     assert!(!listed.contains("architect") && !listed.contains("developer"));
     let named = run_binary(dir.path(), &["team", "down", "unrelated", "missing"]).unwrap();
     assert!(named.status.success());
@@ -2189,7 +2194,8 @@ command = ["cat"]
             .contains("failed broken:")
     );
     let listed = String::from_utf8(run_binary(dir.path(), &["list"]).unwrap().stdout).unwrap();
-    assert!(listed.contains("s1  started  generic  running"));
+    let cells = common::list_cells(&listed, "s1");
+    assert_eq!(&cells[..5], ["s1", "started", "generic", "off", "running"]);
     assert!(!listed.contains("broken") && !listed.contains("later"));
 }
 
@@ -2207,8 +2213,16 @@ async fn flag_form_starts_bare_executables() {
         b"started architect s1\nstarted developer s2\n"
     );
     let listed = String::from_utf8(run_binary(dir.path(), &["list"]).unwrap().stdout).unwrap();
-    assert!(listed.contains("s1  architect  generic  running"));
-    assert!(listed.contains("s2  developer  generic  running"));
+    let architect = common::list_cells(&listed, "s1");
+    let developer = common::list_cells(&listed, "s2");
+    assert_eq!(
+        &architect[..5],
+        ["s1", "architect", "generic", "off", "running"]
+    );
+    assert_eq!(
+        &developer[..5],
+        ["s2", "developer", "generic", "off", "running"]
+    );
 }
 
 #[test]
@@ -2645,7 +2659,7 @@ cwd = "/"
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  role: developer\n  attach: true\n  watch: t-other\n  control_from: t-other\n  heartbeat: 5s\n  activity: working_after 2m, idle_after 30s\n  confinement: unconfined\n  command: cat\nwould start t-other\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  confinement: unconfined\n  command: cat\n",
+        "would start t-worker\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  role: developer\n  attach: true\n  watch: t-other\n  control_from: t-other\n  heartbeat: 5s\n  activity: working_after 2m, idle_after 30s\n  confinement: off\n  command: cat\nwould start t-other\n  harness: generic\n  cwd: /\n  team: t, private, allow: -\n  confinement: off\n  command: cat\n",
     );
 }
 
@@ -2869,6 +2883,8 @@ enabled = false
             unhide: vec![],
             no_default_hides: false,
             grants: vec!["docker".into()],
+            auto: false,
+            reasons: vec![],
             keep_env: vec!["GITHUB_TOKEN".into()],
             team_file: None,
         })
