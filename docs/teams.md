@@ -132,9 +132,7 @@ copyable grants fragment for a local team file. Auto detection reads only a regu
 `.git/config` of at most 65,536 bytes, does not follow worktree `.git` files, and
 treats unreadable or invalid input as no git grants.
 
-Under `auto`, `git push` works only when a remote is detected. A `.git` file for a
-worktree or submodule, and a local team file, require an explicit grant. HTTPS pushes
-through `gh` also require `gh auth setup-git`.
+See [automatic grant detection in the confinement guide](confinement.md#automatic-grant-detection) for the `auto` mode's git behavior.
 
 A confined Claude or OMP session gets its harness configuration root writable and
 persistent by default. This default is equivalent to the `harness-config` behavior;

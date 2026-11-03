@@ -17,7 +17,7 @@ Hide and write are strict by default; you open what you name.
 
 You can configure confinement on one command, in a team file, or by previewing a team file before starting it.
 
-The quickest way to get the `write` line for a project is `a2amx confine suggest [DIR]`. It checks the project's known build-file markers and prints the matching fragment without requiring a daemon or `HOME`.
+The quickest way to get the grants line for a project is `a2amx confine suggest [DIR]`. It checks the project's known build-file markers and supported git remotes, prints a copyable `grants = [...]` line, and uses `HOME` when it is available; it does not require a daemon.
 
 ### One command
 
@@ -28,8 +28,13 @@ a2amx new --confine \
   --confine-write PATH \
   --confine-unhide PATH \
   --confine-hide PATH \
+  --confine-grant NAME \
+  --confine-keep-env NAME \
+  --confine-no-default-hides \
   -- <command>
 ```
+
+`--confine-grant NAME` opens one named capability, `--confine-keep-env NAME` returns one listed credential environment variable to this session, and `--confine-no-default-hides` disables optional home hides while keeping mandatory hides.
 
 `~` and `~/...` expand to your home directory. Absolute paths are accepted; other relative paths are relative to the session's working directory. Environment variables are not expanded, and `~user` forms are rejected. To reach a relative directory literally named `$x`, write `./$x`. A path that does not exist is retained in the dry run as an unresolved operator entry with its option and reason; missing defaults remain skipped. Each of the three lists accepts at most 64 entries.
 
@@ -37,19 +42,17 @@ When confinement is enabled by `a2amx new --confine` or a team file, no cache gr
 implicit. `cache` opens `~/.cache`; marker-specific toolchain grants open their literal
 tool directories only when listed. Claude and OMP sessions always open their own harness
 config root read-write and persistent by default. Use `a2amx confine suggest` to print a
-copyable grants fragment, or add grants explicitly to the team/session table. Auto
-detection recognizes Go and Python markers and enables their `go` and `python` grants
-with their declared paths; paths relocated by environment variables still need an explicit
-write entry.
+copyable grants fragment, or add grants explicitly to the team/session table.
+Auto detection covers the marker-based grants listed in [the detection table](#automatic-grant-detection), adds `ssh`, `gh`, or `git-credentials` from supported git remotes, and always adds `cache`; explicit confinement still has no implicit cache grant. Paths relocated by environment variables still need an explicit `write` entry.
 
 ### Team file
 
 Use one optional `[confine]` table for team defaults and `[session.confine]` for per-session
 settings. Set `enabled = true` in either table; lists add and scalars override. `write`,
-`hide`, and `unhide` are arrays, `default_hides` and `auto` are booleans, and `grants`
-names a capability for that session. In the complete example below, `cwd = "."` is
-relative to the team file's directory; other relative paths are relative to the resolved
-session working directory.
+`hide`, `unhide`, and `keep_env` are arrays, with `keep_env` per-session only;
+`default_hides` and `auto` are booleans, and `grants` names a capability for that
+session. In the complete example below, `cwd = "."` is relative to the team file's
+directory; other relative paths are relative to the resolved session working directory.
 
 ### Preview
 
@@ -59,7 +62,7 @@ Run this before starting the team:
 a2amx team up --dry-run
 ```
 
-The dry run shows the effective restrictions. An operator `write`, `hide`, or `unhide` entry that cannot be resolved is printed as `unresolved: PATH (write|hide|unhide: REASON)`; missing default hides and other optional paths remain `hidden: PATH (skipped missing)`. The complete team file at the end of this page parses as a team file.
+The dry run shows the effective restrictions. An operator `write`, `hide`, or `unhide` entry that cannot be resolved is printed as `unresolved: PATH (write|hide|unhide: REASON)`; missing default hides and other optional paths remain `hidden: PATH (skipped missing)`.
 
 ### How the options combine
 
@@ -202,10 +205,6 @@ When a tool reports `Read-only file system`, add the directory named in the erro
 
 `write = ["~"]` is an operator choice, not a sandbox escape hidden behind a default. It leaves these residuals:
 
-Auto-grant consent is permission for the named grant, not a narrower path limit.
-Once accepted, that grant opens every path described by its row; the prompt explains
-what those paths expose but does not change the confinement plan.
-
 1. The Git history inside a writable Git directory is writable, so an agent can rewrite commits.
 2. Harness roots are writable and persistent by default for Claude and OMP, including settings, hooks, plugins and new files. Treat them as trusted program directories; a running unconfined sibling may load changes immediately. Only this session's repository `hooks`/`config` and team file are protected; every other repository's `.git/hooks` and `.git/config`, and every other `a2amx.toml` under a writable home, are writable. Windows drives under `/mnt` are writable if `/mnt` is opened.
 3. Hides are decided when the session starts. A file created later at a hidden path is not hidden.
@@ -215,22 +214,20 @@ what those paths expose but does not change the confinement plan.
 7. The daemon finds `bwrap` and the `omp` quota probe only in absolute `PATH` directories; relative and empty entries are ignored.
    An `omp` started from a path the session can write (a relative path with a slash, or an absolute one outside the `PATH` directories that `write` opens) is still run by the quota probe outside the sandbox, so keep the harness binary in a read-only directory.
 
+Auto-grant consent is permission for the named grant, not a narrower path limit.
+Once accepted, that grant opens every path described by its row; the prompt explains
+what those paths expose but does not change the confinement plan.
 
 ## Harness login and state files
 
-Claude and OMP sessions bind their real harness configuration root read-write and
-persistent by default, so the harness can renew its token and save settings, hooks,
-skills and new files. This is broad access to programs that sibling unconfined sessions
-may load immediately; use it only for an agent you trust.
-`/login` and saves to `~/.claude.json` from inside a confined session still do not work:
-their lock and temporary files live in your home, which stays read-only. Run `claude /login`
-once in a normal terminal; every session picks up that login.
-
-Claude and OMP sessions bind their harness configuration root read-write and persistent by
-default. Existing settings, plugins, hooks, instructions, and files created during the
-session remain in that root; this broad access can run hooks or programs immediately, so
-use it only for an agent you trust. The explicit `harness-config` grant names the same
-capability for a session that needs it outside the default harness path.
+Claude and OMP sessions bind their real harness configuration root read-write and persistent
+by default, so the harness can renew its token and save settings, hooks, skills and new
+files. This is broad access to programs that sibling unconfined sessions may load
+immediately; use it only for an agent you trust. `/login` and saves to `~/.claude.json`
+from inside a confined session still do not work: their lock and temporary files live in
+your home, which stays read-only. Run `claude /login` once in a normal terminal; every
+session picks up that login. The explicit `harness-config` grant names the same capability
+for a session that needs it outside the default harness path.
 
 `cache` and marker-specific toolchain grants are explicit. Auto detection adds them only
 for a global team file with `[confine] auto = true`; local and explicit files must list
@@ -240,7 +237,21 @@ grants themselves.
 
 ### Rust
 
-With `~/.cargo` read-only, a build that needs an uncached crate fails while creating a `.crate` file under `~/.cargo/registry`; the probe reported `humantime-2.0.0.crate` and `Read-only file system`. The default for a Rust marker is the broader `~/.cargo` directory, which also covers registry, Git checkouts, and cargo-deny advisory databases. The workspace `target` directory needs no entry.
+With `~/.cargo` read-only, a build that needs an uncached crate fails while creating a `.crate` file under `~/.cargo/registry`; the probe reported `humantime-2.0.0.crate` and `Read-only file system`. The `cargo` grant opens `~/.cargo` and `~/.rustup`, including registry and Git caches, installed crates and toolchains. The workspace `target` directory needs no entry.
+
+```toml
+# fragment
+[session.confine]
+grants = ["cargo"]
+```
+
+Equivalent command-line option:
+
+```sh
+a2amx new --confine --confine-grant cargo -- cargo build
+```
+
+If you do not want the whole grant, use this narrower `write` fallback:
 
 ```toml
 # fragment
@@ -254,7 +265,7 @@ Equivalent command-line option:
 a2amx new --confine --confine-write ~/.cargo -- cargo build
 ```
 
-Add `~/.cargo/git` only when using an explicit narrower registry path. The default protects `~/.cargo/bin` when it is on `PATH`; `cargo install` there fails, so set `CARGO_INSTALL_ROOT` to a writable directory. `~/.cargo/config.toml` and `~/.cargo/env` remain writable and later builds run what they contain. The `~/.cargo/credentials` and `~/.cargo/credentials.toml` files remain hidden if they exist when the session starts.
+The `cargo` grant keeps `~/.cargo/bin` read-only when it is on `PATH`; `cargo install` there fails, so set `CARGO_INSTALL_ROOT` to a writable directory. `~/.cargo/config.toml` and `~/.cargo/env` remain writable and later builds run what they contain. The `~/.cargo/credentials` and `~/.cargo/credentials.toml` files remain hidden if they exist when the session starts.
 
 The defaults use literal paths such as `~/.cargo` and `~/.cache`; environment-relocated
 directories (`CARGO_HOME`, `XDG_CACHE_HOME`, and the like) are not detected or honoured.
@@ -265,7 +276,21 @@ symlink is never followed or created through.
 
 ### Node with npm
 
-Without `~/.npm`, `npm install` fails with `EROFS` under `~/.npm/_cacache`. With `~/.npm` writable, the probe completed with `added 2 packages`.
+Without `~/.npm`, `npm install` fails with `EROFS` under `~/.npm/_cacache`. The `node` grant opens the JavaScript package caches in `~/.npm`, `~/.yarn/berry`, `~/.local/share/pnpm` and `~/.bun/install/cache`.
+
+```toml
+# fragment
+[session.confine]
+grants = ["node"]
+```
+
+Equivalent command-line option:
+
+```sh
+a2amx new --confine --confine-grant node -- npm install
+```
+
+If you do not want the whole grant, use this narrower `write` fallback:
 
 ```toml
 # fragment
@@ -283,18 +308,39 @@ a2amx new --confine --confine-write ~/.npm -- npm install
 
 ### Python with pip
 
-A virtual environment inside the workspace needs no `write` entry. The probe installed `requests` into a workspace virtual environment with `~/.cache` read-only.
+The `python` grant opens pip, uv, poetry, virtualenv and pipx data under `~/.cache` and `~/.local/share`, including tool environments whose programs your own shell may run; `~/.pypirc` stays hidden unless you also give `pypi-token`.
 
 ```toml
 # fragment
-# A workspace virtual environment needs no write entry.
+[session.confine]
+grants = ["python"]
 ```
 
-No recipe is given here for `uv`, `poetry`, `conda`, or `pipx`.
+Equivalent command-line option:
+
+```sh
+a2amx new --confine --confine-grant python -- python -m pip install requests
+```
+
+A virtual environment inside the workspace needs no `write` entry. The probe installed `requests` into a workspace virtual environment with `~/.cache` read-only. The `python` grant does not cover conda.
 
 ### Go
 
-These paths were not tested by the maintainers. Run `go env GOMODCACHE GOCACHE`, then add the module cache and build cache it prints. The Go documentation says that `GOPATH` defaults to `$HOME/go`, the module cache is `GOPATH/pkg/mod`, and the build cache is a `go-build` directory under the user cache directory. Do not open `~/go/bin`, where `go install` puts binaries you run later.
+The `go` grant opens all of `~/go`, including `bin` (which stays read-only only when it is on `PATH`), the module cache, downloaded toolchains and installed binaries, and `~/.cache/go-build`; `~/.netrc` stays hidden unless you also give `netrc`.
+
+```toml
+# fragment
+[session.confine]
+grants = ["go"]
+```
+
+Equivalent command-line option:
+
+```sh
+a2amx new --confine --confine-grant go -- go build
+```
+
+If `GOPATH` or `GOCACHE` is relocated, use `go env` for a narrower `write` fallback:
 
 ```toml
 # fragment
@@ -313,7 +359,21 @@ a2amx new --confine --confine-write "$gomodcache" --confine-write "$gocache" -- 
 
 ### Maven
 
-This was not tested by the maintainers. Maven's default local repository is `~/.m2/repository`.
+This was not tested by the maintainers. Maven's default local repository is `~/.m2/repository`. The `java` grant opens that repository and the whole `~/.gradle` directory.
+
+```toml
+# fragment
+[session.confine]
+grants = ["java"]
+```
+
+Equivalent command-line option:
+
+```sh
+a2amx new --confine --confine-grant java -- mvn package
+```
+
+If you do not want the whole grant, use this narrower `write` fallback:
 
 ```toml
 # fragment
@@ -327,11 +387,25 @@ Equivalent command-line option:
 a2amx new --confine --confine-write ~/.m2/repository -- mvn package
 ```
 
-`~/.m2/settings.xml` can hold server `username` and `password` and is not hidden by default, so add `hide = ["~/.m2/settings.xml"]` under `[session.confine]` when the agent does not need it.
+For the narrower fallback, `~/.m2/settings.xml` can hold server `username` and `password` and is not hidden by default, so add `hide = ["~/.m2/settings.xml"]` under `[session.confine]` when the agent does not need it.
 
 ### Gradle
 
-This was not tested by the maintainers. Gradle's user home is `~/.gradle`, or the path in `GRADLE_USER_HOME`; its layout includes `caches`, `daemon`, `init.d`, `jdks`, `wrapper/dists`, and `gradle.properties`.
+This was not tested by the maintainers. Gradle's user home is `~/.gradle`, or the path in `GRADLE_USER_HOME`. The `java` grant opens all of `~/.gradle`, including its caches, daemon, `init.d`, JDKs and wrapper distributions; it also exposes `gradle.properties`, where repository credentials may be stored, and `init.d` scripts run on every build.
+
+```toml
+# fragment
+[session.confine]
+grants = ["java"]
+```
+
+Equivalent command-line option:
+
+```sh
+a2amx new --confine --confine-grant java -- gradle build
+```
+
+If you do not want the whole grant, use this narrower `write` fallback:
 
 ```toml
 # fragment
@@ -347,8 +421,6 @@ a2amx new --confine \
   --confine-write ~/.gradle/wrapper \
   -- gradle build
 ```
-
-`gradle.properties` is often used for repository credentials, and `init.d` scripts run on every build. Do not open all of `~/.gradle` unless you accept that.
 
 For any other tool, run it once, read the failing path in the error, and decide with [the method above](#the-method-open-what-an-honest-mistake-can-recover-from).
 
@@ -482,16 +554,16 @@ be replaced by a rename (`ssh-keygen -R` fails), so drop it. A `ControlPath` und
 also unusable; point it at `/tmp`.
 
 No `SSH_AUTH_SOCK` is passed through, so a passphrase-protected key cannot be used (F63). Signing
-commits with an unencrypted listed ssh key works; gpg signing is F54. With `no_default_hides`,
-`~/.ssh` is visible without the grant, but the system configuration still breaks `ssh`. Keep the
-HTTPS recipe above if that is preferable.
+commits with an unencrypted listed ssh key works; gpg signing is F54. With `default_hides = false`
+in a team file (or `--confine-no-default-hides` on the command line), `~/.ssh` is visible
+without the grant, but the system configuration still breaks `ssh`. Keep the HTTPS recipe above if that is preferable.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `Read-only file system` on a path under `$HOME` | The path is read-only. | Add the directory named in the error to `write` under `[session.confine]`. |
-| A tool says it is not logged in, or reports an authentication error | Its credential file or directory is a default hide. | Add it to `unhide` under `[session.confine]`; see [Credentials a tool needs](#credentials-a-tool-needs). |
+| A tool says it is not logged in, or reports an authentication error | Its credential file or directory is a default hide. | Give the matching grant first (`gh`, `ssh`, `git-credentials`, `sonar`, `aws`, `gcloud`, `azure`, `kube`, `terraform`, `npm-token`, `pypi-token`, `cargo-token`, `netrc`, `huggingface-token`); use `unhide` only for a credential no grant covers; see [Credentials a tool needs](#credentials-a-tool-needs). |
 | Claude or OMP cannot update itself (`Read-only file system` under `~/.local/share/claude` or `~/.local/bin`) | A harness binary lives in a read-only directory on purpose: a writable `~/.local/bin` would let a confined agent replace programs that you, or the daemon's `omp` quota probe, run outside the sandbox. Self-update is not supported in a confined session. | Update the harness from a shell outside the sandbox, then restart the session. |
 | `permission denied` on a container socket | Container sockets are hidden. | Use [Docker and other container engines](#docker-and-other-container-engines). |
 | A file written under `/tmp` is not seen by a peer session | `/tmp` is private per session. | Use a directory in the workspace. |
@@ -521,5 +593,5 @@ role = "developer"
 command = ["omp"]
 cwd = "."
 [session.confine]
-write = ["~/.cargo", "~/.npm"]
+grants = ["cargo", "node"]
 ```

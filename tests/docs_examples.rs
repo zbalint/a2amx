@@ -71,3 +71,60 @@ fn toml_examples_in_the_confinement_guide_parse() {
         panic!("a2amx.toml.example confinement block did not parse: {error}");
     }
 }
+
+#[test]
+fn grant_table_matches_the_code() {
+    let guide = include_str!("../docs/confinement.md");
+    let mut in_grants = false;
+    let mut doc_rows = Vec::new();
+
+    for line in guide.lines() {
+        if line == "### Grants" {
+            in_grants = true;
+            continue;
+        }
+        if in_grants && line.starts_with("### ") {
+            break;
+        }
+        if !in_grants || !line.starts_with("| `") {
+            continue;
+        }
+
+        let cells: Vec<_> = line.split('|').map(str::trim).collect();
+        assert_eq!(cells.len(), 5, "malformed grant row: {line}");
+        doc_rows.push((
+            cells[1].trim_matches('`').to_owned(),
+            cells[2].to_owned(),
+            cells[3].to_owned(),
+        ));
+    }
+
+    assert!(in_grants, "missing ### Grants heading");
+    let code_grants = a2amx::grant::all();
+    let doc_names: Vec<_> = doc_rows.iter().map(|row| row.0.as_str()).collect();
+    let code_names: Vec<_> = code_grants.iter().map(|grant| grant.name).collect();
+    assert_eq!(
+        doc_names, code_names,
+        "grant names differ: docs={doc_names:?}, code={code_names:?}"
+    );
+
+    for ((doc_name, doc_exposes, doc_default), code_grant) in doc_rows.iter().zip(code_grants) {
+        let doc_exposes = doc_exposes.replace('`', "");
+        let code_exposes = code_grant.exposes.replace('`', "");
+        assert_eq!(
+            doc_exposes, code_exposes,
+            "grant `{doc_name}` exposes differ: docs={doc_exposes:?}, code={code_exposes:?}"
+        );
+        assert_eq!(
+            doc_default.starts_with("Yes"),
+            code_grant.team_default_ok,
+            "grant `{doc_name}` default differs: docs={doc_default:?}, code team_default_ok={}",
+            code_grant.team_default_ok
+        );
+        assert_eq!(
+            doc_default.starts_with("No"),
+            !code_grant.team_default_ok,
+            "grant `{doc_name}` default must start with No when code team_default_ok is false"
+        );
+    }
+}

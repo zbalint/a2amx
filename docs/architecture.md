@@ -361,6 +361,8 @@ and records missing operator paths for dry-run output. A late-created socket out
 launch-time hides remains visible; start container daemons before a confined session
 when their host sockets must be hidden.
 
+The `grant` module owns the table of named grants and the consent text, while the `suggest` module detects grants from project markers and git remotes. Under global `auto`, `team up` asks before opening a grant the user has not accepted. Accepted names are kept one per line in the `auto-grants` file in the state directory and apply to later starts from that global team file.
+
 ### Status line
 
 The attach client reserves the terminal's last row for a status line by default and

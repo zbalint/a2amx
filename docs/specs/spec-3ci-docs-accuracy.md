@@ -175,3 +175,21 @@ Run as `env -u A2AMX_BIN -u NO_COLOR` (see `AGENTS.md`).
 7. The paragraph in `teams.md` 3.1 is a link, not a copy: `rg -c "works only when a remote is detected" docs/confinement.md docs/teams.md` prints
    `docs/confinement.md:1` and no line for `docs/teams.md` (the link sentence must not repeat the
    phrase). Judge: command output.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant a2amx-consultant (Claude Code, model not
+exposed to the architect); developer OMP with `openai-codex/gpt-5.6-luna` for planning and working, advisor
+model not exposed; tester OMP with `openai-codex/gpt-5.6-luna`, advisor model not exposed.
+
+BLOCKED/amend cycles: 1 before the lock (consultant review of the draft, amended in the draft), 0 after.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft, architect probe | architect | Acceptance greps over `docs/` matched this spec's own quoted text | Greps scoped to single files |
+| Draft review | consultant | Go row (2.8) and acceptance 5 contradicted: a "keep the fallback" rule preserved the forbidden `~/go/bin` sentence | Go row names the replacement sentence |
+| Draft review | consultant | Python had no narrower fallback to keep, yet acceptance 6 required one | Python exempt; its workspace-venv note is the fallback |
+| Draft review | consultant | Wrong anchors (`src/team.rs` key name, `src/cli.rs` flag lines, `tests/docs_examples.rs` lines); 2.11 said the new test parses TOML; acceptance 4 grep too loose; 2.3 omitted `cache`; 2.10 omitted `ssh`, `git-credentials`, `sonar`; Rust line 257 kept "default" framing | All fixed in the draft before the lock |
+| Tester pass | tester | No blank line after list item 7, so the moved consent paragraph rendered inside the list (spec 2.6 had no acceptance line for it) | Developer inserted the blank line (`confinement.md` line 216); architect verified |
+| Tester pass | tester | Mutation pass could not run: the assignment named no scratch location, and the private `/tmp` (1 GB tmpfs) was too small; the tester built once in `~/.cache` | Architect ran seven mutants in place and restored the file by checksum; the owner set the rule that scratch files go in the gitignored `target/` and are deleted by their creator |
+| Architect review | architect | Four `tests/auto_confine.rs` PTY tests fail when the suite runs inside a confined session (the daemon takes `HOME` from its inherited read-only environment); not caused by this diff | Disposition: environmental, follow-up tests-only hardening; owner or CI runs the full suite |

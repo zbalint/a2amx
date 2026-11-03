@@ -58,17 +58,19 @@ needs that isolation uses a container or a VM.
 
 `--confine` is an opt-in bubblewrap confinement of the PTY child. Generic, Claude,
 and OMP sessions may be confined; Codex is refused because its app-server tools run
-outside the PTY process. The plan keeps harness data directories read-only except for
-the documented data allow-list, hides the daemon state and runtime directory, and
-always unsets `DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`, `GPG_AGENT_INFO`,
-`WSL_INTEROP`, `DISPLAY`, and `WAYLAND_DISPLAY`. `DOCKER_HOST`, `DOCKER_CONTEXT`,
-`CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINERD_ADDRESS`, `BUILDKIT_HOST`,
-and `LIBVIRT_DEFAULT_URI` stay set only with their corresponding runtime grant. Those grants
-expose only the configured system runtime sockets. Rootless sockets under `$XDG_RUNTIME_DIR`
-remain hidden. For an OMP session, the `omp` directory inside the state directory stays visible,
-read-only; the rest of the state directory is hidden.
+outside the PTY process. `--confine` keeps harness data directories read-only except for
+the documented data allow-list. Claude and OMP sessions instead bind their own harness
+configuration root read-write and persistent by default; the rest of the plan hides the
+daemon state and runtime directory. The plan always unsets
+`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`, `GPG_AGENT_INFO`, `WSL_INTEROP`, `DISPLAY`,
+and `WAYLAND_DISPLAY`. `DOCKER_HOST`, `DOCKER_CONTEXT`, `CONTAINER_HOST`,
+`CONTAINER_CONNECTION`, `CONTAINERD_ADDRESS`, `BUILDKIT_HOST`, and
+`LIBVIRT_DEFAULT_URI` stay set only with their corresponding runtime grant. Those grants
+expose only the configured system runtime sockets. Rootless sockets under
+`$XDG_RUNTIME_DIR` remain hidden. For an OMP session, the `omp` directory inside the
+state directory stays visible, read-only; the rest of the state directory is hidden.
 
-See [Harness login and state files](confinement.md#harness-login-and-state-files) for login renewal and ephemeral harness writes.
+See [Harness login and state files](confinement.md#harness-login-and-state-files) for login renewal and state files.
 
 The credential environment list is separate from harness logins: Bedrock's AWS variables and
 Vertex's `GOOGLE_APPLICATION_CREDENTIALS` are not touched, because Claude Code and OMP run as
