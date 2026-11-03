@@ -1,6 +1,74 @@
+use std::collections::BTreeSet;
 use std::process::Command;
 
 use a2amx::{grant, team};
+
+#[test]
+fn accepted_grants_round_trip_and_drop_unknown_lines() {
+    let parsed = grant::parse_accepted(" ssh \nunknown\n\ncargo\n");
+    assert_eq!(
+        parsed,
+        BTreeSet::from(["cargo".to_owned(), "ssh".to_owned()])
+    );
+    assert_eq!(grant::render_accepted(&parsed), "cargo\nssh\n");
+    assert_eq!(grant::render_accepted(&BTreeSet::new()), "");
+}
+
+#[test]
+fn consent_and_escape_lines_include_exposure_details() {
+    let rows = [
+        grant::Grant {
+            name: "ssh",
+            exposes: "keys",
+            escape: Some("remote hosts"),
+            team_default_ok: true,
+            sockets: &[],
+            env: &[],
+            own_config: false,
+            unhides: &[],
+            detect: &[],
+            create: &[],
+            stand_ins: &[],
+        },
+        grant::Grant {
+            name: "cargo",
+            exposes: "toolchain",
+            escape: None,
+            team_default_ok: true,
+            sockets: &[],
+            env: &[],
+            own_config: false,
+            unhides: &[],
+            detect: &[],
+            create: &[],
+            stand_ins: &[],
+        },
+    ];
+    let lines = grant::consent_lines(
+        &[
+            ("ssh".to_owned(), "git remote uses ssh".to_owned()),
+            ("unknown".to_owned(), "unlisted reason".to_owned()),
+        ],
+        &rows,
+    );
+    assert_eq!(
+        lines,
+        "ssh: git remote uses ssh (keys)\n  can escape: remote hosts\nunknown: unlisted reason\n"
+    );
+    assert_eq!(
+        grant::CONSENT_QUESTION,
+        "Accept these for auto mode on all projects? [y/N] "
+    );
+    assert_eq!(
+        grant::escape_notice(
+            "worker",
+            &["ssh".to_owned(), "cargo".to_owned(), "unknown".to_owned()],
+            &rows,
+        ),
+        vec!["session worker: grant ssh can escape: remote hosts"]
+    );
+    assert!(grant::escape_notice("worker", &["cargo".to_owned()], &rows).is_empty());
+}
 
 #[test]
 fn grant_table_has_expected_rows() {

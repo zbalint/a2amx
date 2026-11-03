@@ -155,6 +155,18 @@ Under `auto`, `git push` works only when a remote is detected. A `.git` file for
 worktree or submodule, and a local team file, require an explicit grant. HTTPS pushes
 through `gh` also require `gh auth setup-git`.
 
+When global auto detection adds a grant that is not already accepted, `a2amx team up`
+prints the detector reason and the grant's exposure, then asks for confirmation before
+starting any session. Acceptance is by grant name, not by project or path: accepted
+names apply to every project started from the global team file. The names are stored
+one per line in `<state home>/auto-grants`; delete that file to ask again. Unknown,
+blank, and padded lines are ignored.
+
+`a2amx team up --yes` prints the same consent details but accepts the detected grants
+for that run only and never writes the accepted-grants file. A non-terminal run without
+`--yes` refuses rather than silently accepting grants. `--dry-run` never prompts or
+writes; it reports each new grant as `  not yet accepted: NAME, ...`.
+
 `harness-config` is deliberately broad: the agent can change settings, hooks, instructions and
 programs under `~/.claude` or `~/.omp`, and a running session of that harness—including your own
 unconfined sessions—picks changes up immediately. A hook it adds therefore runs with your full
@@ -189,6 +201,10 @@ When a tool reports `Read-only file system`, add the directory named in the erro
 ## What stays open
 
 `write = ["~"]` is an operator choice, not a sandbox escape hidden behind a default. It leaves these residuals:
+
+Auto-grant consent is permission for the named grant, not a narrower path limit.
+Once accepted, that grant opens every path described by its row; the prompt explains
+what those paths expose but does not change the confinement plan.
 
 1. The Git history inside a writable Git directory is writable, so an agent can rewrite commits.
 2. Harness roots are writable and persistent by default for Claude and OMP, including settings, hooks, plugins and new files. Treat them as trusted program directories; a running unconfined sibling may load changes immediately. Only this session's repository `hooks`/`config` and team file are protected; every other repository's `.git/hooks` and `.git/config`, and every other `a2amx.toml` under a writable home, are writable. Windows drives under `/mnt` are writable if `/mnt` is opened.

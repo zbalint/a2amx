@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
@@ -38,6 +40,48 @@ const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const INPUT_CHUNK: usize = 8 * 1024;
 const DAEMON_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_AUTO_GRANTS_BYTES: usize = 4096;
+
+fn read_accepted_grants(path: &Path) -> anyhow::Result<BTreeSet<String>> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BTreeSet::new());
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("cannot read {}", path.display()));
+        }
+    };
+    let mut bytes = Vec::with_capacity(MAX_AUTO_GRANTS_BYTES + 1);
+    let read = file
+        .take((MAX_AUTO_GRANTS_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    if read > MAX_AUTO_GRANTS_BYTES {
+        bail!(
+            "accepted auto-grants file {} is larger than {} bytes",
+            path.display(),
+            MAX_AUTO_GRANTS_BYTES
+        );
+    }
+    let text = String::from_utf8(bytes)
+        .with_context(|| format!("accepted auto-grants file {} is not UTF-8", path.display()))?;
+    Ok(a2amx::grant::parse_accepted(&text))
+}
+
+async fn load_accepted_grants(home: &Path) -> anyhow::Result<BTreeSet<String>> {
+    let path = home.join("auto-grants");
+    tokio::task::spawn_blocking(move || read_accepted_grants(&path)).await?
+}
+
+async fn save_accepted_grants(home: &Path, accepted: &BTreeSet<String>) -> anyhow::Result<()> {
+    let path = home.join("auto-grants");
+    let content = a2amx::grant::render_accepted(accepted);
+    tokio::task::spawn_blocking(move || a2amx::omp::write_if_changed(&path, content.as_bytes()))
+        .await??;
+    Ok(())
+}
+
 const MOUSE_CAPTURE: &[u8] = b"\x1b[?1000h\x1b[?1006h";
 const RESTORE_TERMINAL: &[u8] = b"\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1l\x1b>\x1b[?25h\x1b[?1049l";
 
@@ -137,8 +181,9 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 file,
                 detach,
                 dry_run,
+                yes,
                 items,
-            } => run_team_up(home, prefix, file, detach, dry_run, items).await,
+            } => run_team_up(home, prefix, file, detach, dry_run, yes, items).await,
             TeamAction::Down { file, names, now } => run_team_down(home, file, names, now).await,
             TeamAction::Reset {
                 file,
@@ -1127,8 +1172,9 @@ async fn dry_run_report(
     home: &Path,
     cwd: &Path,
     origin: TeamOrigin<'_>,
-    actions: Vec<team::Action>,
+    actions: &[team::Action],
     existing: &[SessionSummary],
+    accepted: &BTreeSet<String>,
 ) -> anyhow::Result<String> {
     let mut output = String::new();
     for action in actions {
@@ -1136,12 +1182,12 @@ async fn dry_run_report(
             team::Action::AlreadyRunning { name, id } => {
                 let mode = existing
                     .iter()
-                    .find(|session| session.id == id)
+                    .find(|session| session.id == *id)
                     .map_or("off", session_confinement_mode);
                 output.push_str(&format!("already running {name} {id} (confine {mode})\n"));
             }
             team::Action::Start(session) => {
-                output.push_str(&dry_run_start(home, cwd, origin, &session).await?);
+                output.push_str(&dry_run_start(home, cwd, origin, session, accepted).await?);
             }
         }
     }
@@ -1153,6 +1199,7 @@ async fn dry_run_start(
     cwd: &Path,
     origin: TeamOrigin<'_>,
     session: &TeamSession,
+    accepted: &BTreeSet<String>,
 ) -> anyhow::Result<String> {
     let harness = Harness::infer(&session.command);
     let resolved_cwd = session
@@ -1215,6 +1262,18 @@ async fn dry_run_start(
     {
         for reason in &plan.reasons {
             output.push_str(&format!("  {}: {}\n", reason.grant, reason.reason));
+        }
+        let not_accepted = plan
+            .reasons
+            .iter()
+            .filter(|reason| !accepted.contains(&reason.grant))
+            .map(|reason| reason.grant.as_str())
+            .collect::<Vec<_>>();
+        if !not_accepted.is_empty() {
+            output.push_str(&format!(
+                "  not yet accepted: {}\n",
+                not_accepted.join(", ")
+            ));
         }
     }
     if let Some(plan) = &confine_plan
@@ -1406,12 +1465,42 @@ async fn start_planned_session(
     Ok((name, result))
 }
 
+async fn write_auto_summaries(actions: &[team::Action]) -> anyhow::Result<()> {
+    for action in actions {
+        let team::Action::Start(session) = action else {
+            continue;
+        };
+        let Some(confine) = session.confine.as_ref() else {
+            continue;
+        };
+        if confine.reasons.is_empty() {
+            continue;
+        }
+        let grants = confine
+            .reasons
+            .iter()
+            .map(|reason| reason.grant.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        write_stderr(
+            format!(
+                "auto confinement for session {}: grants {grants}\n",
+                session.name
+            )
+            .into_bytes(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn run_team_up(
     home: PathBuf,
     prefix: u8,
     file: Option<PathBuf>,
     detach: bool,
     dry_run: bool,
+    yes: bool,
     items: Vec<String>,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
@@ -1479,29 +1568,87 @@ async fn run_team_up(
                 reason: reason.clone(),
             })
             .collect();
-        if !added.is_empty() {
-            write_stderr(
-                format!(
-                    "auto confinement for session {}: grants {}\n",
-                    session.name,
-                    added
-                        .iter()
-                        .map(|(grant, _)| *grant)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-                .into_bytes(),
-            )
-            .await?;
-        }
     }
     for action in &actions {
         if let team::Action::Start(session) = action {
             validate_team_session(&home, &cwd, origin, session)?;
         }
     }
+    let has_auto = actions.iter().any(|action| {
+        matches!(
+            action,
+            team::Action::Start(session) if session.auto && session.confine.is_some()
+        )
+    });
+    let mut accepted = if has_auto {
+        load_accepted_grants(&home).await?
+    } else {
+        BTreeSet::new()
+    };
+    let mut new_grants = Vec::new();
+    let mut seen = BTreeSet::new();
+    for action in &actions {
+        let team::Action::Start(session) = action else {
+            continue;
+        };
+        if !session.auto {
+            continue;
+        }
+        let Some(confine) = session.confine.as_ref() else {
+            continue;
+        };
+        for reason in &confine.reasons {
+            if !accepted.contains(&reason.grant) && seen.insert(reason.grant.clone()) {
+                new_grants.push((reason.grant.clone(), reason.reason.clone()));
+            }
+        }
+    }
+    for action in &actions {
+        let team::Action::Start(session) = action else {
+            continue;
+        };
+        let Some(confine) = session.confine.as_ref() else {
+            continue;
+        };
+        let explicit = confine
+            .grants
+            .iter()
+            .filter(|grant| !confine.reasons.iter().any(|reason| reason.grant == **grant))
+            .cloned()
+            .collect::<Vec<_>>();
+        let notices = a2amx::grant::escape_notice(&session.name, &explicit, a2amx::grant::all());
+        if !notices.is_empty() {
+            let output = notices
+                .into_iter()
+                .map(|notice| format!("{notice}\n"))
+                .collect::<String>();
+            write_stderr(output.into_bytes()).await?;
+        }
+    }
+    if !dry_run && !new_grants.is_empty() {
+        let lines = a2amx::grant::consent_lines(&new_grants, a2amx::grant::all());
+        if yes {
+            write_stderr(lines.into_bytes()).await?;
+        } else {
+            let prompt = format!("{lines}{}", a2amx::grant::CONSENT_QUESTION);
+            let names = new_grants
+                .iter()
+                .map(|(grant, _)| grant.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let refusal = format!(
+                "auto confinement would open: {names}; run a2amx team up on a terminal to accept them, or pass --yes for this run"
+            );
+            if !confirm(&prompt, &refusal).await? {
+                bail!("auto grants not accepted; nothing started");
+            }
+            accepted.extend(new_grants.iter().map(|(grant, _)| grant.clone()));
+            save_accepted_grants(&home, &accepted).await?;
+        }
+    }
+    write_auto_summaries(&actions).await?;
     if dry_run {
-        let output = dry_run_report(&home, &cwd, origin, actions, &existing).await?;
+        let output = dry_run_report(&home, &cwd, origin, &actions, &existing, &accepted).await?;
         write_stdout(output.into_bytes()).await?;
         note_lost_messages(&home, &wanted).await;
         return Ok(());

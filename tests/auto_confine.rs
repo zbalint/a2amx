@@ -3,9 +3,12 @@
 
 mod common;
 
+use common::pty::PtyHarness;
 use common::start_daemon;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 use tokio::process::Command as AsyncCommand;
 fn run_binary(
     state: &Path,
@@ -91,6 +94,463 @@ async fn global_auto_dry_run_reports_detected_grants_once() {
         "{stderr}"
     );
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dry_run_reports_unaccepted_grants_and_respects_seeded_file() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    std::fs::write(project.path().join("Cargo.toml"), "").expect("cargo marker");
+
+    let output = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("  cargo: Cargo.toml found\n"), "{stdout}");
+    assert!(
+        stdout.contains("  cache: always added by auto\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("  not yet accepted: cargo, cache\n"),
+        "{stdout}"
+    );
+    assert!(!state.path().join("auto-grants").exists());
+
+    std::fs::write(
+        state.path().join("auto-grants"),
+        "unknown\n cache \n\ncargo\n",
+    )
+    .expect("seed accepted grants");
+    let seeded = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("seeded dry run");
+    assert!(seeded.status.success());
+    assert!(
+        !String::from_utf8_lossy(&seeded.stdout).contains("not yet accepted"),
+        "{}",
+        String::from_utf8_lossy(&seeded.stdout)
+    );
+    std::fs::write(state.path().join("auto-grants"), "x".repeat(4097))
+        .expect("oversized accepted grants");
+    let oversized = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("oversized dry run");
+    assert!(!oversized.status.success());
+    assert!(
+        String::from_utf8_lossy(&oversized.stderr)
+            .contains(&state.path().join("auto-grants").display().to_string())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refusal_blocks_auto_start_and_yes_is_one_run_only() {
+    let bwrap = AsyncCommand::new("bwrap").arg("--version").output().await;
+    if !matches!(bwrap, Ok(output) if output.status.success()) {
+        eprintln!("skipping auto consent start test: bubblewrap unavailable");
+        return;
+    }
+    let state = tempfile::tempdir().expect("state");
+    let bwrap_path = String::from_utf8(
+        AsyncCommand::new("which")
+            .arg("bwrap")
+            .output()
+            .await
+            .expect("which bwrap")
+            .stdout,
+    )
+    .expect("bwrap path");
+    let bwrap_dir = state.path().join("bwrap-path");
+    std::fs::create_dir_all(&bwrap_dir).expect("bwrap directory");
+    std::os::unix::fs::symlink(bwrap_path.trim(), bwrap_dir.join("bwrap")).expect("bwrap symlink");
+    let _daemon = common::start_daemon_in(
+        state.path(),
+        Some("host-a"),
+        a2amx::messaging::Limits::default(),
+    )
+    .await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    std::fs::write(project.path().join("Cargo.toml"), "").expect("cargo marker");
+
+    let refused = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--detach"],
+    )
+    .expect("refused up");
+    assert!(!refused.status.success());
+    let refused_stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        refused_stderr.contains(
+            "auto confinement would open: cargo, cache; run a2amx team up on a terminal to accept them, or pass --yes for this run"
+        ),
+        "{refused_stderr}"
+    );
+    assert!(
+        !refused_stderr.contains("auto confinement for session"),
+        "{refused_stderr}"
+    );
+    assert!(!state.path().join("auto-grants").exists());
+    let listed = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["list"],
+    )
+    .expect("list after refusal");
+    assert!(
+        !String::from_utf8_lossy(&listed.stdout).contains("worker"),
+        "{}",
+        String::from_utf8_lossy(&listed.stdout)
+    );
+    std::fs::write(state.path().join("auto-grants"), "unknown\n").expect("unknown grant");
+
+    let accepted_once = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--detach", "--yes"],
+    )
+    .expect("yes up");
+    assert!(
+        accepted_once.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&accepted_once.stdout),
+        String::from_utf8_lossy(&accepted_once.stderr)
+    );
+    let yes_stderr = String::from_utf8_lossy(&accepted_once.stderr);
+    assert!(
+        yes_stderr.contains("cargo: Cargo.toml found")
+            && yes_stderr.contains("auto confinement for session"),
+        "{yes_stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(state.path().join("auto-grants")).expect("read unknown grant"),
+        "unknown\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_yes_persists_accepted_grants_with_private_mode() -> anyhow::Result<()> {
+    let bwrap = AsyncCommand::new("bwrap").arg("--version").output().await;
+    if !matches!(bwrap, Ok(output) if output.status.success()) {
+        eprintln!("skipping PTY auto consent test: bubblewrap unavailable");
+        return Ok(());
+    }
+    let state = tempfile::tempdir()?;
+    let project = tempfile::tempdir()?;
+    let user_home = tempfile::tempdir()?;
+    let runtime = tempfile::tempdir()?;
+    let bwrap_path = String::from_utf8(
+        AsyncCommand::new("which")
+            .arg("bwrap")
+            .output()
+            .await?
+            .stdout,
+    )?;
+    let bwrap_dir = state.path().join("bwrap-path");
+    std::fs::create_dir_all(&bwrap_dir)?;
+    std::os::unix::fs::symlink(bwrap_path.trim(), bwrap_dir.join("bwrap"))?;
+    let _daemon = common::start_daemon_in(
+        state.path(),
+        Some("host-a"),
+        a2amx::messaging::Limits::default(),
+    )
+    .await;
+    std::fs::write(
+        state.path().join("team.toml"),
+        format!(
+            "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n",
+            project.path().to_string_lossy()
+        ),
+    )?;
+    std::fs::write(project.path().join("Cargo.toml"), "")?;
+    let args = vec![
+        "--home".to_owned(),
+        state.path().to_string_lossy().into_owned(),
+        "team".to_owned(),
+        "up".to_owned(),
+        "--detach".to_owned(),
+    ];
+    let home_env = user_home.path().to_string_lossy().into_owned();
+    let runtime_env = runtime.path().to_string_lossy().into_owned();
+    let mut pty = PtyHarness::spawn_with_env(
+        &args,
+        state.path(),
+        &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
+    )?;
+    pty.wait_for_text(
+        "Accept these for auto mode on all projects?",
+        Duration::from_secs(10),
+    )?;
+    pty.send(b"y\n")?;
+    assert_eq!(pty.wait_exit(Duration::from_secs(10))?, 0);
+    let listed = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["list"],
+    )?;
+    assert!(
+        String::from_utf8_lossy(&listed.stdout).contains("worker"),
+        "{}",
+        String::from_utf8_lossy(&listed.stdout)
+    );
+    let accepted = state.path().join("auto-grants");
+    assert_eq!(std::fs::read_to_string(&accepted)?, "cache\ncargo\n");
+    assert_eq!(
+        std::fs::metadata(accepted)?.permissions().mode() & 0o777,
+        0o600
+    );
+
+    Ok(())
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_no_and_eof_refuse_without_starting_or_writing() -> anyhow::Result<()> {
+    let bwrap = AsyncCommand::new("bwrap").arg("--version").output().await;
+    if !matches!(bwrap, Ok(output) if output.status.success()) {
+        eprintln!("skipping PTY auto refusal test: bubblewrap unavailable");
+        return Ok(());
+    }
+    async fn run_case(input: &[u8]) -> anyhow::Result<()> {
+        let state = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        let user_home = tempfile::tempdir()?;
+        let runtime = tempfile::tempdir()?;
+        let bwrap_path = String::from_utf8(
+            AsyncCommand::new("which")
+                .arg("bwrap")
+                .output()
+                .await?
+                .stdout,
+        )?;
+        let bwrap_dir = state.path().join("bwrap-path");
+        std::fs::create_dir_all(&bwrap_dir)?;
+        std::os::unix::fs::symlink(bwrap_path.trim(), bwrap_dir.join("bwrap"))?;
+        let _daemon = common::start_daemon_in(
+            state.path(),
+            Some("host-a"),
+            a2amx::messaging::Limits::default(),
+        )
+        .await;
+        std::fs::write(
+            state.path().join("team.toml"),
+            format!(
+                "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n",
+                project.path().to_string_lossy()
+            ),
+        )?;
+        std::fs::write(project.path().join("Cargo.toml"), "")?;
+        let args = vec![
+            "--home".to_owned(),
+            state.path().to_string_lossy().into_owned(),
+            "team".to_owned(),
+            "up".to_owned(),
+            "--detach".to_owned(),
+        ];
+        let home_env = user_home.path().to_string_lossy().into_owned();
+        let runtime_env = runtime.path().to_string_lossy().into_owned();
+        let mut pty = PtyHarness::spawn_with_env(
+            &args,
+            state.path(),
+            &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
+        )?;
+        pty.wait_for_text(
+            "Accept these for auto mode on all projects?",
+            Duration::from_secs(10),
+        )?;
+        pty.send(input)?;
+        assert_ne!(pty.wait_exit(Duration::from_secs(10))?, 0);
+        assert!(!state.path().join("auto-grants").exists());
+        let listed = run_binary(
+            state.path(),
+            project.path(),
+            user_home.path(),
+            runtime.path(),
+            &["list"],
+        )?;
+        assert!(
+            !String::from_utf8_lossy(&listed.stdout).contains("worker"),
+            "{}",
+            String::from_utf8_lossy(&listed.stdout)
+        );
+        Ok(())
+    }
+    run_case(b"n\n").await?;
+    run_case(&[4]).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_deduplicates_auto_consent_across_sessions() -> anyhow::Result<()> {
+    let bwrap = AsyncCommand::new("bwrap").arg("--version").output().await;
+    if !matches!(bwrap, Ok(output) if output.status.success()) {
+        eprintln!("skipping PTY auto dedupe test: bubblewrap unavailable");
+        return Ok(());
+    }
+    let state = tempfile::tempdir()?;
+    let first = tempfile::tempdir()?;
+    let second = tempfile::tempdir()?;
+    let user_home = tempfile::tempdir()?;
+    let runtime = tempfile::tempdir()?;
+    let bwrap_path = String::from_utf8(
+        AsyncCommand::new("which")
+            .arg("bwrap")
+            .output()
+            .await?
+            .stdout,
+    )?;
+    let bwrap_dir = state.path().join("bwrap-path");
+    std::fs::create_dir_all(&bwrap_dir)?;
+    std::os::unix::fs::symlink(bwrap_path.trim(), bwrap_dir.join("bwrap"))?;
+    let _daemon = common::start_daemon_in(
+        state.path(),
+        Some("host-a"),
+        a2amx::messaging::Limits::default(),
+    )
+    .await;
+    std::fs::write(
+        state.path().join("team.toml"),
+        format!(
+            "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker-a\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n[[session]]\nname = \"worker-b\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n",
+            first.path().to_string_lossy(),
+            second.path().to_string_lossy()
+        ),
+    )?;
+    let args = vec![
+        "--home".to_owned(),
+        state.path().to_string_lossy().into_owned(),
+        "team".to_owned(),
+        "up".to_owned(),
+        "--detach".to_owned(),
+    ];
+    let home_env = user_home.path().to_string_lossy().into_owned();
+    let runtime_env = runtime.path().to_string_lossy().into_owned();
+    let mut pty = PtyHarness::spawn_with_env(
+        &args,
+        state.path(),
+        &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
+    )?;
+    pty.wait_for_text(
+        "Accept these for auto mode on all projects?",
+        Duration::from_secs(10),
+    )?;
+    let screen = pty.screen_text();
+    let cache_lines = screen
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cache:"))
+        .count();
+    assert_eq!(cache_lines, 1, "{screen}");
+    pty.send(b"y\n")?;
+    assert_eq!(pty.wait_exit(Duration::from_secs(10))?, 0);
+    assert_eq!(
+        std::fs::read_to_string(state.path().join("auto-grants"))?,
+        "cache\n"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_subtracts_seeded_auto_grants_from_consent() -> anyhow::Result<()> {
+    let bwrap = AsyncCommand::new("bwrap").arg("--version").output().await;
+    if !matches!(bwrap, Ok(output) if output.status.success()) {
+        eprintln!("skipping PTY accepted-grant subtraction test: bubblewrap unavailable");
+        return Ok(());
+    }
+    let state = tempfile::tempdir()?;
+    let plain = tempfile::tempdir()?;
+    let cargo = tempfile::tempdir()?;
+    let user_home = tempfile::tempdir()?;
+    let runtime = tempfile::tempdir()?;
+    let bwrap_path = String::from_utf8(
+        AsyncCommand::new("which")
+            .arg("bwrap")
+            .output()
+            .await?
+            .stdout,
+    )?;
+    let bwrap_dir = state.path().join("bwrap-path");
+    std::fs::create_dir_all(&bwrap_dir)?;
+    std::os::unix::fs::symlink(bwrap_path.trim(), bwrap_dir.join("bwrap"))?;
+    let _daemon = common::start_daemon_in(
+        state.path(),
+        Some("host-a"),
+        a2amx::messaging::Limits::default(),
+    )
+    .await;
+    std::fs::write(state.path().join("auto-grants"), "cache\n")?;
+    std::fs::write(cargo.path().join("Cargo.toml"), "")?;
+    std::fs::write(
+        state.path().join("team.toml"),
+        format!(
+            "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"plain\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n[[session]]\nname = \"cargo\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n",
+            plain.path().to_string_lossy(),
+            cargo.path().to_string_lossy()
+        ),
+    )?;
+    let args = vec![
+        "--home".to_owned(),
+        state.path().to_string_lossy().into_owned(),
+        "team".to_owned(),
+        "up".to_owned(),
+        "--detach".to_owned(),
+    ];
+    let home_env = user_home.path().to_string_lossy().into_owned();
+    let runtime_env = runtime.path().to_string_lossy().into_owned();
+    let mut pty = PtyHarness::spawn_with_env(
+        &args,
+        state.path(),
+        &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
+    )?;
+    pty.wait_for_text(
+        "Accept these for auto mode on all projects?",
+        Duration::from_secs(10),
+    )?;
+    let screen = pty.screen_text();
+    let cargo_lines = screen
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cargo:"))
+        .count();
+    let cache_lines = screen
+        .lines()
+        .filter(|line| line.trim_start().starts_with("cache:"))
+        .count();
+    assert_eq!(cargo_lines, 1, "{screen}");
+    assert_eq!(cache_lines, 0, "{screen}");
+    pty.send(b"y\n")?;
+    assert_eq!(pty.wait_exit(Duration::from_secs(10))?, 0);
+    assert_eq!(
+        std::fs::read_to_string(state.path().join("auto-grants"))?,
+        "cache\ncargo\n"
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_merge_preserves_explicit_grant_and_reports_added_reasons() {
     let (state, _daemon) = start_daemon().await;
@@ -206,7 +666,7 @@ async fn auto_mode_stays_true_when_auto_adds_nothing() {
         project.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--detach"],
+        &["team", "up", "--detach", "--yes"],
     )
     .expect("real up");
     assert!(
@@ -522,7 +982,7 @@ async fn real_up_reuses_auto_grants_and_running_session_is_not_rescanned() {
         project.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--detach"],
+        &["team", "up", "--detach", "--yes"],
     )
     .expect("real up");
     assert!(
@@ -544,7 +1004,7 @@ async fn real_up_reuses_auto_grants_and_running_session_is_not_rescanned() {
         project.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--detach"],
+        &["team", "up", "--detach", "--yes"],
     )
     .expect("second up");
     assert!(second.status.success());

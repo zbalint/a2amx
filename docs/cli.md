@@ -116,6 +116,11 @@ also print one `  <grant>: <reason>` line per detected grant, such as
 `  cache: always added by auto`. An already-running session is reported with its mode,
 for example `already running agent-plan s1 (confine manual)`.
 
+When global automatic detection finds a grant not yet accepted, `a2amx team up` asks
+before starting. Pass `a2amx team up --yes` to accept those grants for that run without
+writing `<state home>/auto-grants`; use a terminal to answer and save acceptance for
+future projects.
+
 See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.
 
 ## State directory and attachment

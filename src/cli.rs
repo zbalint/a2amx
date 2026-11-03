@@ -232,6 +232,9 @@ pub enum TeamAction {
         /// Print the launch plan without starting sessions.
         #[arg(long, conflicts_with_all = ["detach", "items"])]
         dry_run: bool,
+        /// Accept auto-detected grants for this run without saving them.
+        #[arg(long)]
+        yes: bool,
         /// NAME=EXECUTABLE; the first session is attached.
         items: Vec<String>,
     },

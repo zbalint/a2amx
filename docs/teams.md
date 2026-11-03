@@ -120,12 +120,17 @@ for the closed credential environment list.
 `auto = true` is accepted only in the global `<state home>/team.toml` `[confine]`
 table, and requires `enabled = true`. It detects project markers and git remotes at
 each start and adds the matching grants plus `cache`; local `a2amx.toml` files and
-explicit `--file` inputs must not set the key. `auto = false` is accepted anywhere
-in a team `[confine]` table and means nothing. Session-level `auto` is always an
-error. Run `a2amx confine suggest` to print a copyable grants fragment for a local
-team file. Auto detection reads only a regular `.git/config` of at most 65,536 bytes,
-does not follow worktree `.git` files, and treats unreadable or invalid input as no
-git grants.
+explicit `--file` inputs must not set the key. When a detected grant is not in the
+accepted set, `team up` shows its reason and exposure and asks before starting.
+Answering yes records that grant name in `<state home>/auto-grants`, covering every
+project using the global file; delete the file to ask again. `team up --yes` accepts
+for one run without recording, a non-terminal run without it refuses, and
+`team up --dry-run` never prompts or writes and marks each new grant `not yet accepted`.
+`auto = false` is accepted anywhere in a team `[confine]` table and means nothing.
+Session-level `auto` is always an error. Run `a2amx confine suggest` to print a
+copyable grants fragment for a local team file. Auto detection reads only a regular
+`.git/config` of at most 65,536 bytes, does not follow worktree `.git` files, and
+treats unreadable or invalid input as no git grants.
 
 Under `auto`, `git push` works only when a remote is detected. A `.git` file for a
 worktree or submodule, and a local team file, require an explicit grant. HTTPS pushes
@@ -198,8 +203,10 @@ protected paths, final hidden paths, unresolved operator paths with their option
 filesystem reason, skipped missing defaults, and redacted command for each session that
 would start. The confinement line is `confinement: off`, `confinement: manual`, or
 `confinement: auto`; automatic sessions also print one `  <grant>: <reason>` line per
-detected grant, such as `  cache: always added by auto`. Already-running rows include
-their current mode as `(confine off|manual|auto)`.
+detected grant, such as `  cache: always added by auto`. A new auto grant not in
+`<state home>/auto-grants` is followed by `  not yet accepted: NAME, ...`; dry runs
+never prompt or write that file. Already-running rows include their current mode as
+`(confine off|manual|auto)`.
 Paths accept absolute names, `~`, `~/...`, or other relative names resolved against the
 session cwd; `$VAR`, `~user`, and empty entries are rejected. A relative directory literally
 named `$x` is written `./$x`. It needs a running daemon, exits 1 on the same conflicts, and

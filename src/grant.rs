@@ -1,5 +1,7 @@
 //! Named opt-in capabilities for confinement.
 
+use std::collections::BTreeSet;
+
 use anyhow::{Result, bail};
 
 /// One named thing a user opens on purpose.
@@ -8,6 +10,8 @@ pub struct Grant {
     pub name: &'static str,
     /// One line for the docs and for the later `confine list`.
     pub exposes: &'static str,
+    /// Additional warning when a grant can escape the confinement boundary.
+    pub escape: Option<&'static str>,
     /// Whether a team-level table may name this grant.
     pub team_default_ok: bool,
     /// Host paths hidden unless the grant is given (`~/` is the home directory).
@@ -92,6 +96,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "docker",
         exposes: "docker container daemon sockets: effectively root on the host",
+        escape: None,
         team_default_ok: false,
         sockets: DOCKER_SOCKETS,
         env: DOCKER_ENV,
@@ -104,6 +109,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "podman",
         exposes: "podman container daemon sockets: effectively root on the host",
+        escape: None,
         team_default_ok: false,
         sockets: PODMAN_SOCKETS,
         env: PODMAN_ENV,
@@ -116,6 +122,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "containerd",
         exposes: "containerd, buildkit and k3s container daemon sockets: effectively root on the host",
+        escape: None,
         team_default_ok: false,
         sockets: CONTAINERD_SOCKETS,
         env: CONTAINERD_ENV,
@@ -128,6 +135,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "crio",
         exposes: "crio container daemon sockets: effectively root on the host",
+        escape: None,
         team_default_ok: false,
         sockets: CRIO_SOCKETS,
         env: NO_PATHS,
@@ -140,6 +148,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "libvirt",
         exposes: "libvirt virtual-machine control: controls virtual machines",
+        escape: None,
         team_default_ok: false,
         sockets: LIBVIRT_SOCKETS,
         env: LIBVIRT_ENV,
@@ -152,6 +161,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "lxd",
         exposes: "lxd and incus container daemon sockets: effectively root on the host",
+        escape: None,
         team_default_ok: false,
         sockets: LXD_SOCKETS,
         env: NO_PATHS,
@@ -164,6 +174,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "snap",
         exposes: "snapd package management: installs and removes packages",
+        escape: None,
         team_default_ok: false,
         sockets: SNAP_SOCKETS,
         env: NO_PATHS,
@@ -176,6 +187,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "harness-config",
         exposes: "the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately",
+        escape: None,
         team_default_ok: false,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -188,6 +200,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "gh",
         exposes: "your GitHub CLI login (~/.config/gh, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: GH_ENV,
@@ -200,6 +213,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "git-credentials",
         exposes: "the plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -212,6 +226,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "ssh",
         exposes: "your ssh keys and config (~/.ssh, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -224,6 +239,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "cargo",
         exposes: "the Rust toolchain, read-write: ~/.cargo (registry and git caches, installed crates; its bin directory stays read-only when it is on PATH) and ~/.rustup (installed toolchains), whose programs and settings (config.toml, env) your own builds outside the session run; your registry login stays hidden while it exists unless you also give cargo-token",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -236,6 +252,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "go",
         exposes: "the Go toolchain, read-write: ~/go (module cache, downloaded toolchains and installed binaries, which your own builds outside the session may run) and ~/.cache/go-build; ~/.netrc stays hidden unless you also give netrc",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -248,6 +265,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "python",
         exposes: "the Python tool caches, read-write: pip, uv, poetry, virtualenv and pipx data under ~/.cache and ~/.local/share, including tool environments whose programs your own shell may run; ~/.pypirc stays hidden unless you also give pypi-token",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -260,6 +278,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "node",
         exposes: "the JavaScript package caches, read-write: ~/.npm, ~/.yarn/berry, ~/.local/share/pnpm and ~/.bun/install/cache; ~/.npmrc stays hidden unless you also give npm-token",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -272,6 +291,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "java",
         exposes: "the Java build caches, read-write: ~/.m2/repository and the whole ~/.gradle, where a gradle.properties you wrote may hold repository passwords the agent can then read and an init.d script is run by every gradle build you start outside the session",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -290,6 +310,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "c-cpp",
         exposes: "the C and C++ build caches, read-write: ccache, conan and cmake data in ~/.cache/ccache, ~/.ccache, ~/.conan2 and ~/.cmake, which your own builds outside the session use",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -302,6 +323,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "semgrep",
         exposes: "semgrep's data directory ~/.semgrep, read-write: its settings file holds the login token if you ran semgrep login",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -314,6 +336,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "sonar",
         exposes: "sonar-scanner's data directory ~/.sonar, read-write, and the SONAR_TOKEN environment variable: the agent can run analyses and publish results to your SonarQube or SonarCloud project as you",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: &["SONAR_TOKEN"],
@@ -326,6 +349,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "aws",
         exposes: "your AWS CLI configuration and credentials (~/.aws, read-write, including cached SSO tokens): the agent acts in your AWS accounts as you and can change or delete the files",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -338,6 +362,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "gcloud",
         exposes: "your Google Cloud CLI login (~/.config/gcloud, read-write): the agent acts in your Google Cloud projects as you and can change or delete the login",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -350,6 +375,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "azure",
         exposes: "your Azure CLI login (~/.azure, read-write) and the AZURE_CLIENT_SECRET and ARM_CLIENT_SECRET environment variables: the agent acts in your Azure subscriptions as you and can change or delete the login",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: &["AZURE_CLIENT_SECRET", "ARM_CLIENT_SECRET"],
@@ -362,6 +388,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "kube",
         exposes: "your kubectl configuration (~/.kube, read-write): the cluster credentials in it let the agent act in your clusters as you, and it can change or delete them",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -374,6 +401,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "terraform",
         exposes: "terraform's user directory (~/.terraform.d, read-write): the saved Terraform Cloud or registry tokens in it let the agent act as you, and it can change or delete them",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -386,6 +414,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "npm-token",
         exposes: "your ~/.npmrc (read-write in place) and the NPM_TOKEN and NODE_AUTH_TOKEN environment variables: the agent can publish packages as you and change the file",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: &["NPM_TOKEN", "NODE_AUTH_TOKEN"],
@@ -398,6 +427,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "pypi-token",
         exposes: "your ~/.pypirc (read-write in place) and the PYPI_TOKEN and TWINE_PASSWORD environment variables: the agent can upload packages as you and change the file",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: &["PYPI_TOKEN", "TWINE_PASSWORD"],
@@ -410,6 +440,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "cargo-token",
         exposes: "your cargo registry login (~/.cargo/credentials and ~/.cargo/credentials.toml, read-write in place) and the CARGO_REGISTRY_TOKEN and CARGO_REGISTRIES_CRATES_IO_TOKEN environment variables: the agent can publish crates as you and change the file",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: &["CARGO_REGISTRY_TOKEN", "CARGO_REGISTRIES_CRATES_IO_TOKEN"],
@@ -422,6 +453,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "netrc",
         exposes: "your ~/.netrc (read-write in place): every host login and password stored there, which the agent can also overwrite",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -434,6 +466,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "cache",
         exposes: "your whole ~/.cache, read-write: every tool's cache and scratch data, including tool environments and hooks whose programs your own shell and builds outside the session run; the default hides under it (for example the Hugging Face token) stay hidden only while they exist when the session starts, and only until something moves them; a credential file created or renamed later is open to the agent, and a state directory under ~/.cache makes the grant fail",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: NO_PATHS,
@@ -446,6 +479,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "huggingface-token",
         exposes: "your Hugging Face login (~/.cache/huggingface/token, read-write in place) and the HF_TOKEN and HUGGING_FACE_HUB_TOKEN environment variables: the agent can act on your Hugging Face account and change the file",
+        escape: None,
         team_default_ok: true,
         sockets: NO_PATHS,
         env: &["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"],
@@ -462,6 +496,67 @@ pub fn all() -> &'static [Grant] {
     &GRANTS
 }
 
+/// Parse accepted auto-grant names, discarding blank and unknown lines.
+pub fn parse_accepted(text: &str) -> BTreeSet<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|name| all().iter().any(|grant| grant.name == *name))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Render accepted auto-grant names in sorted order.
+pub fn render_accepted(names: &BTreeSet<String>) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+    let mut rendered = names
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    rendered.push('\n');
+    rendered
+}
+
+pub const CONSENT_QUESTION: &str = "Accept these for auto mode on all projects? [y/N] ";
+
+/// Render the grant reasons and exposure text shown before auto-grant consent.
+pub fn consent_lines(new: &[(String, String)], rows: &[Grant]) -> String {
+    let mut output = String::new();
+    for (name, reason) in new {
+        output.push_str(name);
+        output.push_str(": ");
+        output.push_str(reason);
+        if let Some(row) = rows.iter().find(|row| row.name == name) {
+            output.push_str(" (");
+            output.push_str(row.exposes);
+            output.push(')');
+            if let Some(escape) = row.escape {
+                output.push_str("\n  can escape: ");
+                output.push_str(escape);
+            }
+        }
+        output.push('\n');
+    }
+    output
+}
+
+/// Render escape warnings for grants that are already present in a session plan.
+pub fn escape_notice(session: &str, grants: &[String], rows: &[Grant]) -> Vec<String> {
+    grants
+        .iter()
+        .filter_map(|name| {
+            rows.iter()
+                .find(|row| row.name == name && row.escape.is_some())
+                .and_then(|row| {
+                    row.escape.map(|escape| {
+                        format!("session {session}: grant {name} can escape: {escape}")
+                    })
+                })
+        })
+        .collect()
+}
 /// Look up a grant by its configuration name.
 pub fn lookup(name: &str) -> Result<&'static Grant> {
     if name == "containers" {
@@ -533,6 +628,9 @@ pub fn render_list() -> String {
             "{:<name_width$}{:<15}{}\n",
             grant.name, scope, grant.exposes
         ));
+        if let Some(escape) = grant.escape {
+            output.push_str(&format!("  can escape: {escape}\n"));
+        }
     }
     output.push_str(
         "Give a grant with --confine-grant NAME, or grants = [\"NAME\"] in [session.confine].",

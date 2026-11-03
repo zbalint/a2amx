@@ -37,7 +37,7 @@ pub fn install(home: &Path) -> anyhow::Result<Installed> {
     Ok(installed)
 }
 
-fn write_if_changed(path: &Path, content: &[u8]) -> anyhow::Result<()> {
+pub fn write_if_changed(path: &Path, content: &[u8]) -> anyhow::Result<()> {
     let changed = match fs::read(path) {
         Ok(old) => old != content,
         Err(error) if error.kind() == ErrorKind::NotFound => true,

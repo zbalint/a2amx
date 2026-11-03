@@ -194,7 +194,7 @@ async fn show_reports_auto_reasons_and_explicit_grants() {
         project.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--detach"],
+        &["team", "up", "--detach", "--yes"],
     );
     assert!(
         started.status.success(),

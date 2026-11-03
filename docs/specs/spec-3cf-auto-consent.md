@@ -176,3 +176,21 @@ rerun once and recorded as pre-existing if it passes.
 | Existing tests that run a real `team up` with `auto = true` and now need `--yes` or a seeded file: `tests/auto_confine.rs` (lines 48, 102, 174, 408, 428, 504), `tests/confine_show.rs:189`, `tests/team.rs` (1697, 3054, 3061, 3081; the dry-run ones are unaffected) | grep `auto *= *true` | grep; the developer re-checks each by running it |
 | `PtyHarness::spawn(args, home)` runs the `a2amx` binary on a pty with `A2AMX_HOME` set, `send` types bytes, `wait_exit` returns the exit code | `tests/common/pty.rs:46-200` | read |
 | Session tokens cannot spawn | `src/daemon.rs:2124`, `:2153` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5 (not fresh: its session could not be reset by the architect); developer and tester OMP, working slot openai-codex/gpt-5.6-luna, advisor slot openai-codex/gpt-5.6-luna. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Opus 5.5 | Acceptance 3 had the dry-run grant order backwards (`cache, cargo`; the table order is `cargo, cache`) | Corrected |
+| Draft review | consultant, Opus 5.5 | Step 1 read as skipping the explicit-grant escape notices when nothing was new | Step 2 always runs |
+| Draft review | consultant, Opus 5.5 | One prompt string ended in the question, so `--yes` could not print the lines without it | Split into `consent_lines` and `CONSENT_QUESTION` |
+| Draft review | consultant, Opus 5.5 | The mutation target `consent` named no function | The consent step in `run_team_up` |
+| Draft review | consultant, Opus 5.5 | A private-file writer already existed in `src/omp.rs`; the spec would have copied it | `omp::write_if_changed` made `pub`, `omp.rs` added to scope |
+| Draft review | consultant, Opus 5.5 | The state directory exists because of `team.toml`, not the daemon connection; the `auto confinement for session` line printed before consent and so claimed grants for sessions that never start; trust path (b) was called removed | Corrected; the line moves after consent; path (b) constrained |
+| Implementation | developer, gpt-5.6-luna | Kept editing a test file after the completion report, while the tester worked from the reported snapshot | Test-only change accepted; snapshot identified by diff hash; the hash goes into reports |
+| Tester pass | tester, gpt-5.6-luna | Mutation survivors: cross-session dedupe, accepted-name subtraction, escape notice wiring | Two tests added (fix round 1); the escape wiring has no input while every grant's `escape` is `None`, so it stays a known survivor owned by the escape audit (F71) |
+| Tester pass | tester, gpt-5.6-luna | First focused runs used the live checkout instead of the scratch copy | Discarded and redone from the archive copy |
+
+Follow-up, not fixed here (backlog F71): the end-to-end test of the explicit-grant escape notice, and notices for the implicit `harness-config` grant.

@@ -7,6 +7,13 @@ All notable user-visible changes are listed here. The format follows
 
 ### Added
 
+- Auto confinement asks first. `a2amx team up` lists each grant that global `auto` would add and has not
+  yet been accepted, with the reason and what the grant opens, and waits for a yes; the accepted names are
+  kept in `auto-grants` in the state directory, so a grant is asked about once for all projects (delete the
+  file to be asked again). `team up --yes` accepts for one run and records nothing; a run without a terminal
+  refuses; `--dry-run` prints `not yet accepted: <names>` and never asks. Grants gain an optional `escape`
+  text that the prompt and `confine list` show once the escape audit fills it. New flag `--yes` on `team up`
+  (`docs/confinement.md`, `docs/teams.md`, `docs/cli.md`).
 - Confinement is visible. The status line shows `[confined auto]` or `[confined]`; `list` and `team status` gain a
   `CONFINE` column (`off`, `manual`, `auto`); `team up --dry-run` prints the mode and, for auto, the reason for
   each grant it added; the new `a2amx confine show [SESSION]` prints a running session's mode, grants and
