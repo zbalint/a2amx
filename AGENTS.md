@@ -14,9 +14,11 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-- Inside an a2amx-hosted session the environment carries `A2AMX_BIN`, which breaks
-  `tests/omp_wiring.rs::generic_sessions_get_no_a2amx_bin`. Run the suite as
-  `env -u A2AMX_BIN -u NO_COLOR cargo test`; a spec's baseline and acceptance commands use that form.
+- The suite passes inside an a2amx-hosted session, a confined one included, with its ambient environment
+  (`A2AMX_BIN`, `A2AMX_ADDR`, `A2AMX_TOKEN`, `NO_COLOR`): the tests that depend on the daemon's
+  environment run the real daemon with a cleared one (`common::spawn_daemon_process`) and run their
+  PTY in the fixture directory, not the checkout. Older specs name the form
+  `env -u A2AMX_BIN -u NO_COLOR cargo test`; it still works.
 - The OMP extension's behavior tests (`tests/omp_extension/`) run on Node 22 or newer through
   `cargo test --test omp_extension`. Without Node the test skips; `A2AMX_REQUIRE_NODE=1` (set in CI)
   makes a missing Node a failure.

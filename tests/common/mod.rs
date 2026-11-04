@@ -12,9 +12,90 @@ use a2amx::harness::{Deliver, Harness};
 use a2amx::messaging::{Limits, TeamScope};
 use a2amx::wire::{Request, Response};
 use std::net::SocketAddr;
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+pub struct DaemonProcess {
+    child: Child,
+    state: PathBuf,
+}
+
+impl Drop for DaemonProcess {
+    fn drop(&mut self) {
+        let _ = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+            .arg("--home")
+            .arg(&self.state)
+            .args(["daemon", "stop", "--yes"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Err(_) => break,
+            }
+        }
+        if self
+            .child
+            .try_wait()
+            .map_or(true, |status| status.is_none())
+        {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+    }
+}
+
+/// Run the real daemon with only the environment needed by its child sessions.
+pub fn spawn_daemon_process(state: &Path, home: &Path, runtime: &Path) -> DaemonProcess {
+    let path = std::env::var_os("PATH").expect("PATH");
+    let child = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .arg("--home")
+        .arg(state)
+        .args(["daemon", "start", "--foreground", "--listen", "127.0.0.1:0"])
+        .env_clear()
+        .env("PATH", path)
+        .env("HOME", home)
+        .env("XDG_RUNTIME_DIR", runtime)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn foreground daemon");
+    let mut process = DaemonProcess {
+        child,
+        state: state.to_owned(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = process.child.try_wait().expect("poll foreground daemon") {
+            panic!("foreground daemon exited during startup: {status}");
+        }
+        let ready = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+            .arg("--home")
+            .arg(state)
+            .arg("list")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("check foreground daemon");
+        if ready.success() {
+            return process;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "foreground daemon did not become ready within 10 seconds"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 
 pub fn list_cells<'a>(listing: &'a str, id: &str) -> Vec<&'a str> {
     listing

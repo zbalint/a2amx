@@ -55,16 +55,44 @@ impl PtyHarness {
         Self::spawn_program(env!("CARGO_BIN_EXE_a2amx"), args, home, environment)
     }
 
+    pub fn spawn_with_env_in(
+        args: &[String],
+        home: &Path,
+        cwd: &Path,
+        environment: &[(&str, &str)],
+    ) -> anyhow::Result<Self> {
+        Self::spawn_inner(
+            env!("CARGO_BIN_EXE_a2amx"),
+            args,
+            home,
+            Some(cwd),
+            environment,
+        )
+    }
+
     pub fn spawn_program(
         program: &str,
         args: &[String],
         home: &Path,
         environment: &[(&str, &str)],
     ) -> anyhow::Result<Self> {
+        Self::spawn_inner(program, args, home, None, environment)
+    }
+
+    fn spawn_inner(
+        program: &str,
+        args: &[String],
+        home: &Path,
+        cwd: Option<&Path>,
+        environment: &[(&str, &str)],
+    ) -> anyhow::Result<Self> {
         let mut options = tty::Options {
             shell: Some(tty::Shell::new(program.to_owned(), args.to_vec())),
             ..tty::Options::default()
         };
+        if let Some(cwd) = cwd {
+            options.working_directory = Some(cwd.to_owned());
+        }
         options
             .env
             .insert("A2AMX_HOME".to_owned(), home.to_string_lossy().into_owned());

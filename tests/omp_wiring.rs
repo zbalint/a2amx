@@ -95,8 +95,11 @@ async fn no_authorize_peers_leaves_the_operator_line_out() -> anyhow::Result<()>
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generic_sessions_get_no_a2amx_bin() -> anyhow::Result<()> {
-    let (dir, _daemon) = common::start_daemon().await;
-    let (_, bin) = capture_launch(dir.path(), "generic", true).await?;
+    let state = tempfile::tempdir()?;
+    let user_home = tempfile::tempdir()?;
+    let runtime = tempfile::tempdir()?;
+    let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
+    let (_, bin) = capture_launch(state.path(), "generic", true).await?;
     assert_eq!(bin, "unset");
     Ok(())
 }

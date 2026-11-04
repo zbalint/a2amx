@@ -265,22 +265,7 @@ async fn pty_yes_persists_accepted_grants_with_private_mode() -> anyhow::Result<
     let project = tempfile::tempdir()?;
     let user_home = tempfile::tempdir()?;
     let runtime = tempfile::tempdir()?;
-    let bwrap_path = String::from_utf8(
-        AsyncCommand::new("which")
-            .arg("bwrap")
-            .output()
-            .await?
-            .stdout,
-    )?;
-    let bwrap_dir = state.path().join("bwrap-path");
-    std::fs::create_dir_all(&bwrap_dir)?;
-    std::os::unix::fs::symlink(bwrap_path.trim(), bwrap_dir.join("bwrap"))?;
-    let _daemon = common::start_daemon_in(
-        state.path(),
-        Some("host-a"),
-        a2amx::messaging::Limits::default(),
-    )
-    .await;
+    let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
     std::fs::write(
         state.path().join("team.toml"),
         format!(
@@ -298,9 +283,10 @@ async fn pty_yes_persists_accepted_grants_with_private_mode() -> anyhow::Result<
     ];
     let home_env = user_home.path().to_string_lossy().into_owned();
     let runtime_env = runtime.path().to_string_lossy().into_owned();
-    let mut pty = PtyHarness::spawn_with_env(
+    let mut pty = PtyHarness::spawn_with_env_in(
         &args,
         state.path(),
+        project.path(),
         &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
     )?;
     pty.wait_for_text(
@@ -327,6 +313,7 @@ async fn pty_yes_persists_accepted_grants_with_private_mode() -> anyhow::Result<
         std::fs::metadata(accepted)?.permissions().mode() & 0o777,
         0o600
     );
+    assert!(user_home.path().join(".cargo").is_dir());
 
     Ok(())
 }
@@ -342,22 +329,7 @@ async fn pty_no_and_eof_refuse_without_starting_or_writing() -> anyhow::Result<(
         let project = tempfile::tempdir()?;
         let user_home = tempfile::tempdir()?;
         let runtime = tempfile::tempdir()?;
-        let bwrap_path = String::from_utf8(
-            AsyncCommand::new("which")
-                .arg("bwrap")
-                .output()
-                .await?
-                .stdout,
-        )?;
-        let bwrap_dir = state.path().join("bwrap-path");
-        std::fs::create_dir_all(&bwrap_dir)?;
-        std::os::unix::fs::symlink(bwrap_path.trim(), bwrap_dir.join("bwrap"))?;
-        let _daemon = common::start_daemon_in(
-            state.path(),
-            Some("host-a"),
-            a2amx::messaging::Limits::default(),
-        )
-        .await;
+        let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
         std::fs::write(
             state.path().join("team.toml"),
             format!(
@@ -375,9 +347,10 @@ async fn pty_no_and_eof_refuse_without_starting_or_writing() -> anyhow::Result<(
         ];
         let home_env = user_home.path().to_string_lossy().into_owned();
         let runtime_env = runtime.path().to_string_lossy().into_owned();
-        let mut pty = PtyHarness::spawn_with_env(
+        let mut pty = PtyHarness::spawn_with_env_in(
             &args,
             state.path(),
+            project.path(),
             &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
         )?;
         pty.wait_for_text(
@@ -418,22 +391,7 @@ async fn pty_deduplicates_auto_consent_across_sessions() -> anyhow::Result<()> {
     let second = tempfile::tempdir()?;
     let user_home = tempfile::tempdir()?;
     let runtime = tempfile::tempdir()?;
-    let bwrap_path = String::from_utf8(
-        AsyncCommand::new("which")
-            .arg("bwrap")
-            .output()
-            .await?
-            .stdout,
-    )?;
-    let bwrap_dir = state.path().join("bwrap-path");
-    std::fs::create_dir_all(&bwrap_dir)?;
-    std::os::unix::fs::symlink(bwrap_path.trim(), bwrap_dir.join("bwrap"))?;
-    let _daemon = common::start_daemon_in(
-        state.path(),
-        Some("host-a"),
-        a2amx::messaging::Limits::default(),
-    )
-    .await;
+    let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
     std::fs::write(
         state.path().join("team.toml"),
         format!(
@@ -451,9 +409,10 @@ async fn pty_deduplicates_auto_consent_across_sessions() -> anyhow::Result<()> {
     ];
     let home_env = user_home.path().to_string_lossy().into_owned();
     let runtime_env = runtime.path().to_string_lossy().into_owned();
-    let mut pty = PtyHarness::spawn_with_env(
+    let mut pty = PtyHarness::spawn_with_env_in(
         &args,
         state.path(),
+        first.path(),
         &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
     )?;
     pty.wait_for_text(
@@ -487,22 +446,7 @@ async fn pty_subtracts_seeded_auto_grants_from_consent() -> anyhow::Result<()> {
     let cargo = tempfile::tempdir()?;
     let user_home = tempfile::tempdir()?;
     let runtime = tempfile::tempdir()?;
-    let bwrap_path = String::from_utf8(
-        AsyncCommand::new("which")
-            .arg("bwrap")
-            .output()
-            .await?
-            .stdout,
-    )?;
-    let bwrap_dir = state.path().join("bwrap-path");
-    std::fs::create_dir_all(&bwrap_dir)?;
-    std::os::unix::fs::symlink(bwrap_path.trim(), bwrap_dir.join("bwrap"))?;
-    let _daemon = common::start_daemon_in(
-        state.path(),
-        Some("host-a"),
-        a2amx::messaging::Limits::default(),
-    )
-    .await;
+    let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
     std::fs::write(state.path().join("auto-grants"), "cache\n")?;
     std::fs::write(cargo.path().join("Cargo.toml"), "")?;
     std::fs::write(
@@ -522,9 +466,10 @@ async fn pty_subtracts_seeded_auto_grants_from_consent() -> anyhow::Result<()> {
     ];
     let home_env = user_home.path().to_string_lossy().into_owned();
     let runtime_env = runtime.path().to_string_lossy().into_owned();
-    let mut pty = PtyHarness::spawn_with_env(
+    let mut pty = PtyHarness::spawn_with_env_in(
         &args,
         state.path(),
+        cargo.path(),
         &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
     )?;
     pty.wait_for_text(

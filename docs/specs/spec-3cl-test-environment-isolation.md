@@ -197,3 +197,19 @@ Claims for the amendment:
 | The checkout's `a2amx.toml` is gitignored | `.gitignore:4` | `git check-ignore -v a2amx.toml` |
 | `spawn_program` has callers `pty.rs:55`, `attach_cli.rs:862,1704,1726`; `spawn_with_env` has 5 (4 here, `attach_cli.rs:833`) | `tests/` | grep |
 | alacritty `tty::Options` has a `working_directory` field | `alacritty_terminal` pinned version | read: `alacritty_terminal-0.26.0/src/tty/mod.rs:30`, version from `Cargo.lock` |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant a Claude Code session (model identity not read
+back; its session was not reset because a draft sat in its composer); developer and tester OMP
+with `openai-codex/gpt-5.6-luna` for planning and working (advisor model not exposed by the
+harness). BLOCKED/amend cycles: 1.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | The red phase and the mutant for `HOME` only fail in a confined session, so an unconfined judge cannot tell fixed from never broken | Criteria say where they run; a `.cargo` assertion that holds anywhere was added |
+| Draft review | consultant | The helper's blocking behaviour, five stale line anchors, a `pgrep` pattern that also matches the host daemon, and an unestablished claim about which call fails | Spec text corrected before lock |
+| Implementation | developer (BLOCKED) | The four PTY tests run in the checkout, where the gitignored `a2amx.toml` beats the fixture's team file; the spec and the consultant missed it | Amendment 1: optional PTY working directory in `tests/common/pty.rs`; `--file` rejected |
+| Draft | architect | The backlog's F75 explanation (daemon `HOME` only) was incomplete and the spec repeated it | Why section and Amendment 1 corrected |
+| Tester pass | tester | Three mutants survive: the readiness gate, removal of the `.cargo` assertion, and the kill fallback in `Drop` | Accepted: no reasonable test forces a slow start or a failing `daemon stop`; the assertion is itself the proof for `HOME` |
+| Architect review | architect | No problems found in the diff; two architect mutants (no `env_clear`, PTY in the checkout) were killed | none |

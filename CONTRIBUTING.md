@@ -28,7 +28,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-Inside an a2amx-hosted session, run `env -u A2AMX_BIN -u NO_COLOR cargo test`; tests that
+Run `cargo test`, also inside an a2amx-hosted session; tests that
 start the `a2amx` binary are refused as root. The OMP extension tests need Node 22 or newer
 and skip without it unless `A2AMX_REQUIRE_NODE=1`.
 
