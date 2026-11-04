@@ -2970,10 +2970,10 @@ fn confine_table_rejects_old_keys_and_team_grants() {
     }
 
     team::parse(
-        "[confine]\ngrants = ['gh', 'ssh', 'git-credentials']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        "[confine]\ngrants = ['gh', 'ssh', 'git-credentials', 'docker']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
     )
     .expect("credential team grants");
-    for grant in ["docker", "harness-config"] {
+    for grant in ["podman", "harness-config"] {
         let error = team::parse(&format!(
             "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
         ))

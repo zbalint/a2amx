@@ -143,7 +143,7 @@ then adds the matching grants plus `cache`; local and explicit team files must n
 `auto = false` is accepted in any team table and means nothing. A session-level `auto`
 key is always an error. `write`, `hide`, and `unhide` lists add in team-then-session order,
 with exact duplicates kept once. `grants` is per session by default; every grant may be set
-in the team table except container grants and `harness-config`, which remain session-only.
+in the team table except `harness-config` and the container grants other than `docker`, which remain session-only.
 `enabled = false` needs no other key. A team table with options but no `enabled` anywhere
 confines nothing, while team `enabled = false` and session `enabled = true` confines that
 session and still applies the team's lists.
@@ -152,12 +152,12 @@ session and still applies the team's lists.
 
 | Name | Exposes | Team default |
 | --- | --- | --- |
-| `docker` | docker container daemon sockets: effectively root on the host | No; grant it per session. |
-| `podman` | podman container daemon sockets: effectively root on the host | No; grant it per session. |
-| `containerd` | containerd, buildkit and k3s container daemon sockets: effectively root on the host | No; grant it per session. |
-| `crio` | crio container daemon sockets: effectively root on the host | No; grant it per session. |
+| `docker` | docker daemon sockets: any docker command as you; an accidental rm -rf ~/ still fails, but on a rootful daemon a deliberate privileged container is root on the host, and userns-remap or a sandboxed runtime does not stop that | Yes; team or session. |
+| `podman` | podman daemon socket: any podman command through it; the system socket belongs to a root service on a default install, so a deliberate privileged container is root on the host | No; grant it per session. |
+| `containerd` | containerd, buildkit and k3s daemon sockets: any command through them; these daemons run as root on a default install, so a deliberate privileged container is root on the host | No; grant it per session. |
+| `crio` | crio daemon socket: any command through it; the daemon runs as root on a default install, so a deliberate privileged container is root on the host | No; grant it per session. |
 | `libvirt` | libvirt virtual-machine control: controls virtual machines | No; grant it per session. |
-| `lxd` | lxd and incus container daemon sockets: effectively root on the host | No; grant it per session. |
+| `lxd` | lxd and incus daemon sockets: any command through them; these daemons run as root on a default install, so a deliberate privileged container is root on the host | No; grant it per session. |
 | `snap` | snapd package management: installs and removes packages | No; grant it per session. |
 | `harness-config` | the session's own harness config directory, read-write and persistent: settings, hooks, instructions and programs under it; running sessions of that harness pick up changes immediately | No; grant it per session. |
 | `gh` | your GitHub CLI login (`~/.config/gh`, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login | Yes; team or session. |
@@ -207,6 +207,7 @@ files are checked only in the session's project directory:
 
 | Grant | Marker(s) |
 | --- | --- |
+| `docker` | `Dockerfile`, `compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml`, `.devcontainer` |
 | `cargo` | `Cargo.toml` |
 | `go` | `go.mod` |
 | `python` | `pyproject.toml`, `requirements.txt` |
@@ -514,10 +515,7 @@ a2amx new --confine --confine-grant docker -- <command>
 grants = ["docker"]
 ```
 
-This gives the agent root-equivalent power over the host: a member of the `docker` group can
-start a container that mounts the host's root, and confinement does not limit what a container
-can do. Use the grant only when you accept that. After the grant, the configured daemon socket
-is reachable; the maintainers did not test `docker run`, `docker build`, or `docker compose` here.
+The grant adds the Docker daemon sockets and `DOCKER_HOST`/`DOCKER_CONTEXT`, so the agent can run any Docker command as you. An accidental `rm -rf ~/` still fails, but on a rootful daemon a deliberate privileged container is root on the host; `userns-remap` or a sandboxed runtime does not stop that because a container can opt out. Running the agents in a VM is the real isolation limit (see [The user's responsibility](philosophy.md#8-the-users-responsibility)); rootless Docker would also remove host root, but its socket is under the hidden `$XDG_RUNTIME_DIR` and cannot be used with this grant, as the paragraph below explains. `confine suggest` and global auto mode offer `docker` when a Docker marker is present, with the usual consent prompt for an auto-picked grant. A Docker Desktop user whose only socket is under `~/.docker` also needs the unhide described below, because the grant does not lift that hide. After the grant, the configured daemon socket is reachable; the maintainers did not test `docker run`, `docker build`, or `docker compose` here.
 
 The Docker Desktop sockets `~/.docker/desktop/docker.sock` and `~/.docker/run/docker.sock` are
 also inside the default hide of `~/.docker`. The grant does not lift that hide, so both the grant

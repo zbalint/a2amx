@@ -66,6 +66,7 @@ All notable user-visible changes are listed here. The format follows
 
 ### Changed
 
+- The `docker` grant is detected by `a2amx confine suggest` and by global `auto` mode when the project has a `Dockerfile`, a compose file (`compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml`) or a `.devcontainer`, with the usual consent prompt for an auto-picked grant; a team file may now name `docker` (it was refused before; `podman`, `containerd`, `crio`, `libvirt`, `lxd` and `snap` stay session-only). The container grant texts no longer say "effectively root on the host": they say what the grant adds and that a deliberate privileged container is root on a rootful daemon, and that `userns-remap` or a sandboxed runtime does not stop the holder of the socket. `a2amx confine --help` describes `suggest` as printing a grants line (`docs/confinement.md`, `docs/teams.md`, `docs/philosophy.md`).
 - Breaking: messages from the daemon itself (peer exit events, activity notices, heartbeat digests) no longer
   say "From another agent" and no longer tell the recipient to reply to `a2amx-daemon@<host>`, which cannot
   receive one. Their envelope says "System notification from the A2AMX daemon, not your user. It cannot be replied

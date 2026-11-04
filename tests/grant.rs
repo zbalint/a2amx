@@ -83,7 +83,7 @@ fn grant_table_has_expected_rows() {
             vec!["DOCKER_HOST", "DOCKER_CONTEXT"],
             vec![],
             vec![],
-            false,
+            true,
             false,
         ),
         (
@@ -631,6 +631,7 @@ fn old_containers_name_reports_the_split_grants() {
 #[test]
 fn team_table_accepts_new_grants_and_rejects_the_rest() {
     for grant in [
+        "docker",
         "gh",
         "ssh",
         "git-credentials",
@@ -659,7 +660,7 @@ fn team_table_accepts_new_grants_and_rejects_the_rest() {
         ))
         .expect("team-default grant is allowed team-wide");
     }
-    for grant in ["docker", "harness-config"] {
+    for grant in ["podman", "harness-config"] {
         let error = team::parse(&format!(
             "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
         ))

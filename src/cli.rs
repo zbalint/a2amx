@@ -181,7 +181,7 @@ pub enum ConfineAction {
         /// Session name or id; omit to show every session.
         session: Option<String>,
     },
-    /// Print a [session.confine] fragment for the build tools found in DIR.
+    /// Print a grants line for the project markers and git remotes found in DIR.
     Suggest {
         /// Project directory; defaults to the current directory.
         dir: Option<PathBuf>,

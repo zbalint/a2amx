@@ -24,9 +24,8 @@ claim. Real isolation is the user's job (see rule 8).
 
 Where it is cheap and does not break the daily flow, confinement also closes ways a faithful
 agent could get out when it cannot reach its goal. This is best effort, not a guarantee, and
-not at any cost. A grant the user adds or a confirmation they give is their decision. As with a
-real sandbox, the result is as secure as the user configures it: Docker can be set up securely,
-or run as root with none of that.
+not at any cost. A grant the user adds or a confirmation they give is their decision. The result
+is as secure as the user configures it: a Docker daemon may run in a VM or directly on the host.
 
 ### 2. Safe by default, open by choice
 
@@ -42,9 +41,8 @@ refusal.
 
 Every grant states plainly what it exposes: what the agent can do, change or delete,
 and which credentials come with it. The text should say what the grant adds, not a worst-case
-claim that is false for some setups. A user with a hardened Docker daemon, for example, should
-not be told that Docker access is root on the host. Some container grant texts are stricter than
-this today and will be brought in line.
+claim that is false for some setups. A Docker Desktop user's daemon runs in a VM, for example,
+so saying that Docker access is root on the host would be false for that setup.
 
 ### 4. Trust what the user chose, confirm what the tool chose
 
@@ -143,13 +141,12 @@ The grant gives the agent the contents of `~/.ssh`. A careful user limits what i
 
 ### The `docker` grant
 
-The grant lets the agent run any docker command as the user. A careful user hardens the daemon
-first:
-
-- `userns-remap` in `daemon.json`, so container root maps to an unprivileged user on the host.
-- A sandboxed runtime such as `runsc` (gVisor).
-
-With these, the risk of the grant is much smaller than on a default install.
+The grant lets the agent run any docker command as the user. It adds the configured daemon
+sockets and Docker environment variables. On a rootful daemon, a deliberate privileged
+container is root on the host; `userns-remap` or a sandboxed runtime does not stop the holder
+of the socket because a container can opt out. An accidental `rm -rf ~/` still fails. A careful
+user runs agents in a VM when real isolation is needed. Rootless Docker would also limit the
+daemon's host impact, but its socket is under the hidden `$XDG_RUNTIME_DIR` in a confined session.
 
 ### Other examples
 

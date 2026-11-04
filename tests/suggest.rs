@@ -10,6 +10,29 @@ fn detect_finds_cargo_marker() {
 }
 
 #[test]
+fn detect_finds_each_docker_marker() {
+    for marker in [
+        "Dockerfile",
+        "compose.yaml",
+        "compose.yml",
+        "docker-compose.yaml",
+        "docker-compose.yml",
+        ".devcontainer",
+    ] {
+        assert_eq!(
+            suggest::detect(|name| name == marker),
+            vec!["docker"],
+            "{marker}"
+        );
+    }
+}
+
+#[test]
+fn detect_ignores_containerfile_marker() {
+    assert!(suggest::detect(|name| name == "Containerfile").is_empty());
+}
+
+#[test]
 fn detect_follows_grant_table_order() {
     assert_eq!(
         suggest::detect(|name| matches!(name, "go.mod" | "package.json")),
@@ -171,6 +194,21 @@ fn explain_uses_the_first_marker_in_grant_order() {
 }
 
 #[test]
+fn explain_reports_docker_first_marker() {
+    assert_eq!(
+        suggest::explain(
+            |name| matches!(name, "Dockerfile" | "compose.yaml"),
+            None,
+            |_| false
+        ),
+        vec![
+            ("docker", "Dockerfile found".into()),
+            ("cache", "always added by auto".into()),
+        ]
+    );
+}
+
+#[test]
 fn render_cargo_and_cache_is_a_single_grants_line() {
     assert_eq!(
         suggest::render(&["cargo", "cache"]),
@@ -221,6 +259,45 @@ fn binary_suggests_the_fragment_for_files_in_an_explicit_directory() {
         output.stdout,
         suggest::render(&["cargo", "java", "cache"]).as_bytes()
     );
+}
+
+#[test]
+fn binary_suggests_docker_for_a_devcontainer_directory() {
+    let home = tempdir().expect("temporary home");
+    let directory = tempdir().expect("temporary project directory");
+    std::fs::create_dir(directory.path().join(".devcontainer")).expect("devcontainer marker");
+    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .env_clear()
+        .env("HOME", home.path())
+        .args(["confine", "suggest"])
+        .arg(directory.path())
+        .output()
+        .expect("run confine suggest");
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("docker"),
+        "{:?}",
+        output.stdout
+    );
+}
+
+#[test]
+fn binary_help_describes_grants_line_suggest() {
+    let home = tempdir().expect("temporary home");
+    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .env_clear()
+        .env("HOME", home.path())
+        .args(["confine", "--help"])
+        .output()
+        .expect("run confine help");
+    assert!(output.status.success(), "{output:?}");
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        help.contains("Print a grants line for the project markers and git remotes found in"),
+        "{help}"
+    );
+    assert!(!help.contains("fragment for the build tools"), "{help}");
 }
 
 #[test]

@@ -187,3 +187,19 @@ may now name `docker` (breaking nothing that worked before; a file that was refu
 Known flaky tests: I7 `tests/attach_cli.rs::attach_does_not_capture_session_already_in_drag_mode`
 and I14 `tests/attach_cli.rs::mouse_wheel_scrolls_three_lines_and_q_returns_to_live`: rerun that
 file once; if it passes, record it as pre-existing.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant a Claude Code session (model identity not read
+back; not reset, its composer was reported as holding a draft although the owner found it empty);
+developer and tester OMP with `openai-codex/gpt-5.6-luna` for planning and working (advisor model
+not exposed by the harness). BLOCKED/amend cycles: 0 (one tester BLOCKED about scratch paths was a
+misreading and was dismissed with a ruling).
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | The wording "userns-remap or a sandboxed runtime makes the grant much less risky" is false for the holder of the docker socket (a container can opt out with `--userns=host`), and the same claim stood in `docs/philosophy.md` | Owner chose the accident-net wording and the philosophy rewrite; spec and texts changed before lock |
+| Draft review | consultant | The spec said the grant "also opens" the Docker Desktop sockets, but `~/.docker` stays hidden; two docs lines (`confinement.md:146`, `teams.md:116`) still said container grants are session-only; criterion 6's `rg` matched history files; the red phase wording hid a passing contract test | Spec text corrected, `docs/teams.md` added to scope, criteria reworded |
+| Architect review | architect | The developer deleted the "maintainers did not test `docker run`" disclosure (rule 10) and wrote "now offer"; both docs passages recommended rootless Docker, which `docs/confinement.md` says cannot be used from a confined session | Fix request m_5469; corrected in the same round |
+| Tester pass | tester | Two mutants survived the repository tests: the detector `exists()` changed to `is_file()` (a directory marker such as `.devcontainer` was never tested) and the old `suggest` help text | Two tests added in `tests/suggest.rs`; both mutants now fail them |
+| Architect review | architect | A mutant of my own (removing the `Dockerfile` marker) was killed by two tests | none |

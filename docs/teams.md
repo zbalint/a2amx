@@ -112,8 +112,8 @@ Within a `[[session]]` table, `name` may be omitted when `role` is set; the role
 Use an optional team-level `[confine]` table for defaults and a `[session.confine]`
 table for session settings. `enabled` defaults to false, and `default_hides` defaults
 to true. `write`, `hide`, and `unhide` lists add team entries before session entries,
-while scalars override. A team-level `grants` list applies to every session; container
-grants and `harness-config` remain session-only. Run `a2amx confine list` for valid
+while scalars override. A team-level `grants` list applies to every session; `harness-config` and
+the container grants other than `docker` remain session-only. Run `a2amx confine list` for valid
 grant names and see [Confinement](confinement.md#credential-environment-variables)
 for the closed credential environment list.
 
