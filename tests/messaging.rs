@@ -58,6 +58,10 @@ fn message_validation_uses_spec_precedence_and_codes() {
         ("subject", "delete\x7f", "invalid_content"),
         ("subject", "next\u{0085}line", "invalid_content"),
         ("subject", "</a2amx-message>", "invalid_content"),
+        ("subject", "<a2amx-message id=\"m_5\"", "invalid_content"),
+        ("subject", "before <a2amx-message after", "invalid_content"),
+        // The check is a plain substring match, so longer element names are rejected too.
+        ("subject", "<a2amx-messages-list", "invalid_content"),
     ];
 
     for (subject, message, code) in cases {
@@ -66,6 +70,22 @@ fn message_validation_uses_spec_precedence_and_codes() {
         assert!(!error.message.is_empty());
         assert!(error.to_string().contains(code));
     }
+
+    let opening_error = validate_message("subject", "before <a2amx-message after")
+        .expect_err("opening envelope tag must be rejected");
+    assert_eq!(
+        opening_error.message,
+        "message contains an envelope opening tag (write it without the leading <)"
+    );
+    let closing_error = validate_message("subject", "</a2amx-message>")
+        .expect_err("closing envelope tag must be rejected");
+    assert_eq!(
+        closing_error.message,
+        "message contains the envelope terminator"
+    );
+    assert!(validate_message("subject", "the a2amx-message element").is_ok());
+    // A near miss that is not the opening tag stays valid: the needle is the whole tag name.
+    assert!(validate_message("subject", "<a2amx-messagX id=\"m_5\"").is_ok());
 
     assert!(validate_message("subject", "line\n\t非ASCII").is_ok());
     assert!(validate_message(&"s".repeat(MAX_SUBJECT_BYTES), "body").is_ok());

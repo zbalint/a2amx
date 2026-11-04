@@ -47,7 +47,6 @@ Make what exists on one machine dependable and explainable before adding more.
   for example one stopped at a startup dialog (F19, with I16).
 - A stable test suite: the flaky PTY tests fixed (I7, I14) and tests isolated from
   the environment of the session that runs them (I13).
-- A decision on whether a message body may contain an opening envelope tag (I11).
 - The heartbeat shows what a busy peer is doing, not only how long it has been busy (F12).
 
 ### 0.3.0: Worktrees

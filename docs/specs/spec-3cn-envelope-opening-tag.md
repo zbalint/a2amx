@@ -149,3 +149,16 @@ bodies it accepted), the backlog rows and the roadmap line.
    `message contains an envelope opening tag (write it without the leading <)` with code
    `invalid_content`; the changelog line is the architect's.
 6. `git status --short` shows only files in scope. Scratch only under `target/scratch/3cn/`.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5 (fresh); developer and tester OMP
+with `openai-codex/gpt-5.6-luna` for planning and working (advisor model not exposed by the
+harness). BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | The spec said a second id on the hook path could forge a receipt; it cannot: a receipt needs exactly one known id and an exact text match, and two ids block the prompt and charge a rejection to each (the architect had not read past `daemon.rs:1376`) | Why and claims table rewritten around the real harm |
+| Draft review | consultant | "Removes the path" overstated: case variants reach a model, and a split tag across a paste wrapper depends on Claude Code escaping the wrapper; no attack-path table; the error text gave the sender no hint; acceptance wording (an accept case cannot be red; the property's size bound; a docs grep matching specs) | Case-insensitive check, attack-path table, fragments property, actionable error text, acceptance reworded, SECURITY.md heading and private-report carve-out |
+| Tester pass | tester | One mutant survived (the needle cut to its first 13 bytes); the Generic harness joins a split wrapper (outside the hook path, documented in the spec) | Architect added a near-prefix acceptance assertion (tiny change); the wrapper case is the spec's recorded constraint |
+| Tester pass | tester | Four timing-sensitive tests failed once in a full run that overlapped the architect's own test runs; each passed alone | Classified as load contention; backlog I18 |

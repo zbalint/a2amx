@@ -422,9 +422,9 @@ machine; there is no central-versus-host split yet.
   `--host-name`) or `<id>@<host>` when unnamed. Names match `[a-z0-9][a-z0-9-]{0,62}`,
   may not look like a session id (`s12`), and are unique among all sessions still in
   the registry, exited ones included.
-- **Limits.** Subject 200 bytes and body 32 KiB with control characters rejected
-  (the envelope terminator too); 50 open messages per recipient; 10 000 stored
-  messages; 20 accepted sends per minute per sender session (in memory only).
+- **Limits.** Subject 200 bytes and body 32 KiB; control characters, the envelope
+  terminator, and the text `<a2amx-message` (an opening envelope tag) are rejected; 50 open
+  messages per recipient; 10 000 stored messages; 20 accepted sends per minute per sender session (in memory only).
   Errors carry a code: `unknown_recipient`, `recipient_exited`, `too_large`,
   `queue_full`, `rate_limited`, `invalid_content`, `unknown_message`, `internal`.
 - **Delivery.** One task per session delivers its pending messages in acceptance

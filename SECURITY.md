@@ -30,6 +30,13 @@ The design and its stated limits are in [docs/architecture.md](docs/architecture
 In particular, a process that holds a session token can act as that session; the
 project does not claim to defend against that.
 
+## Not handled as a vulnerability
+
+Confinement is a safety net against honest mistakes, not a sandbox or a security boundary
+([project philosophy](docs/philosophy.md)). An escape from it is welcome as a normal bug report
+(a public issue is fine) and is fixed on a best-effort basis. An escape that also reaches an item
+above—tokens, another user's state files, or acting as another session—is still reported privately.
+
 ## How the project is built
 
 All code, tests and documentation are written by AI coding agents (apart from a

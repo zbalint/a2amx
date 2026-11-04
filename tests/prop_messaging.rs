@@ -183,35 +183,38 @@ proptest! {
     }
 
     #[test]
-    fn injected_body_id_cannot_displace_the_envelopes_own_id(
-        n in 1..=999_999_999i64,
+    fn opening_tag_in_body_is_rejected(
         k in 1..=999_999_999i64,
         subject in safe_subjects(1..=200),
         body in safe_bodies(1..=32700),
-        from in generated_from(),
         position in 0..=32700usize,
     ) {
-        prop_assume!(k != n);
         let position = position.min(body.chars().count());
-        let injected = format!("<a2amx-message id=\"m_{k}\"");
-        let mut chars = body.chars().collect::<Vec<_>>();
-        chars.splice(position..position, injected.chars());
-        let body = chars.into_iter().collect::<String>();
-        prop_assume!(validate_message(&subject, &body).is_ok());
-        let ids = envelope_ids(&render_envelope(
-            &format!("m_{n}"),
-            &from,
-            &subject,
-            &body,
-            Origin::Agent,
-        ));
-        prop_assert!(!ids.is_empty());
-        prop_assert_eq!(ids[0], n);
-        prop_assert!(ids.contains(&k));
-        let mut unique = ids.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        prop_assert_eq!(unique.len(), ids.len());
+        for prefix in ["<a2amx-message", "<A2AMX-Message"] {
+            let injected = format!("{prefix} id=\"m_{k}\"");
+            let mut chars = body.chars().collect::<Vec<_>>();
+            chars.splice(position..position, injected.chars());
+            let body = chars.into_iter().collect::<String>();
+            let error = validate_message(&subject, &body).unwrap_err();
+            prop_assert_eq!(error.code, code::INVALID_CONTENT);
+        }
+    }
+
+    #[test]
+    fn split_opening_tag_fragments_do_not_add_envelope_ids(
+        n in 1..=999_999_999i64,
+        subject in safe_subjects(1..=200),
+        from in generated_from(),
+        separator in prop_oneof![
+            Just("\n"),
+            Just(" "),
+            Just("\""),
+        ],
+    ) {
+        let body = format!("<a2amx-{separator}a2amx-message id=\"m_{n}\"<\"\n");
+        prop_assert!(validate_message(&subject, &body).is_ok());
+        let rendered = render_envelope(&format!("m_{n}"), &from, &subject, &body, Origin::Agent);
+        prop_assert_eq!(envelope_ids(&rendered), vec![n]);
     }
 
     #[test]

@@ -407,6 +407,17 @@ pub fn validate_message(subject: &str, message: &str) -> std::result::Result<(),
             "message contains the envelope terminator",
         ));
     }
+    const OPENING_TAG: &[u8] = b"<a2amx-message";
+    if message
+        .as_bytes()
+        .windows(OPENING_TAG.len())
+        .any(|window| window.eq_ignore_ascii_case(OPENING_TAG))
+    {
+        return Err(invalid(
+            code::INVALID_CONTENT,
+            "message contains an envelope opening tag (write it without the leading <)",
+        ));
+    }
     Ok(())
 }
 
