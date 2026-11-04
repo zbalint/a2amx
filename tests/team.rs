@@ -1529,13 +1529,12 @@ command = ["claude"]
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn status_leaves_a_ready_claude_session_unmarked() {
-    let (dir, _daemon) = common::start_daemon().await;
+// A blocking spawn kept out of the async test body (Sonar rust:S7487).
+fn start_fake_claude(dir: &Path) -> std::io::Result<Output> {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_claude.sh");
-    let started = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+    Command::new(env!("CARGO_BIN_EXE_a2amx"))
         .arg("--home")
-        .arg(dir.path())
+        .arg(dir)
         .args([
             "new",
             "--detach",
@@ -1547,13 +1546,18 @@ async fn status_leaves_a_ready_claude_session_unmarked() {
         ])
         .arg("sh")
         .arg(&fixture)
-        .current_dir(dir.path())
-        .env("OUT", dir.path().join("out"))
+        .current_dir(dir)
+        .env("OUT", dir.join("out"))
         .env("PASTE_LEN", "1")
         .env("MODE", "ready")
         .stdin(Stdio::null())
         .output()
-        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_leaves_a_ready_claude_session_unmarked() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let started = start_fake_claude(dir.path()).unwrap();
     assert!(
         started.status.success(),
         "{}",
