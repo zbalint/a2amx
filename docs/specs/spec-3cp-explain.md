@@ -172,11 +172,17 @@ promise.
   7. A session token is refused: send `Request::Explain` through the library `Client` with a
      session token (the pattern of the existing "not permitted for a session token" test) and
      assert the error.
-  8. The stale OMP draft case (kills the mutant that calls `reset_gate_reason`): copy the shape of
+  8. The stale OMP draft case (the preview agrees with reset): copy the shape of
      `tests/broker.rs:1988` `reset_stale_omp_draft_hold_clears_after_margin` (it uses
-     `omp_reset_target`); wait past the 2 s margin; send `Request::Explain` twice; both replies
-     show `reset: gate open`, and `list` still shows the session held `human_draft` (explain did
-     not clear it).
+     `omp_reset_target`, a bridge state with `draft: false`, idle, and a human input on an
+     attachment). Right after the input, `Request::Explain` shows `reset: refused (draft_present):
+     hold human_draft`; after the 2 s margin it shows `reset: gate open`, the answer a reset
+     would give after clearing the stale hold. Asserted through `explain` only: for an OMP
+     session `list` does not show the raw `human_draft` hold (an OMP session's channel is the
+     native one, whose `hold_reason` is always none, `src/delivery.rs:198-200`, and
+     `list_sessions` projects only the channel hold and `needs_input`, `src/daemon.rs:2177-2180`),
+     so `explain` not clearing the hold cannot be observed through a public seam (see
+     criterion 4(a)).
 
 ## 7. Claims about existing code
 
@@ -185,6 +191,7 @@ promise.
 | `resolve_session` resolves a known name to its id and passes any other reference through; the daemon answers `unknown session <ref>` | `src/main.rs:3605-3618`, `src/daemon.rs:2308-2310`, `tests/refs_and_list.rs:337` | read (developer's BLOCKED m_5527, architect confirmed) |
 | `Request::Screen`/`Response::Screen` and `screen_of` are the model | `src/wire.rs:200, 282`, `src/daemon.rs:2051, 2297-2311`, `src/main.rs:1949-1968` | read |
 | A Generic session is ready only with bracketed paste on and not scrolled; `cat` never enables it | `src/harness.rs:205-209` | read (consultant) |
+| `list` shows no raw `human_draft` hold for an OMP session | `src/delivery.rs:198-200`, `src/daemon.rs:2177-2180` | read (developer's BLOCKED m_5538, architect confirmed) |
 | `reset_gate_reason` clears a stale OMP draft first, then refuses on exited, a hold, an unready screen, the native bridge | `src/session.rs:925-962` | read (consultant, architect) |
 | `begin_reset` produces the BUSY answer | `src/session.rs:976-982` | read (consultant) |
 | `deliver_hold` comes from `session.deliver() == Hold`, not from a channel hold; `PtyChannel::hold_reason` is the PTY hold; the native channel's is none | `src/daemon.rs:1193, 1465`, `src/delivery.rs:142-144, 198-200` | read (consultant) |
@@ -214,7 +221,9 @@ screen lines (`screen` does that); `CHANGELOG.md` and the backlog row (the archi
    `ready: yes` and `reset: gate open`; a `cat` session prints `reset: refused (not_ready)`.
    Judge: the tester.
 4. Mutation check by the developer, restored by checksum: (a) `explain_of` calls
-   `reset_gate_reason`: test 8 fails; (b) `hold` takes the channel hold only (drop
+   `reset_gate_reason` instead of the preview: not observable through any public seam (reset
+   would clear the same stale hold, and nothing else shows it), so report it as a survivor with
+   that reason; the split is checked by reading the diff (the architect does); (b) `hold` takes the channel hold only (drop
    `deliver_hold`): test 2 fails; (c) print `refused` when the verdict is allowed: tests 1 and 2
    fail; (d) drop the explanation text: test 2 fails; (e) allow `Explain` for a session token:
    test 7 fails; (f) show `ready: unknown` for Generic: tests 1 and 3 fail; (g) in the preview skip
@@ -231,3 +240,17 @@ Section 4 and test 5 said an unknown name fails in `resolve_session` with its ow
 answers `unknown session <ref>`, and the CLI prints it and exits 1. Section 4 and test 5 now say
 so. The statement had been marked "inferred" by the consultant and was kept in the draft without
 reading the function. No other section changes.
+
+## Amendment 2: test 8 observes the stale draft through `explain` only (BLOCKED report m_5538, 2026-11-04)
+
+Test 8 asked `list` to show `human_draft` after `explain` for an OMP session. `list` cannot: the
+native channel has no hold and `list_sessions` projects only the channel hold and `needs_input`.
+Test 8 now asserts the preview's two answers (refused with `draft_present` right after the input,
+`gate open` after the margin) through `explain`; mutant 4(a) is a survivor by construction. No
+other section changes.
+
+Causal review (two BLOCKED cycles): both came from statements the consultant had marked as
+inferred, or as not read (`resolve_session`'s error, `list`'s projection of the OMP hold), which
+the draft kept as facts. The remaining unread claims were read before this amendment (the
+session-token refusal tests exist at `tests/daemon.rs:257, 1338` and `tests/broker.rs:285`; the
+`stale_omp_draft` predicate is in `src/session.rs:925-935`).
