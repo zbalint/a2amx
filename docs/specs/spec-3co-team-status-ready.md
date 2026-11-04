@@ -54,10 +54,14 @@ it (additive; the missing field reads as false).
 
 ## 3. `src/daemon.rs`
 
-In the `SessionSummary { .. }` literal in the list handler (`:2187`) set
-`starting: session.starting()`, in the literal where it stands, after `session_activity` has run at
-`:2174`: do not hoist the call above it, or a session that is ready right now would not have
-latched yet. `Session::starting` already returns false for an exited session
+In the list handler closure (`:2173-2207`) add `let starting = session.starting();` after the
+`quota` line (`:2180`) and before `let state = session.lock();` (`:2181`), and set `starting` in
+the `SessionSummary { .. }` literal (`:2187`) from that variable. It must run after
+`session_activity` (`:2174`), or a session that is ready right now would not have latched yet, and
+before the lock: the literal runs while `state` holds the session's `std::sync::Mutex`, and
+`Session::starting` calls `exit_code()`, which locks it again (`src/session.rs:543-545, 1098-1100`),
+so calling it inside the literal deadlocks every non-empty list (Amendment 1).
+`Session::starting` already returns false for an exited session
 (`src/session.rs:543-547` checks `exit_code().is_none()`) and for Generic. No other change.
 
 ## 4. `src/main.rs`
@@ -108,6 +112,7 @@ the note is the only readiness signal in this table.
 
 | Claim | Where | Verified how |
 |---|---|---|
+| `Session::starting` locks the session mutex (through `exit_code()`), and the summary literal runs while `let state = session.lock()` is held, so `starting()` must be read before that lock | `src/session.rs:543-545, 1098-1100, 1114-1119`, `src/daemon.rs:2181-2207` | read (developer's BLOCKED m_5507, architect confirmed) |
 | `Session::starting` is true only for a non-Generic, not-exited session that has not latched ready | `src/session.rs:543-547` | read |
 | `list_sessions` calls `session_activity` (which calls `observe_ready`) at `:2174`, before the summary literal at `:2187`; `observe_ready` also runs in the delivery check (`src/delivery.rs:148`) and the status frame | `src/daemon.rs:2174, 2511-2513` | read (consultant), architect read the literal |
 | A team file has no `harness` key; the harness comes from the command's basename | `src/team.rs:25-54`, `src/harness.rs:51-62` | read (consultant) |
@@ -150,3 +155,14 @@ reset` behavior; `CHANGELOG.md` and the backlog row (the architect adds them).
 5. Public interface: the `Response::Sessions` JSON gains an optional `starting` key; the
    changelog line is the architect's.
 6. `git status --short` shows only files in scope. Scratch only under `target/scratch/3co/`.
+
+## Amendment 1: read `starting()` before the session lock (BLOCKED report m_5507, 2026-11-04)
+
+The first draft of section 3 told the developer to call `session.starting()` inside the
+`SessionSummary` literal. The literal runs while `state = session.lock()` is held
+(`src/daemon.rs:2181`) and `Session::starting` locks the same non-reentrant mutex through
+`exit_code()`, so that call deadlocks. Section 3 now places the call between `:2180` and `:2181`.
+Neither the architect's draft nor the pre-lock consultant review (which reported `:2174-2187` as
+read) noticed that a guard is live across the literal. The ordering requirement is unchanged:
+after `session_activity`, before the summary is built. No other section changes; scope is
+unchanged.
