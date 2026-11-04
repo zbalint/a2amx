@@ -102,6 +102,7 @@ fn fake_sessions(team: &TeamScope) -> Vec<SessionSummary> {
         activity: Some(Activity::Idle),
         uptime_secs: Some(1),
         activity_secs: Some(1),
+        starting: false,
     })
     .collect()
 }

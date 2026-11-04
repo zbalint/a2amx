@@ -166,3 +166,16 @@ Neither the architect's draft nor the pre-lock consultant review (which reported
 read) noticed that a guard is live across the literal. The ordering requirement is unchanged:
 after `session_activity`, before the summary is built. No other section changes; scope is
 unchanged.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5 (fresh); developer and tester OMP
+with `openai-codex/gpt-5.6-luna` (advisor model not exposed by the harness). BLOCKED/amend cycles: 1.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | The test setup and acceptance step used a `harness` key that team files do not have (`deny_unknown_fields`); ungrouped matching was assumed without reading `team::inspect` | Sessions are started with `new --harness claude` and an ungrouped team file via `--file` |
+| Draft review | consultant | The latch differs from a live check (a session ready earlier that later shows a dialog is not marked); whole-row assertions needed; anchors; red-phase wording; the latch is sampled by `list_sessions` | Decision and limit recorded in the spec and `docs/teams.md`; listed to the owner |
+| Implementation | developer (BLOCKED) | Section 3 put `session.starting()` inside the summary literal while the session lock is held, and `starting()` locks again: a deadlock of every non-empty list. The architect and the consultant missed it | Amendment 1: read before the lock, after `session_activity` |
+| Developer report | architect | Mutant (e) (ignore the latch) survived because the ready-Claude fixture was judged impractical | Architect added `status_leaves_a_ready_claude_session_unmarked` (the fixture needs three environment variables); the mutant now fails it |
+| Tester pass | tester | The pass ended after the static review (the harness ran out of tool access): no real-binary transcript and no mutants | Recorded as not run; the architect ran the deadlock mutant (it hangs) and mutant (e) and relied on the developer's mutants (a) to (d) |

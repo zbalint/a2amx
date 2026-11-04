@@ -43,11 +43,8 @@ Make what exists on one machine dependable and explainable before adding more.
 - A command that explains a session's state: where the state came from (the harness's
   native channel, the prompt hook, or the screen), why a message is held, and why a
   reset would be refused (F18, absorbing G7 and G9).
-- `team status` distinguishes a session that is running from one that is ready to work,
-  for example one stopped at a startup dialog (F19, with I16).
 - A stable test suite: the flaky PTY tests fixed (I7, I14) and tests isolated from
   the environment of the session that runs them (I13).
-- The heartbeat shows what a busy peer is doing, not only how long it has been busy (F12).
 
 ### 0.3.0: Worktrees
 

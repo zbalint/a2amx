@@ -2178,6 +2178,7 @@ async fn list_sessions(runtime: &Runtime) -> anyhow::Result<Response> {
                 .hold_reason()
                 .or(session.needs_input());
             let quota = session_quota(session, omp_usage.as_ref());
+            let starting = session.starting();
             let state = session.lock();
             let (uptime_secs, activity_secs) = if state.exit_code.is_none() {
                 (Some(session.started().elapsed().as_secs()), activity_secs)
@@ -2206,6 +2207,7 @@ async fn list_sessions(runtime: &Runtime) -> anyhow::Result<Response> {
                 activity,
                 uptime_secs,
                 activity_secs,
+                starting,
             }
         })
         .collect();

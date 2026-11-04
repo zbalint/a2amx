@@ -1101,12 +1101,14 @@ async fn run_team_status(
         let (state, confine, note) = match entry.state {
             team::EntryState::Missing => ("missing".to_owned(), String::new(), "-".to_owned()),
             team::EntryState::Running { id } => {
-                let mode = existing
-                    .iter()
-                    .find(|current| current.id == id)
-                    .map_or("off", session_confinement_mode)
-                    .to_owned();
-                ("running".to_owned(), mode, id)
+                let current = existing.iter().find(|current| current.id == id);
+                let mode = current.map_or("off", session_confinement_mode).to_owned();
+                let note = if current.is_some_and(|summary| summary.starting) {
+                    format!("{id} (not ready: starting)")
+                } else {
+                    id
+                };
+                ("running".to_owned(), mode, note)
             }
             team::EntryState::Conflict { id, reason } => {
                 has_conflict = true;

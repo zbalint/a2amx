@@ -190,7 +190,13 @@ row per wanted session in file order. `TEAM` is the configured team name, with a
 `running`, `exited`, or `team-mismatch`; `CONFINE` is `off`, `manual`, or `auto` for
 running sessions and is blank when the session is missing or conflicts. `running` means
 only that the name and team scope match, not that the command, cwd, role, or other settings
-are current. It exits 0 when `team up` would proceed (including missing sessions) and 1
+are current. A running row's NOTE is the session id, or `<id> (not ready: starting)` while
+the daemon has not yet seen a harness readiness screen since the session started (for example,
+a Claude Code session stopped at a startup dialog). The check runs when the daemon lists
+sessions, so a screen that was ready only between two looks is not remembered. Generic
+sessions have no readiness check and never show the note, and a session that was ready earlier
+and later shows a dialog is not marked. The note is the only readiness signal in this table.
+It exits 0 when `team up` would proceed (including missing sessions) and 1
 when `team up` would refuse because of a conflict. A conflict note uses the same remediation
 text as `team up`; status returns that exit code directly without an `a2amx:` error line.
 

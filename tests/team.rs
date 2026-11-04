@@ -421,6 +421,7 @@ fn summary(name: &str, id: &str, exit_code: Option<i32>) -> SessionSummary {
         team: None,
         uptime_secs: None,
         activity_secs: None,
+        starting: false,
     }
 }
 #[test]
@@ -1453,6 +1454,129 @@ command = ["cat"]
 
     let after = run_binary(dir.path(), &["list"]).unwrap().stdout;
     assert_eq!(after, before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_keeps_generic_running_note_as_the_session_id() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let plain = run_binary(
+        dir.path(),
+        &["new", "--detach", "--name", "plain", "--", "cat"],
+    )
+    .unwrap();
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    std::fs::write(
+        dir.path().join("team.toml"),
+        r#"
+[[session]]
+name = "plain"
+command = ["cat"]
+"#,
+    )
+    .unwrap();
+
+    let status = run_binary(dir.path(), &["team", "status", "--file", "team.toml"]).unwrap();
+    assert!(status.status.success());
+    assert_eq!(
+        String::from_utf8(status.stdout).unwrap(),
+        "NAME TEAM STATE CONFINE NOTE\nplain - running off s1\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_marks_a_running_claude_session_that_is_not_ready() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let worker = run_binary(
+        dir.path(),
+        &[
+            "new",
+            "--detach",
+            "--harness",
+            "claude",
+            "--name",
+            "worker",
+            "--",
+            "sh",
+            "-c",
+            "sleep 30",
+        ],
+    )
+    .unwrap();
+    assert!(
+        worker.status.success(),
+        "{}",
+        String::from_utf8_lossy(&worker.stderr)
+    );
+    std::fs::write(
+        dir.path().join("team.toml"),
+        r#"
+[[session]]
+name = "worker"
+command = ["claude"]
+"#,
+    )
+    .unwrap();
+
+    let status = run_binary(dir.path(), &["team", "status", "--file", "team.toml"]).unwrap();
+    assert!(status.status.success());
+    assert_eq!(
+        String::from_utf8(status.stdout).unwrap(),
+        "NAME TEAM STATE CONFINE NOTE\nworker - running off s1 (not ready: starting)\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_leaves_a_ready_claude_session_unmarked() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_claude.sh");
+    let started = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .arg("--home")
+        .arg(dir.path())
+        .args([
+            "new",
+            "--detach",
+            "--harness",
+            "claude",
+            "--name",
+            "ready",
+            "--",
+        ])
+        .arg("sh")
+        .arg(&fixture)
+        .current_dir(dir.path())
+        .env("OUT", dir.path().join("out"))
+        .env("PASTE_LEN", "1")
+        .env("MODE", "ready")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    std::fs::write(
+        dir.path().join("team.toml"),
+        "[[session]]\nname = \"ready\"\ncommand = [\"claude\"]\n",
+    )
+    .unwrap();
+
+    // The fixture draws Claude's ready screen after it starts; each status request samples
+    // the screen, so the first rows may still say "starting".
+    let rows = common::eventually(|| async {
+        let status = run_binary(dir.path(), &["team", "status", "--file", "team.toml"]).unwrap();
+        let rows = String::from_utf8(status.stdout).unwrap();
+        (!rows.contains("not ready")).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows,
+        "NAME TEAM STATE CONFINE NOTE\nready - running off s1\n"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

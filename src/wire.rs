@@ -387,6 +387,10 @@ pub struct SessionSummary {
     pub uptime_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_secs: Option<u64>,
+    /// True while a harness with a readiness check has not yet been ready since startup.
+    /// False for exited sessions and Generic sessions.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub starting: bool,
 }
 
 /// Percent left per quota window, as the harness's status line last showed it: `five_hour_left` and

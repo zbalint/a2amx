@@ -335,6 +335,7 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             activity: None,
             uptime_secs: None,
             activity_secs: None,
+            starting: false,
         }],
     };
     let json = serde_json::to_string(&response).unwrap_or_default();
@@ -368,11 +369,58 @@ fn session_summary_durations_round_trip_when_present() {
             activity: Some(Activity::Working),
             uptime_secs: Some(5),
             activity_secs: Some(3),
+            starting: false,
         }],
     };
     let json = serde_json::to_string(&response).unwrap_or_default();
     assert!(json.contains(r#""uptime_secs":5,"activity_secs":3"#));
     assert_eq!(serde_json::from_str::<Response>(&json).ok(), Some(response));
+}
+#[test]
+fn session_summary_starting_is_optional_and_round_trips() {
+    let mut summary = SessionSummary {
+        id: "s-starting".to_owned(),
+        argv: vec!["claude".to_owned()],
+        cols: 80,
+        rows: 24,
+        exit_code: None,
+        attached: false,
+        name: None,
+        address: String::new(),
+        pending: 0,
+        held: false,
+        hold_reason: None,
+        quota: None,
+        harness: Default::default(),
+        confine: None,
+        team: None,
+        cwd: None,
+        activity: None,
+        uptime_secs: None,
+        activity_secs: None,
+        starting: true,
+    };
+    let encoded = serde_json::to_value(&summary).unwrap();
+    assert_eq!(encoded["starting"], true);
+    assert_eq!(
+        serde_json::from_value::<SessionSummary>(encoded).unwrap(),
+        summary
+    );
+
+    summary.starting = false;
+    let encoded = serde_json::to_value(&summary).unwrap();
+    assert!(encoded.get("starting").is_none());
+
+    let old: SessionSummary = serde_json::from_value(serde_json::json!({
+        "id": "s-old",
+        "argv": ["cat"],
+        "cols": 80,
+        "rows": 24,
+        "exit_code": null,
+        "attached": false,
+    }))
+    .unwrap();
+    assert!(!old.starting);
 }
 
 #[test]
@@ -732,6 +780,7 @@ fn additive_visibility_fields_round_trip() {
             activity: None,
             uptime_secs: None,
             activity_secs: None,
+            starting: false,
         }],
     };
     let sessions_json = serde_json::json!({
