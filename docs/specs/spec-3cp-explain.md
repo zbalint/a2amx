@@ -135,8 +135,9 @@ reset: refused (draft_present): hold human_draft
 - `queued:` is the open message count for the session.
 - `reset:` is `gate open`, or `refused (<code>): <reason>`. "Gate open" is the answer at this
   instant; a reset can still fail at a later step.
-Exit 0; 1 on an error response (an unknown name fails in `resolve_session` with its own error
-text, which the test asserts).
+Exit 0; 1 on an error response. `resolve_session` leaves a reference that is not a known name for
+the daemon to judge (`src/main.rs:3605-3618`), so an unknown name reaches `explain_of` and the
+command exits 1 with stderr containing `unknown session <name>`, as `screen` does (Amendment 1).
 
 ## 5. `docs/cli.md`
 
@@ -164,7 +165,8 @@ promise.
   3. A plain `cat` session (never ready) prints `ready: no` and `reset: refused (not_ready):
      screen not ready`, and an `activity:` line with the cause `screen not ready`.
   4. An exited session (`sh -c "exit 0"`) prints exactly the exited line.
-  5. An unknown name exits 1 and prints the error that `resolve_session` prints.
+  5. An unknown name exits 1 and its stderr contains `unknown session nobody` (the style of
+     `tests/refs_and_list.rs:337`).
   6. `explain` is read only: `list` before and after shows the same `held`, `pending` and state
      (compare those fields; the uptime and activity-age columns change with time).
   7. A session token is refused: send `Request::Explain` through the library `Client` with a
@@ -180,6 +182,7 @@ promise.
 
 | Claim | Where | Verified how |
 |---|---|---|
+| `resolve_session` resolves a known name to its id and passes any other reference through; the daemon answers `unknown session <ref>` | `src/main.rs:3605-3618`, `src/daemon.rs:2308-2310`, `tests/refs_and_list.rs:337` | read (developer's BLOCKED m_5527, architect confirmed) |
 | `Request::Screen`/`Response::Screen` and `screen_of` are the model | `src/wire.rs:200, 282`, `src/daemon.rs:2051, 2297-2311`, `src/main.rs:1949-1968` | read |
 | A Generic session is ready only with bracketed paste on and not scrolled; `cat` never enables it | `src/harness.rs:205-209` | read (consultant) |
 | `reset_gate_reason` clears a stale OMP draft first, then refuses on exited, a hold, an unready screen, the native bridge | `src/session.rs:925-962` | read (consultant, architect) |
@@ -220,3 +223,11 @@ screen lines (`screen` does that); `CHANGELOG.md` and the backlog row (the archi
 5. Public interface: a new CLI command and a new request/response pair; the changelog line is the
    architect's.
 6. `git status --short` shows only files in scope. Scratch only under `target/scratch/3cp/`.
+
+## Amendment 1: an unknown name is judged by the daemon (BLOCKED report m_5527, 2026-11-04)
+
+Section 4 and test 5 said an unknown name fails in `resolve_session` with its own error text.
+`resolve_session` returns an unknown reference unchanged (`src/main.rs:3605-3618`); the daemon
+answers `unknown session <ref>`, and the CLI prints it and exits 1. Section 4 and test 5 now say
+so. The statement had been marked "inferred" by the consultant and was kept in the draft without
+reading the function. No other section changes.
