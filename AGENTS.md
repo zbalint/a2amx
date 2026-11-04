@@ -1,7 +1,8 @@
 # AGENTS.md
 
 Conventions for anyone (human or agent) changing this repository. Design lives in
-`docs/`; read `docs/architecture.md` before touching a module.
+`docs/`; read `docs/architecture.md` before touching a module, and `docs/philosophy.md` before
+changing anything that touches safety, defaults, or what a user is allowed to do.
 
 ## Commands
 

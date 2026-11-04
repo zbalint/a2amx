@@ -1,6 +1,6 @@
 # Confinement
 
-Confinement is a safety net for a trusted but fallible agent, not a security boundary; see [Confinement and harness boundaries](harnesses.md#confinement-and-harness-boundaries).
+Confinement is a safety net for a trusted but fallible agent, not a security boundary; see [Confinement and harness boundaries](harnesses.md#confinement-and-harness-boundaries) and the rules behind it in [Philosophy](philosophy.md).
 
 ## Defaults at a glance
 
