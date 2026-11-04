@@ -4,8 +4,8 @@
 
 LOCKED. Tests only; no change to `src/`.
 
-Scope (files that may be edited): `tests/common/mod.rs`, `tests/auto_confine.rs`,
-`tests/omp_wiring.rs`. Does not touch: `src/`, `tests/common/pty.rs`, every other test file,
+Scope (files that may be edited): `tests/common/mod.rs`, `tests/common/pty.rs` (Amendment 1),
+`tests/auto_confine.rs`, `tests/omp_wiring.rs`. Does not touch: `src/`, every other test file,
 `AGENTS.md`, `CHANGELOG.md`, `docs/`, any other spec.
 
 Location: main checkout `/home/zbalint/workspace/a2amx`, branch `develop`, base `963755c`.
@@ -150,3 +150,50 @@ section 3 is what holds in both.
 Known flaky tests: `tests/attach_cli.rs::attach_does_not_capture_session_already_in_drag_mode`
 (I7) and `tests/attach_cli.rs::mouse_wheel_scrolls_three_lines_and_q_returns_to_live` (I14). A
 failure there: rerun that file once; if it passes, record it as pre-existing.
+
+## Amendment 1: the PTY must run in the fixture's directory (BLOCKED report m_5434, 2026-11-04)
+
+Found by the developer after the helper and the section 3 replacements were in place: all four
+migrated `auto_confine` tests still time out waiting for the consent prompt. The screen shows
+`started a2amx-architect s1` and the other three sessions of the checkout's own `a2amx.toml`,
+not the fixture's `worker`.
+
+Cause (read by the architect): the four tests run `a2amx team up --detach` in a PTY whose
+working directory is the test process's, the repository checkout. `resolve_team_file`
+(`src/main.rs:961-975`) prefers `./a2amx.toml` over `<state>/team.toml`, and the gitignored
+`a2amx.toml` of this checkout (`.gitignore:4`) exists. On CI and on a fresh clone it does not, so
+the tests passed there. The earlier red-phase screen (`failed a2amx-tester: Read-only file
+system`) was already this team file, so the real cause of F75 here is both the ambient
+environment (section 1) and the ambient team file. `PtyHarness::spawn_program` sets no working
+directory (`tests/common/pty.rs:58-80`).
+
+Rejected: adding `--file <state>/team.toml`. A `--file` makes `resolve_team_file` return
+`default_team: None` (`src/main.rs:942-949`), which is not the global-team path these tests
+exist to cover ("Accept these for auto mode on all projects").
+
+Changes:
+
+- **A1.1** `tests/common/pty.rs`: give the PTY an optional working directory without changing any
+  existing caller. Move the body of `spawn_program` into a private
+  `spawn_inner(program, args, home, cwd: Option<&Path>, environment)` that sets
+  `tty::Options::working_directory` when `cwd` is `Some`; `spawn_program` calls it with `None`
+  and a new `pub fn spawn_with_env_in(args, home, cwd, environment)` calls it with
+  `Some(cwd)` and `env!("CARGO_BIN_EXE_a2amx")`. No other function changes.
+- **A1.2** `tests/auto_confine.rs`: the four tests call `spawn_with_env_in` with the fixture's
+  `project` directory as `cwd` (it holds `Cargo.toml` and no `a2amx.toml`; the tests already
+  run their `list` check there). Section 3's other changes stand.
+- **A1.3** Section 6 additions: (8) in this checkout, which has an `a2amx.toml`, the four tests
+  pass; (9) mutant: pass the repository directory instead of `project` as `cwd` in one test: that
+  test fails here (the screen shows the checkout's sessions). It passes on a clone without
+  `a2amx.toml`, so record it as an observation in that case.
+- **A1.4** Out of scope grows by nothing; `pty.rs` is now in scope only for A1.1.
+
+Claims for the amendment:
+
+| Claim | Where | Verified how |
+|---|---|---|
+| `resolve_team_file` prefers `./a2amx.toml`, then `<state>/team.toml` | `src/main.rs:939-984` | read |
+| `--file` yields `default_team: None` | `src/main.rs:942-949` | read |
+| The checkout's `a2amx.toml` is gitignored | `.gitignore:4` | `git check-ignore -v a2amx.toml` |
+| `spawn_program` has callers `pty.rs:55`, `attach_cli.rs:862,1704,1726`; `spawn_with_env` has 5 (4 here, `attach_cli.rs:833`) | `tests/` | grep |
+| alacritty `tty::Options` has a `working_directory` field | `alacritty_terminal` pinned version | read: `alacritty_terminal-0.26.0/src/tty/mod.rs:30`, version from `Cargo.lock` |
