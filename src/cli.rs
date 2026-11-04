@@ -135,6 +135,8 @@ pub enum Command {
     },
     /// Run the target session's configured reset sequence.
     Reset { session: String },
+    /// Explain a session's current state and the reasons behind it.
+    Explain { session: String },
     /// Print a session's visible screen without attaching.
     Screen {
         session: String,

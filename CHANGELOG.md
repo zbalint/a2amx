@@ -63,6 +63,12 @@ All notable user-visible changes are listed here. The format follows
   file (`<state home>/team.toml`, needs `enabled = true`) detects the project's markers and its git remote at each
   start and adds the matching grants plus `cache`; it is weaker than explicit grants, and a local team file,
   `--file` or `[session.confine]` that sets it is an error (`docs/confinement.md`, `docs/teams.md`).
+- `a2amx explain SESSION` says why a session is in the state it is in: its activity and what that activity
+  came from (a channel hold, a reset, a screen that is not ready, or how long the screen has been still),
+  readiness (`no (starting)` for a session that has not reached a ready screen yet), whether it needs input,
+  the hold and its explanation, the number of queued messages, and whether `reset` would be allowed and, if
+  not, with which error code and reason. It changes nothing and is admin only. New request and response pair
+  `explain` on the control protocol (`docs/cli.md`).
 
 ### Changed
 

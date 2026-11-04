@@ -922,49 +922,68 @@ impl Session {
         }
     }
 
+    fn stale_omp_draft(state: &State) -> bool {
+        state.hold == Some(Hold::HumanDraft)
+            && state.restore.is_none()
+            && state.native.connected
+            && !state.native.refused
+            && !state.native.draft
+            && state.native.idle
+            && state
+                .last_human_input
+                .is_none_or(|input| input.elapsed() >= STALE_DRAFT_MARGIN)
+    }
+
     fn clear_stale_omp_draft(&self) {
         if self.harness != Harness::Omp {
             return;
         }
         let mut state = self.lock();
-        if state.hold != Some(Hold::HumanDraft)
-            || state.restore.is_some()
-            || !state.native.connected
-            || state.native.refused
-            || state.native.draft
-            || !state.native.idle
-            || state
-                .last_human_input
-                .is_some_and(|input| input.elapsed() < STALE_DRAFT_MARGIN)
-        {
-            return;
+        if Self::stale_omp_draft(&state) {
+            state.hold = None;
         }
-        state.hold = None;
+    }
+
+    pub(crate) fn reset_gate_preview(&self) -> Option<(&'static str, String)> {
+        if self.resetting() {
+            return Some((messaging::code::BUSY, "reset is already running".to_owned()));
+        }
+        self.reset_gate_decision()
     }
 
     fn reset_gate_reason(&self) -> Option<(&'static str, String)> {
         self.clear_stale_omp_draft();
+        self.reset_gate_decision()
+    }
+
+    fn reset_gate_decision(&self) -> Option<(&'static str, String)> {
         if self.exit_code().is_some() {
             return Some((messaging::code::EXITED, "exited".to_owned()));
         }
-        {
+        let gate = {
             let state = self.lock();
-            if let Some(hold) = state.hold {
+            let hold = if self.harness == Harness::Omp && Self::stale_omp_draft(&state) {
+                None
+            } else {
+                state.hold
+            };
+            if let Some(hold) = hold {
                 let code = match hold {
                     Hold::HumanDraft => messaging::code::DRAFT_PRESENT,
                     Hold::UnsubmittedEnvelope | Hold::CorruptedSubmissions => messaging::code::HELD,
                 };
-                return Some((code, format!("hold {}", delivery::hold_name(hold))));
-            }
-            if !harness::ready(
+                Some((code, format!("hold {}", delivery::hold_name(hold))))
+            } else if !harness::ready(
                 self.harness,
                 &state.emulator.screen(),
                 state.emulator.is_scrolled(),
             ) {
-                return Some((messaging::code::NOT_READY, "screen not ready".to_owned()));
+                Some((messaging::code::NOT_READY, "screen not ready".to_owned()))
+            } else {
+                None
             }
-        }
-        self.reset_native_reason()
+        };
+        gate.or_else(|| self.reset_native_reason())
     }
 
     fn reset_error(

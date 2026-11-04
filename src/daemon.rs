@@ -34,8 +34,9 @@ use crate::session::{
 };
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
-    Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, MessageInfo,
-    QuotaInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
+    Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, ExplainInfo,
+    HoldInfo, MessageInfo, QuotaInfo, Request, ResetVerdict, Response, ServerFrame, SessionSummary,
+    StatusInfo, TeamMember,
 };
 
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
@@ -2049,6 +2050,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
             Request::Kill { session: id, now } => kill_session(&runtime, &id, now).await,
             Request::Reset { session } => runtime.reset_session(&role, session).await,
             Request::Screen { session: id } => screen_of(&runtime, &id),
+            Request::Explain { session: id } => explain_of(&runtime, &id).await,
             Request::Attach {
                 session: id,
                 force,
@@ -2311,6 +2313,98 @@ fn screen_of(runtime: &Runtime, id: &str) -> Response {
     }
 }
 
+async fn explain_of(runtime: &Runtime, id: &str) -> Response {
+    let counts = match runtime.store.open_counts(&runtime.boot).await {
+        Ok(counts) => counts,
+        Err(error) => {
+            return Response::Error {
+                message: error.to_string(),
+            };
+        }
+    };
+    let Some((_, session)) = lookup(runtime, id) else {
+        return Response::Error {
+            message: format!("unknown session {id}"),
+        };
+    };
+    let exit_code = session.exit_code();
+    let pending = if exit_code.is_some() {
+        0
+    } else {
+        counts.get(&session.id().0).copied().unwrap_or(0)
+    };
+    let (ready, starting, activity, activity_cause, needs_input, hold, reset) =
+        if exit_code.is_some() {
+            (
+                None,
+                false,
+                None,
+                None,
+                None,
+                None,
+                ResetVerdict {
+                    allowed: false,
+                    code: None,
+                    reason: None,
+                },
+            )
+        } else {
+            let activity_cause = session_activity_cause(&session);
+            let activity = activity_cause.as_ref().map(|(activity, _)| *activity);
+            let cause = activity_cause.map(|(_, cause)| cause);
+            let needs_input = session.needs_input().map(str::to_owned);
+            let hold_reason = if session.deliver() == Deliver::Hold {
+                Some("deliver_hold".to_owned())
+            } else {
+                AnyChannel::for_session(session.clone())
+                    .hold_reason()
+                    .map(str::to_owned)
+            };
+            let hold = hold_reason.map(|reason| HoldInfo {
+                explanation: messaging::hold_explanation(&reason).map(str::to_owned),
+                reason,
+            });
+            let starting = session.starting();
+            let ready = {
+                let state = session.lock();
+                Some(harness::ready(
+                    session.harness(),
+                    &state.emulator.screen(),
+                    state.emulator.is_scrolled(),
+                ))
+            };
+            let reset = session.reset_gate_preview().map_or_else(
+                || ResetVerdict {
+                    allowed: true,
+                    code: None,
+                    reason: None,
+                },
+                |(code, reason)| ResetVerdict {
+                    allowed: false,
+                    code: Some(code.to_owned()),
+                    reason: Some(reason),
+                },
+            );
+            (ready, starting, activity, cause, needs_input, hold, reset)
+        };
+    Response::Explain {
+        info: ExplainInfo {
+            id: session.id().0.clone(),
+            address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
+            harness: session.harness(),
+            exit_code,
+            ready,
+            starting,
+            activity,
+            activity_cause,
+            needs_input,
+            hold,
+            pending,
+            reset,
+        },
+    }
+}
+
 async fn bridge_attach(
     connection: &mut Framed,
     runtime: &Arc<Runtime>,
@@ -2517,19 +2611,39 @@ fn session_working(session: &Arc<Session>) -> Option<bool> {
     Some(!ready || now.saturating_duration_since(last_change) < ACTIVITY_QUIET)
 }
 
-fn session_activity(session: &Arc<Session>) -> Option<Activity> {
-    let working = session_working(session)?;
-    if AnyChannel::for_session(session.clone())
-        .hold_reason()
-        .is_some()
-        || session.resetting()
-    {
-        Some(Activity::Busy)
-    } else if working {
-        Some(Activity::Working)
+fn session_activity_cause(session: &Arc<Session>) -> Option<(Activity, String)> {
+    let now = Instant::now();
+    let (ready, last_change) = {
+        let state = session.lock();
+        if state.exit_code.is_some() {
+            return None;
+        }
+        (session.observe_ready(&state), state.last_change)
+    };
+    if let Some(reason) = AnyChannel::for_session(session.clone()).hold_reason() {
+        Some((Activity::Busy, format!("held: {reason}")))
+    } else if session.resetting() {
+        Some((Activity::Busy, "reset running".to_owned()))
+    } else if !ready {
+        Some((Activity::Working, "screen not ready".to_owned()))
     } else {
-        Some(Activity::Idle)
+        let unchanged = now.saturating_duration_since(last_change);
+        if unchanged < ACTIVITY_QUIET {
+            Some((
+                Activity::Working,
+                format!("screen changed {}s ago", unchanged.as_secs()),
+            ))
+        } else {
+            Some((
+                Activity::Idle,
+                format!("screen quiet for {}s", unchanged.as_secs()),
+            ))
+        }
     }
+}
+
+fn session_activity(session: &Arc<Session>) -> Option<Activity> {
+    session_activity_cause(session).map(|(activity, _)| activity)
 }
 
 fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {

@@ -200,6 +200,9 @@ pub enum Request {
     Screen {
         session: String,
     },
+    Explain {
+        session: String,
+    },
     /// Admin only: ask the daemon to shut down.
     Shutdown {
         #[serde(default, skip_serializing_if = "is_default")]
@@ -282,6 +285,9 @@ pub enum Response {
     Screen {
         lines: Vec<String>,
     },
+    Explain {
+        info: ExplainInfo,
+    },
     Attached,
     AttachedTop {
         top_rows: u16,
@@ -319,6 +325,44 @@ pub enum Response {
         reason: Option<String>,
     },
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExplainInfo {
+    pub id: String,
+    pub address: String,
+    pub harness: Harness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready: Option<bool>,
+    pub starting: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<Activity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_input: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<HoldInfo>,
+    pub pending: u32,
+    pub reset: ResetVerdict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldInfo {
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResetVerdict {
+    pub allowed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Activity {

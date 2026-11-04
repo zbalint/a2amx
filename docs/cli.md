@@ -18,6 +18,7 @@ a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx kill --exited              # remove every exited session without prompting
 a2amx reset <id|name>               # type the configured reset sequence
 a2amx screen <id|name> [--rows N]   # read visible screen text without attaching
+a2amx explain <id|name>              # explain state, readiness, holds and reset gate
 a2amx confine show [<id|name>]  # show recorded confinement mode and grants
 a2amx daemon start --host-name host-a  # names this host in addresses (name@host-a)
 # --harness is inferred from the command name when omitted (claude, codex, omp)
@@ -26,6 +27,37 @@ a2amx new --name agent-review --harness omp -- omp
 a2amx messages [--session <id>] [--state pending]
 a2amx cancel <message-id>
 ```
+
+## Explain
+
+`a2amx explain SESSION` is a read-only, admin-only view; a session token is refused. It reports
+the daemon's evidence from today and does not record or reconstruct whether past activity came
+from a native channel, prompt hook or screen.
+
+```text
+s1 (worker@host-a): generic, running
+activity: busy (held: human_draft)
+ready: yes
+needs input: no
+hold: human_draft - A person typed in the recipient session. Delivery resumes when they submit or release it (prefix, then r).
+queued: 2
+reset: refused (draft_present): hold human_draft
+```
+
+- The first line identifies the session, address, harness and whether its child is running or
+  exited.
+- `activity` reports the current idle, working or busy classification and the evidence that
+  produced it.
+- `ready` reports the harness readiness check; `no (starting)` means the readiness latch has not
+  been set yet.
+- `needs input` reports the harness input-needed signal, or `no`.
+- `hold` reports the delivery hold and its explanation, or `none`.
+- `queued` reports the number of open messages for the session.
+- `reset` reports the reset gate's answer at this instant; `gate open` is not a promise that a
+  later reset will succeed.
+
+Looking can latch `starting` as `list` does because the readiness check observes the live screen.
+
 
 For team commands and their selection rules, see [Teams](teams.md#team-commands).
 

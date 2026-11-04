@@ -1,8 +1,8 @@
 use a2amx::emulator::Scroll;
 use a2amx::wire::{
-    Activity, AgentSummary, ClientFrame, ConfineInfo, FrameDecoder, GrantReason, MAX_FRAME_LEN,
-    MessageInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
-    encode_frame,
+    Activity, AgentSummary, ClientFrame, ConfineInfo, ExplainInfo, FrameDecoder, GrantReason,
+    HoldInfo, MAX_FRAME_LEN, MessageInfo, Request, ResetVerdict, Response, ServerFrame,
+    SessionSummary, StatusInfo, TeamMember, encode_frame,
 };
 
 #[test]
@@ -186,6 +186,88 @@ fn request_json_uses_exact_tagged_shapes() {
     assert_eq!(
         serde_json::from_str::<Request>(&screen_json).ok(),
         Some(screen)
+    );
+}
+
+#[test]
+fn explain_wire_round_trips_and_omits_absent_options() {
+    let request = Request::Explain {
+        session: "s1".into(),
+    };
+    let request_json = serde_json::to_string(&request).unwrap_or_default();
+    assert_eq!(request_json, r#"{"type":"explain","session":"s1"}"#);
+    assert_eq!(
+        serde_json::from_str::<Request>(&request_json).ok(),
+        Some(request)
+    );
+
+    let populated = Response::Explain {
+        info: ExplainInfo {
+            id: "s1".into(),
+            address: "worker@host-a".into(),
+            harness: a2amx::harness::Harness::Generic,
+            exit_code: Some(7),
+            ready: Some(true),
+            starting: true,
+            activity: Some(Activity::Busy),
+            activity_cause: Some("held: human_draft".into()),
+            needs_input: Some("input?".into()),
+            hold: Some(HoldInfo {
+                reason: "human_draft".into(),
+                explanation: Some("draft explanation".into()),
+            }),
+            pending: 2,
+            reset: ResetVerdict {
+                allowed: false,
+                code: Some("draft_present".into()),
+                reason: Some("hold human_draft".into()),
+            },
+        },
+    };
+    let populated_json = serde_json::to_string(&populated).unwrap_or_default();
+    assert_eq!(
+        serde_json::from_str::<Response>(&populated_json).ok(),
+        Some(populated)
+    );
+
+    let absent = Response::Explain {
+        info: ExplainInfo {
+            id: "s2".into(),
+            address: "plain@host-a".into(),
+            harness: a2amx::harness::Harness::Generic,
+            exit_code: None,
+            ready: None,
+            starting: false,
+            activity: None,
+            activity_cause: None,
+            needs_input: None,
+            hold: None,
+            pending: 0,
+            reset: ResetVerdict {
+                allowed: true,
+                code: None,
+                reason: None,
+            },
+        },
+    };
+    let absent_json = serde_json::to_value(&absent).unwrap();
+    let info = absent_json["info"].as_object().unwrap();
+    for key in [
+        "exit_code",
+        "ready",
+        "activity",
+        "activity_cause",
+        "needs_input",
+        "hold",
+    ] {
+        assert!(!info.contains_key(key), "{key} should be omitted");
+    }
+    let reset = info["reset"].as_object().unwrap();
+    assert!(!reset.contains_key("code"));
+    assert!(!reset.contains_key("reason"));
+    assert_eq!(
+        serde_json::from_value::<Response>(absent_json).ok(),
+        Some(absent)
     );
 }
 

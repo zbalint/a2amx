@@ -203,6 +203,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
             now,
         } => run_kill(home, session, exited, yes, now).await,
         Command::Reset { session } => run_reset(home, session).await,
+        Command::Explain { session } => run_explain(home, session).await,
         Command::Screen { session, rows } => run_screen(home, session, rows).await,
         Command::Messages { session, state } => run_messages(home, session, state).await,
         Command::Cancel { message } => run_cancel(home, message).await,
@@ -1944,6 +1945,69 @@ async fn run_reset(home: PathBuf, reference: String) -> anyhow::Result<()> {
     let noun = if steps == 1 { "step" } else { "steps" };
     write_stdout(format!("reset {session}: {steps} {noun}\n").into_bytes()).await?;
     Ok(())
+}
+
+async fn run_explain(home: PathBuf, reference: String) -> anyhow::Result<()> {
+    let session = resolve_session(&home, &reference).await?;
+    let mut client = Client::connect(&home).await?;
+    let response = client.request(Request::Explain { session }).await?;
+    let info = match response {
+        Response::Explain { info } => info,
+        Response::Error { message } => return Err(anyhow!(message)),
+        other => return Err(anyhow!("unexpected explain response: {other:?}")),
+    };
+    let mut output = String::new();
+    if let Some(code) = info.exit_code {
+        output.push_str(&format!(
+            "{} ({}): {}, exited (code {code})\n",
+            info.id,
+            info.address,
+            info.harness.as_str(),
+        ));
+        return write_stdout(output.into_bytes()).await;
+    }
+    output.push_str(&format!(
+        "{} ({}): {}, running\n",
+        info.id,
+        info.address,
+        info.harness.as_str()
+    ));
+    let activity = info.activity.map(Activity::as_str).unwrap_or("unknown");
+    let cause = info.activity_cause.as_deref().unwrap_or("unknown");
+    output.push_str(&format!("activity: {activity} ({cause})\n"));
+    let ready = match info.ready {
+        Some(true) => "yes",
+        Some(false) if info.starting => "no (starting)",
+        Some(false) => "no",
+        None => "unknown",
+    };
+    output.push_str(&format!("ready: {ready}\n"));
+    output.push_str(&format!(
+        "needs input: {}\n",
+        info.needs_input.as_deref().unwrap_or("no")
+    ));
+    if let Some(hold) = info.hold {
+        output.push_str("hold: ");
+        output.push_str(&hold.reason);
+        if let Some(explanation) = hold.explanation {
+            output.push_str(" - ");
+            output.push_str(&explanation);
+        }
+        output.push('\n');
+    } else {
+        output.push_str("hold: none\n");
+    }
+    output.push_str(&format!("queued: {}\n", info.pending));
+    if info.reset.allowed {
+        output.push_str("reset: gate open\n");
+    } else {
+        output.push_str("reset: refused (");
+        output.push_str(info.reset.code.as_deref().unwrap_or("unknown"));
+        output.push_str("): ");
+        output.push_str(info.reset.reason.as_deref().unwrap_or("unknown"));
+        output.push('\n');
+    }
+    write_stdout(output.into_bytes()).await
 }
 
 async fn run_screen(home: PathBuf, session: String, rows: Option<usize>) -> anyhow::Result<()> {

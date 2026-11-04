@@ -254,3 +254,18 @@ inferred, or as not read (`resolve_session`'s error, `list`'s projection of the 
 the draft kept as facts. The remaining unread claims were read before this amendment (the
 session-token refusal tests exist at `tests/daemon.rs:257, 1338` and `tests/broker.rs:285`; the
 `stale_omp_draft` predicate is in `src/session.rs:925-935`).
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5 (fresh); developer and tester OMP
+with `openai-codex/gpt-5.6-luna` (advisor model not exposed by the harness). BLOCKED/amend cycles: 2.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | `resolve_session` and `reset_gate_reason` statements were marked inferred or not read; the pre-lock gate otherwise held | Both kept as facts without reading; see the two rows below |
+| Implementation | developer (BLOCKED) | Section 4 and test 5 said an unknown name fails in `resolve_session`; the function passes an unknown reference through and the daemon answers `unknown session <ref>`. The architect kept the consultant's "inferred" claim unread | Amendment 1 |
+| Implementation | developer (BLOCKED) | Test 8 asked `list` to show the raw OMP `human_draft` hold; the native channel has no hold and `list_sessions` projects only the channel hold. Same cause: an unread claim | Amendment 2: test 8 asserts the preview through `explain` only; mutant 4(a) is a survivor by construction |
+| Architect review | architect | Mutants M1 (the `no (starting)` suffix) and M2 (`needs input` forced to none) survived the developer's and the tester's tests: the spec's test list had no positive case for either line | Fix request m_5550; `tests/explain.rs` gained a Claude-stub `starting` test and a needs-input dialog test; both mutants now fail them |
+| Architect review | architect | Mutants that turn the hold and running-reset activity into other values survive in `tests/explain.rs` (a channel hold needs a hold fixture; 4(g) is mandated) | Accepted survivors, not covered by the explain tests; the activity text is also time dependent |
+
+Tester pass: no disagreement with sections 2 to 6; CLI smoke against a temp daemon; six own mutants killed. Mutation survivors accepted: 4(a), 4(g), and the two activity-cause mutants above.
