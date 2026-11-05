@@ -62,6 +62,18 @@ fn screen_contains_until(home: &Path, args: &[&str], expected: &str) -> Output {
     }
 }
 
+fn session_diagnostics(home: &Path, session: &str) -> String {
+    let explain = run(home, &["explain", session]);
+    let screen = run(home, &["screen", session]);
+    format!(
+        "explain stdout:\n{}\nexplain stderr:\n{}\nscreen stdout:\n{}\nscreen stderr:\n{}",
+        stdout(&explain),
+        stderr(&explain),
+        stdout(&screen),
+        stderr(&screen)
+    )
+}
+
 /// Ends any daemon left in the state dir, so a failing test leaves no process.
 struct Cleanup<'a>(&'a Path);
 
@@ -415,19 +427,59 @@ fn reset_times_out_when_second_step_stays_not_ready() {
     );
     assert!(created.status.success(), "stderr: {}", stderr(&created));
     let reset = run(&home, &["reset", "worker"]);
-    assert!(!reset.status.success(), "stdout: {}", stdout(&reset));
+    assert!(
+        !reset.status.success(),
+        "stdout: {}\n{}",
+        stdout(&reset),
+        session_diagnostics(&home, "worker")
+    );
     let message = stderr(&reset);
-    assert!(message.contains("step_timeout"), "{message}");
-    assert!(message.contains("step 2 of 2"), "{message}");
+    assert!(
+        message.contains("step_timeout"),
+        "{message}\n{}",
+        session_diagnostics(&home, "worker")
+    );
+    assert!(
+        message.contains("step 2 of 2"),
+        "{message}\n{}",
+        session_diagnostics(&home, "worker")
+    );
     let screen = screen_contains_until(&home, &["screen", "worker"], "marker:/clear");
-    assert!(screen.status.success(), "stderr: {}", stderr(&screen));
+    assert!(
+        screen.status.success(),
+        "stderr: {}\n{}",
+        stderr(&screen),
+        session_diagnostics(&home, "worker")
+    );
     let text = stdout(&screen);
-    assert!(text.contains("marker:/clear"), "{text:?}");
-    assert!(text.contains("got:/second"), "{text:?}");
+    assert!(
+        text.contains("marker:/clear"),
+        "{text:?}\n{}",
+        session_diagnostics(&home, "worker")
+    );
+    assert!(
+        text.contains("got:/second"),
+        "{text:?}\n{}",
+        session_diagnostics(&home, "worker")
+    );
     let retry = run(&home, &["reset", "worker"]);
-    assert!(!retry.status.success());
-    assert!(!stderr(&retry).contains("busy"), "{}", stderr(&retry));
-    assert!(stderr(&retry).contains("not_ready"), "{}", stderr(&retry));
+    assert!(
+        !retry.status.success(),
+        "{}",
+        session_diagnostics(&home, "worker")
+    );
+    assert!(
+        !stderr(&retry).contains("busy"),
+        "{}\n{}",
+        stderr(&retry),
+        session_diagnostics(&home, "worker")
+    );
+    assert!(
+        stderr(&retry).contains("not_ready"),
+        "{}\n{}",
+        stderr(&retry),
+        session_diagnostics(&home, "worker")
+    );
 }
 
 #[test]
@@ -460,19 +512,39 @@ fn reset_runs_configured_steps_in_order() {
     let reset = run(&home, &["reset", "worker"]);
     assert!(
         reset.status.success(),
-        "stdout: {}\nstderr: {}",
+        "stdout: {}\nstderr: {}\n{}",
         stdout(&reset),
-        stderr(&reset)
+        stderr(&reset),
+        session_diagnostics(&home, "worker")
     );
-    assert_eq!(stdout(&reset), "reset s1: 2 steps\n");
+    assert_eq!(
+        stdout(&reset),
+        "reset s1: 2 steps\n",
+        "{}",
+        session_diagnostics(&home, "worker")
+    );
     let screen = screen_contains_until(&home, &["screen", "worker"], "got:/prewalk restart");
-    assert!(screen.status.success(), "stderr: {}", stderr(&screen));
+    assert!(
+        screen.status.success(),
+        "stderr: {}\n{}",
+        stderr(&screen),
+        session_diagnostics(&home, "worker")
+    );
     let text = stdout(&screen);
-    assert!(text.contains("marker:/clear"), "{text:?}");
-    assert!(text.contains("got:/prewalk restart"), "{text:?}");
+    assert!(
+        text.contains("marker:/clear"),
+        "{text:?}\n{}",
+        session_diagnostics(&home, "worker")
+    );
+    assert!(
+        text.contains("got:/prewalk restart"),
+        "{text:?}\n{}",
+        session_diagnostics(&home, "worker")
+    );
     assert!(
         text.find("marker:/clear") < text.find("got:/prewalk restart"),
-        "{text:?}"
+        "{text:?}\n{}",
+        session_diagnostics(&home, "worker")
     );
 }
 

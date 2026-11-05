@@ -19,6 +19,7 @@ use rustix::termios::{Winsize, tcsetwinsize};
 const COLS: u16 = 80;
 const ROWS: u16 = 24;
 const READ_CHUNK: usize = 8192;
+const RAW_TAIL: usize = 4096;
 
 #[derive(Debug)]
 enum ReadEvent {
@@ -182,8 +183,8 @@ impl PtyHarness {
             let now = Instant::now();
             if now >= deadline {
                 return Err(anyhow::anyhow!(
-                    "timed out waiting for {text:?}; screen was {:?}",
-                    self.screen_text()
+                    "timed out waiting for {text:?}\n{}",
+                    self.diagnostics()
                 ));
             }
             self.recv_one((deadline - now).min(Duration::from_millis(50)));
@@ -221,7 +222,10 @@ impl PtyHarness {
             }
             let now = Instant::now();
             if now >= deadline {
-                return Err(anyhow::anyhow!("timed out waiting for PTY child exit"));
+                return Err(anyhow::anyhow!(
+                    "timed out waiting for PTY child exit\n{}",
+                    self.diagnostics()
+                ));
             }
             self.recv_one((deadline - now).min(Duration::from_millis(50)));
         }
@@ -230,6 +234,68 @@ impl PtyHarness {
     pub fn raw_output(&mut self) -> &[u8] {
         self.drain_ready();
         &self.raw_output
+    }
+
+    /// What a failing test needs to see: the screen, the tail of the raw bytes with control
+    /// bytes escaped, and the child's state.
+    pub fn diagnostics(&mut self) -> String {
+        let screen = self.screen_text();
+        let raw_len = self.raw_output.len();
+        let tail_start = raw_len.saturating_sub(RAW_TAIL);
+        let tail = &self.raw_output[tail_start..];
+        let escaped_tail = tail.escape_ascii().to_string();
+        let exit_code = self.exit_code;
+        let eof = self.eof;
+        format!(
+            "screen:\n{screen}\nraw output: {raw_len} bytes, last {} shown:\n\
+             {escaped_tail}\nchild: exit code {exit_code:?}, eof {eof}",
+            tail.len()
+        )
+    }
+
+    /// `Ok` when the raw output contains `needle`, else an error carrying `diagnostics()`.
+    pub fn expect_raw_contains(&mut self, needle: &[u8]) -> anyhow::Result<()> {
+        let contains = needle.is_empty()
+            || self
+                .raw_output()
+                .windows(needle.len())
+                .any(|window| window == needle);
+        if contains {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "expected raw output to contain {}\n{}",
+            needle.escape_ascii(),
+            self.diagnostics()
+        ))
+    }
+
+    /// `Ok` when the raw output does not contain `needle`, else an error carrying `diagnostics()`.
+    pub fn expect_raw_lacks(&mut self, needle: &[u8]) -> anyhow::Result<()> {
+        let contains = needle.is_empty()
+            || self
+                .raw_output()
+                .windows(needle.len())
+                .any(|window| window == needle);
+        if !contains {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "expected raw output not to contain {}\n{}",
+            needle.escape_ascii(),
+            self.diagnostics()
+        ))
+    }
+
+    /// `Ok` when the screen text does not contain `text`, else an error carrying `diagnostics()`.
+    pub fn expect_screen_lacks(&mut self, text: &str) -> anyhow::Result<()> {
+        if !self.screen_text().contains(text) {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "expected screen not to contain {text:?}\n{}",
+            self.diagnostics()
+        ))
     }
 
     fn recv_one(&mut self, timeout: Duration) {

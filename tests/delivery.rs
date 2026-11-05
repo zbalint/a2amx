@@ -103,7 +103,8 @@ impl Case {
             .await
             .unwrap();
         let mut mirror = Emulator::new(Size { cols: 40, rows: 10 });
-        tokio::time::timeout(WAIT, async {
+        let mirror = &mut mirror;
+        let ready = tokio::time::timeout(WAIT, async {
             loop {
                 let Some(ServerFrame::Data(bytes)) = attachment.recv().await.unwrap() else {
                     panic!("fake exited")
@@ -119,9 +120,68 @@ impl Case {
                 }
             }
         })
-        .await
-        .unwrap();
+        .await;
+        if ready.is_err() {
+            let screen = mirror.screen();
+            let lines = (0..screen.size.rows)
+                .map(|row| {
+                    let start = usize::from(row) * usize::from(screen.size.cols);
+                    let end = start + usize::from(screen.size.cols);
+                    screen.cells[start..end]
+                        .iter()
+                        .map(|cell| cell.ch)
+                        .collect::<String>()
+                        .trim_end_matches(' ')
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            panic!("timed out waiting for the ready composer; mirror screen:\n{lines}");
+        }
         attachment
+    }
+
+    async fn ask(&self, request: Request) -> Result<Response, String> {
+        let mut client = Client::connect(self.dir.path())
+            .await
+            .map_err(|error| format!("connection failed: {error}"))?;
+        client
+            .request(request)
+            .await
+            .map_err(|error| format!("request failed: {error}"))
+    }
+
+    async fn diagnostics(&self) -> String {
+        let recipient = match self.ask(Request::List).await {
+            Ok(Response::Sessions { sessions }) => sessions
+                .into_iter()
+                .find(|summary| summary.id == self.recipient)
+                .map(|summary| format!("{summary:?}"))
+                .unwrap_or_else(|| format!("session {} missing from list", self.recipient)),
+            Ok(response) => format!("unexpected list response: {response:?}"),
+            Err(error) => format!("list {error}"),
+        };
+        let screen = match self
+            .ask(Request::Screen {
+                session: self.recipient.clone(),
+            })
+            .await
+        {
+            Ok(Response::Screen { lines }) => lines.join("\n"),
+            Ok(response) => format!("unexpected screen response: {response:?}"),
+            Err(error) => format!("screen {error}"),
+        };
+        let explain = match self
+            .ask(Request::Explain {
+                session: self.recipient.clone(),
+            })
+            .await
+        {
+            Ok(response @ Response::Explain { .. }) => format!("{response:?}"),
+            Ok(response) => format!("unexpected explain response: {response:?}"),
+            Err(error) => format!("explain {error}"),
+        };
+        format!("recipient: {recipient}\nscreen:\n{screen}\nexplain: {explain}")
     }
 
     async fn send(&mut self, subject: &str) -> String {
@@ -170,17 +230,26 @@ impl Case {
     }
 
     async fn wait_state(&mut self, id: &str, state: &str) -> MessageInfo {
-        tokio::time::timeout(WAIT, async {
+        let mut last_status = None;
+        let result = tokio::time::timeout(WAIT, async {
             loop {
                 let message = self.status(id).await;
+                last_status = Some(message.clone());
                 if message.state == state {
                     return message;
                 }
                 tokio::task::yield_now().await;
             }
         })
-        .await
-        .unwrap()
+        .await;
+        match result {
+            Ok(message) => message,
+            Err(_) => panic!(
+                "timed out waiting for state {state:?} of {id}; last status {:?}\n{}",
+                last_status,
+                self.diagnostics().await
+            ),
+        }
     }
 
     async fn recipient_summary(&mut self) -> SessionSummary {
@@ -227,8 +296,9 @@ impl Case {
         .await;
         assert!(
             result.is_ok(),
-            "expected rest {expected:?}, observed {:?}",
-            std::fs::read(path)
+            "expected rest {expected:?}, observed {:?}\n{}",
+            std::fs::read(&path),
+            self.diagnostics().await
         );
     }
 }

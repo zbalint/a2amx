@@ -196,3 +196,21 @@ Scratch: none needed. Mutation probes happen in the checkout and are restored by
 | `a2amx explain SESSION` is in the CLI | `docs/cli.md:21`, `src/main.rs:206` | read |
 | `pty.rs` allows `dead_code` and `unwrap` | `tests/common/pty.rs:3` | read |
 | The reset tests assert on `reset` output and `screen_contains_until` | `tests/daemon_cli.rs:417-431, 460-476` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5; developer and tester OMP
+`openai-codex/gpt-5.6-luna` (planning, working and advisor slot names are not exposed in the OMP
+sessions). BLOCKED/amend cycles: 0.
+
+| Where found | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Opus 5.5 | `Case::diagnostics` would reuse `self.admin` after a `wait_state` timeout; `Client::request` has no request id, so the next request reads the stale reply and the promised message would show `no list` | Fresh connection per request; `recipient_summary` not used |
+| Draft review | consultant, Opus 5.5 | Probe 4 edited an assertion section 5 did not cover; probe 1 named no helper; acceptance 2's regex matched the existing `timeout(WAIT, ..)` lines; `docs/backlog.md` was missing from the status check; a claims row had its line ranges swapped | Section 5 names every assertion by line, probes and acceptance reworded |
+| Implementation | developer, gpt-5.6-luna | The first converted assertion in the wheel test briefly became `line-100` instead of `line-076` | Caught by the developer's own diff review and restored before the report |
+| Architect review | architect, Sonnet 5.5 | `Case::diagnostics` repeated the same connect-request-match block three times | One private helper, `Case::ask` |
+| Tester pass | tester, gpt-5.6-luna | `expect_raw_lacks` accepted an empty needle while `expect_raw_contains` treats it as contained | `expect_raw_lacks` rejects an empty needle |
+
+Accepted survivors: the unbounded raw tail (no fixture has more than 4096 raw bytes; the
+`RAW_TAIL = 64` probe shows the bound) and an eager `session_diagnostics` call before an
+assertion (no test can see it).

@@ -360,23 +360,18 @@ async fn mouse_wheel_scrolls_three_lines_and_q_returns_to_live() -> anyhow::Resu
 
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
     attached.wait_for_text("line-100", WAIT)?;
-    assert!(
-        attached
-            .raw_output()
-            .windows(b"\x1b[?1000h\x1b[?1006h".len())
-            .any(|window| window == b"\x1b[?1000h\x1b[?1006h")
-    );
-    assert!(!attached.screen_text().contains("line-076"));
+    attached.expect_raw_contains(b"\x1b[?1000h\x1b[?1006h")?;
+    attached.expect_screen_lacks("line-076")?;
     attached.send(b"\x1b[<64;10;5M")?;
     attached.wait_for_text("line-077", WAIT)?;
     attached.wait_for_text("[scroll: q to exit]", WAIT)?;
-    assert!(!attached.screen_text().contains("line-100"));
+    attached.expect_screen_lacks("line-100")?;
     attached.send(b"\x1b[<65;10;5M")?;
     attached.wait_for_text("line-100", WAIT)?;
     attached.wait_for_text("[scroll: q to exit]", WAIT)?;
     attached.send(b"q")?;
     attached.wait_for_text("@host-a", WAIT)?;
-    assert!(!attached.screen_text().contains("[scroll: q to exit]"));
+    attached.expect_screen_lacks("[scroll: q to exit]")?;
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
@@ -474,18 +469,8 @@ async fn attach_does_not_capture_session_already_in_drag_mode() -> anyhow::Resul
 
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
     attached.wait_for_text("ready", WAIT)?;
-    assert!(
-        !attached
-            .raw_output()
-            .windows(b"\x1b[?1000h".len())
-            .any(|window| window == b"\x1b[?1000h")
-    );
-    assert!(
-        !attached
-            .raw_output()
-            .windows(b"\x1b[?1006h".len())
-            .any(|window| window == b"\x1b[?1006h")
-    );
+    attached.expect_raw_lacks(b"\x1b[?1000h")?;
+    attached.expect_raw_lacks(b"\x1b[?1006h")?;
     attached.send(&[2, b'd'])?;
     attached.wait_for_text("[detached from s1]", WAIT)?;
     assert_eq!(attached.wait_exit(WAIT)?, 0);
