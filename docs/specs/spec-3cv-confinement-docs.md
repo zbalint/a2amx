@@ -148,3 +148,26 @@ escape-text wiring in `run_team_up` (F73 code part).
    philosophy rules 1, 3 and 10.
 5. The anchors other pages use still resolve: `rg -n "confinement.md#" docs README.md` lists only headings
    that exist in the edited page.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5; developer and tester OMP with
+`openai-codex/gpt-5.6-luna` (the advisor slot model was not exposed to either session). BLOCKED/amend cycles:
+4 (Amendments 1, 3, 4 and 5); Amendment 2 answered a developer question and Amendment 6 was a wording
+finding.
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Opus 5.5 | The enable-switch premise was false: `--confine` exists only on `a2amx new`, `team up` has no confine flag, and the local and global team files are never merged; both examples were impossible | Section 2.3 rewritten as three scopes, not layers |
+| Draft review | consultant, Opus 5.5 | The class rules contradicted the grants table (`docker` is team-allowed; "closed: the whole home" is false); the class column would have broken `grant_table_matches_the_code`; the `--confine-default-hides` description, a missing link target, `~/.cache` as hidden, a duplicated refusal sentence, an acceptance grep that could not fail first | Rules, wording and acceptance fixed; class list outside the `### Grants` section |
+| Implementation | developer, gpt-5.6-luna (BLOCKED) | The spec listed "a git pointer that is not a git directory" among the plan's refusals; the code ignores it. Written by the architect from the 3cr design | Amendment 1 |
+| Implementation | developer, gpt-5.6-luna (question) | Twelve grants made the class placement a judgement call | Amendment 2, the architect's decision by what comes with the grant |
+| Tester pass | tester, gpt-5.6-luna (BLOCKED) | "Project build paths are read-only" was false after spec 3cd; the developer's claims table had marked it confirmed from the code | Amendment 3 |
+| Tester pass | tester, gpt-5.6-luna (BLOCKED) | "Everything inside the working directory is writable" ignored the protected Git `hooks`, `config` and team file | Amendment 4 |
+| Tester pass | tester, gpt-5.6-luna (BLOCKED, one sweep of universal words) | Three over-broad statements: same-user reach (private `/tmp`), whole home (an allowed ancestor), team file (`--file` takes priority) | Amendment 5 |
+| Tester pass | tester, gpt-5.6-luna | The `docker` row names daemon access, not credentials; credential hides are opened by an explicit `unhide` too, which the troubleshooting row contradicted | Amendment 6 and a docs edit |
+| Architect review | architect, Sonnet 5.5 | The troubleshooting row lost its cause text | Cause restored with the link |
+
+Process lesson: three of the four cycles came from universal statements written from memory without their
+exceptions; the claims table must test each universal word (all, every, only, never) instead of marking it
+confirmed from reading the code.

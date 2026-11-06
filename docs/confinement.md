@@ -6,10 +6,11 @@ Confinement is a safety net for a trusted but fallible agent, not a security bou
 
 | Area | Default |
 | --- | --- |
-| Writable | The workspace and its Git directory, a private `/tmp`, and the tool or harness directories named by explicit grants. Claude and OMP sessions always open their own harness config root read-write and persistent by default. |
-| Read-only | The rest of the filesystem by default; writable defaults still keep `~/.a2amx`, existing `PATH` directories inside home, harness control files and directories, and this session's Git `hooks`, `config`, `config.worktree`, `core.hooksPath`, and team file read-only. |
-| Hidden | Secret locations such as `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.npmrc`, and `~/.docker`; credential files under the writable tool directories, the state and runtime directories, `/run/WSL`, `/mnt/wslg`, and container sockets. |
+| Writable | The working directory and its Git directory, a private `/tmp`, and Claude and OMP's own harness config roots read-write and persistent by default. Named grants and explicit `write` entries add the paths they name. |
+| Read-only | The rest of the filesystem; the `~/.cache` root and the tool directories under home such as `~/.cargo` are read-only, not opened, and not hidden, while credential hides inside them still apply; the working directory is writable, `target/` and `node_modules/` included, except the protected launch inputs listed next. Protected launch inputs stay read-only: `~/.a2amx`, existing `PATH` directories inside home, harness control files and directories, and this session's Git `hooks`, `config`, `config.worktree`, `core.hooksPath`, and team file. |
+| Hidden | Credential locations by default; a matching grant or an explicit `unhide` makes an allowed location visible. The state and runtime directories, desktop bus, container sockets, `/run/WSL`, and `/mnt/wslg` are hidden at launch. |
 
+`--confine-default-hides=false` makes the optional home credential locations visible instead of hidden, while keeping mandatory hides; see [One command](#one-command). The path-selection limits are in [What confinement does not do](#what-confinement-does-not-do).
 
 Hide and write are strict by default; you open what you name.
 
@@ -134,6 +135,16 @@ would start proj-builder
 ```
 
 ### How the options combine
+
+#### Three ways to turn it on
+
+These are three scopes, not layers:
+
+- `--confine` (with its `--confine-*` options) belongs to `a2amx new` for one session and reads no team file. Passing a `--confine-*` option without `--confine` is an error.
+- `[confine] enabled = true` belongs to a team file. A team run reads one file: the `--file` you pass, otherwise the local `a2amx.toml` if it exists, otherwise the global `<state home>/team.toml`; they are never merged, and a session's `enabled` beats the team's.
+- Global `auto = true` belongs to the global file's `[confine]` table, needs `enabled = true` there, and adds detected grants plus `cache` only for sessions that end up confined.
+
+Two cases can disagree: team `enabled = true` with session `enabled = false` leaves that session unconfined and gives it no auto grants; when no `--file` is given, a local `a2amx.toml` hides the global file entirely. `a2amx team up --dry-run` shows the effective plan before anything starts, and `a2amx confine show` shows a running session's plan. `a2amx confine suggest` prints a grants line, not the effective plan. `auto = true` in a local file or with `enabled = false`, and `auto` in `[session.confine]`, are rejected.
 
 The effective session setting uses the session table when a scalar is present, otherwise
 the team table, otherwise the default (`enabled = false`, `default_hides = true`).
@@ -266,11 +277,25 @@ cache caused each detected grant.
 
 ## The method: open what an honest mistake can recover from
 
-Open a directory when an accident in it is recoverable: a cache is disposable, and a toolchain can be reinstalled. Keep credentials, the repository itself, installed binaries, and state closed. Prefer the narrowest cache directory.
+Choose a grant by recovery: open a directory when an accident there is recoverable (a cache is disposable; a toolchain can be reinstalled); keep credentials, the repository itself, installed binaries, and state closed. Prefer the narrowest cache directory.
+
+The classes follow what the table row says comes with the grant:
+
+- **Plain grant:** rows without a credential, token, or account action: `cargo`, `go`, `python`, `node`, `c-cpp`, and `cache`.
+- **Grant with the risk spelled out:** rows that name credentials, a token, an account action, or (for `docker`) access to a container daemon: `docker`, `gh`, `git-credentials`, `ssh`, `java`, `semgrep`, `sonar`, `aws`, `gcloud`, `azure`, `kube`, `terraform`, `npm-token`, `pypi-token`, `cargo-token`, `netrc`, and `huggingface-token`. `docker` is allowed in a team file; otherwise use the team or session scope shown in the table.
+- **Session-only:** exactly the rows whose last column says `No`: `podman`, `containerd`, `crio`, `libvirt`, `lxd`, `snap`, and `harness-config`. `harness-config` is also the default harness root for Claude and OMP, so it is not opt-in for those harnesses.
+- **Closed:** no grant opens the system or the whole home; `/` is refused (see [Where A2AMX says no](philosophy.md#9-where-a2amx-says-no)). Opening the whole home takes an explicit `write` entry for home or for an allowed ancestor of it (for example `write = ["~"]`), which is the operator's choice.
 
 When a tool reports `Read-only file system`, add the directory named in the error to `write` or grant the matching tool directory in the session's `[session.confine]` table, not `$HOME`, unless opening the whole home is your deliberate choice. `write = ["~"]` makes everything under home writable except the hides and protected launch inputs; the choice belongs to the user. Whatever you open stays writable for the next unconfined run too. The `cargo` grant opens `~/.cargo` while keeping its credentials hidden; `~/.cargo/bin` remains protected when it is on `PATH`. `~/.cargo/env` and `~/.cargo/config.toml` are writable under that grant, and later builds execute the configuration they contain.
 
-The plan refuses a working directory or Git pointer it picks when it lies inside a default hide, and keeps harness data links and Git pointers inside their expected places; these are tested limits, not a broader confinement guarantee.
+## What confinement does not do
+
+- It is a safety net, not a security sandbox, container, or VM, and it does not stop a rogue agent or a crafted program; see [Philosophy](philosophy.md#1-a-safety-net-not-a-sandbox). Real isolation is the user's job.
+- Network access is not restricted.
+- Beyond the listed launch-time hides (container sockets, the runtime directory, the desktop bus) and the private `/tmp`, confinement does not isolate the agent from other processes and resources of the same user; the filesystem stays read-only except the writable paths.
+- `a2amx` refuses to run as effective uid 0; that includes launching it with `sudo`, and applies whether confined or not. The maintainers ran `a2amx new --detach --confine -- sh -c 'sudo -n id'` on 2026-11-06; inside the confined session, `sudo` exited 1 with `no new privileges`, so it did not run as root. The probe entered no password and involved no agent.
+- Hooks, MCP server entries, and settings under the harness config root, plus project build files (`Makefile`, package scripts, `.envrc`, and hooks of other repositories), run with your rights outside the sandbox—immediately for a running sibling or on your next run. Review them like any code an agent wrote.
+- The plan refuses a working directory or Git directory inside a default hide and a harness data link that leaves its harness folder, each with the `write` line that opens it. It ignores a `.git` pointer that does not lead to a Git directory (no `HEAD` file or no `objects` directory): the session starts and the pointer is not followed. These are tested limits, not a broader confinement guarantee.
 
 ## What stays open
 
@@ -279,10 +304,9 @@ The plan refuses a working directory or Git pointer it picks when it lies inside
 1. The Git history inside a writable Git directory is writable, so an agent can rewrite commits.
 2. Harness roots are writable and persistent by default for Claude and OMP, including settings, hooks, plugins and new files. Treat them as trusted program directories; a running unconfined sibling may load changes immediately. Only this session's repository `hooks`/`config` and team file are protected; every other repository's `.git/hooks` and `.git/config`, and every other `a2amx.toml` under a writable home, are writable. Windows drives under `/mnt` are writable if `/mnt` is opened.
 3. Hides are decided when the session starts. A file created later at a hidden path is not hidden.
-4. Network access is not restricted.
-5. A writable home lets the agent edit shell startup files and editor configs that the user's next unconfined run executes. Open it knowing that.
-6. A grant opens what its row says and no more. An install directory other than `~/.a2amx` is protected only when it appears as an existing `PATH` directory inside the home.
-7. The daemon finds `bwrap` and the `omp` quota probe only in absolute `PATH` directories; relative and empty entries are ignored.
+4. A writable home lets the agent edit shell startup files and editor configs that the user's next unconfined run executes. Open it knowing that.
+5. A grant opens what its row says and no more. An install directory other than `~/.a2amx` is protected only when it appears as an existing `PATH` directory inside the home.
+6. The daemon finds `bwrap` and the `omp` quota probe only in absolute `PATH` directories; relative and empty entries are ignored.
    An `omp` started from a path the session can write (a relative path with a slash, or an absolute one outside the `PATH` directories that `write` opens) is still run by the quota probe outside the sandbox, so keep the harness binary in a read-only directory.
 
 Auto-grant consent is permission for the named grant, not a narrower path limit.
@@ -657,9 +681,9 @@ These ten credential grants are described in the [grants table](#grants):
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `Read-only file system` on a path under `$HOME` | The path is read-only. | Add the directory named in the error to `write` under `[session.confine]`. |
-| The session is refused with `resolves to the hidden path` or `harness data path` | The working directory or Git directory is inside a default hide (for example a pass store or versioned `~/.ssh`), or a harness data link leaves its harness folder. | Add the `write` lines printed in the error, or remove the link and keep harness data inside its harness folder. |
+| The session is refused with `resolves to the hidden path` or `harness data path` | The working directory or Git directory is inside a default hide (for example a pass store or versioned `~/.ssh`), or a harness data link leaves its harness folder; see [What confinement does not do](#what-confinement-does-not-do). | Add the `write` lines printed in the error, or remove the link and keep harness data inside its harness folder. |
 | `git push -u`, `git branch --set-upstream-to` or `git remote add` fails with `could not write config file .git/config: Device or resource busy` | `.git/config` is read-only in a confined session on purpose: an agent could set `core.hooksPath`, `fsmonitor` or an alias that runs later outside the sandbox. | Push with `git push origin <branch>`, which needs no upstream, then set the upstream or remote from an unconfined shell. A supported way to do this from inside the session is a known gap. |
-| A tool says it is not logged in, or reports an authentication error | Its credential file or directory is a default hide. | Give the matching grant first (`gh`, `ssh`, `git-credentials`, `sonar`, `aws`, `gcloud`, `azure`, `kube`, `terraform`, `npm-token`, `pypi-token`, `cargo-token`, `netrc`, `huggingface-token`); use `unhide` only for a credential no grant covers; see [Credentials a tool needs](#credentials-a-tool-needs). |
+| A tool says it is not logged in, or reports an authentication error | Its credential file or directory is a default hide. | Give the matching grant first (`gh`, `ssh`, `git-credentials`, `sonar`, `aws`, `gcloud`, `azure`, `kube`, `terraform`, `npm-token`, `pypi-token`, `cargo-token`, `netrc`, `huggingface-token`); prefer the grant and use `unhide` for a credential no grant covers; see [Credentials a tool needs](#credentials-a-tool-needs). |
 | Claude or OMP cannot update itself (`Read-only file system` under `~/.local/share/claude` or `~/.local/bin`) | A harness binary lives in a read-only directory on purpose: a writable `~/.local/bin` would let a confined agent replace programs that you, or the daemon's `omp` quota probe, run outside the sandbox. Self-update is not supported in a confined session. | Update the harness from a shell outside the sandbox, then restart the session. |
 | `permission denied` on a container socket | Container sockets are hidden. | Use [Docker and other container engines](#docker-and-other-container-engines). |
 | A file written under `/tmp` is not seen by a peer session | `/tmp` is private per session. | Use a directory in the workspace. |
