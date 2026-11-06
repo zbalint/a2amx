@@ -127,11 +127,13 @@ Expected values are literals written in the test, not recomputed with the code u
    deserializes with empty vectors and `false`; a round trip with the fields set is equal; the serialized form
    of a value with the defaults omits them (`skip_serializing_if`).
 2. `tests/confine.rs` (the existing confine tests file; add one test): `default_hide_sources_for` is private,
-   so test through `confine::plan` on a fixture home: `plan.default_hidden` for `Harness::Claude`,
-   `Harness::Codex` and `Harness::Generic` contains the credential files of the other harnesses exactly as
+   so test through `confine::plan` on a fixture home: `plan.default_hidden` for `Harness::Claude`
+   and `Harness::Generic` (not `Harness::Codex`: `check_harness` at `src/confine.rs:1092` makes `plan` reject a Codex
+   session, so Codex is covered only by the `default_hide_names` pin below) contains the credential files of the other harnesses exactly as
    before (compare with a literal list of the entries present in the fixture) and a `default_hide_names`
    test pins the literal list for `Harness::Generic` (24 + 4 entries, the two harness credentials, `/run/dbus`
-   = 31 names) and for `Harness::Claude` (30: no `~/.claude/.credentials.json`). The developer states the
+   = 31 names) and for `Harness::Claude` and `Harness::Codex` (30 each: Claude has no `~/.claude/.credentials.json`, Codex has no `~/.codex/auth.json`; called directly, as the
+   function takes any harness). The developer states the
    counts after reading the three arrays.
 3. `tests/grant.rs`: `denial_help` on literal inputs with a closure `exists` that returns true for a fixed
    list: (a) a typical session (`grants` = `cache`, `cargo`, `harness-config`; `write` = `~/notes`;
@@ -172,3 +174,7 @@ Expected values are literals written in the test, not recomputed with the code u
    environment of a hosted session. Known flakes I7, I14 (fixed by spec 3cx once it lands), I18: rerun once
    and record as pre-existing.
 5. Scratch files stay under `target/scratch/3da/` and are removed before the report.
+
+## Amendment 1 (architect, 2026-11-07)
+
+BLOCKED by the developer: section 4.2 asked for `plan` over `Harness::Codex`, which `check_harness` rejects. The test now plans Claude and Generic and pins `default_hide_names` for Generic, Claude and Codex. No change to scope or to source behavior; Codex confinement stays unsupported. Verified: `src/confine.rs:1092-1099`.
