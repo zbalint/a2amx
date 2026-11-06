@@ -350,6 +350,44 @@ async fn scroll_mode_parses_split_sequences_and_returns_to_live_bottom() -> anyh
     Ok(())
 }
 
+#[test]
+fn raw_wait_observes_late_bytes() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let args = [
+        "-c".to_owned(),
+        "printf first; sleep 1; printf second; sleep 30".to_owned(),
+    ];
+    let mut pty = PtyHarness::spawn_program("sh", &args, dir.path(), &[])?;
+    pty.wait_for_text("first", WAIT)?;
+    pty.wait_for_raw_contains(b"second", WAIT)?;
+    Ok(())
+}
+
+#[test]
+fn raw_wait_times_out_with_diagnostics() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let args = ["-c".to_owned(), "sleep 30".to_owned()];
+    let mut pty = PtyHarness::spawn_program("sh", &args, dir.path(), &[])?;
+    let error = pty
+        .wait_for_raw_contains(b"ne\x01ver", Duration::from_millis(300))
+        .expect_err("missing raw output should time out");
+    let message = error.to_string();
+    assert!(message.contains("timed out"), "error: {message}");
+    assert!(message.contains("ne\\x01ver"), "error: {message}");
+    assert!(message.contains("raw output:"), "error: {message}");
+    Ok(())
+}
+
+#[test]
+fn raw_wait_accepts_empty_needle() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let args = ["-c".to_owned(), "printf first; sleep 30".to_owned()];
+    let mut pty = PtyHarness::spawn_program("sh", &args, dir.path(), &[])?;
+    pty.wait_for_text("first", WAIT)?;
+    pty.wait_for_raw_contains(b"", Duration::from_millis(300))?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mouse_wheel_scrolls_three_lines_and_q_returns_to_live() -> anyhow::Result<()> {
     let (dir, _daemon) = common::start_daemon().await;
@@ -360,7 +398,7 @@ async fn mouse_wheel_scrolls_three_lines_and_q_returns_to_live() -> anyhow::Resu
 
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
     attached.wait_for_text("line-100", WAIT)?;
-    attached.expect_raw_contains(b"\x1b[?1000h\x1b[?1006h")?;
+    attached.wait_for_raw_contains(b"\x1b[?1000h\x1b[?1006h", WAIT)?;
     attached.expect_screen_lacks("line-076")?;
     attached.send(b"\x1b[<64;10;5M")?;
     attached.wait_for_text("line-077", WAIT)?;

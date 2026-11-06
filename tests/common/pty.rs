@@ -253,21 +253,33 @@ impl PtyHarness {
         )
     }
 
-    /// `Ok` when the raw output contains `needle`, else an error carrying `diagnostics()`.
-    pub fn expect_raw_contains(&mut self, needle: &[u8]) -> anyhow::Result<()> {
-        let contains = needle.is_empty()
-            || self
-                .raw_output()
-                .windows(needle.len())
-                .any(|window| window == needle);
-        if contains {
-            return Ok(());
+    /// Wait until raw output contains `needle`, or return an error with diagnostics at the deadline.
+    pub fn wait_for_raw_contains(
+        &mut self,
+        needle: &[u8],
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            self.drain_ready();
+            let contains = needle.is_empty()
+                || self
+                    .raw_output
+                    .windows(needle.len())
+                    .any(|window| window == needle);
+            if contains {
+                return Ok(());
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(anyhow::anyhow!(
+                    "timed out waiting for raw output to contain {}\n{}",
+                    needle.escape_ascii(),
+                    self.diagnostics()
+                ));
+            }
+            self.recv_one((deadline - now).min(Duration::from_millis(50)));
         }
-        Err(anyhow::anyhow!(
-            "expected raw output to contain {}\n{}",
-            needle.escape_ascii(),
-            self.diagnostics()
-        ))
     }
 
     /// `Ok` when the raw output does not contain `needle`, else an error carrying `diagnostics()`.

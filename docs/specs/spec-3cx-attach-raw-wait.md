@@ -81,3 +81,12 @@ two callers, `tests/attach_cli.rs:472-473`, follow `wait_for_text("ready")` and 
    environment of a hosted session. If a test other than the three named here fails, rerun it once and
    record it as pre-existing; the known flakes are I7, I14 and I18 in `docs/backlog.md`.
 5. Scratch files stay under `target/scratch/3cx/` and are removed before the report.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant Claude Code session, model not recorded; developer and tester OMP, planning/working slot openai-codex/gpt-5.6-luna, advisor slot not exposed. BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | architect (Sonnet 5.5) | The draft said `expect_raw_lacks` has three callers; it has two (`tests/attach_cli.rs:472-473`) | Spec corrected before locking |
+| Tester pass | tester (gpt-5.6-luna) | Two mutants of `wait_for_raw_contains` survived: an empty needle rejected, and the timeout error without the escaped needle; the spec required both and no test pinned them | Developer follow-up: escaped-needle assertion in `raw_wait_times_out_with_diagnostics`, new `raw_wait_accepts_empty_needle`; both mutants now killed |
