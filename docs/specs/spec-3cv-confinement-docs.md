@@ -54,8 +54,8 @@ honest mistake can recover from", and the first line of the page's global team f
 writable (working directory and its git directory, a private `/tmp`, the harness's own config root for
 Claude and OMP); read-only (the rest, plus the protected launch inputs the row lists; `~/.cache` and the tool
 directories under home such as `~/.cargo` are read-only, not opened and not hidden, and the `cache` grant
-opens `~/.cache`; anything inside the working directory, `target/` and `node_modules/` included, is writable
-because the working directory is; Amendment 3); hidden (credential
+opens `~/.cache`; the working directory is writable, `target/` and `node_modules/` included, except the protected
+launch inputs the row lists (this session's Git `hooks` and `config`, the team file); Amendments 3 and 4); hidden (credential
 locations until a grant unhides them). Add one line on `--confine-default-hides=false`: it shows the
 optional home hides and keeps the mandatory ones (verify with `src/cli.rs:70` help, the page's line 37 and
 `MANDATORY_ROOTS` in `src/confine.rs`), linking to `#one-command`. Do not repeat the 3cr refusals here; link
