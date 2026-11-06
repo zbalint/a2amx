@@ -5,6 +5,10 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The container-runtime grants (`docker`, `podman`, `containerd`, `crio`, `lxd`) now carry an escape text: `a2amx confine list` prints a warning line under each, and `team up` shows `grant NAME can escape: ...` for an explicitly granted one, because a privileged container started through a root daemon is root on the host.
+
 ### Fixed
 
 - The confinement plan no longer hangs when a repository's `.git/config` is a FIFO or another non-regular file (it is treated as absent), reads a config that is not valid UTF-8, finds `core.hooksPath` after lines without `=`, and fails the plan with an error when the config is larger than 1 MiB instead of ignoring its `hooksPath`.

@@ -770,6 +770,59 @@ async fn auto_merge_preserves_explicit_grant_and_reports_added_reasons() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_container_grant_reports_escape_notice_in_dry_run() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    std::fs::write(
+        project.path().join("a2amx.toml"),
+        "[confine]\nenabled = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n[session.confine]\ngrants = [\"docker\"]\n",
+    )
+    .expect("local team file");
+
+    let output = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("session worker: grant docker can escape: "),
+        "{stderr}"
+    );
+
+    std::fs::write(
+        project.path().join("a2amx.toml"),
+        "[confine]\nenabled = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n[session.confine]\ngrants = [\"cargo\"]\n",
+    )
+    .expect("local team file");
+    let output = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("can escape"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_mode_stays_true_when_auto_adds_nothing() {
     let bwrap = AsyncCommand::new("bwrap").arg("--version").output().await;
     if !matches!(bwrap, Ok(output) if output.status.success()) {

@@ -97,7 +97,8 @@ byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` a
 `--default-signal` (GNU coreutils 8.31 or newer, or uutils).
 
 `a2amx confine list` prints the valid grant names, scope and one-line exposure
-description without contacting a daemon or reading `HOME`.
+description, and a warning line under each grant that can escape the sandbox, without
+contacting a daemon or reading `HOME`.
 
 `a2amx confine suggest [DIR]` checks project markers and walks upward from the
 project directory, following `.git` file pointers. It reads supported git remote forms

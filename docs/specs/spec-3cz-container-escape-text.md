@@ -108,3 +108,11 @@ line when committing).
    environment of a hosted session. Known flakes I7, I14 and I18: rerun once and record as pre-existing (I14
    is fixed by spec 3cx once that lands).
 5. Scratch files stay under `target/scratch/3cz/` and are removed before the report.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant Claude Code session, model not recorded; developer OMP, planning/working slot openai-codex/gpt-5.6-luna, advisor slot not exposed; no tester pass (the architect reran the focused tests and a mutant that drops the `lxd` escape, which two tests killed). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The draft claimed `confine list` does not print `escape`; `render_list` does | Spec amended: the 36-line `render_list` test is rewritten |

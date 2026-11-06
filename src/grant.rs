@@ -92,11 +92,13 @@ const NETRC_UNHIDES: &[&str] = &["~/.netrc"];
 const CACHE_UNHIDES: &[&str] = &["~/.cache"];
 const HUGGINGFACE_TOKEN_UNHIDES: &[&str] = &["~/.cache/huggingface/token"];
 
+const ROOT_DAEMON_ESCAPE: &str = "a privileged container started through the daemon mounts the host filesystem and runs as root on the host";
+
 static GRANTS: [Grant; 30] = [
     Grant {
         name: "docker",
         exposes: "docker daemon sockets: any docker command as you; an accidental rm -rf ~/ still fails, but on a rootful daemon a deliberate privileged container is root on the host, and userns-remap or a sandboxed runtime does not stop that",
-        escape: None,
+        escape: Some(ROOT_DAEMON_ESCAPE),
         team_default_ok: true,
         sockets: DOCKER_SOCKETS,
         env: DOCKER_ENV,
@@ -116,7 +118,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "podman",
         exposes: "podman daemon socket: any podman command through it; the system socket belongs to a root service on a default install, so a deliberate privileged container is root on the host",
-        escape: None,
+        escape: Some(ROOT_DAEMON_ESCAPE),
         team_default_ok: false,
         sockets: PODMAN_SOCKETS,
         env: PODMAN_ENV,
@@ -129,7 +131,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "containerd",
         exposes: "containerd, buildkit and k3s daemon sockets: any command through them; these daemons run as root on a default install, so a deliberate privileged container is root on the host",
-        escape: None,
+        escape: Some(ROOT_DAEMON_ESCAPE),
         team_default_ok: false,
         sockets: CONTAINERD_SOCKETS,
         env: CONTAINERD_ENV,
@@ -142,7 +144,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "crio",
         exposes: "crio daemon socket: any command through it; the daemon runs as root on a default install, so a deliberate privileged container is root on the host",
-        escape: None,
+        escape: Some(ROOT_DAEMON_ESCAPE),
         team_default_ok: false,
         sockets: CRIO_SOCKETS,
         env: NO_PATHS,
@@ -168,7 +170,7 @@ static GRANTS: [Grant; 30] = [
     Grant {
         name: "lxd",
         exposes: "lxd and incus daemon sockets: any command through them; these daemons run as root on a default install, so a deliberate privileged container is root on the host",
-        escape: None,
+        escape: Some(ROOT_DAEMON_ESCAPE),
         team_default_ok: false,
         sockets: LXD_SOCKETS,
         env: NO_PATHS,

@@ -674,11 +674,45 @@ fn team_table_accepts_new_grants_and_rejects_the_rest() {
 }
 
 #[test]
+fn container_runtime_grants_carry_an_escape_text() {
+    let runtime_grants = ["docker", "podman", "containerd", "crio", "lxd"];
+    for name in runtime_grants {
+        let row = grant::lookup(name).expect("container runtime grant");
+        assert!(
+            row.escape.is_some_and(|escape| !escape.is_empty()),
+            "{name} has no escape text"
+        );
+    }
+    for row in grant::all() {
+        if !runtime_grants.contains(&row.name) {
+            assert!(
+                row.escape.is_none(),
+                "{} unexpectedly carries escape text",
+                row.name
+            );
+        }
+    }
+}
+
+#[test]
+fn escape_notice_renders_for_a_real_container_grant() {
+    let notices = grant::escape_notice("worker", &["docker".to_owned()], grant::all());
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].starts_with("session worker: grant docker can escape: "));
+}
+
+#[test]
 fn render_list_has_every_grant_and_instruction() {
     let rendered = grant::render_list();
     let lines = rendered.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), grant::all().len() + 1);
-    for (line, row) in lines.iter().zip(grant::all()) {
+    assert_eq!(lines.len(), 36);
+    let row_lines = lines[..lines.len() - 1]
+        .iter()
+        .copied()
+        .filter(|line| !line.starts_with("  can escape: "))
+        .collect::<Vec<_>>();
+    assert_eq!(row_lines.len(), grant::all().len());
+    for (line, row) in row_lines.iter().zip(grant::all()) {
         let after_name = line
             .strip_prefix(row.name)
             .expect("each rendered row starts with its grant name");
@@ -706,16 +740,43 @@ fn render_list_has_every_grant_and_instruction() {
         assert!(line.contains(row.exposes));
     }
     assert_eq!(
-        lines[8],
-        "gh                team or sessionyour GitHub CLI login (~/.config/gh, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login"
+        row_lines
+            .iter()
+            .find(|line| line.starts_with("gh "))
+            .copied(),
+        Some(
+            "gh                team or sessionyour GitHub CLI login (~/.config/gh, read-write) and its tokens in the environment: the agent can push, open and merge pull requests, read private repositories as you, and change or delete the login"
+        )
     );
     assert_eq!(
-        lines[9],
-        "git-credentials   team or sessionthe plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite"
+        row_lines
+            .iter()
+            .find(|line| line.starts_with("git-credentials "))
+            .copied(),
+        Some(
+            "git-credentials   team or sessionthe plain-text git credential files (read-write in place): every host and password stored there, which the agent can also overwrite"
+        )
     );
     assert_eq!(
-        lines[10],
-        "ssh               team or sessionyour ssh keys and config (~/.ssh, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them"
+        row_lines
+            .iter()
+            .find(|line| line.starts_with("ssh "))
+            .copied(),
+        Some(
+            "ssh               team or sessionyour ssh keys and config (~/.ssh, read-write): the agent can log in to every host those keys open as you, push with them, and change or delete them"
+        )
+    );
+    let docker_index = lines
+        .iter()
+        .position(|line| line.starts_with("docker "))
+        .expect("docker row");
+    let docker_escape = grant::lookup("docker")
+        .expect("docker grant")
+        .escape
+        .expect("docker escape text");
+    assert_eq!(
+        lines[docker_index + 1],
+        format!("  can escape: {docker_escape}")
     );
     assert_eq!(
         lines.last().copied(),
