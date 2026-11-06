@@ -75,7 +75,8 @@ say that a build executes the config later; those sentences stay). Add the class
 - session-only: exactly the rows whose last column says "No" (for example `podman`, `containerd`, `crio`,
   `lxd`; read the table, do not copy this list);
 - closed: no grant opens the system or the whole home; `/` is refused (philosophy rule 9); the whole home
-  opens only with an explicit `write = ["~"]`, which is the operator's choice (line 271).
+  opens only with an explicit `write` entry for home or an allowed ancestor of it, for example `write =
+  ["~"]`, which is the operator's choice (line 271; Amendment 5).
 The developer places each grant by these definitions and lists in the plan every grant whose row makes the
 placement a judgement call (the consultant expects `cargo`, `go`, `python`, `java`, `cache`, `semgrep`,
 `sonar`, `node`, `c-cpp`, `libvirt`, `snap`, `harness-config`); the architect decides each of those, so the
@@ -85,13 +86,13 @@ developer reports the list before writing the class bullets and does not invent 
 it on", in this order, saying plainly that they are three scopes, not layers:
 - `--confine` (with its `--confine-*` options) belongs to `a2amx new` for one session and reads no team
   file; `--confine-*` without `--confine` is an error;
-- `[confine] enabled = true` belongs to a team file; a team run uses one file, the local `a2amx.toml` if it
-  exists, else the global `team.toml`; they are never merged; a session's `enabled` beats the team's;
+- `[confine] enabled = true` belongs to a team file; a team run uses one file, the `--file` you pass, else the local
+  `a2amx.toml` if it exists, else the global `team.toml` (Amendment 5); they are never merged; a session's `enabled` beats the team's;
 - global `auto = true` belongs to the global file's `[confine]` table, needs `enabled = true` there, and adds
   the detected grants plus `cache` only for sessions that end up confined.
 Then the two cases that can disagree: team `enabled = true` with a session `enabled = false` (that session
 is unconfined, and gets no auto grants; the developer proves the last part with `team up --dry-run`), and
-a local file that exists, which hides the global file entirely. Say that `a2amx team up --dry-run` shows the
+a local file that exists, which hides the global file entirely when no `--file` is given. Say that `a2amx team up --dry-run` shows the
 plan before anything starts and `a2amx confine show` shows a running session; do not say that `confine
 suggest` shows the plan. Error cases (`auto` in a local file, `auto` with `enabled = false`) go in prose or
 in a fenced block marked `text`, not in a `toml` block, because `tests/docs_examples.rs` parses every `toml`
@@ -104,7 +105,9 @@ list in the disclosure style of the page (say what the agent can do, not a worst
   real isolation is the user's job;
 - the network is not restricted;
 - beyond the listed hides (including the container sockets, the runtime directory and the desktop bus),
-  whatever you can reach as the same user the agent can reach;
+  beyond the listed hides and the private `/tmp`, confinement does not isolate the agent from other
+  processes and resources of the same user, and the filesystem stays read-only except the writable paths
+  (Amendment 5);
 - `sudo` and root: `a2amx` refuses to run as uid 0 (philosophy rule 9). What `sudo` does inside a
   confined session is stated only if the developer's probe shows it, in the form "the maintainers ran X on
   DATE and saw Y" (line 574 style), never "sudo cannot work"; the probe never types a password and an
