@@ -108,9 +108,11 @@ list in the disclosure style of the page (say what the agent can do, not a worst
   (`Makefile`, package scripts, `.envrc`, hooks of other repositories), run with your rights outside the
   sandbox, immediately for a running sibling or on your next run, so review them like any code an agent
   wrote (the docs part of F73; no behavior change);
-- the refusals the plan makes for paths it picks (spec 3cr: a working directory or git directory inside a
-  default hide, a harness data link that leaves its harness folder, a git pointer that is not a git
-  directory), listed as tested limits; move the sentence at line 273 here and keep its scope, naming the
+- what the plan does with paths it picks (spec 3cr; Amendment 1): it refuses a working directory or git
+  directory inside a default hide and a harness data link that leaves its harness folder, each with the
+  `write` line that opens it; it ignores a `.git` pointer that does not lead to a git directory (no `HEAD`
+  file or no `objects` directory): the session starts and the pointer is not followed. Listed as tested
+  limits; move the sentence at line 273 here and keep its scope, naming the
   tests in `tests/confine.rs` that pin them in the developer's plan, not in the page; link here from 2.1 and
   from the troubleshooting row instead of repeating it.
 "What stays open" keeps its numbered list; remove only a sentence the new section now holds.
