@@ -64,9 +64,12 @@ backlog F64, worded as a rule about recovering from accidents, not about executi
 say that a build executes the config later; those sentences stay). Add the class list as bullets, outside
 `### Grants` and with no row starting with "| `". The classes, defined by what the grant's row already says:
 - plain grant: the row names no credential, token or account action (toolchain and cache directories);
-- grant with the risk spelled out: the row names credentials, a token, an account action, or something that
-  runs later with your rights; team or session as the table says (`docker` belongs here, with a note that it
-  is allowed in a team file);
+- grant with the risk spelled out: the row says credentials, a token or an account action come with it;
+  team or session as the table says (`docker` belongs here, with a note that it is allowed in a team file).
+  A row's note that your own builds run installed programs later is a disclosure, not a class: it stays in
+  the row and does not move a toolchain out of the plain class (Amendment 2, architect decision on the
+  developer's question m_5715: `cargo`, `go`, `python`, `node`, `c-cpp`, `cache` are plain; `java`,
+  `semgrep`, `sonar` are risk-spelled-out; `libvirt`, `snap`, `harness-config` are session-only);
 - session-only: exactly the rows whose last column says "No" (for example `podman`, `containerd`, `crio`,
   `lxd`; read the table, do not copy this list);
 - closed: no grant opens the system or the whole home; `/` is refused (philosophy rule 9); the whole home
