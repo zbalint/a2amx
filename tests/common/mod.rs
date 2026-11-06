@@ -17,6 +17,13 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+pub fn keep_coverage_env(command: &mut Command) -> &mut Command {
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
+    command
+}
+
 pub struct DaemonProcess {
     child: Child,
     state: PathBuf,
@@ -55,19 +62,21 @@ impl Drop for DaemonProcess {
 /// Run the real daemon with only the environment needed by its child sessions.
 pub fn spawn_daemon_process(state: &Path, home: &Path, runtime: &Path) -> DaemonProcess {
     let path = std::env::var_os("PATH").expect("PATH");
-    let child = Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .arg("--home")
-        .arg(state)
-        .args(["daemon", "start", "--foreground", "--listen", "127.0.0.1:0"])
-        .env_clear()
-        .env("PATH", path)
-        .env("HOME", home)
-        .env("XDG_RUNTIME_DIR", runtime)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn foreground daemon");
+    let child = keep_coverage_env(
+        Command::new(env!("CARGO_BIN_EXE_a2amx"))
+            .arg("--home")
+            .arg(state)
+            .args(["daemon", "start", "--foreground", "--listen", "127.0.0.1:0"])
+            .env_clear(),
+    )
+    .env("PATH", path)
+    .env("HOME", home)
+    .env("XDG_RUNTIME_DIR", runtime)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .expect("spawn foreground daemon");
     let mut process = DaemonProcess {
         child,
         state: state.to_owned(),

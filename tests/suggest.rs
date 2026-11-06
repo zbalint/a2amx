@@ -1,3 +1,7 @@
+mod common;
+
+use common::keep_coverage_env;
+
 use std::process::Command;
 
 use tempfile::tempdir;
@@ -247,8 +251,7 @@ fn binary_suggests_the_fragment_for_files_in_an_explicit_directory() {
     let directory = tempdir().expect("temporary project directory");
     std::fs::write(directory.path().join("Cargo.toml"), "").expect("cargo marker");
     std::fs::write(directory.path().join("pom.xml"), "").expect("maven marker");
-    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .env_clear()
+    let output = keep_coverage_env(Command::new(env!("CARGO_BIN_EXE_a2amx")).env_clear())
         .args(["confine", "suggest"])
         .arg(directory.path())
         .output()
@@ -266,8 +269,7 @@ fn binary_suggests_docker_for_a_devcontainer_directory() {
     let home = tempdir().expect("temporary home");
     let directory = tempdir().expect("temporary project directory");
     std::fs::create_dir(directory.path().join(".devcontainer")).expect("devcontainer marker");
-    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .env_clear()
+    let output = keep_coverage_env(Command::new(env!("CARGO_BIN_EXE_a2amx")).env_clear())
         .env("HOME", home.path())
         .args(["confine", "suggest"])
         .arg(directory.path())
@@ -285,8 +287,7 @@ fn binary_suggests_docker_for_a_devcontainer_directory() {
 #[test]
 fn binary_help_describes_grants_line_suggest() {
     let home = tempdir().expect("temporary home");
-    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .env_clear()
+    let output = keep_coverage_env(Command::new(env!("CARGO_BIN_EXE_a2amx")).env_clear())
         .env("HOME", home.path())
         .args(["confine", "--help"])
         .output()
@@ -307,8 +308,7 @@ fn binary_rejects_missing_and_non_directory_project_paths() {
     let file = root.path().join("not-a-directory");
     std::fs::write(&file, "").expect("file marker");
     for path in [&missing, &file] {
-        let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
-            .env_clear()
+        let output = keep_coverage_env(Command::new(env!("CARGO_BIN_EXE_a2amx")).env_clear())
             .args(["confine", "suggest"])
             .arg(path)
             .output()
@@ -326,8 +326,7 @@ fn binary_rejects_missing_and_non_directory_project_paths() {
 fn binary_suggests_from_the_current_directory_when_dir_is_omitted() {
     let directory = tempdir().expect("temporary project directory");
     std::fs::write(directory.path().join("package.json"), "").expect("node marker");
-    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .env_clear()
+    let output = keep_coverage_env(Command::new(env!("CARGO_BIN_EXE_a2amx")).env_clear())
         .current_dir(directory.path())
         .args(["confine", "suggest"])
         .output()
@@ -345,8 +344,7 @@ fn binary_suggests_static_text_for_a_directory_with_newline_and_hash() {
     let directory = root.path().join("line\n# injected");
     std::fs::create_dir(&directory).expect("project directory");
     std::fs::write(directory.join("Cargo.toml"), "").expect("cargo marker");
-    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .env_clear()
+    let output = keep_coverage_env(Command::new(env!("CARGO_BIN_EXE_a2amx")).env_clear())
         .args(["confine", "suggest"])
         .arg(&directory)
         .output()

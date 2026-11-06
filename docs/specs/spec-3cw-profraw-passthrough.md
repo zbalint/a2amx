@@ -79,3 +79,13 @@ The developer proves the cause and the fix by measurement, with the coverage too
    its own runs created in the root (it knows them by the before/after lists), deletes `target/scratch/3cw`,
    and reports the count; the 550 older files stay.
 5. The architect confirms with the next `scripts/prepush-sonar.sh` run: the root count does not grow.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5, consultant Claude Opus 5.5, developer OMP `openai-codex/gpt-5.6-luna`. No tester pass (tests-only diff measured by before/after profile counts). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Opus 5.5 | See the draft-review findings folded into the locked text before lock | Spec text amended before lock |
+| Implementation | developer | One edit-range mistake in `privilege.rs::run_command` and duplicated daemon stdio | Developer restored it before the report |
+| Architect review | architect, Sonnet 5.5 | none: every `env_clear` site in `tests/` is covered (grep), root `default_*.profraw` count stayed at 579 across the pre-push Sonar run | none needed |

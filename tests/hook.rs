@@ -182,9 +182,7 @@ impl HookCase {
 fn clean_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_a2amx"));
     command.env_clear();
-    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
-        command.env("LLVM_PROFILE_FILE", profile);
-    }
+    common::keep_coverage_env(&mut command);
     command
 }
 

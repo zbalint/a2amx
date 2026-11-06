@@ -1,3 +1,7 @@
+mod common;
+
+use common::keep_coverage_env;
+
 use std::collections::BTreeSet;
 use std::process::Command;
 
@@ -723,8 +727,7 @@ fn render_list_has_every_grant_and_instruction() {
 
 #[test]
 fn binary_confine_list_needs_no_home_or_daemon() {
-    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .env_clear()
+    let output = keep_coverage_env(Command::new(env!("CARGO_BIN_EXE_a2amx")).env_clear())
         .args(["confine", "list"])
         .output()
         .expect("run confine list");

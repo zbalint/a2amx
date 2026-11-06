@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
 use std::env;
+
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -46,9 +48,8 @@ fn userns_available() -> bool {
 }
 fn run_command(binary: &str, args: &[&str]) -> std::io::Result<Output> {
     let mut command = Command::new(binary);
-    command
-        .args(args)
-        .env_clear()
+    command.args(args).env_clear();
+    common::keep_coverage_env(&mut command)
         .envs(path_env().into_iter().map(|path| ("PATH", path)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
