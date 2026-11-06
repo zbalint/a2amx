@@ -58,8 +58,10 @@ dispositions: (1) a pointer or common directory that resolves inside a hidden pa
 (section 2); (2) a pointer to a directory that is not a git directory (`~/.config`, a plain `~/.ssh`):
 removed by the shape check on the `.git` file branch (section 4); (3) a harness data symlink to a hidden
 path or to a path outside its harness location: removed by section 3 (it runs first, in
-`validate_harness_data_paths`); section 2 is the second line for a data path that section 3 does not
-validate (the `ide` directory when `harness-config` is dropped); (4) a harness data symlink to a
+`validate_harness_data_paths`); section 2 does not check harness data (Amendment 1: a link into a hide
+inside its own harness root, such as `~/.claude/todos` linked to `~/.claude/ide`, passes section 3, and
+`bind_harness_config` then drops that entry from `self.writable` in favour of the root, lines 1319-1333,
+so the hide stays intact and no overwrite happens); (4) a harness data symlink to a
 read-only-bound target that runs later: removed by section 3; (5) a working directory inside a hidden path:
 removed by section 2 (the user started it there, so the refusal tells them the `write` line that opens it);
 (6) harness config and project files that run later outside the sandbox: not removable without breaking the
@@ -69,21 +71,21 @@ harness and the work; monitored by disclosure.
 
 Add a private method `check_implicit_writes_not_hidden(&self) -> Result<()>` and call it in `finish` right
 after the existing `harness-config` and grant conflict checks (the loop ending at line 1677, before
-`protected_paths`). It refuses the plan when a path that one of the three binders added to `self.writable`,
+`protected_paths`). It refuses the plan when a path that one of the two binders added to `self.writable`,
 and that is not in `self.explicit_writes`, equals or lies inside (`is_within`, `src/confine.rs:257`) a path
-in `self.default_hidden`, `self.mandatory_hidden` or `self.container_hidden`. The three sources are the
-working directory, the git common directory and the harness data targets. Grant paths and the harness-config
-root are also in `self.writable` and are excluded: grant paths are checked at lines 1508-1535 and the
-harness-config root contains the data paths rather than lying inside a hide. Operator `hide` lines
+in `self.default_hidden`, `self.mandatory_hidden` or `self.container_hidden`. The two sources are the
+working directory and the git common directory. Harness data targets are covered by section 3 alone
+(Amendment 1). Grant paths, harness data targets and the harness-config root are also in `self.writable`
+and are excluded: grant paths are checked at lines 1508-1535. Operator `hide` lines
 (`self.hidden`) are not in the protected set, so a deliberately hidden harness root keeps working.
 
 One error for the whole plan: the method collects every offender and reports them together, one clause per
 offender joined with `; `, so that a project inside a hide (the working directory and its `.git` directory
 both offend) is told every `write` line in one round. Each clause follows the style at lines 1517-1521:
 `working directory {p} resolves to the hidden path {h}; open it with write = ["{p}"] if that is intended`,
-`git directory {p} resolves to the hidden path {h}; ...` and `harness data path {p} resolves to the hidden
-path {h}; ...`. The developer decides how the method knows the source of a path (for example the three
-binders record the source in a small private struct); the texts are the contract.
+`git directory {p} resolves to the hidden path {h}; ...`. The developer decides how the method knows the
+source of a path (for example the two binders record the source in a small private struct); the texts are
+the contract.
 
 The check runs after the hides are final (default hides, grant unhides and explicit writes have pruned
 `default_hidden`, lines 1540, 1611, 1635), so an explicit `write` or `unhide` line, a grant that unhides a
@@ -149,9 +151,9 @@ Red:
    `resolves to the hidden path`, and the same through a `commondir` file.
 2. The Claude harness with `~/.claude/todos` a symlink to `<home>/.ssh` gives `Err` containing `harness
    data path` and `outside`; `~/.claude/history.jsonl` a symlink to a hidden file (`~/.netrc`, created)
-   does too. A test of the section 2 harness data clause: `~/.claude/ide` a symlink to a hidden path with
-   `harness-config` dropped (operator `hide` of the root); the developer constructs it and reports BLOCKED
-   if the clause turns out to be unreachable.
+   does too. Contract test (Amendment 1, green on old and new code): `~/.claude/todos` a symlink to
+   `<home>/.claude/ide` (a directory, created) gives `Ok`, and the hide of `~/.claude/ide` is still in
+   effect in the plan.
 3. `cwd = <home>/.password-store/sub` (a default hide) gives `Err` containing `working directory`; with
    `cwd` inside the store and a `.git` directory there too, one error names both clauses.
 4. `~/.claude/todos` a symlink to `<home>/.config` (not hidden) gives `Err` containing `outside`.
@@ -199,7 +201,7 @@ start; the planner's read of a FIFO `config` (F77); the user-facing git-config b
    `objects` requirement; apply the shape check to the `.git` directory branch too (the contract test
    `.git` DIRECTORY without `HEAD` and `objects` must fail). The `mandatory_hidden` and `container_hidden`
    members of the protected set are defensive: every entry of the first is already refused by
-   `check_write_allowed`, and every entry of the second is a socket file that none of the three sources can
+   `check_write_allowed`, and every entry of the second is a socket file that neither source can
    name. They get no mutant; the developer states that in the report.
 3. A hand probe by the tester with an isolated daemon (temp home, `target/debug` binary, scratch under
    `target/scratch`, deleted afterwards): (a) a `.git` pointer to a git-shaped `$HOME/.ssh` (with `HEAD`
