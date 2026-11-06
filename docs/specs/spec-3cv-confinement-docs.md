@@ -52,8 +52,10 @@ honest mistake can recover from", and the first line of the page's global team f
 
 2.1 Defaults at a glance (lines 5-14). Make the table complete and true after specs 3cd, 3cr and 3cu:
 writable (working directory and its git directory, a private `/tmp`, the harness's own config root for
-Claude and OMP); read-only (the rest, plus the protected launch inputs the row lists; `~/.cache` and build
-paths are read-only, not opened and not hidden, and the `cache` grant opens `~/.cache`); hidden (credential
+Claude and OMP); read-only (the rest, plus the protected launch inputs the row lists; `~/.cache` and the tool
+directories under home such as `~/.cargo` are read-only, not opened and not hidden, and the `cache` grant
+opens `~/.cache`; anything inside the working directory, `target/` and `node_modules/` included, is writable
+because the working directory is; Amendment 3); hidden (credential
 locations until a grant unhides them). Add one line on `--confine-default-hides=false`: it shows the
 optional home hides and keeps the mandatory ones (verify with `src/cli.rs:70` help, the page's line 37 and
 `MANDATORY_ROOTS` in `src/confine.rs`), linking to `#one-command`. Do not repeat the 3cr refusals here; link
