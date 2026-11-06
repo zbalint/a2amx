@@ -112,8 +112,8 @@ The valid values and what each one exposes are listed by `a2amx confine list`.
 repeat it for multiple names. It requires `--confine` and rejects names that are not in the
 closed credential list.
 
-Relative paths are resolved against the session cwd. `--confine-no-default-hides`
-disables the optional home hides but never removes the mandatory hides: the state
+Relative paths are resolved against the session cwd. `--confine-default-hides=false` shows the optional home
+credential locations hidden by default but never removes the mandatory hides: the state
 directory, the runtime directory, `/run/WSL` and `/mnt/wslg`. Claude and OMP harness
 configuration roots are writable and persistent by default; `harness-config` names the
 same capability explicitly. There is no build-path switch. The private `/proc` and PID

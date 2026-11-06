@@ -500,7 +500,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         confine_write,
         confine_hide,
         confine_unhide,
-        confine_no_default_hides,
+        confine_default_hides,
         mut confine_grant,
         confine_keep_env,
         reset,
@@ -524,6 +524,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     let has_confine_options = !confine_write.is_empty()
         || !confine_hide.is_empty()
         || !confine_unhide.is_empty()
+        || confine_default_hides.is_some()
         || !confine_grant.is_empty()
         || !confine_keep_env.is_empty();
     if has_confine_options && !confine {
@@ -574,7 +575,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             write: confine_write,
             hide: confine_hide,
             unhide: confine_unhide,
-            no_default_hides: confine_no_default_hides,
+            no_default_hides: confine_default_hides == Some(false),
             grants: confine_grant,
             keep_env: confine_keep_env,
             auto: false,

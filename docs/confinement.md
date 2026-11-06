@@ -30,11 +30,11 @@ a2amx new --confine \
   --confine-hide PATH \
   --confine-grant NAME \
   --confine-keep-env NAME \
-  --confine-no-default-hides \
+  --confine-default-hides=false \
   -- <command>
 ```
 
-`--confine-grant NAME` opens one named capability, `--confine-keep-env NAME` returns one listed credential environment variable to this session, and `--confine-no-default-hides` disables optional home hides while keeping mandatory hides.
+`--confine-grant NAME` opens one named capability, `--confine-keep-env NAME` returns one listed credential environment variable to this session, and `--confine-default-hides=false` shows the optional home hides while keeping mandatory hides.
 
 For example, run OMP with Rust and cache access without Docker:
 
@@ -621,7 +621,7 @@ also unusable; point it at `/tmp`.
 
 No `SSH_AUTH_SOCK` is passed through, so a passphrase-protected key cannot be used (F63). Signing
 commits with an unencrypted listed ssh key works; gpg signing is F54. With `default_hides = false`
-in a team file (or `--confine-no-default-hides` on the command line), `~/.ssh` is visible
+in a team file (or `--confine-default-hides=false` on the command line), `~/.ssh` is visible
 without the grant, but the system configuration still breaks `ssh`. Keep the HTTPS recipe above if that is preferable.
 
 ## Cloud CLIs and registry tokens

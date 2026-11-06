@@ -276,3 +276,189 @@ async fn show_reports_no_sessions_and_unknown_reference() {
     assert!(!unknown.status.success());
     assert!(String::from_utf8_lossy(&unknown.stderr).contains("unknown session missing"));
 }
+// A blocking spawn kept out of the async test body (Sonar rust:S7487).
+fn bwrap_available() -> bool {
+    matches!(
+        Command::new("bwrap").arg("--version").output(),
+        Ok(output) if output.status.success()
+    )
+}
+
+#[test]
+fn old_confine_default_hides_flag_is_rejected() {
+    let state = tempfile::tempdir().expect("state");
+    let cwd = tempfile::tempdir().expect("cwd");
+    let user_home = tempfile::tempdir().expect("home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    let output = run_binary(
+        state.path(),
+        cwd.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "new",
+            "--confine",
+            "--confine-no-default-hides",
+            "--",
+            "sh",
+            "-c",
+            "true",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("unexpected argument '--confine-no-default-hides'"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn confine_default_hides_requires_confine() {
+    // On old code, this red test fails only because the new flag does not exist.
+    let state = tempfile::tempdir().expect("state");
+    let cwd = tempfile::tempdir().expect("cwd");
+    let user_home = tempfile::tempdir().expect("home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    for value in ["false", "true"] {
+        let option = format!("--confine-default-hides={value}");
+        let output = run_binary(
+            state.path(),
+            cwd.path(),
+            user_home.path(),
+            runtime.path(),
+            &["new", option.as_str(), "--", "sh", "-c", "true"],
+        );
+        assert!(
+            !output.status.success(),
+            "{value}: command unexpectedly succeeded"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--confine-* flags require --confine"),
+            "{value}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("cannot reach the a2amx daemon"),
+            "{value}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn new_help_lists_positive_default_hides_option() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .args(["new", "--help"])
+        .output()
+        .expect("run a2amx help");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--confine-default-hides <BOOL>"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("--confine-no-default-hides"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn confine_default_hides_controls_home_visibility() {
+    if !bwrap_available() {
+        eprintln!("skipping default hide visibility test: bubblewrap unavailable");
+        return;
+    }
+    eprintln!("running default hide visibility test with bubblewrap");
+
+    let state = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("state");
+    let cwd = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("cwd");
+    let user_home = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("home");
+    let runtime = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("runtime");
+    std::fs::create_dir_all(user_home.path().join(".ssh")).expect("ssh directory");
+    std::fs::write(user_home.path().join(".ssh/marker"), "marker").expect("ssh marker");
+    let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
+
+    let hidden = run_binary(
+        state.path(),
+        cwd.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "hidden",
+            "--confine",
+            "--",
+            "sh",
+            "-c",
+            "if test -e \"$HOME/.ssh/marker\"; then echo visible > out-hidden; else echo hidden > out-hidden; fi; sleep 30",
+        ],
+    );
+    assert!(
+        hidden.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hidden.stderr)
+    );
+
+    let visible = run_binary(
+        state.path(),
+        cwd.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "visible",
+            "--confine",
+            "--confine-default-hides=false",
+            "--",
+            "sh",
+            "-c",
+            "if test -e \"$HOME/.ssh/marker\"; then echo visible > out-visible; else echo hidden > out-visible; fi; sleep 30",
+        ],
+    );
+    assert!(
+        visible.status.success(),
+        "{}",
+        String::from_utf8_lossy(&visible.stderr)
+    );
+
+    let hidden_output = cwd.path().join("out-hidden");
+    common::eventually(|| {
+        let path = hidden_output.clone();
+        async move {
+            let text = std::fs::read_to_string(path).ok()?;
+            (text.trim() == "hidden").then_some(())
+        }
+    })
+    .await;
+    let visible_output = cwd.path().join("out-visible");
+    common::eventually(|| {
+        let path = visible_output.clone();
+        async move {
+            let text = std::fs::read_to_string(path).ok()?;
+            (text.trim() == "visible").then_some(())
+        }
+    })
+    .await;
+
+    for name in ["hidden", "visible"] {
+        let killed = run_binary(
+            state.path(),
+            cwd.path(),
+            user_home.path(),
+            runtime.path(),
+            &["kill", "--now", "--yes", name],
+        );
+        assert!(
+            killed.status.success(),
+            "kill {name}: {}",
+            String::from_utf8_lossy(&killed.stderr)
+        );
+    }
+}

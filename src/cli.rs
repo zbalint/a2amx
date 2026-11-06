@@ -66,8 +66,9 @@ pub enum Command {
         confine_hide: Vec<String>,
         #[arg(long = "confine-unhide")]
         confine_unhide: Vec<String>,
-        #[arg(long)]
-        confine_no_default_hides: bool,
+        /// Set to false to show the optional home credential locations that are hidden by default.
+        #[arg(long = "confine-default-hides", value_name = "BOOL")]
+        confine_default_hides: Option<bool>,
         /// Grant a named capability to a confined session; repeatable.
         #[arg(long = "confine-grant")]
         confine_grant: Vec<String>,

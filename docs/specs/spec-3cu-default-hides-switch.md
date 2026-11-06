@@ -136,3 +136,18 @@ checks differently; renaming anything else; the enable switches; a deprecation a
 
 Known flaky tests: I7, I14, I18 in `tests/attach_cli.rs` and `tests/daemon_cli.rs`; a failure there on
 the first run is rerun once, and recorded as pre-existing when it passes (spec 3cq prints diagnostics).
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5; developer and tester OMP
+`openai-codex/gpt-5.6-luna` (slot names not exposed). BLOCKED/amend cycles: 0.
+
+| Where found | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Opus 5.5 | Test 1 could not pass as drafted: the daemon takes the plan's home from its own environment and a session's `/tmp` is a private tmpfs, so a plain tempdir home is never visible | Test uses `spawn_daemon_process` and fixtures under `CARGO_TARGET_TMPDIR` |
+| Draft review | consultant, Opus 5.5 | Scope said five files, acceptance said six; two different greps; requires-block anchor off by one | Fixed in the spec |
+| Tester pass | tester, gpt-5.6-luna | Two mutants survived: the requires guard tested only the `false` value, and `value_name` could change from `BOOL` | Requires test loops over both values; a help-text test was added |
+| Architect review | architect, Sonnet 5.5 | The bwrap availability check used a blocking `std::process::Command` in an async test body (Sonar rust:S7487, flagged the same way in spec 3cs) | Moved into a sync helper `bwrap_available` |
+
+Accepted survivors: none. One transient `tests/explain.rs` timeout on the developer's first full
+run passed on rerun (known flaky class, not part of this diff).
