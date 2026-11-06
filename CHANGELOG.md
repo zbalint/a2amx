@@ -5,6 +5,8 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
 ### Added
 
 - Auto detection follows a `.git` file. Under global `auto` and in `a2amx confine suggest`, the git-remote grants
