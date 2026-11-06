@@ -4003,6 +4003,30 @@ fn git_common_dir_rejects_directory_commondir() {
 }
 
 #[test]
+fn git_common_dir_rejects_oversized_commondir() {
+    let fixture = Fixture::new();
+    let worktree = fixture.cwd.join("worktree");
+    let metadata = fixture.cwd.join("meta/worktree");
+    let common = fixture.cwd.join("common.git");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    std::fs::create_dir_all(&metadata).expect("worktree metadata");
+    std::fs::create_dir_all(&common).expect("common git");
+    std::fs::write(common.join("HEAD"), "ref: refs/heads/main\n").expect("common HEAD");
+    std::fs::create_dir(common.join("objects")).expect("common objects");
+    std::fs::write(worktree.join(".git"), "gitdir: ../meta/worktree\n").expect("gitdir marker");
+    std::fs::write(
+        metadata.join("commondir"),
+        format!("../../common.git\n{}", " ".repeat(4096)),
+    )
+    .expect("oversized commondir");
+    let result = git_common_dir_with_timeout(
+        worktree.canonicalize().expect("worktree canonical"),
+        fixture.home.canonicalize().expect("home canonical"),
+    );
+    assert!(result.is_none());
+}
+
+#[test]
 fn home_repository_is_not_bound_and_outside_team_file_stays_hidden() {
     let fixture = Fixture::new();
     std::fs::create_dir_all(fixture.home.join(".git")).expect("home git");
