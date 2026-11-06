@@ -112,3 +112,12 @@ with a 5 second `recv_timeout`, like `git_common_dir_with_timeout` (`tests/confi
    environment of a hosted session. Known flakes I7, I14 and I18 (`docs/backlog.md`): rerun once and record as
    pre-existing.
 5. Scratch files stay under `target/scratch/3cy/` and are removed before the report.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant Claude Code session, model not recorded; developer OMP, planning/working slot openai-codex/gpt-5.6-luna, advisor slot not exposed; no tester pass (the architect reran the focused tests and a mutant of the `limit + 1` read bound, which the oversize test killed). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | `?` on an `Option` does not compile in a `Result` function; `OFlags` is `c_uint` and `custom_flags` takes `i32`; a directory test was needed to kill the dropped regular-file mutant; the padding sat in the wrong shape; error text needed `path.display()` | Spec amended before locking |
+| Draft review | consultant | A capped read that returns "no config" over the cap would be fail-open | Oversize fails the plan with an error |

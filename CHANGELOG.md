@@ -5,6 +5,10 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The confinement plan no longer hangs when a repository's `.git/config` is a FIFO or another non-regular file (it is treated as absent), reads a config that is not valid UTF-8, finds `core.hooksPath` after lines without `=`, and fails the plan with an error when the config is larger than 1 MiB instead of ignoring its `hooksPath`.
+
 ## [0.2.0] - 2026-11-06
 
 ### Added

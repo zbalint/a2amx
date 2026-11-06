@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use rustix::fs::OFlags;
+
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::grant;
@@ -831,9 +833,34 @@ pub fn ensure_data_files(harness: Harness, home: &Path) -> Result<()> {
     Ok(())
 }
 
-fn parse_core_hooks_path(common: &Path, worktree: &Path) -> Option<PathBuf> {
+fn parse_core_hooks_path(common: &Path, worktree: &Path) -> Result<Option<PathBuf>> {
     let config = common.join("config");
-    let text = fs::read_to_string(config).ok()?;
+    let Ok(file) = OpenOptions::new()
+        .read(true)
+        .custom_flags((OFlags::NONBLOCK | OFlags::NOCTTY).bits() as i32)
+        .open(&config)
+    else {
+        return Ok(None);
+    };
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("failed to stat git config {}", config.display()))?;
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    let read = file
+        .take((GIT_CONFIG_PLAN_LIMIT + 1) as u64)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read git config {}", config.display()))?;
+    if read > GIT_CONFIG_PLAN_LIMIT {
+        bail!(
+            "git config {} is larger than {} bytes; the confinement plan cannot check its hooksPath",
+            config.display(),
+            GIT_CONFIG_PLAN_LIMIT
+        );
+    }
+    let text = String::from_utf8_lossy(&bytes);
     let mut in_core = false;
     for line in text.lines() {
         let line = line.trim();
@@ -844,21 +871,25 @@ fn parse_core_hooks_path(common: &Path, worktree: &Path) -> Option<PathBuf> {
         if !in_core {
             continue;
         }
-        let (key, value) = line.split_once('=')?;
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         if key.trim().eq_ignore_ascii_case("hooksPath") {
             let value = value.trim().trim_matches(['"', '\'']);
             let path = PathBuf::from(value);
-            return Some(if path.is_absolute() {
+            return Ok(Some(if path.is_absolute() {
                 path
             } else {
                 worktree.join(path)
-            });
+            }));
         }
     }
-    None
+    Ok(None)
 }
 
 const POINTER_LIMIT: usize = 4096;
+// The planner fails closed on oversize; auto detection has a separate, smaller cap.
+const GIT_CONFIG_PLAN_LIMIT: usize = 1024 * 1024;
 
 fn read_pointer_text(path: &Path) -> Option<String> {
     if !fs::metadata(path).ok()?.is_file() {
@@ -1314,22 +1345,23 @@ impl<'a> PlanBuilder<'a> {
             )? {
                 self.implicit_writes.push((path, "git directory"));
             }
-            self.protect_git_metadata(&common, &worktree);
+            self.protect_git_metadata(&common, &worktree)?;
         }
         Ok(())
     }
 
-    fn protect_git_metadata(&mut self, common: &Path, worktree: &Path) {
+    fn protect_git_metadata(&mut self, common: &Path, worktree: &Path) -> Result<()> {
         for name in ["hooks", "config", "config.worktree"] {
             if let Ok(path) = common.join(name).canonicalize() {
                 add_unique(&mut self.readonly, path);
             }
         }
-        if let Some(path) =
-            parse_core_hooks_path(common, worktree).and_then(|path| path.canonicalize().ok())
+        if let Some(path) = parse_core_hooks_path(common, worktree)?
+            && let Ok(path) = path.canonicalize()
         {
             add_unique(&mut self.readonly, path);
         }
+        Ok(())
     }
 
     fn bind_harness_data(&mut self, request: &ConfineRequest) -> Result<()> {

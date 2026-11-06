@@ -3404,6 +3404,138 @@ fn git_hooks_and_core_hooks_path_are_protected_inside_writable_repo() {
     );
 }
 
+fn plan_with_timeout(repo: PathBuf, host: Host) -> anyhow::Result<confine::Plan> {
+    let (sender, receiver) = std_mpsc::channel();
+    std::thread::spawn(move || {
+        let result = confine::plan(&ConfineRequest::default(), Harness::Generic, &repo, &host);
+        let _ = sender.send(result);
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("plan timed out")
+}
+
+#[test]
+fn plan_does_not_hang_on_fifo_git_config() {
+    let fixture = Fixture::new();
+    let repo = fixture.cwd.join("repo");
+    let git = repo.join(".git");
+    let git_hooks = git.join("hooks");
+    std::fs::create_dir_all(&git_hooks).expect("git hooks");
+    let status = Command::new("mkfifo")
+        .arg(git.join("config"))
+        .status()
+        .expect("mkfifo");
+    assert!(status.success(), "mkfifo status: {status}");
+
+    let plan = plan_with_timeout(repo, fixture.host()).expect("plan");
+    assert!(
+        plan.protected
+            .contains(&std::fs::canonicalize(git.join("config")).expect("config canonical"))
+    );
+    assert!(
+        plan.protected
+            .contains(&std::fs::canonicalize(git_hooks).expect("git hooks canonical"))
+    );
+}
+
+#[test]
+fn plan_rejects_oversized_git_config() {
+    let limit = 1024 * 1024;
+    let fixture = Fixture::new();
+    let repo = fixture.cwd.join("repo");
+    let git = repo.join(".git");
+    std::fs::create_dir_all(git.join("hooks")).expect("git hooks");
+    std::fs::write(git.join("config"), vec![b'x'; limit + 1]).expect("oversized git config");
+    let error = match plan_with_timeout(repo, fixture.host()) {
+        Ok(_) => panic!("oversized config accepted"),
+        Err(error) => error,
+    };
+    let text = error.to_string();
+    assert!(text.contains("larger than"), "unexpected error: {text}");
+    assert!(text.contains("hooksPath"), "unexpected error: {text}");
+
+    let fixture = Fixture::new();
+    let repo = fixture.cwd.join("repo");
+    let git = repo.join(".git");
+    let husky = repo.join(".husky");
+    std::fs::create_dir_all(git.join("hooks")).expect("git hooks");
+    std::fs::create_dir_all(&husky).expect("husky hooks");
+    let prefix = "[user]\n\tpad = ";
+    let suffix = "\n[core]\n\thooksPath = .husky\n";
+    let padding = limit - prefix.len() - suffix.len();
+    let config = format!("{prefix}{}{suffix}", "a".repeat(padding));
+    assert_eq!(config.len(), limit);
+    std::fs::write(git.join("config"), config).expect("exact-limit git config");
+    let plan = plan_with_timeout(repo, fixture.host()).expect("exact-limit plan");
+    assert!(
+        plan.protected
+            .contains(&std::fs::canonicalize(husky).expect("husky canonical"))
+    );
+}
+
+#[test]
+fn plan_protects_hooks_path_in_config_with_invalid_utf8() {
+    let fixture = Fixture::new();
+    let repo = fixture.cwd.join("repo");
+    let git = repo.join(".git");
+    let husky = repo.join(".husky");
+    std::fs::create_dir_all(git.join("hooks")).expect("git hooks");
+    std::fs::create_dir_all(&husky).expect("husky hooks");
+    std::fs::write(
+        git.join("config"),
+        b"[user]\n\tname = \xe9\n[core]\n\thooksPath = .husky\n",
+    )
+    .expect("git config");
+
+    let plan = plan_with_timeout(repo, fixture.host()).expect("plan");
+    assert!(
+        plan.protected
+            .contains(&std::fs::canonicalize(husky).expect("husky canonical"))
+    );
+}
+
+#[test]
+fn plan_ignores_directory_git_config() {
+    let fixture = Fixture::new();
+    let repo = fixture.cwd.join("repo");
+    let git = repo.join(".git");
+    let git_hooks = git.join("hooks");
+    std::fs::create_dir_all(&git_hooks).expect("git hooks");
+    std::fs::create_dir(git.join("config")).expect("config directory");
+
+    let plan = plan_with_timeout(repo, fixture.host()).expect("plan");
+    assert!(
+        plan.protected
+            .contains(&std::fs::canonicalize(git.join("config")).expect("config canonical"))
+    );
+    assert!(
+        plan.protected
+            .contains(&std::fs::canonicalize(git_hooks).expect("git hooks canonical"))
+    );
+}
+
+#[test]
+fn plan_finds_hooks_path_after_lines_without_equals() {
+    let fixture = Fixture::new();
+    let repo = fixture.cwd.join("repo");
+    let git = repo.join(".git");
+    let husky = repo.join(".husky");
+    std::fs::create_dir_all(git.join("hooks")).expect("git hooks");
+    std::fs::create_dir_all(&husky).expect("husky hooks");
+    std::fs::write(
+        git.join("config"),
+        "[core]\n\n\tbare\n# note\n\thooksPath = .husky\n",
+    )
+    .expect("git config");
+
+    let plan = plan_with_timeout(repo, fixture.host()).expect("plan");
+    assert!(
+        plan.protected
+            .contains(&std::fs::canonicalize(husky).expect("husky canonical"))
+    );
+}
+
 #[test]
 fn git_worktree_and_submodule_common_dirs_are_bound() {
     let fixture = Fixture::new();
