@@ -40,8 +40,9 @@ when one does.
 
 Make what exists on one machine dependable and explainable before adding more.
 
-- A stable test suite: the flaky PTY tests fixed (I7, I14) and tests isolated from
-  the environment of the session that runs them (I13).
+- A stable test suite: tests isolated from the environment of the session that runs them (I13),
+  and a failing flaky PTY test (I7, I14, I18) that prints the screen, the raw bytes and the
+  daemon's view, so its cause can be found (spec 3cq). The flakes themselves are not fixed yet.
 
 ### 0.3.0: Worktrees
 
@@ -94,12 +95,12 @@ clearly attributed message, and report a receipt when the harness provides one.
 Work on quality and security that changes no user-visible behavior. It has no version
 and is picked up between milestone items, except where a condition is given.
 
-- A weekly non-blocking broad Semgrep scan, before 0.2.0 starts (F16). The blocking gate with the
+- A weekly non-blocking broad Semgrep scan (F16, spec 3ct). The blocking gate with the
   repository's own rules is done (F15, spec 3aq).
-- Fuzzing of wire framing and message parsing with `cargo-fuzz`, before 0.2.0 starts;
-  the property tests for the pure modules already exist (F10).
+- Fuzzing of wire framing and message parsing with `cargo-fuzz`, after 0.2.0 (owner decision,
+  2026-11-05); the property tests for the pure modules already exist (F10).
 - A check of what a malicious dependency's build script could reach in CI, such as the
-  release signing permission, before 0.2.0 starts (F17).
+  release signing permission (F17, done in spec 3ct: the build job holds `contents: read` only).
 - A mutation-testing baseline on the pure modules (F11).
 - The OpenSSF Best Practices criteria and Scorecard findings (F14).
 - Coverage of subprocess tests that end their child with a signal (I15).

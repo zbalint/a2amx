@@ -168,3 +168,20 @@ step 2 of `publish` must exit non-zero. Checks 4 and 5 are judgments of the read
 reads the file), not exit codes.
 
 Known flaky tests: none involved; no Rust test runs for this spec.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5; developer OMP
+`openai-codex/gpt-5.6-luna` (slot names not exposed). No tester pass: the diff is two workflow files,
+the developer ran mutants (a) to (f) and the architect re-ran the checks (the tester's weekly quota was
+low and the mutation targets are greps and linters). BLOCKED/amend cycles: 0.
+
+| Where found | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Opus 5.5 | Trust path 4 credited `test -f` as the guard against a path-escaping artifact member; the real guard is the download action's extraction | Reworded, paths 4a and 4b added |
+| Draft review | consultant, Opus 5.5 | `sha256sum -c` passes when `SHA256SUMS` names a different file than the archive | One-line and archive-name checks added to `publish` |
+| Draft review | consultant, Opus 5.5 | Mutations (c) to (e) had no mechanical check; reasons for rejecting `--config auto` and for `workflow_dispatch` were worded wrongly | `rg` checks added, wording fixed |
+| Architect review | architect, Sonnet 5.5 | `docs/releasing.md` still described a single `release` job and the roadmap still listed fuzzing and the flaky-test fix before 0.2.0 | Architect updated both docs and the roadmap in the commit |
+
+Unproven until the first run: the `p/default` scan (needs the file on `master` for a manual dispatch) and
+the `publish` job (needs the `v0.2.0-rc.1` run). A failure in either is a follow-up fix.

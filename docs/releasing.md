@@ -26,18 +26,21 @@ this workflow. Creating a tag and moving `master` require the owner's approval.
 
 ## What the workflow does
 
-For a `vX.Y.Z` or `vX.Y.Z-suffix` tag, the `release` job checks out the complete history with
+For a `vX.Y.Z` or `vX.Y.Z-suffix` tag, the `build` job (permission `contents: read` only, so a
+dependency's build script cannot sign or publish) checks out the complete history with
 credentials disabled, validates the tag version, confirms that the tagged commit is on `master`,
 and requires a non-empty matching changelog section. It installs the repository toolchain,
 builds with `cargo build --release --locked`, and checks that the binary reports the tag.
 
 It packages `a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` with `a2amx`, `LICENSE`, and `README.md`,
-then writes `SHA256SUMS`. Cosign keyless-signs both the archive and checksum file with Sigstore
+then writes `SHA256SUMS`, and uploads both with the release notes. The `publish` job, which never
+compiles, downloads them, checks the checksum file, and holds the signing and publishing permissions.
+Cosign keyless-signs both the archive and checksum file with Sigstore
 bundles. GitHub's build-provenance action attests the archive. Finally, `gh release create`
 publishes the archive, checksums, both `.sigstore.json` bundles, and changelog notes; tags with a
 hyphen are marked prereleases.
 
-The job uses `ubuntu-22.04` so the binary links against glibc 2.35 and runs on more systems. If
+The jobs use `ubuntu-22.04` so the binary links against glibc 2.35 and runs on more systems. If
 GitHub retires that runner image, update the workflow and this note together.
 
 ## Verify a release
