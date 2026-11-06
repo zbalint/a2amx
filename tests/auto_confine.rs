@@ -1100,9 +1100,10 @@ async fn global_auto_rejects_worktree_git_config_fifo_without_hanging() {
     std::fs::create_dir_all(&target).expect("worktree metadata");
     std::fs::write(project.path().join(".git"), "gitdir: meta/worktree\n")
         .expect("worktree git file");
-    let status = Command::new("mkfifo")
+    let status = AsyncCommand::new("mkfifo")
         .arg(target.join("config"))
         .status()
+        .await
         .expect("mkfifo");
     assert!(status.success(), "mkfifo status: {status}");
     std::fs::write(
