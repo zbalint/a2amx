@@ -66,7 +66,8 @@ backlog F64, worded as a rule about recovering from accidents, not about executi
 say that a build executes the config later; those sentences stay). Add the class list as bullets, outside
 `### Grants` and with no row starting with "| `". The classes, defined by what the grant's row already says:
 - plain grant: the row names no credential, token or account action (toolchain and cache directories);
-- grant with the risk spelled out: the row says credentials, a token or an account action come with it;
+- grant with the risk spelled out: the row says credentials, a token or an account action come with it (or, for `docker`, access to the
+  container daemon; Amendment 6);
   team or session as the table says (`docker` belongs here, with a note that it is allowed in a team file).
   A row's note that your own builds run installed programs later is a disclosure, not a class: it stays in
   the row and does not move a toolchain out of the plain class (Amendment 2, architect decision on the
