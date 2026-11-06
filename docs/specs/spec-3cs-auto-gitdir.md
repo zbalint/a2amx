@@ -208,3 +208,21 @@ lines included.
 | `File::open(O_RDONLY)` on a FIFO blocks until a writer opens it | POSIX behaviour | recalled; test 7 turns a hang into a failure, and the tester shows the `commondir` FIFO case is red after the `pub` change alone |
 | `Path::parent` of `../x` is `..`, then `""` | Rust standard library behaviour | probed with a one-file rustc program (2026-11-05): `../x`, `..`, `""`, and `"".join(".git")` is `.git` |
 | The plan test for worktree and submodule layouts exists | `tests/confine.rs:3407` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5; developer and tester OMP
+`openai-codex/gpt-5.6-luna` (planning, working and advisor slot names are not exposed in the OMP
+sessions). BLOCKED/amend cycles: 1 (Amendment 1).
+
+| Where found | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Implementation | developer, gpt-5.6-luna | The FIFO-config abuse case asked of the developer could not use `team up --dry-run`: the confinement plan's `parse_core_hooks_path` reads `<common>/config` with `read_to_string` and blocks on a FIFO (pre-existing) | Amendment 1: the case runs `confine suggest`; the planner hang is backlog F77 |
+| Developer mutants | developer, gpt-5.6-luna | Dropping the regular-file check of the config survived: the spec's abuse cases covered a directory and a symlink to one, not a FIFO | FIFO-config test added (spec gap, missed by the draft review of architect and consultant) |
+| Tester pass | tester, gpt-5.6-luna | Dropping the home canonicalization and resolving a relative `gitdir:` from the initial directory both survived the suite | Two `confine suggest` tests added |
+| Tester pass | tester, gpt-5.6-luna | The troubleshooting row lacked the spec's "a supported way is a known gap" wording | Architect added the sentence |
+| Architect review | architect, Sonnet 5.5 | No problems beyond the above; own mutants (a directory `commondir` accepted, the config cap raised by one byte) were killed | none needed |
+
+Accepted survivors: the two `take(POINTER_LIMIT + 1)` read bounds (the post-read length check gives
+the same result; only memory use differs, which no test at the public seam can see) and a lossy
+UTF-8 decode of the marker (no observable difference).

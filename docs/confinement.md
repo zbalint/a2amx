@@ -219,14 +219,13 @@ files are checked only in the session's project directory:
 
 Git remotes add `ssh` for `ssh://`, `git+ssh://`, and scp-style URLs. HTTPS remotes
 add `gh` when `~/.config/gh` exists and `git-credentials` when either supported
-credential file exists. `.git` must be a directory and its `config` must be a regular
-file no larger than 65,536 bytes; worktree `.git` files and unreadable or invalid
-configs add no git grants. `cache` is always included. Results are deduplicated in
-grant-table order.
+credential file exists. The repository is found by walking upward from the project
+directory and following a `.git` file's `gitdir:` pointer; the common directory's
+`config` must be a regular file no larger than 65,536 bytes. Anything else adds no
+git grants. `cache` is always included. Results are deduplicated in grant-table order.
 
-Under `auto`, `git push` works only when a remote is detected. A `.git` file for a
-worktree or submodule, and a local team file, require an explicit grant. HTTPS pushes
-through `gh` also require `gh auth setup-git`.
+Under `auto`, `git push` works only when a remote is detected. A local team file
+requires an explicit grant. HTTPS pushes through `gh` also require `gh auth setup-git`.
 
 When global auto detection adds a grant that is not already accepted, `a2amx team up`
 prints the detector reason and the grant's exposure, then asks for confirmation before
@@ -656,6 +655,7 @@ These ten credential grants are described in the [grants table](#grants):
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `Read-only file system` on a path under `$HOME` | The path is read-only. | Add the directory named in the error to `write` under `[session.confine]`. |
+| `git push -u`, `git branch --set-upstream-to` or `git remote add` fails with `could not write config file .git/config: Device or resource busy` | `.git/config` is read-only in a confined session on purpose: an agent could set `core.hooksPath`, `fsmonitor` or an alias that runs later outside the sandbox. | Push with `git push origin <branch>`, which needs no upstream, then set the upstream or remote from an unconfined shell. A supported way to do this from inside the session is a known gap. |
 | A tool says it is not logged in, or reports an authentication error | Its credential file or directory is a default hide. | Give the matching grant first (`gh`, `ssh`, `git-credentials`, `sonar`, `aws`, `gcloud`, `azure`, `kube`, `terraform`, `npm-token`, `pypi-token`, `cargo-token`, `netrc`, `huggingface-token`); use `unhide` only for a credential no grant covers; see [Credentials a tool needs](#credentials-a-tool-needs). |
 | Claude or OMP cannot update itself (`Read-only file system` under `~/.local/share/claude` or `~/.local/bin`) | A harness binary lives in a read-only directory on purpose: a writable `~/.local/bin` would let a confined agent replace programs that you, or the daemon's `omp` quota probe, run outside the sandbox. Self-update is not supported in a confined session. | Update the harness from a shell outside the sandbox, then restart the session. |
 | `permission denied` on a container socket | Container sockets are hidden. | Use [Docker and other container engines](#docker-and-other-container-engines). |

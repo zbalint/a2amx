@@ -99,9 +99,9 @@ byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` a
 `a2amx confine list` prints the valid grant names, scope and one-line exposure
 description without contacting a daemon or reading `HOME`.
 
-`a2amx confine suggest [DIR]` checks project markers and, when `.git/config` is a
-regular file of at most 65,536 bytes, supported git remote forms. It prints one
-copyable TOML `grants = [...]` line with `cache` and matching grants in table order.
+`a2amx confine suggest [DIR]` checks project markers and walks upward from the
+project directory, following `.git` file pointers. It reads supported git remote forms
+only when the common directory's `config` is a regular file of at most 65,536 bytes.
 It defaults to the current directory and does not need a daemon; credential probes use
 `HOME` when it is available.
 

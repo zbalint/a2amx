@@ -6,6 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc as std_mpsc;
 
 use a2amx::client::Client;
 use a2amx::confine::{self, ConfineRequest, Host};
@@ -3446,6 +3447,68 @@ fn git_worktree_and_submodule_common_dirs_are_bound() {
             .writable
             .contains(&std::fs::canonicalize(&submodule_git).expect("submodule canonical"))
     );
+}
+fn git_common_dir_with_timeout(cwd: PathBuf, home: PathBuf) -> Option<(PathBuf, PathBuf)> {
+    let (sender, receiver) = std_mpsc::channel();
+    std::thread::spawn(move || {
+        let result = confine::git_common_dir(&cwd, &home);
+        let _ = sender.send(result);
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("git common directory lookup timed out")
+}
+
+#[test]
+fn git_common_dir_rejects_fifo_commondir_without_hanging() {
+    let fixture = Fixture::new();
+    let worktree = fixture.cwd.join("worktree");
+    let metadata = fixture.cwd.join("meta/worktree");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    std::fs::create_dir_all(&metadata).expect("worktree metadata");
+    std::fs::write(worktree.join(".git"), "gitdir: ../meta/worktree\n").expect("gitdir marker");
+    let fifo = metadata.join("commondir");
+    let status = Command::new("mkfifo").arg(&fifo).status().expect("mkfifo");
+    assert!(status.success(), "mkfifo status: {status}");
+    let result = git_common_dir_with_timeout(
+        std::fs::canonicalize(&worktree).expect("canonical worktree"),
+        std::fs::canonicalize(&fixture.home).expect("canonical home"),
+    );
+    assert!(result.is_none());
+}
+
+#[test]
+fn git_common_dir_rejects_oversized_git_marker() {
+    let fixture = Fixture::new();
+    let worktree = fixture.cwd.join("worktree");
+    let metadata = fixture.cwd.join("metadata");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    std::fs::create_dir_all(&metadata).expect("gitdir");
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: ../metadata\n{}", "x".repeat(4096)),
+    )
+    .expect("oversized git marker");
+    let result = git_common_dir_with_timeout(
+        std::fs::canonicalize(&worktree).expect("canonical worktree"),
+        std::fs::canonicalize(&fixture.home).expect("canonical home"),
+    );
+    assert!(result.is_none());
+}
+
+#[test]
+fn git_common_dir_rejects_directory_commondir() {
+    let fixture = Fixture::new();
+    let worktree = fixture.cwd.join("worktree");
+    let metadata = fixture.cwd.join("meta/worktree");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    std::fs::create_dir_all(metadata.join("commondir")).expect("commondir directory");
+    std::fs::write(worktree.join(".git"), "gitdir: ../meta/worktree\n").expect("gitdir marker");
+    let result = git_common_dir_with_timeout(
+        std::fs::canonicalize(&worktree).expect("canonical worktree"),
+        std::fs::canonicalize(&fixture.home).expect("canonical home"),
+    );
+    assert!(result.is_none());
 }
 
 #[test]

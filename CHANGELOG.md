@@ -7,6 +7,12 @@ All notable user-visible changes are listed here. The format follows
 
 ### Added
 
+- Auto detection follows a `.git` file. Under global `auto` and in `a2amx confine suggest`, the git-remote grants
+  (`ssh`, `gh`, `git-credentials`) are read from the common git directory, so a worktree, a submodule and a
+  session started in a subdirectory of a repository get them too. Detection only; the `.git/config` protection
+  is unchanged, and `docs/confinement.md` says that `git push origin <branch>` works without an upstream. A
+  `.git` file or `commondir` that is larger than 4096 bytes, not UTF-8 or not a regular file now makes the
+  confinement plan treat the directory as not a repository (`docs/confinement.md`, `docs/teams.md`, `docs/cli.md`).
 - A start-to-finish guide, `docs/getting-started.md` ("Your first team"): install, a team file, grant suggestion, the dry-run preview, inspecting the running team and stopping it, with output from the installed binary, and a section on auto mode with a global team file in `docs/confinement.md`. The README quick start points to it, its `list` sample shows the `CONFINE` column, and `docs_examples` now parses the complete TOML examples of both pages.
 - Auto confinement asks first. `a2amx team up` lists each grant that global `auto` would add and has not
   yet been accepted, with the reason and what the grant opens, and waits for a yes; the accepted names are

@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
+use std::io::Read;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -820,7 +821,10 @@ fn parse_core_hooks_path(common: &Path, worktree: &Path) -> Option<PathBuf> {
     None
 }
 
-fn git_common_dir(cwd: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
+/// Returns the canonical common git directory and worktree root, or `None` for no repository, a home-directory repository, or an unusable pointer; `cwd` must be canonical.
+pub fn git_common_dir(cwd: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
+    const POINTER_LIMIT: usize = 4096;
+
     let mut current = cwd.to_owned();
     loop {
         if current == home {
@@ -833,7 +837,16 @@ fn git_common_dir(cwd: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
                 .map(|common| (common, current));
         }
         if marker.is_file() {
-            let text = fs::read_to_string(&marker).ok()?;
+            let mut bytes = Vec::new();
+            let read = fs::File::open(&marker)
+                .ok()?
+                .take((POINTER_LIMIT + 1) as u64)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            if read > POINTER_LIMIT {
+                return None;
+            }
+            let text = String::from_utf8(bytes).ok()?;
             let target = text
                 .lines()
                 .find_map(|line| line.trim().strip_prefix("gitdir:"))?
@@ -845,8 +858,19 @@ fn git_common_dir(cwd: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
                 current.join(gitdir)
             };
             let gitdir = fs::canonicalize(gitdir).ok()?;
-            let common = match fs::read_to_string(gitdir.join("commondir")) {
-                Ok(relative) => {
+            let commondir = gitdir.join("commondir");
+            let common = match fs::metadata(&commondir) {
+                Ok(metadata) if metadata.is_file() => {
+                    let mut bytes = Vec::new();
+                    let read = fs::File::open(commondir)
+                        .ok()?
+                        .take((POINTER_LIMIT + 1) as u64)
+                        .read_to_end(&mut bytes)
+                        .ok()?;
+                    if read > POINTER_LIMIT {
+                        return None;
+                    }
+                    let relative = String::from_utf8(bytes).ok()?;
                     let path = PathBuf::from(relative.trim());
                     if path.is_absolute() {
                         path
@@ -854,7 +878,9 @@ fn git_common_dir(cwd: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
                         gitdir.join(path)
                     }
                 }
-                Err(_) => gitdir,
+                Ok(_) => return None,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => gitdir,
+                Err(_) => return None,
             };
             let common = fs::canonicalize(common).ok()?;
             return (common != home).then_some((common, current));

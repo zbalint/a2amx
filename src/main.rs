@@ -749,38 +749,42 @@ fn resolved_confine_request(
 const MAX_GIT_CONFIG_BYTES: usize = 65_536;
 
 fn auto_grants_for(dir: &Path, home: &Path) -> Vec<(&'static str, String)> {
-    let git_config = dir.join(".git");
-    let git_config = if git_config.is_dir() {
-        let config_path = git_config.join("config");
+    let canonical_dir = std::fs::canonicalize(dir).ok();
+    let canonical_home = if home.as_os_str().is_empty() {
+        home.to_owned()
+    } else {
+        std::fs::canonicalize(home).unwrap_or_else(|_| home.to_owned())
+    };
+    let git_config = canonical_dir.as_deref().and_then(|canonical_dir| {
+        let git_dir = a2amx::confine::git_common_dir(canonical_dir, &canonical_home)
+            .map(|(common, _)| common)?;
+        let config_path = git_dir.join("config");
         let regular = std::fs::metadata(&config_path)
             .map(|metadata| metadata.is_file())
             .unwrap_or(false);
         if !regular {
-            None
-        } else {
-            let mut bytes = Vec::new();
-            std::fs::File::open(config_path).ok().and_then(|file| {
-                let read = file
-                    .take((MAX_GIT_CONFIG_BYTES + 1) as u64)
-                    .read_to_end(&mut bytes)
-                    .ok()?;
-                (read <= MAX_GIT_CONFIG_BYTES)
-                    .then(|| String::from_utf8(bytes).ok())
-                    .flatten()
-            })
+            return None;
         }
-    } else {
-        None
-    };
+        let mut bytes = Vec::new();
+        std::fs::File::open(config_path).ok().and_then(|file| {
+            let read = file
+                .take((MAX_GIT_CONFIG_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            (read <= MAX_GIT_CONFIG_BYTES)
+                .then(|| String::from_utf8(bytes).ok())
+                .flatten()
+        })
+    });
     a2amx::suggest::explain(
         |name| dir.join(name).exists(),
         git_config.as_deref(),
         |path| {
-            if home.as_os_str().is_empty() {
+            if canonical_home.as_os_str().is_empty() {
                 return false;
             }
             let relative = path.strip_prefix("~/").unwrap_or(path);
-            home.join(relative).exists()
+            canonical_home.join(relative).exists()
         },
     )
 }

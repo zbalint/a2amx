@@ -128,9 +128,9 @@ for one run without recording, a non-terminal run without it refuses, and
 `team up --dry-run` never prompts or writes and marks each new grant `not yet accepted`.
 `auto = false` is accepted anywhere in a team `[confine]` table and means nothing.
 Session-level `auto` is always an error. Run `a2amx confine suggest` to print a
-copyable grants fragment for a local team file. Auto detection reads only a regular
-`.git/config` of at most 65,536 bytes, does not follow worktree `.git` files, and
-treats unreadable or invalid input as no git grants.
+copyable grants fragment for a local team file. Auto detection walks upward from the
+project directory, follows `.git` file pointers, and reads only a regular common-directory
+`config` of at most 65,536 bytes; unreadable or invalid input gives no git grants.
 
 See [automatic grant detection in the confinement guide](confinement.md#automatic-grant-detection) for the `auto` mode's git behavior.
 

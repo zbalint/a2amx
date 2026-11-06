@@ -8,6 +8,7 @@ use common::start_daemon;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 use tokio::process::Command as AsyncCommand;
 fn run_binary(
@@ -51,6 +52,223 @@ fn global_auto_file(state: &Path) {
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n",
     )
     .unwrap();
+}
+fn write_worktree_git_file(project: &Path, config: &str) {
+    std::fs::create_dir_all(project.join("meta/worktree")).expect("worktree metadata");
+    std::fs::create_dir_all(project.join("common.git")).expect("common git directory");
+    std::fs::write(project.join(".git"), "gitdir: meta/worktree\n").expect("worktree git file");
+    std::fs::write(
+        project.join("meta/worktree/commondir"),
+        "../../common.git\n",
+    )
+    .expect("commondir");
+    std::fs::write(project.join("common.git/config"), config).expect("git config");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_follows_worktree_git_file_for_ssh() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    write_worktree_git_file(
+        project.path(),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    );
+
+    let dry_run = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(
+        dry_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry_run.stderr)
+    );
+    let dry_stdout = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(
+        dry_stdout.contains("  grants: cache, ssh\n"),
+        "{dry_stdout}"
+    );
+
+    let suggest = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "confine",
+            "suggest",
+            project.path().to_str().expect("project path"),
+        ],
+    )
+    .expect("suggest");
+    assert!(suggest.status.success());
+    assert_eq!(
+        suggest.stdout,
+        b"# Suggested grants:\ngrants = [\"ssh\", \"cache\"]\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_follows_submodule_git_file_for_ssh() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    std::fs::create_dir_all(project.path().join("submodule-meta")).expect("submodule git");
+    std::fs::write(project.path().join(".git"), "gitdir: submodule-meta\n")
+        .expect("submodule git file");
+    std::fs::write(
+        project.path().join("submodule-meta/config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("git config");
+
+    let dry_run = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(
+        dry_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry_run.stderr)
+    );
+    let dry_stdout = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(
+        dry_stdout.contains("  grants: cache, ssh\n"),
+        "{dry_stdout}"
+    );
+
+    let suggest = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "confine",
+            "suggest",
+            project.path().to_str().expect("project path"),
+        ],
+    )
+    .expect("suggest");
+    assert!(suggest.status.success());
+    assert_eq!(
+        suggest.stdout,
+        b"# Suggested grants:\ngrants = [\"ssh\", \"cache\"]\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_follows_repository_from_subdirectory() {
+    let (state, _daemon) = start_daemon().await;
+    let root = tempfile::tempdir().expect("repository");
+    let subdirectory = root.path().join("sub");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    std::fs::create_dir_all(root.path().join(".git")).expect("git directory");
+    std::fs::create_dir(&subdirectory).expect("subdirectory");
+    std::fs::write(
+        root.path().join(".git/config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("git config");
+
+    let dry_run = run_binary(
+        state.path(),
+        &subdirectory,
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(
+        dry_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry_run.stderr)
+    );
+    let dry_stdout = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(
+        dry_stdout.contains("  grants: cache, ssh\n"),
+        "{dry_stdout}"
+    );
+
+    let suggest = run_binary(
+        state.path(),
+        &subdirectory,
+        user_home.path(),
+        runtime.path(),
+        &[
+            "confine",
+            "suggest",
+            subdirectory.to_str().expect("subdirectory path"),
+        ],
+    )
+    .expect("suggest");
+    assert!(suggest.status.success());
+    assert_eq!(
+        suggest.stdout,
+        b"# Suggested grants:\ngrants = [\"ssh\", \"cache\"]\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_follows_worktree_git_file_for_https_gh() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    std::fs::create_dir_all(user_home.path().join(".config/gh")).expect("gh config");
+    write_worktree_git_file(
+        project.path(),
+        "[remote \"origin\"]\nurl = https://host-a/team/demo.git\n",
+    );
+
+    let dry_run = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(
+        dry_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry_run.stderr)
+    );
+    let dry_stdout = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(dry_stdout.contains("  grants: cache, gh\n"), "{dry_stdout}");
+
+    let suggest = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "confine",
+            "suggest",
+            project.path().to_str().expect("project path"),
+        ],
+    )
+    .expect("suggest");
+    assert!(suggest.status.success());
+    assert_eq!(
+        suggest.stdout,
+        b"# Suggested grants:\ngrants = [\"gh\", \"cache\"]\n"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -747,6 +965,313 @@ fn git_config_size_limit_accepts_65536_and_rejects_65537_bytes() {
         );
         assert_eq!(output.stdout, expected.as_bytes());
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_rejects_missing_worktree_git_target() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    std::fs::write(project.path().join(".git"), "gitdir: missing-meta\n")
+        .expect("missing worktree git file");
+    std::fs::write(
+        project.path().join("config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("fallback git config bait");
+
+    let output = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("  grants: cache\n"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_rejects_oversized_worktree_git_config() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    let target = project.path().join("meta/worktree");
+    std::fs::create_dir_all(&target).expect("worktree metadata");
+    std::fs::write(project.path().join(".git"), "gitdir: meta/worktree\n")
+        .expect("worktree git file");
+    std::fs::write(
+        target.join("config"),
+        format!(
+            "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n{}",
+            "x".repeat(65_500)
+        ),
+    )
+    .expect("oversized git config");
+
+    let output = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("  grants: cache\n"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_rejects_worktree_git_config_directory() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    let target = project.path().join("meta/worktree");
+    std::fs::create_dir_all(target.join("config")).expect("config directory");
+    std::fs::write(project.path().join(".git"), "gitdir: meta/worktree\n")
+        .expect("worktree git file");
+    std::fs::write(
+        project.path().join("meta/config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("sibling git config");
+
+    let output = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("  grants: cache\n"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_rejects_worktree_git_config_symlink_to_directory() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    let target = project.path().join("meta/worktree");
+    std::fs::create_dir_all(target.join("config-directory")).expect("config directory");
+    std::fs::write(project.path().join(".git"), "gitdir: meta/worktree\n")
+        .expect("worktree git file");
+    std::os::unix::fs::symlink("config-directory", target.join("config"))
+        .expect("config directory symlink");
+    std::fs::write(
+        project.path().join("meta/config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("sibling git config");
+
+    let output = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("  grants: cache\n"), "{stdout}");
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_rejects_worktree_git_config_fifo_without_hanging() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    let target = project.path().join("meta/worktree");
+    std::fs::create_dir_all(&target).expect("worktree metadata");
+    std::fs::write(project.path().join(".git"), "gitdir: meta/worktree\n")
+        .expect("worktree git file");
+    let status = Command::new("mkfifo")
+        .arg(target.join("config"))
+        .status()
+        .expect("mkfifo");
+    assert!(status.success(), "mkfifo status: {status}");
+    std::fs::write(
+        project.path().join("meta/config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("sibling git config");
+
+    let state_path = state.path().to_owned();
+    let project_path = project.path().to_owned();
+    let user_home_path = user_home.path().to_owned();
+    let runtime_path = runtime.path().to_owned();
+    let (sender, receiver) = std_mpsc::channel();
+    std::thread::spawn(move || {
+        let result = run_binary(
+            &state_path,
+            &project_path,
+            &user_home_path,
+            &runtime_path,
+            &[
+                "confine",
+                "suggest",
+                project_path.to_str().expect("project path"),
+            ],
+        );
+        let _ = sender.send(result);
+    });
+    let output = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("auto grant detection timed out")
+        .expect("suggest");
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        b"# Suggested grants:\ngrants = [\"cache\"]\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_auto_rejects_gitdir_at_home() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    std::fs::write(
+        project.path().join(".git"),
+        format!("gitdir: {}\n", user_home.path().display()),
+    )
+    .expect("home git file");
+    std::fs::write(
+        user_home.path().join("config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("home git config");
+
+    let output = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("dry run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("  grants: cache\n"), "{stdout}");
+}
+
+#[test]
+fn suggest_symlinked_home_repository_is_not_detected() {
+    let state = tempfile::tempdir().expect("state");
+    let home_parent = tempfile::tempdir().expect("home parent");
+    let real_home = home_parent.path().join("real-home");
+    let symlinked_home = home_parent.path().join("home-link");
+    let project = symlinked_home.join("project");
+    let runtime = tempfile::tempdir().expect("runtime");
+    std::fs::create_dir_all(real_home.join(".git")).expect("home git directory");
+    std::os::unix::fs::symlink(&real_home, &symlinked_home).expect("home symlink");
+    std::fs::create_dir_all(&project).expect("project");
+    std::fs::write(
+        real_home.join(".git/config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("home git config");
+
+    let output = run_binary(
+        state.path(),
+        &project,
+        &symlinked_home,
+        runtime.path(),
+        &[
+            "confine",
+            "suggest",
+            project.to_str().expect("project path"),
+        ],
+    )
+    .expect("suggest");
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        b"# Suggested grants:\ngrants = [\"cache\"]\n"
+    );
+}
+
+#[test]
+fn suggest_follows_relative_gitdir_from_parent_repository() {
+    let state = tempfile::tempdir().expect("state");
+    let root = tempfile::tempdir().expect("repository");
+    let subdirectory = root.path().join("sub");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    std::fs::create_dir_all(root.path().join("meta")).expect("git metadata");
+    std::fs::create_dir(&subdirectory).expect("subdirectory");
+    std::fs::write(root.path().join(".git"), "gitdir: meta\n").expect("gitdir marker");
+    std::fs::write(
+        root.path().join("meta/config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("git config");
+
+    let output = run_binary(
+        state.path(),
+        &subdirectory,
+        user_home.path(),
+        runtime.path(),
+        &[
+            "confine",
+            "suggest",
+            subdirectory.to_str().expect("subdirectory path"),
+        ],
+    )
+    .expect("suggest");
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        b"# Suggested grants:\ngrants = [\"ssh\", \"cache\"]\n"
+    );
+}
+
+#[test]
+fn suggest_canonicalizes_relative_directory_before_git_walk() {
+    let state = tempfile::tempdir().expect("state");
+    let root = tempfile::tempdir().expect("repository parent");
+    let repository = root.path().join("repository");
+    let sibling = root.path().join("sibling");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    std::fs::create_dir_all(repository.join(".git")).expect("git directory");
+    std::fs::create_dir(&sibling).expect("sibling");
+    std::fs::write(
+        repository.join(".git/config"),
+        "[remote \"origin\"]\nurl = git@host-a:team/demo.git\n",
+    )
+    .expect("git config");
+
+    let output = run_binary(
+        state.path(),
+        &repository,
+        user_home.path(),
+        runtime.path(),
+        &["confine", "suggest", "../sibling"],
+    )
+    .expect("suggest");
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        b"# Suggested grants:\ngrants = [\"cache\"]\n"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
