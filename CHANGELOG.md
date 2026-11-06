@@ -125,6 +125,15 @@ All notable user-visible changes are listed here. The format follows
 
 ### Fixed
 
+- A confined session could reach a hidden path through a path the tool picked itself. A `.git` file whose
+  `gitdir:` points at `~/.ssh` made the session see and write `~/.ssh`, and a link planted in the harness
+  data folder (for example `~/.claude/todos` to `~/.ssh`) did the same. The plan now refuses a working
+  directory or git directory that lies inside a default hide, and names the `write` line that opens it. A
+  `.git` file must point at a real git directory (`HEAD` and `objects`), and harness data links must stay
+  inside the harness folder unless you name the target in `write`. An existing setup that had a project
+  inside a hide, such as a `pass` store with a repository, now needs that one `write` line
+  (`docs/confinement.md`, troubleshooting).
+
 - A team-level `[confine] grants` list was accepted but never applied to the team's sessions; it is now merged
   before each session's own grants (`docs/teams.md`).
 

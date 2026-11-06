@@ -208,3 +208,22 @@ start; the planner's read of a FIFO `config` (F77); the user-facing git-config b
    and `objects`) is refused with the message and `~/.ssh` is untouched; (b) a `.git` pointer to a plain
    `$HOME/.ssh` starts the session with `~/.ssh` hidden and no file can be created in it.
 4. `git status --short` lists only the scope files.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude Opus 5.5; developer and tester OMP with
+`openai-codex/gpt-5.6-luna` (the advisor slot model was not exposed to either session). BLOCKED/amend
+cycles: 1 (Amendment 1).
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, Opus 5.5 | The shape check made red test 1 and the hand probe impossible: a plain `~/.ssh` has no `HEAD`, so the pointer was ignored and the plan was `Ok` | Red test 1 uses a git-shaped `.ssh`; the probe covers the git-shaped and the plain case |
+| Draft review | consultant, Opus 5.5 | Root containment would refuse `~/.claude.json`, which lies outside `~/.claude`, for every Claude user; the spec said all data paths are under the roots | Section 3 gives each data path its expected location and a contract test with an existing `~/.claude.json` |
+| Draft review | consultant, Opus 5.5 | The shape check on the `.git` directory branch let the session switch off `protect_git_metadata` | The check applies to the `.git` file pointer only |
+| Draft review | consultant, Opus 5.5 | Two required mutants (`mandatory_hidden`, `container_hidden`) cannot be killed | Labelled defensive, no mutant |
+| Draft review | consultant, Opus 5.5 | Scope list missed `tests/auto_confine.rs`; the fixture list was incomplete; "no write-line escape" for harness data blocked legitimate links; a project inside a hide took two refusal rounds; grant paths and the harness-config root were unaddressed in the check | Scope and fixture list fixed; explicit `write` lifts the harness data refusal; one aggregated error; the excluded sources are named |
+| Implementation | developer, gpt-5.6-luna (BLOCKED) | The spec said `~/.claude/ide` is a harness data path reachable by the section 2 clause; `harness_data` does not list it. The claim came from the consultant and the architect adopted it without reading the list | Amendment 1: section 2 has two sources, harness data is covered by section 3 alone, and a contract test pins the `todos` to `ide` link |
+| Architect review | architect, Sonnet 5.5 | `git_common_dir` lost its final `canonicalize`, so a worktree `commondir` of `../..` came back non-canonical and the home check could be bypassed; 898 tests and ten mutants did not notice | Canonicalize restored, red test and mutant added |
+| Architect review | architect, Sonnet 5.5 | The harness data error text was built three times; the symlinked-home case for `~/.claude.json` had no evidence | One closure; a symlinked-home test |
+| Architect review | architect, Sonnet 5.5 (own mutant) | `objects` as a regular file was accepted by the shape check and no test failed | Test case added, mutant killed |
+| Tester pass | tester, gpt-5.6-luna | No material finding; one own mutant survived as equivalent (skipping the `explicit_writes` test in the implicit check, because explicit writes already prune the hide) | Recorded, no change |

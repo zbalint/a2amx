@@ -592,21 +592,58 @@ fn validate_harness_data_paths(
     runtime_dir: &Path,
     data_dirs: &[PathBuf],
     data_files: &[PathBuf],
+    explicit_writes: &BTreeSet<PathBuf>,
 ) -> Result<()> {
-    let roots = match harness {
+    let expected_sources = match harness {
         Harness::Claude => vec![home.join(".claude")],
-        Harness::Omp => vec![home.join(".omp"), home.join(".omp/agent")],
+        Harness::Omp => vec![home.join(".omp/agent"), home.join(".omp")],
         Harness::Generic | Harness::Codex => Vec::new(),
     };
-    for path in roots
-        .into_iter()
+    let expected_roots = expected_sources
+        .iter()
+        .filter_map(|source| fs::canonicalize(source).ok().map(|root| (source, root)))
+        .collect::<Vec<_>>();
+    let home_file = home.join(".claude.json");
+    let outside_error = |path: &Path, target: &Path, root: &Path| -> anyhow::Error {
+        anyhow!(
+            "harness data path {} resolves to {}, outside {}; remove the link, keep the data inside {}, or open it with write = [\"{}\"] if that is intended",
+            path.display(),
+            target.display(),
+            root.display(),
+            root.display(),
+            target.display()
+        )
+    };
+    for path in expected_sources
+        .iter()
+        .cloned()
         .chain(data_dirs.iter().cloned())
         .chain(data_files.iter().cloned())
     {
-        if let Some(path) = canonical_if_exists(&path) {
-            check_write_allowed(&path, home, state_dir, false)?;
-            check_write_runtime_allowed(&path, runtime_dir, false)?;
+        let Some(target) = canonical_if_exists(&path) else {
+            continue;
+        };
+        let explicit = explicit_writes.contains(&target);
+        if !explicit {
+            if harness == Harness::Claude && path == home_file {
+                let is_file = fs::metadata(&target).is_ok_and(|metadata| metadata.is_file());
+                if !is_file || target.parent() != Some(home) {
+                    return Err(outside_error(&path, &target, home));
+                }
+            } else {
+                let Some((_, root)) = expected_roots
+                    .iter()
+                    .find(|(source, _)| is_within(&path, source))
+                else {
+                    return Err(outside_error(&path, &target, home));
+                };
+                if !is_within(&target, root) {
+                    return Err(outside_error(&path, &target, root));
+                }
+            }
         }
+        check_write_allowed(&target, home, state_dir, explicit)?;
+        check_write_runtime_allowed(&target, runtime_dir, explicit)?;
     }
     Ok(())
 }
@@ -883,7 +920,14 @@ pub fn git_common_dir(cwd: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
                 Err(_) => return None,
             };
             let common = fs::canonicalize(common).ok()?;
-            return (common != home).then_some((common, current));
+            let has_head =
+                fs::metadata(common.join("HEAD")).is_ok_and(|metadata| metadata.is_file());
+            let has_objects =
+                fs::metadata(common.join("objects")).is_ok_and(|metadata| metadata.is_dir());
+            if common == home || !has_head || !has_objects {
+                return None;
+            }
+            return Some((common, current));
         }
         let parent = current.parent()?.to_owned();
         if parent == current {
@@ -1056,7 +1100,7 @@ pub fn plan_with_preflight(
     }
     let empty_file = plan_empty_file(host, &builder.state_dir)?;
     builder.bind_workspace(&cwd)?;
-    builder.bind_harness_data()?;
+    builder.bind_harness_data(request)?;
     let mut effective_grants = request.grants.clone();
     if matches!(harness, Harness::Claude | Harness::Omp)
         && !request.grants.iter().any(|grant| grant == "harness-config")
@@ -1158,6 +1202,7 @@ struct PlanBuilder<'a> {
     skipped: Vec<PathBuf>,
     unresolved: Vec<Unresolved>,
     explicit_writes: BTreeSet<PathBuf>,
+    implicit_writes: Vec<(PathBuf, &'static str)>,
     mandatory_hidden: Vec<PathBuf>,
     default_hidden: Vec<PathBuf>,
     container_hidden: Vec<PathBuf>,
@@ -1236,6 +1281,7 @@ impl<'a> PlanBuilder<'a> {
             skipped: Vec::new(),
             unresolved: Vec::new(),
             explicit_writes: BTreeSet::new(),
+            implicit_writes: Vec::new(),
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),
             container_hidden: Vec::new(),
@@ -1254,15 +1300,21 @@ impl<'a> PlanBuilder<'a> {
     }
 
     fn bind_workspace(&mut self, cwd: &Path) -> Result<()> {
-        let _ = add_validated_write(cwd, self.host, &mut self.writable, &mut self.skipped, false)?;
+        if let Some(path) =
+            add_validated_write(cwd, self.host, &mut self.writable, &mut self.skipped, false)?
+        {
+            self.implicit_writes.push((path, "working directory"));
+        }
         if let Some((common, worktree)) = git_common_dir(cwd, &self.home) {
-            let _ = add_validated_write(
+            if let Some(path) = add_validated_write(
                 &common,
                 self.host,
                 &mut self.writable,
                 &mut self.skipped,
                 false,
-            )?;
+            )? {
+                self.implicit_writes.push((path, "git directory"));
+            }
             self.protect_git_metadata(&common, &worktree);
         }
         Ok(())
@@ -1281,8 +1333,13 @@ impl<'a> PlanBuilder<'a> {
         }
     }
 
-    fn bind_harness_data(&mut self) -> Result<()> {
+    fn bind_harness_data(&mut self, request: &ConfineRequest) -> Result<()> {
         let (data_dirs, data_files) = harness_data(self.harness, &self.home);
+        let explicit_writes = request
+            .write
+            .iter()
+            .filter_map(|entry| canonical_if_exists(&user_path(entry, &self.home)))
+            .collect::<BTreeSet<_>>();
         validate_harness_data_paths(
             self.harness,
             &self.home,
@@ -1290,6 +1347,7 @@ impl<'a> PlanBuilder<'a> {
             &self.runtime_dir,
             &data_dirs,
             &data_files,
+            &explicit_writes,
         )?;
         add_harness_data_mounts(
             self.harness,
@@ -1645,6 +1703,35 @@ impl<'a> PlanBuilder<'a> {
         Ok(())
     }
 
+    fn check_implicit_writes_not_hidden(&self) -> Result<()> {
+        let protected_hides = self
+            .default_hidden
+            .iter()
+            .chain(&self.mandatory_hidden)
+            .chain(&self.container_hidden);
+        let mut offenders = Vec::new();
+        for (path, source) in &self.implicit_writes {
+            if self.explicit_writes.contains(path) {
+                continue;
+            }
+            for hidden in protected_hides.clone() {
+                if is_within(path, hidden) {
+                    offenders.push(format!(
+                        "{source} {} resolves to the hidden path {}; open it with write = [\"{}\"] if that is intended",
+                        path.display(),
+                        hidden.display(),
+                        path.display()
+                    ));
+                }
+            }
+        }
+        if offenders.is_empty() {
+            Ok(())
+        } else {
+            bail!("{}", offenders.join("; "));
+        }
+    }
+
     fn finish(
         mut self,
         request: &ConfineRequest,
@@ -1676,6 +1763,7 @@ impl<'a> PlanBuilder<'a> {
                 );
             }
         }
+        self.check_implicit_writes_not_hidden()?;
         let protected = protected_paths(&self.readonly, &self.writable);
         let (data_dirs, data_files) = harness_data(self.harness, &self.home);
         let overlay_parents = harness_overlay_parents(

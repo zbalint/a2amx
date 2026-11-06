@@ -270,6 +270,8 @@ Open a directory when an accident in it is recoverable: a cache is disposable, a
 
 When a tool reports `Read-only file system`, add the directory named in the error to `write` or grant the matching tool directory in the session's `[session.confine]` table, not `$HOME`, unless opening the whole home is your deliberate choice. `write = ["~"]` makes everything under home writable except the hides and protected launch inputs; the choice belongs to the user. Whatever you open stays writable for the next unconfined run too. The `cargo` grant opens `~/.cargo` while keeping its credentials hidden; `~/.cargo/bin` remains protected when it is on `PATH`. `~/.cargo/env` and `~/.cargo/config.toml` are writable under that grant, and later builds execute the configuration they contain.
 
+The plan refuses a working directory or Git pointer it picks when it lies inside a default hide, and keeps harness data links and Git pointers inside their expected places; these are tested limits, not a broader confinement guarantee.
+
 ## What stays open
 
 `write = ["~"]` is an operator choice, not a sandbox escape hidden behind a default. It leaves these residuals:
@@ -655,6 +657,7 @@ These ten credential grants are described in the [grants table](#grants):
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `Read-only file system` on a path under `$HOME` | The path is read-only. | Add the directory named in the error to `write` under `[session.confine]`. |
+| The session is refused with `resolves to the hidden path` or `harness data path` | The working directory or Git directory is inside a default hide (for example a pass store or versioned `~/.ssh`), or a harness data link leaves its harness folder. | Add the `write` lines printed in the error, or remove the link and keep harness data inside its harness folder. |
 | `git push -u`, `git branch --set-upstream-to` or `git remote add` fails with `could not write config file .git/config: Device or resource busy` | `.git/config` is read-only in a confined session on purpose: an agent could set `core.hooksPath`, `fsmonitor` or an alias that runs later outside the sandbox. | Push with `git push origin <branch>`, which needs no upstream, then set the upstream or remote from an unconfined shell. A supported way to do this from inside the session is a known gap. |
 | A tool says it is not logged in, or reports an authentication error | Its credential file or directory is a default hide. | Give the matching grant first (`gh`, `ssh`, `git-credentials`, `sonar`, `aws`, `gcloud`, `azure`, `kube`, `terraform`, `npm-token`, `pypi-token`, `cargo-token`, `netrc`, `huggingface-token`); use `unhide` only for a credential no grant covers; see [Credentials a tool needs](#credentials-a-tool-needs). |
 | Claude or OMP cannot update itself (`Read-only file system` under `~/.local/share/claude` or `~/.local/bin`) | A harness binary lives in a read-only directory on purpose: a writable `~/.local/bin` would let a confined agent replace programs that you, or the daemon's `omp` quota probe, run outside the sandbox. Self-update is not supported in a confined session. | Update the harness from a shell outside the sandbox, then restart the session. |

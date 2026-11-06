@@ -56,6 +56,8 @@ fn global_auto_file(state: &Path) {
 fn write_worktree_git_file(project: &Path, config: &str) {
     std::fs::create_dir_all(project.join("meta/worktree")).expect("worktree metadata");
     std::fs::create_dir_all(project.join("common.git")).expect("common git directory");
+    std::fs::write(project.join("common.git/HEAD"), "ref: refs/heads/main\n").expect("common HEAD");
+    std::fs::create_dir(project.join("common.git/objects")).expect("common objects");
     std::fs::write(project.join(".git"), "gitdir: meta/worktree\n").expect("worktree git file");
     std::fs::write(
         project.join("meta/worktree/commondir"),
@@ -123,6 +125,12 @@ async fn global_auto_follows_submodule_git_file_for_ssh() {
     let runtime = tempfile::tempdir().expect("runtime");
     global_auto_file(state.path());
     std::fs::create_dir_all(project.path().join("submodule-meta")).expect("submodule git");
+    std::fs::write(
+        project.path().join("submodule-meta/HEAD"),
+        "ref: refs/heads/main\n",
+    )
+    .expect("submodule HEAD");
+    std::fs::create_dir(project.path().join("submodule-meta/objects")).expect("submodule objects");
     std::fs::write(project.path().join(".git"), "gitdir: submodule-meta\n")
         .expect("submodule git file");
     std::fs::write(
@@ -1004,6 +1012,8 @@ async fn global_auto_rejects_oversized_worktree_git_config() {
     global_auto_file(state.path());
     let target = project.path().join("meta/worktree");
     std::fs::create_dir_all(&target).expect("worktree metadata");
+    std::fs::write(target.join("HEAD"), "ref: refs/heads/main\n").expect("worktree HEAD");
+    std::fs::create_dir(target.join("objects")).expect("worktree objects");
     std::fs::write(project.path().join(".git"), "gitdir: meta/worktree\n")
         .expect("worktree git file");
     std::fs::write(
@@ -1037,6 +1047,8 @@ async fn global_auto_rejects_worktree_git_config_directory() {
     global_auto_file(state.path());
     let target = project.path().join("meta/worktree");
     std::fs::create_dir_all(target.join("config")).expect("config directory");
+    std::fs::write(target.join("HEAD"), "ref: refs/heads/main\n").expect("worktree HEAD");
+    std::fs::create_dir(target.join("objects")).expect("worktree objects");
     std::fs::write(project.path().join(".git"), "gitdir: meta/worktree\n")
         .expect("worktree git file");
     std::fs::write(
@@ -1067,6 +1079,8 @@ async fn global_auto_rejects_worktree_git_config_symlink_to_directory() {
     global_auto_file(state.path());
     let target = project.path().join("meta/worktree");
     std::fs::create_dir_all(target.join("config-directory")).expect("config directory");
+    std::fs::write(target.join("HEAD"), "ref: refs/heads/main\n").expect("worktree HEAD");
+    std::fs::create_dir(target.join("objects")).expect("worktree objects");
     std::fs::write(project.path().join(".git"), "gitdir: meta/worktree\n")
         .expect("worktree git file");
     std::os::unix::fs::symlink("config-directory", target.join("config"))
@@ -1098,6 +1112,8 @@ async fn global_auto_rejects_worktree_git_config_fifo_without_hanging() {
     global_auto_file(state.path());
     let target = project.path().join("meta/worktree");
     std::fs::create_dir_all(&target).expect("worktree metadata");
+    std::fs::write(target.join("HEAD"), "ref: refs/heads/main\n").expect("worktree HEAD");
+    std::fs::create_dir(target.join("objects")).expect("worktree objects");
     std::fs::write(project.path().join(".git"), "gitdir: meta/worktree\n")
         .expect("worktree git file");
     let status = AsyncCommand::new("mkfifo")
@@ -1217,6 +1233,8 @@ fn suggest_follows_relative_gitdir_from_parent_repository() {
     let user_home = tempfile::tempdir().expect("user home");
     let runtime = tempfile::tempdir().expect("runtime");
     std::fs::create_dir_all(root.path().join("meta")).expect("git metadata");
+    std::fs::write(root.path().join("meta/HEAD"), "ref: refs/heads/main\n").expect("git HEAD");
+    std::fs::create_dir(root.path().join("meta/objects")).expect("git objects");
     std::fs::create_dir(&subdirectory).expect("subdirectory");
     std::fs::write(root.path().join(".git"), "gitdir: meta\n").expect("gitdir marker");
     std::fs::write(
@@ -1282,8 +1300,24 @@ async fn global_auto_ignores_worktree_git_files_and_oversized_configs() {
     let user_home = tempfile::tempdir().expect("user home");
     let runtime = tempfile::tempdir().expect("runtime");
     global_auto_file(state.path());
-    std::fs::write(project.path().join(".git"), "gitdir: /other/repo/.git\n")
-        .expect("worktree git file");
+    let external = tempfile::tempdir().expect("external repository");
+    let external_git = external.path().join(".git");
+    std::fs::create_dir_all(&external_git).expect("external git directory");
+    std::fs::write(external_git.join("HEAD"), "ref: refs/heads/main\n").expect("external HEAD");
+    std::fs::create_dir(external_git.join("objects")).expect("external objects");
+    std::fs::write(
+        external_git.join("config"),
+        format!(
+            "[remote \"origin\"]\nurl = git@host-a:repo.git\n{}",
+            "x".repeat(65_500)
+        ),
+    )
+    .expect("external oversized config");
+    std::fs::write(
+        project.path().join(".git"),
+        format!("gitdir: {}\n", external_git.display()),
+    )
+    .expect("worktree git file");
 
     let worktree = run_binary(
         state.path(),
