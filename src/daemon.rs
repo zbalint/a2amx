@@ -2019,6 +2019,38 @@ async fn response(connection: &mut Framed, response: Response) -> anyhow::Result
     connection.send(&serde_json::to_vec(&response)?).await
 }
 
+/// Requests that act as one session: an admin token has no sender, so it is refused.
+async fn session_only_request(
+    runtime: &Runtime,
+    role: &Role,
+    request: Request,
+) -> anyhow::Result<Response> {
+    let tool = match &request {
+        Request::SendMessage { .. } => "send_message",
+        Request::ReportPrompt { .. } => "report_prompt",
+        _ => "report_quota",
+    };
+    let Role::Session(id) = role else {
+        return Ok(Response::Error {
+            message: format!("{tool} needs a session token"),
+        });
+    };
+    Ok(match request {
+        Request::SendMessage {
+            to,
+            subject,
+            message,
+        } => runtime.send_message(id, to, subject, message).await,
+        Request::ReportPrompt { prompt } => runtime.report_prompt(id, prompt).await?,
+        Request::ReportQuota { five_hour, weekly } => {
+            runtime.report_quota(id, five_hour, weekly).await?
+        }
+        _ => Response::Error {
+            message: "unexpected request".into(),
+        },
+    })
+}
+
 async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
     let mut connection = Framed::new(socket);
     let Some(role) = authenticate_hello(&mut connection, &runtime).await? else {
@@ -2115,28 +2147,11 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 }
             }
             Request::ListAgents => list_agents(&runtime, &role),
-            Request::SendMessage {
-                to,
-                subject,
-                message,
-            } => match &role {
-                Role::Admin => Response::Error {
-                    message: "send_message needs a session token".into(),
-                },
-                Role::Session(id) => runtime.send_message(id, to, subject, message).await,
-            },
-            Request::ReportPrompt { prompt } => match &role {
-                Role::Admin => Response::Error {
-                    message: "report_prompt needs a session token".into(),
-                },
-                Role::Session(id) => runtime.report_prompt(id, prompt).await?,
-            },
-            Request::ReportQuota { five_hour, weekly } => match &role {
-                Role::Admin => Response::Error {
-                    message: "report_quota needs a session token".into(),
-                },
-                Role::Session(id) => runtime.report_quota(id, five_hour, weekly).await?,
-            },
+            request @ (Request::SendMessage { .. }
+            | Request::ReportPrompt { .. }
+            | Request::ReportQuota { .. }) => {
+                session_only_request(&runtime, &role, request).await?
+            }
             Request::BridgeAttach => {
                 if let Some(result) = bridge_attach(&mut connection, &runtime, &role).await? {
                     result
