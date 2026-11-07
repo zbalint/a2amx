@@ -78,8 +78,7 @@ quota to a file instead of the daemon (a second state store, and no token check)
    cannot mark an OMP session. `session_quota` (line 2570) returns, for `Harness::Claude`, the stored windows
    that are not expired (each window is expired when its own `resets_at` is not after the daemon's clock, so
    an expired 5h window does not hide a valid weekly one), else the screen scrape for the missing windows; the
-   `limit_reached` flag still comes from the screen scrape, combined as the OMP branch does at
-   `src/daemon.rs:2583-2598` (a report never clears a screen-seen usage limit). A report may be replaced by a
+   `limit_reached` stays false for Claude, as before (Amendment 3: the Claude scrape never sets it). A report may be replaced by a
    later one; a later report with only one window keeps the stored other window until it expires.
 4. `src/session.rs`: one field on the session state for the report (the two `Option<QuotaWindow>`), a setter,
    and a getter that takes the clock and returns the unexpired part.
@@ -204,3 +203,7 @@ Mutant (k): make `a2amx statusline --report` read `HOME` before connecting; the 
 ## Amendment 2 (architect, 2026-11-07)
 
 BLOCKED by the developer, two findings, both correct. (1) Mutant (g) as written changed only the getter, and the handler stores nothing for a non-Claude session, so no stored report could reach it: the mutant was equivalent. It now removes both layers (section 5.2). (2) `i=$(cat)` strips trailing newlines, so the chained command did not receive the same bytes. The composed string now reads `i=$(cat; echo x); i=${i%x}`, which keeps them (probed with dash: `x\n\n` in, `78 0a 0a` out); a NUL byte is still dropped, and a JSON status payload never carries one. Section 2.6 and test 4's `cat` case say so; the release gate and everything else stand.
+
+## Amendment 3 (architect, 2026-11-07)
+
+BLOCKED by the developer on mutant A and correct: section 2.3's sentence that `limit_reached` "still comes from the screen scrape" is false for Claude. `quota::read` sends Claude to `read_windows`, which only parses the `5h` and `weekly` tokens (`src/quota.rs:105`); the `usage_limit_reached` parser `read_omp_limit` runs for OMP only (`src/quota.rs:192`), so a Claude screen scrape never sets `limit_reached`. The `|| quota.limit_reached` clause in the Claude branch of `session_quota` is therefore dead, and mutant A (dropping it) is equivalent. Resolution: remove the clause (no behavior change, no dead code) and the sentence; Claude's `limit_reached` stays false as it was before this spec. No new test for A.
