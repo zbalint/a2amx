@@ -192,3 +192,12 @@ and another as `config_dir`, never `Path::new(".")`: the checkout holds a global
    that every a2amx Claude session now has a custom status line, so 3db's evidence from a default install must
    be re-checked under it.
 5. Scratch files stay under `target/scratch/3dc/` and are removed before the report.
+
+## Amendment 1 (architect, 2026-11-07)
+
+Added after the owner asked whether a confined session's status-line command can reach the daemon. The command is a child of Claude inside the sandbox and inherits its environment, as the MCP server does, so it should; this was reasoned, not tested. Two additions, no other change:
+
+1. Test (in `tests/statusline.rs`, public seam: the real `a2amx statusline --report` binary): run it with the environment cleared except `A2AMX_ADDR` and `A2AMX_TOKEN` (no `HOME`, no `PATH`, no `A2AMX_HOME`) against a real daemon in a temp state dir, stdin a rate-limit JSON for a Claude session, and show the report is stored (visible in `List`). This is a contract test only if `mcp::configuration()` already needs nothing else; if it needs another variable the test fails and the developer reports it, since a confined session may not have it.
+2. Release gate 4 also runs one confined Claude session (the owner or tester starts it with `a2amx new --confine`): after its first turn `a2amx list` shows its QUOTA and the short line appears in the footer, same as unconfined. A hidden state directory is expected; the session reaches the daemon over its token.
+
+Mutant (k): make `a2amx statusline --report` read `HOME` before connecting; the new test fails.
