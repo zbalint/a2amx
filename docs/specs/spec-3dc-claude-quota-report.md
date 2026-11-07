@@ -94,8 +94,8 @@ quota to a file instead of the daemon (a second state store, and no token check)
    (`5h 77% left 7d 59% left`), or an empty line when neither is known, and exit 0. It never prints stdin.
 6. `src/harness.rs`: `claude_argv` adds a `statusLine` object to the settings JSON:
    `{"type": "command", "command": <string>}`. With no chained user command the string is `<shell_quote(exe)> statusline`. With one it is
-   `i=$(cat); printf '%s' "$i" | <shell_quote(exe)> statusline --report; printf '%s' "$i" | (<user command>\n)`: the report
-   runs first, then the user's command receives the same bytes (the closing parenthesis follows a newline so a trailing
+   `i=$(cat; echo x); i=${i%x}; printf '%s' "$i" | <shell_quote(exe)> statusline --report; printf '%s' "$i" | (<user command>\n)`: the report
+   runs first, then the user's command receives the same bytes (a NUL byte excepted, which JSON never carries; the closing parenthesis follows a newline so a trailing
    comment in the user's command cannot swallow it), its stdout and exit status are the status line's; the user's
    command text is placed in the string as the user wrote it, exactly as Claude Code would run it on its own,
    and is never parsed or split by a2amx (a user command with an unterminated quote or construct fails the way
@@ -150,7 +150,7 @@ and another as `config_dir`, never `Path::new(".")`: the checkout holds a global
    writer tolerates a broken pipe because the command stops reading); invalid JSON, and no daemon reachable: stdout and
    exit as rule (e) says, within 2 seconds; neither stdout nor stderr contains the session token in any case.
    The composed string (the `command` value that `wire_claude_argv` produced, run with `sh -c` in the test and the
-   same stdin): user command `cat`: stdout equals the stdin bytes exactly; ordering with the user command `sleep 1;
+   same stdin): user command `cat`: stdout equals the stdin bytes exactly, also when the stdin ends in two newlines (the `echo x` guard keeps them; plain `i=$(cat)` strips them); ordering with the user command `sleep 1;
    echo done`: the listener's arrival time is earlier than the instant the first stdout byte reaches the test;
    user command `exit 3`: exit status 3; user command `echo ok # trailing comment`: stdout `ok`, exit 0; and with a
    daemon that never answers, the user's output still appears within 2 seconds.
@@ -175,8 +175,7 @@ and another as `config_dir`, never `Path::new(".")`: the checkout holds a global
    test 1 fails; (c) put the `--report` step after the user's command in the composed string, test 4's ordering
    case fails; (d) let the Admin role store a report, test 3 fails; (e) drop the 256 KiB bound, test 4's
    256 KiB + 1 case fails; (f) change the composed string so the user command is not inside a subshell with a
-   newline before `)`, test 4's trailing-comment case fails; (g) make `session_quota` read the stored report for
-   every harness, test 3 fails (it asserts the OMP stub's List quota stays at its no-report value); (h) expire the
+   newline before `)`, test 4's trailing-comment case fails; (g) drop both the Claude-only check in the handler and the Claude-only branch in `session_quota` (two edits, one mutant), test 3 fails (it asserts the OMP stub's List quota stays at its no-report value; either edit alone survives by design, the two layers back each other up); (h) expire the
    whole report on the earliest `resets_at`, test 3's one-expired-window case fails; (i1) drop the 8-day bound in
    `quota.rs`, test 1 fails; (i2) drop the 8-day bound in the daemon, test 3 fails; (j) change `<=` to `<` at
    the 8-day boundary, test 1's kept case fails. The developer names the failing test for each.
@@ -201,3 +200,7 @@ Added after the owner asked whether a confined session's status-line command can
 2. Release gate 4 also runs one confined Claude session (the owner or tester starts it with `a2amx new --confine`): after its first turn `a2amx list` shows its QUOTA and the short line appears in the footer, same as unconfined. A hidden state directory is expected; the session reaches the daemon over its token.
 
 Mutant (k): make `a2amx statusline --report` read `HOME` before connecting; the new test fails.
+
+## Amendment 2 (architect, 2026-11-07)
+
+BLOCKED by the developer, two findings, both correct. (1) Mutant (g) as written changed only the getter, and the handler stores nothing for a non-Claude session, so no stored report could reach it: the mutant was equivalent. It now removes both layers (section 5.2). (2) `i=$(cat)` strips trailing newlines, so the chained command did not receive the same bytes. The composed string now reads `i=$(cat; echo x); i=${i%x}`, which keeps them (probed with dash: `x\n\n` in, `78 0a 0a` out); a NUL byte is still dropped, and a JSON status payload never carries one. Section 2.6 and test 4's `cat` case say so; the release gate and everything else stand.
