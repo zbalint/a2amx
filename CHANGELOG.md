@@ -5,22 +5,7 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
-### Added
-
-- `a2amx explain SESSION` names, for a confined session (also an exited one), what the session cannot touch and what opens each path: the grant, the `--confine-unhide` flag or the `write` line. `ConfineInfo` in the control protocol gains the optional fields `hide`, `unhide` and `no_default_hides` (older clients and daemons stay compatible).
-
-### Changed
-
-- A Claude session reports its quota through a status-line command that a2amx injects when it starts it (`a2amx statusline`), so `list`, `list_agents` and the status line show the 5-hour and weekly quota on a default install; a status line of your own is called afterwards with the same input and keeps its output. New control request `report_quota` (session token only) and new command `a2amx statusline [--report]`; a session with no quota data (an API-key account) shows an empty footer line.
-- The container-runtime grants (`docker`, `podman`, `containerd`, `crio`, `lxd`) now carry an escape text: `a2amx confine list` prints a warning line under each, and `team up` shows `grant NAME can escape: ...` for an explicitly granted one, because a privileged container started through a root daemon is root on the host.
-
-### Fixed
-
-- The confinement plan no longer hangs when a repository's `.git/config` is a FIFO or another non-regular file (it is treated as absent), reads a config that is not valid UTF-8, finds `core.hooksPath` after lines without `=`, and fails the plan with an error when the config is larger than 1 MiB instead of ignoring its `hooksPath`.
-- Claude Code's default settings: a session whose composer cursor is hidden and drawn by Claude itself (an inverse cell) is now read as ready, so `list`, `explain` and message delivery work without custom settings. A stale `human_draft` hold on a Claude session clears at `a2amx reset` when the composer is empty, including the grey prompt suggestion, after the 2 second margin, as it already did for OMP; a typed draft, a pasted-text or image chip still holds. `a2amx explain` names the session's own hold for native Claude, OMP and Codex sessions when the channel reports none.
-- A Claude session whose terminal window has no focus is no longer read as not ready while its composer is empty. Claude Code stops drawing its own cursor cell when the terminal reports focus lost, so `explain` said `screen not ready` and refused resets for as long as an attached window was unfocused. An empty composer with the cursor at its start now reads as ready; a composer with text, a menu or a dialog still does not. PTY delivery and draft restore can therefore type into an unfocused attached session whose composer is empty.
-
-## [0.2.0] - 2026-11-06
+## [0.2.0] - 2026-11-07
 
 ### Added
 
@@ -92,6 +77,7 @@ All notable user-visible changes are listed here. The format follows
   the hold and its explanation, the number of queued messages, and whether `reset` would be allowed and, if
   not, with which error code and reason. It changes nothing and is admin only. New request and response pair
   `explain` on the control protocol (`docs/cli.md`).
+- `a2amx explain SESSION` names, for a confined session (also an exited one), what the session cannot touch and what opens each path: the grant, the `--confine-unhide` flag or the `write` line. `ConfineInfo` in the control protocol gains the optional fields `hide`, `unhide` and `no_default_hides` (older clients and daemons stay compatible).
 
 ### Changed
 
@@ -139,6 +125,8 @@ All notable user-visible changes are listed here. The format follows
   granted directory (`~/.cargo/credentials.toml`) stays hidden unless its own grant is given. **Breaking:** a grant
   path that passes through a symlink is now refused when the plan is built (it used to open the symlink's target);
   name the real path with a `write` entry (`a2amx confine list`, `docs/confinement.md`).
+- A Claude session reports its quota through a status-line command that a2amx injects when it starts it (`a2amx statusline`), so `list`, `list_agents` and the status line show the 5-hour and weekly quota on a default install; a status line of your own is called afterwards with the same input and keeps its output. New control request `report_quota` (session token only) and new command `a2amx statusline [--report]`; a session with no quota data (an API-key account) shows an empty footer line.
+- The container-runtime grants (`docker`, `podman`, `containerd`, `crio`, `lxd`) now carry an escape text: `a2amx confine list` prints a warning line under each, and `team up` shows `grant NAME can escape: ...` for an explicitly granted one, because a privileged container started through a root daemon is root on the host.
 
 ### Fixed
 
@@ -156,6 +144,9 @@ All notable user-visible changes are listed here. The format follows
 
 - A mouse drag that starts in the session and ends on the team line is forwarded to the session at the
   grid's first row instead of a row lower.
+- The confinement plan no longer hangs when a repository's `.git/config` is a FIFO or another non-regular file (it is treated as absent), reads a config that is not valid UTF-8, finds `core.hooksPath` after lines without `=`, and fails the plan with an error when the config is larger than 1 MiB instead of ignoring its `hooksPath`.
+- Claude Code's default settings: a session whose composer cursor is hidden and drawn by Claude itself (an inverse cell) is now read as ready, so `list`, `explain` and message delivery work without custom settings. A stale `human_draft` hold on a Claude session clears at `a2amx reset` when the composer is empty, including the grey prompt suggestion, after the 2 second margin, as it already did for OMP; a typed draft, a pasted-text or image chip still holds. `a2amx explain` names the session's own hold for native Claude, OMP and Codex sessions when the channel reports none.
+- A Claude session whose terminal window has no focus is no longer read as not ready while its composer is empty. Claude Code stops drawing its own cursor cell when the terminal reports focus lost, so `explain` said `screen not ready` and refused resets for as long as an attached window was unfocused. An empty composer with the cursor at its start now reads as ready; a composer with text, a menu or a dialog still does not. PTY delivery and draft restore can therefore type into an unfocused attached session whose composer is empty.
 
 ## [0.1.2] - 2026-10-26
 
