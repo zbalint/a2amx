@@ -1955,7 +1955,11 @@ async fn run_reset(home: PathBuf, reference: String) -> anyhow::Result<()> {
 async fn run_explain(home: PathBuf, reference: String) -> anyhow::Result<()> {
     let session = resolve_session(&home, &reference).await?;
     let mut client = Client::connect(&home).await?;
-    let response = client.request(Request::Explain { session }).await?;
+    let response = client
+        .request(Request::Explain {
+            session: session.clone(),
+        })
+        .await?;
     let info = match response {
         Response::Explain { info } => info,
         Response::Error { message } => return Err(anyhow!(message)),
@@ -1969,48 +1973,79 @@ async fn run_explain(home: PathBuf, reference: String) -> anyhow::Result<()> {
             info.address,
             info.harness.as_str(),
         ));
-        return write_stdout(output.into_bytes()).await;
-    }
-    output.push_str(&format!(
-        "{} ({}): {}, running\n",
-        info.id,
-        info.address,
-        info.harness.as_str()
-    ));
-    let activity = info.activity.map(Activity::as_str).unwrap_or("unknown");
-    let cause = info.activity_cause.as_deref().unwrap_or("unknown");
-    output.push_str(&format!("activity: {activity} ({cause})\n"));
-    let ready = match info.ready {
-        Some(true) => "yes",
-        Some(false) if info.starting => "no (starting)",
-        Some(false) => "no",
-        None => "unknown",
-    };
-    output.push_str(&format!("ready: {ready}\n"));
-    output.push_str(&format!(
-        "needs input: {}\n",
-        info.needs_input.as_deref().unwrap_or("no")
-    ));
-    if let Some(hold) = info.hold {
-        output.push_str("hold: ");
-        output.push_str(&hold.reason);
-        if let Some(explanation) = hold.explanation {
-            output.push_str(" - ");
-            output.push_str(&explanation);
+    } else {
+        output.push_str(&format!(
+            "{} ({}): {}, running\n",
+            info.id,
+            info.address,
+            info.harness.as_str()
+        ));
+        let activity = info.activity.map(Activity::as_str).unwrap_or("unknown");
+        let cause = info.activity_cause.as_deref().unwrap_or("unknown");
+        output.push_str(&format!("activity: {activity} ({cause})\n"));
+        let ready = match info.ready {
+            Some(true) => "yes",
+            Some(false) if info.starting => "no (starting)",
+            Some(false) => "no",
+            None => "unknown",
+        };
+        output.push_str(&format!("ready: {ready}\n"));
+        output.push_str(&format!(
+            "needs input: {}\n",
+            info.needs_input.as_deref().unwrap_or("no")
+        ));
+        if let Some(hold) = info.hold {
+            output.push_str("hold: ");
+            output.push_str(&hold.reason);
+            if let Some(explanation) = hold.explanation {
+                output.push_str(" - ");
+                output.push_str(&explanation);
+            }
+            output.push('\n');
+        } else {
+            output.push_str("hold: none\n");
         }
-        output.push('\n');
-    } else {
-        output.push_str("hold: none\n");
+        output.push_str(&format!("queued: {}\n", info.pending));
+        if info.reset.allowed {
+            output.push_str("reset: gate open\n");
+        } else {
+            output.push_str("reset: refused (");
+            output.push_str(info.reset.code.as_deref().unwrap_or("unknown"));
+            output.push_str("): ");
+            output.push_str(info.reset.reason.as_deref().unwrap_or("unknown"));
+            output.push('\n');
+        }
     }
-    output.push_str(&format!("queued: {}\n", info.pending));
-    if info.reset.allowed {
-        output.push_str("reset: gate open\n");
-    } else {
-        output.push_str("reset: refused (");
-        output.push_str(info.reset.code.as_deref().unwrap_or("unknown"));
-        output.push_str("): ");
-        output.push_str(info.reset.reason.as_deref().unwrap_or("unknown"));
-        output.push('\n');
+
+    let sessions = request_sessions(&mut client).await?;
+    if let Some(summary) = sessions.into_iter().find(|summary| summary.id == session)
+        && let Some(confine) = summary.confine
+    {
+        let default_hides = a2amx::confine::default_hide_names(summary.harness);
+        let cwd = summary.cwd;
+        let user_home = std::env::var_os("HOME").map(PathBuf::from);
+        let help = tokio::task::spawn_blocking(move || {
+            let exists = |path: &str| {
+                if path == "~" {
+                    return user_home.as_ref().is_some_and(|home| home.exists());
+                }
+                if let Some(relative) = path.strip_prefix("~/") {
+                    return user_home
+                        .as_ref()
+                        .is_some_and(|home| home.join(relative).exists());
+                }
+                Path::new(path).exists()
+            };
+            a2amx::grant::denial_help(
+                &confine,
+                cwd.as_deref(),
+                &default_hides,
+                a2amx::grant::all(),
+                &exists,
+            )
+        })
+        .await?;
+        output.push_str(&help);
     }
     write_stdout(output.into_bytes()).await
 }

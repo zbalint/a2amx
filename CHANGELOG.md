@@ -5,6 +5,10 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `a2amx explain SESSION` names, for a confined session (also an exited one), what the session cannot touch and what opens each path: the grant, the `--confine-unhide` flag or the `write` line. `ConfineInfo` in the control protocol gains the optional fields `hide`, `unhide` and `no_default_hides` (older clients and daemons stay compatible).
+
 ### Changed
 
 - The container-runtime grants (`docker`, `podman`, `containerd`, `crio`, `lxd`) now carry an escape text: `a2amx confine list` prints a warning line under each, and `team up` shows `grant NAME can escape: ...` for an explicitly granted one, because a privileged container started through a root daemon is root on the host.

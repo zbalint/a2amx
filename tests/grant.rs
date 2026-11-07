@@ -5,7 +5,125 @@ use common::keep_coverage_env;
 use std::collections::BTreeSet;
 use std::process::Command;
 
+use a2amx::wire::ConfineInfo;
+
 use a2amx::{grant, team};
+
+#[test]
+fn denial_help_renders_a_typical_confined_session() {
+    let info = ConfineInfo {
+        auto: false,
+        grants: vec!["cache".into(), "cargo".into(), "harness-config".into()],
+        write: vec!["~/notes".into()],
+        reasons: Vec::new(),
+        hide: Vec::new(),
+        unhide: Vec::new(),
+        no_default_hides: false,
+    };
+    let default_hides = ["~/.ssh", "~/.gnupg", "~/.config/gh", "~/.docker"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let present = BTreeSet::from([
+        "~/.ssh".to_owned(),
+        "~/.gnupg".to_owned(),
+        "~/.config/gh".to_owned(),
+        "/run/docker.sock".to_owned(),
+    ]);
+    let rendered = grant::denial_help(
+        &info,
+        Some("~/project"),
+        &default_hides,
+        grant::all(),
+        &|path| present.contains(path),
+    );
+    assert_eq!(
+        rendered,
+        concat!(
+            "confinement: manual; grants: cache, cargo; harness config\n",
+            "writable: working directory ~/project, its git directory, harness config, ~/notes\n",
+            "read-only: the rest of the home directory and the system\n",
+            "protected (no option opens them): git hooks and config, the hooksPath target, tool directories on PATH inside writable paths, the a2amx state and runtime directories, /run/WSL, /mnt/wslg\n",
+            "hidden (present on this host): ~/.ssh, ~/.gnupg, ~/.config/gh\n",
+            "to open a denied path:\n",
+            "  /run/docker.sock  grant docker (team or session)\n",
+            "  ~/.config/gh  grant gh (team or session)\n",
+            "  ~/.ssh  grant ssh (team or session)\n",
+            "  ~/.gnupg  --confine-unhide PATH (no grant opens it)\n",
+            "any other home path  write = [\"PATH\"] in [session.confine], or --confine-write PATH\n",
+            "a grant goes in [session.confine] grants = [\"NAME\"], or --confine-grant NAME\n",
+        )
+    );
+    assert!(rendered.lines().count() <= 25);
+}
+
+#[test]
+fn denial_help_respects_custom_hides_and_grants() {
+    let mut info = ConfineInfo {
+        auto: false,
+        grants: vec!["cache".into(), "cargo".into(), "harness-config".into()],
+        write: Vec::new(),
+        reasons: Vec::new(),
+        hide: Vec::new(),
+        unhide: Vec::new(),
+        no_default_hides: true,
+    };
+    let default_hides = ["~/.ssh", "~/.gnupg", "~/.config/gh", "~/.docker"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let present = BTreeSet::from([
+        "~/.ssh".to_owned(),
+        "~/.gnupg".to_owned(),
+        "~/.config/gh".to_owned(),
+        "/run/docker.sock".to_owned(),
+    ]);
+    let rendered = grant::denial_help(&info, None, &default_hides, grant::all(), &|path| {
+        present.contains(path)
+    });
+    assert!(rendered.contains("hidden: nothing from the default set is present\n"));
+    assert!(!rendered.contains("--confine-unhide"));
+
+    info.no_default_hides = false;
+    info.unhide = vec!["~/.ssh".into()];
+    let rendered = grant::denial_help(&info, None, &default_hides, grant::all(), &|path| {
+        present.contains(path)
+    });
+    let hidden = rendered
+        .lines()
+        .find(|line| line.starts_with("hidden (present"))
+        .expect("hidden line");
+    assert_eq!(
+        hidden,
+        "hidden (present on this host): ~/.gnupg, ~/.config/gh"
+    );
+    assert!(rendered.contains("this session also unhides: ~/.ssh\n"));
+
+    info.grants.push("ssh".into());
+    let rendered = grant::denial_help(&info, None, &default_hides, grant::all(), &|path| {
+        present.contains(path)
+    });
+    assert!(!rendered.contains("grant ssh (team or session)"));
+
+    let docker_default = vec!["~/.docker".to_owned()];
+    let docker_rendered = grant::denial_help(
+        &ConfineInfo {
+            auto: false,
+            grants: Vec::new(),
+            write: Vec::new(),
+            reasons: Vec::new(),
+            hide: Vec::new(),
+            unhide: Vec::new(),
+            no_default_hides: false,
+        },
+        None,
+        &docker_default,
+        grant::all(),
+        &|path| path == "~/.docker" || path == "/run/docker.sock",
+    );
+    assert!(docker_rendered.contains("~/.docker  --confine-unhide PATH (no grant opens it)\n"));
+    assert!(docker_rendered.contains("/run/docker.sock  grant docker (team or session)\n"));
+}
 
 #[test]
 fn accepted_grants_round_trip_and_drop_unknown_lines() {

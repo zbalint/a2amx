@@ -21,6 +21,31 @@ fn run_binary(home: &Path, args: &[&str]) -> std::io::Result<Output> {
         .output()
 }
 
+fn run_binary_with_context(
+    home: &Path,
+    cwd: &Path,
+    user_home: &Path,
+    runtime: &Path,
+    args: &[&str],
+) -> std::io::Result<Output> {
+    Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .arg("--home")
+        .arg(home)
+        .args(args)
+        .current_dir(cwd)
+        .env("HOME", user_home)
+        .env("XDG_RUNTIME_DIR", runtime)
+        .stdin(Stdio::null())
+        .output()
+}
+
+fn bwrap_available() -> bool {
+    matches!(
+        Command::new("bwrap").arg("--version").output(),
+        Ok(output) if output.status.success()
+    )
+}
+
 fn start_process_daemon() -> (TempDir, TempDir, TempDir, common::DaemonProcess) {
     let state = tempfile::tempdir().expect("state directory");
     let user_home = tempfile::tempdir().expect("user home");
@@ -176,6 +201,73 @@ fn claude_explain_reports_needs_input_reason() {
         text.contains("needs input: input?\n")
     });
     assert!(output.contains("needs input: input?\n"));
+}
+
+#[test]
+fn exited_confined_explain_reports_denial_help() {
+    if !bwrap_available() {
+        eprintln!("skipping confined explain test: bubblewrap unavailable");
+        return;
+    }
+    let (state, user_home, runtime, _daemon) = start_process_daemon();
+    let cwd = tempfile::tempdir().expect("working directory");
+    let created = run_binary_with_context(
+        state.path(),
+        cwd.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "confined",
+            "--confine",
+            "--",
+            "sh",
+            "-c",
+            "exit 7",
+        ],
+    )
+    .expect("start confined session");
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = run_binary_with_context(
+            state.path(),
+            cwd.path(),
+            user_home.path(),
+            runtime.path(),
+            &["explain", "confined"],
+        )
+        .expect("run explain");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if output.status.success() && stdout.contains("exited (code 7)") {
+            let mut lines = stdout.lines();
+            assert!(
+                lines
+                    .next()
+                    .is_some_and(|line| line.contains("exited (code 7)"))
+            );
+            assert!(
+                lines
+                    .next()
+                    .is_some_and(|line| line.starts_with("confinement: manual; grants:"))
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "explain did not report exited confined session: {}{}",
+            stdout,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[test]

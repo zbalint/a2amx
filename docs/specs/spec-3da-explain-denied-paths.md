@@ -178,3 +178,13 @@ Expected values are literals written in the test, not recomputed with the code u
 ## Amendment 1 (architect, 2026-11-07)
 
 BLOCKED by the developer: section 4.2 asked for `plan` over `Harness::Codex`, which `check_harness` rejects. The test now plans Claude and Generic and pins `default_hide_names` for Generic, Claude and Codex. No change to scope or to source behavior; Codex confinement stays unsupported. Verified: `src/confine.rs:1092-1099`.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant Claude Code session, model not recorded; developer OMP, planning/working slot openai-codex/gpt-5.6-luna, advisor slot not exposed; no tester pass (the architect reran the focused suites). BLOCKED/amend cycles: 1.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Several findings on the draft (wire literal at `tests/wire.rs`, exact-match coverage rule, the `exists` source for tilde paths, the missing `tests/confine.rs` in the scope was found later by the architect at lock) | Spec amended before locking |
+| Implementation | developer (gpt-5.6-luna) | The spec asked for a `plan()` test over `Harness::Codex`, which `check_harness` rejects (`src/confine.rs:1092`); the architect and the consultant missed it at draft review | BLOCKED; Amendment 1 plans Claude and Generic and pins `default_hide_names` for Codex directly |
+| Implementation | developer | Its own `denial_help` custom-variant assertion looked up `hidden:` instead of the specified `hidden (present on this host):` | Developer fixed the test |

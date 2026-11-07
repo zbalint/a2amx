@@ -34,6 +34,10 @@ a2amx cancel <message-id>
 the daemon's evidence from today and does not record or reconstruct whether past activity came
 from a native channel, prompt hook or screen.
 
+For a confined session, running or exited, it ends with the confinement: the grants and the writable and
+read-only paths, the paths no option opens, the hidden paths present on this host, and for each denied path the
+grant, `--confine-unhide` flag or `write` line that opens it.
+
 ```text
 s1 (worker@host-a): generic, running
 activity: busy (held: human_draft)

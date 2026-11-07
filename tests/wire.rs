@@ -952,6 +952,21 @@ fn confinement_visibility_fields_are_backward_compatible() {
             .expect("old status payload");
     assert!(!old_status.confine_auto);
 
+    let old_confine_json = serde_json::json!({
+        "auto": true,
+        "grants": ["cache", "ssh"],
+        "write": ["~/.cache"],
+        "reasons": [{
+            "grant": "cache",
+            "reason": "always added by auto"
+        }]
+    });
+    let old_confine: ConfineInfo =
+        serde_json::from_value(old_confine_json).expect("old confinement payload");
+    assert!(old_confine.hide.is_empty());
+    assert!(old_confine.unhide.is_empty());
+    assert!(!old_confine.no_default_hides);
+
     let confine = ConfineInfo {
         auto: true,
         grants: vec!["cache".into(), "ssh".into()],
@@ -960,11 +975,33 @@ fn confinement_visibility_fields_are_backward_compatible() {
             grant: "cache".into(),
             reason: "always added by auto".into(),
         }],
+        hide: vec!["~/.secret".into()],
+        unhide: vec!["~/.ssh".into()],
+        no_default_hides: true,
     };
     let encoded = serde_json::to_value(&confine).expect("confinement payload");
     assert_eq!(
         serde_json::from_value::<ConfineInfo>(encoded).unwrap(),
         confine
+    );
+
+    let defaults = ConfineInfo {
+        auto: false,
+        grants: Vec::new(),
+        write: Vec::new(),
+        reasons: Vec::new(),
+        hide: Vec::new(),
+        unhide: Vec::new(),
+        no_default_hides: false,
+    };
+    let encoded_defaults = serde_json::to_value(defaults).expect("default confinement payload");
+    assert!(!encoded_defaults.as_object().unwrap().contains_key("hide"));
+    assert!(!encoded_defaults.as_object().unwrap().contains_key("unhide"));
+    assert!(
+        !encoded_defaults
+            .as_object()
+            .unwrap()
+            .contains_key("no_default_hides")
     );
 }
 

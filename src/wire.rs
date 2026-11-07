@@ -393,6 +393,12 @@ pub struct ConfineInfo {
     pub grants: Vec<String>,
     pub write: Vec<String>,
     pub reasons: Vec<GrantReason>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub hide: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub unhide: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub no_default_hides: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

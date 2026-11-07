@@ -204,6 +204,9 @@ pub struct Plan {
     pub auto: bool,
     pub reasons: Vec<GrantReason>,
     pub write: Vec<String>,
+    pub hide: Vec<String>,
+    pub unhide: Vec<String>,
+    pub no_default_hides: bool,
     pub keep_env: Vec<String>,
     pub mandatory_hidden: Vec<PathBuf>,
     pub default_hidden: Vec<PathBuf>,
@@ -1282,20 +1285,27 @@ fn container_socket_hides(
     (hidden, skipped)
 }
 
-fn default_hide_sources_for(home: &Path, harness: Harness) -> Vec<PathBuf> {
-    let mut sources = DEFAULT_HIDES
+pub fn default_hide_names(harness: Harness) -> Vec<String> {
+    let mut names = DEFAULT_HIDES
         .into_iter()
         .chain(DEFAULT_HIDES_EXTRA)
-        .map(|name| user_path(name, home))
+        .map(str::to_owned)
         .collect::<Vec<_>>();
     if harness != Harness::Claude {
-        sources.push(home.join(".claude/.credentials.json"));
+        names.push("~/.claude/.credentials.json".to_owned());
     }
     if harness != Harness::Codex {
-        sources.push(home.join(".codex/auth.json"));
+        names.push("~/.codex/auth.json".to_owned());
     }
-    sources.push(PathBuf::from("/run/dbus"));
-    sources
+    names.push("/run/dbus".to_owned());
+    names
+}
+
+fn default_hide_sources_for(home: &Path, harness: Harness) -> Vec<PathBuf> {
+    default_hide_names(harness)
+        .into_iter()
+        .map(|name| user_path(&name, home))
+        .collect()
 }
 impl<'a> PlanBuilder<'a> {
     fn new(host: &'a Host, harness: Harness) -> Result<Self> {
@@ -1851,6 +1861,9 @@ impl<'a> PlanBuilder<'a> {
             auto: request.auto,
             reasons: request.reasons.clone(),
             write: request.write.clone(),
+            hide: request.hide.clone(),
+            unhide: request.unhide.clone(),
+            no_default_hides: request.no_default_hides,
             keep_env,
             mandatory_hidden: self.mandatory_hidden,
             default_hidden: self.default_hidden,
@@ -1905,6 +1918,9 @@ impl Plan {
             grants: self.effective_grants.clone(),
             write: self.write.clone(),
             reasons: self.reasons.clone(),
+            hide: self.hide.clone(),
+            unhide: self.unhide.clone(),
+            no_default_hides: self.no_default_hides,
         }
     }
 
@@ -2542,6 +2558,9 @@ mod tests {
             auto: false,
             reasons: Vec::new(),
             write: Vec::new(),
+            hide: Vec::new(),
+            unhide: Vec::new(),
+            no_default_hides: false,
             keep_env: Vec::new(),
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),
@@ -2738,6 +2757,9 @@ mod tests {
                 reason: "detected cache".to_owned(),
             }],
             write: Vec::new(),
+            hide: Vec::new(),
+            unhide: Vec::new(),
+            no_default_hides: false,
             keep_env: Vec::new(),
             mandatory_hidden: Vec::new(),
             default_hidden: Vec::new(),

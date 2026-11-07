@@ -2114,6 +2114,165 @@ fn other_harness_credentials_are_default_hidden() {
 }
 
 #[test]
+fn default_hide_names_and_sources_match_the_literal_sets() {
+    let generic = vec![
+        "~/.ssh",
+        "~/.gnupg",
+        "~/.aws",
+        "~/.config/gcloud",
+        "~/.kube",
+        "~/.docker",
+        "~/.netrc",
+        "~/.local/share/keyrings",
+        "~/.config/chromium",
+        "~/.config/google-chrome",
+        "~/.mozilla/firefox",
+        "~/.config/gh",
+        "~/.git-credentials",
+        "~/.config/git/credentials",
+        "~/.npmrc",
+        "~/.pypirc",
+        "~/.cargo/credentials",
+        "~/.cargo/credentials.toml",
+        "~/.azure",
+        "~/.terraform.d",
+        "~/.vault-token",
+        "~/.pgpass",
+        "~/.password-store",
+        "~/.config/op",
+        "~/.cache/huggingface/token",
+        "~/.config/rclone",
+        "~/.s3cfg",
+        "~/.claude/ide",
+        "~/.claude/.credentials.json",
+        "~/.codex/auth.json",
+        "/run/dbus",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    assert_eq!(generic.len(), 31);
+    assert_eq!(confine::default_hide_names(Harness::Generic), generic);
+
+    let claude = vec![
+        "~/.ssh",
+        "~/.gnupg",
+        "~/.aws",
+        "~/.config/gcloud",
+        "~/.kube",
+        "~/.docker",
+        "~/.netrc",
+        "~/.local/share/keyrings",
+        "~/.config/chromium",
+        "~/.config/google-chrome",
+        "~/.mozilla/firefox",
+        "~/.config/gh",
+        "~/.git-credentials",
+        "~/.config/git/credentials",
+        "~/.npmrc",
+        "~/.pypirc",
+        "~/.cargo/credentials",
+        "~/.cargo/credentials.toml",
+        "~/.azure",
+        "~/.terraform.d",
+        "~/.vault-token",
+        "~/.pgpass",
+        "~/.password-store",
+        "~/.config/op",
+        "~/.cache/huggingface/token",
+        "~/.config/rclone",
+        "~/.s3cfg",
+        "~/.claude/ide",
+        "~/.codex/auth.json",
+        "/run/dbus",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    assert_eq!(claude.len(), 30);
+    assert_eq!(confine::default_hide_names(Harness::Claude), claude);
+
+    let codex = vec![
+        "~/.ssh",
+        "~/.gnupg",
+        "~/.aws",
+        "~/.config/gcloud",
+        "~/.kube",
+        "~/.docker",
+        "~/.netrc",
+        "~/.local/share/keyrings",
+        "~/.config/chromium",
+        "~/.config/google-chrome",
+        "~/.mozilla/firefox",
+        "~/.config/gh",
+        "~/.git-credentials",
+        "~/.config/git/credentials",
+        "~/.npmrc",
+        "~/.pypirc",
+        "~/.cargo/credentials",
+        "~/.cargo/credentials.toml",
+        "~/.azure",
+        "~/.terraform.d",
+        "~/.vault-token",
+        "~/.pgpass",
+        "~/.password-store",
+        "~/.config/op",
+        "~/.cache/huggingface/token",
+        "~/.config/rclone",
+        "~/.s3cfg",
+        "~/.claude/ide",
+        "~/.claude/.credentials.json",
+        "/run/dbus",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    assert_eq!(codex.len(), 30);
+    assert_eq!(confine::default_hide_names(Harness::Codex), codex);
+
+    let fixture = Fixture::new();
+    let claude_credentials = fixture.home.join(".claude/.credentials.json");
+    let codex_credentials = fixture.home.join(".codex/auth.json");
+    std::fs::create_dir_all(claude_credentials.parent().expect("Claude parent"))
+        .expect("Claude directory");
+    std::fs::create_dir_all(codex_credentials.parent().expect("Codex parent"))
+        .expect("Codex directory");
+    std::fs::write(&claude_credentials, "fixture").expect("Claude credentials");
+    std::fs::write(&codex_credentials, "fixture").expect("Codex credentials");
+
+    let dbus = std::fs::canonicalize("/run/dbus").ok();
+    for (harness, expected_credentials) in [
+        (Harness::Claude, vec![&codex_credentials]),
+        (
+            Harness::Generic,
+            vec![&claude_credentials, &codex_credentials],
+        ),
+    ] {
+        let plan = confine::plan(
+            &ConfineRequest::default(),
+            harness,
+            &fixture.cwd,
+            &fixture.host(),
+        )
+        .expect("default hide plan");
+        let mut expected = vec![
+            std::fs::canonicalize(fixture.home.join(".ssh")).expect("ssh canonical"),
+            std::fs::canonicalize(fixture.home.join(".aws")).expect("aws canonical"),
+        ];
+        expected.extend(
+            expected_credentials
+                .into_iter()
+                .map(|path| std::fs::canonicalize(path).expect("credential canonical")),
+        );
+        if let Some(dbus) = &dbus {
+            expected.push(dbus.clone());
+        }
+        expected.sort();
+        assert_eq!(plan.default_hidden, expected);
+    }
+}
+
+#[test]
 fn git_config_worktree_is_protected_inside_writable_common_dir() {
     let fixture = Fixture::new();
     let repo = fixture.cwd.join("repo");

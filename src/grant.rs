@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 
 use anyhow::{Result, bail};
 
+use crate::wire::ConfineInfo;
+
 /// One named thing a user opens on purpose.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Grant {
@@ -503,6 +505,142 @@ static GRANTS: [Grant; 30] = [
 /// Return every grant in stable display order.
 pub fn all() -> &'static [Grant] {
     &GRANTS
+}
+
+/// Explain the paths a confined session cannot reach and the options that open them.
+pub fn denial_help(
+    info: &ConfineInfo,
+    cwd: Option<&str>,
+    default_hides: &[String],
+    rows: &[Grant],
+    exists: &dyn Fn(&str) -> bool,
+) -> String {
+    let matches_unhide = |path: &str| info.unhide.iter().any(|entry| entry.trim() == path.trim());
+    let present_defaults = if info.no_default_hides {
+        Vec::new()
+    } else {
+        default_hides
+            .iter()
+            .filter(|path| exists(path) && !matches_unhide(path))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    let grant_names = info
+        .grants
+        .iter()
+        .filter(|name| name.as_str() != "harness-config")
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let grant_names = if grant_names.is_empty() {
+        "none"
+    } else {
+        grant_names.as_str()
+    };
+    let harness_config = info.grants.iter().any(|name| name == "harness-config");
+    let mut output = String::new();
+    output.push_str(&format!(
+        "confinement: {}; grants: {grant_names}",
+        if info.auto { "auto" } else { "manual" }
+    ));
+    if harness_config {
+        output.push_str("; harness config");
+    }
+    output.push('\n');
+
+    let mut writable = vec![format!(
+        "working directory {}, its git directory",
+        cwd.unwrap_or("unknown")
+    )];
+    if harness_config {
+        writable.push("harness config".to_owned());
+    }
+    writable.extend(info.write.iter().cloned());
+    output.push_str(&format!("writable: {}\n", writable.join(", ")));
+    output.push_str("read-only: the rest of the home directory and the system\n");
+    output.push_str(
+        "protected (no option opens them): git hooks and config, the hooksPath target, tool directories on PATH inside writable paths, the a2amx state and runtime directories, /run/WSL, /mnt/wslg\n",
+    );
+
+    let mut hidden = present_defaults.clone();
+    hidden.extend(info.hide.iter().cloned());
+    if hidden.is_empty() {
+        output.push_str("hidden: nothing from the default set is present\n");
+    } else {
+        output.push_str(&format!(
+            "hidden (present on this host): {}\n",
+            hidden.join(", ")
+        ));
+    }
+
+    output.push_str("to open a denied path:\n");
+    for row in rows {
+        if info.grants.iter().any(|name| name == row.name) {
+            continue;
+        }
+        let mut paths = Vec::new();
+        for path in row.unhides.iter().chain(row.sockets.iter()) {
+            if exists(path) && !paths.contains(path) {
+                paths.push(*path);
+            }
+        }
+        if paths.is_empty() {
+            continue;
+        }
+        let scope = if row.team_default_ok {
+            "team or session"
+        } else {
+            "session only"
+        };
+        output.push_str(&format!(
+            "  {}  grant {} ({scope})\n",
+            paths.join(", "),
+            row.name
+        ));
+    }
+
+    if !info.no_default_hides {
+        let uncovered = present_defaults
+            .iter()
+            .filter(|default| {
+                let default = default.trim_end_matches('/');
+                !rows.iter().any(|row| {
+                    row.unhides
+                        .iter()
+                        .chain(row.sockets.iter())
+                        .any(|path| path.trim_end_matches('/') == default)
+                })
+            })
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if !uncovered.is_empty() {
+            output.push_str(&format!(
+                "  {}  --confine-unhide PATH (no grant opens it)\n",
+                uncovered.join(", ")
+            ));
+        }
+    }
+
+    output.push_str(
+        "any other home path  write = [\"PATH\"] in [session.confine], or --confine-write PATH\n",
+    );
+    output.push_str(
+        "a grant goes in [session.confine] grants = [\"NAME\"], or --confine-grant NAME\n",
+    );
+    if !info.unhide.is_empty() {
+        output.push_str(&format!(
+            "this session also unhides: {}\n",
+            info.unhide.join(", ")
+        ));
+    }
+    if !info.hide.is_empty() {
+        output.push_str(&format!(
+            "this session also hides: {}\n",
+            info.hide.join(", ")
+        ));
+    }
+    output
 }
 
 /// Parse accepted auto-grant names, discarding blank and unknown lines.
