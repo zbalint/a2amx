@@ -109,7 +109,9 @@ fn explain_until_named<F>(home: &Path, name: &str, mut ready: F) -> String
 where
     F: FnMut(&str) -> bool,
 {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Above the daemon's ten second NEEDS_INPUT_AFTER delay: the `input?` label only appears after
+    // the dialog signal has lasted that long, so a ten second deadline raced it.
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let output = run_binary(home, &["explain", name]).expect("run explain");
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
