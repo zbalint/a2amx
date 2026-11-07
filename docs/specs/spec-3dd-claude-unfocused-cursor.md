@@ -66,3 +66,17 @@ Expected values are literal frames, built with the same escape-sequence method a
 ## Amendment 1 (architect, 2026-11-07)
 
 BLOCKED by the developer (`m_5963`): the fixture of section 5 1(k) put the character at column 38 of 40, but the blank check covers columns 2 through 39, so a range that stops one column short still contains column 38 and the mutant survives. Verified at `src/harness.rs:225-233` (the slice runs from column 2 for `cols - 2` cells). Fix: the character goes in the last column, zero-based 39, which only the full range reaches; section 6.2's mutant is worded as a range that stops one column short. A range that runs one column too long cannot be written (it would index past the row), so only the short-by-one mutant exists. Cause of the miss: I wrote "column 38 of 40" without checking it against the slice bounds; the consultant's review suggested the near-edge test and did not catch the exact column either.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant Claude Code session, model not recorded; developer OMP, working slot openai-codex/gpt-5.6-luna (planning slot not named in its report, the automatic advisor model not exposed); no tester pass (a one-function change with 12 literal test cases and a full-suite run; the architect ran a mutant of its own). BLOCKED/amend cycles: 1.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft | architect | The existing `f4` and the line-958 case assert the shape the fix makes ready; the 3db spec called `f4` case (o) and said it stays | The draft flips both on purpose and names them |
+| Draft review | consultant (`m_5957`) | The draft cited a comment that does not exist, said "three flips" for two cases, listed `!visible` and no-`INVERSE` clauses that narrow nothing (an equivalent mutant), and section 3 omitted draft restore, kill's Ctrl-D, heartbeat digests and the status display | All applied before the lock |
+| Implementation | developer (`m_5963`) | The edge fixture sat at column 38 of 40 but the blank range covers 2 to 39, so the one-short mutant survived | Amendment 1 moved it to the last column |
+| Architect review | architect | None beyond the above; one mutant of its own (blank-row condition dropped) was killed by 5 tests | no change |
+
+The live gate stays open until the owner installs the next rc: an attached `probe-claude` with an unfocused window must read `ready: yes`, and the `/mcp` + arrows + Esc reset must still pass.
+

@@ -109,10 +109,27 @@ fn cell_attrs(screen: &Screen, row: u16, col: u16) -> Option<Attrs> {
     screen.cells.get(index).map(|cell| cell.attrs)
 }
 
+fn row_is_blank_from(screen: &Screen, row: u16, start_col: u16) -> bool {
+    let cols = usize::from(screen.size.cols);
+    let start_col = usize::from(start_col);
+    if row >= screen.size.rows || start_col >= cols {
+        return false;
+    }
+    let start = usize::from(row) * cols + start_col;
+    let Some(cells) = screen
+        .cells
+        .get(start..start.saturating_add(cols - start_col))
+    else {
+        return false;
+    };
+    cells.iter().all(|cell| matches!(cell.ch, ' ' | '\u{a0}'))
+}
+
 fn claude_cursor_shown(screen: &Screen) -> bool {
     screen.cursor.visible
         || cell_attrs(screen, screen.cursor.row, screen.cursor.col)
             .is_some_and(|attrs| attrs.contains(Attrs::INVERSE))
+        || (screen.cursor.col == 2 && row_is_blank_from(screen, screen.cursor.row, 2))
 }
 
 fn row_is_rule(screen: &Screen, row: u16) -> bool {
@@ -230,7 +247,7 @@ pub fn claude_composer_empty(screen: &Screen, scrolled: bool) -> bool {
     else {
         return false;
     };
-    if cells.iter().all(|cell| matches!(cell.ch, ' ' | '\u{a0}')) {
+    if row_is_blank_from(screen, row, 2) {
         return true;
     }
     if cells.first().is_none_or(|cell| {

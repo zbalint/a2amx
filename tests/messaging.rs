@@ -732,6 +732,30 @@ fn claude_readiness_accepts_idle_and_mid_turn_composers() {
 }
 
 #[test]
+fn claude_readiness_accepts_an_empty_composer_with_a_hidden_cursor() {
+    let rules = "─".repeat(40);
+    let plain_space =
+        format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;3H\x1b[?25l");
+    let plain_space_screen = screen_from(plain_space.as_bytes());
+    assert!(harness::ready(Harness::Claude, &plain_space_screen, false));
+    assert!(harness::claude_composer_empty(&plain_space_screen, false));
+
+    let non_breaking_space = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯\u{a0}\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    let non_breaking_space_screen = screen_from(non_breaking_space.as_bytes());
+    assert!(harness::ready(
+        Harness::Claude,
+        &non_breaking_space_screen,
+        false
+    ));
+    assert!(harness::claude_composer_empty(
+        &non_breaking_space_screen,
+        false
+    ));
+}
+
+#[test]
 fn claude_paste_view_expands_each_tab_to_four_spaces() {
     assert_eq!(
         harness::paste_view(Harness::Claude, "a\tb\n\tc"),
@@ -803,10 +827,6 @@ fn claude_readiness_accepts_the_non_breaking_space_after_the_glyph() {
 #[test]
 fn claude_readiness_rejects_each_non_ready_fixture() {
     let f1 = f1_bytes();
-
-    let mut f4 = f1.clone();
-    f4.extend_from_slice(b"\x1b[?25l");
-    assert!(!harness::ready(Harness::Claude, &screen_from(&f4), false));
 
     let f5 = "\x1b[2J\x1b[?2004h\x1b[2;1H".to_owned()
         + &"─".repeat(40)
@@ -957,12 +977,12 @@ fn claude_composer_empty_accepts_only_a_blank_composer() {
     let hidden_no_inverse =
         format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;3H\x1b[?25l");
     let hidden_no_inverse_screen = screen_from(hidden_no_inverse.as_bytes());
-    assert!(!harness::ready(
+    assert!(harness::ready(
         Harness::Claude,
         &hidden_no_inverse_screen,
         false
     ));
-    assert!(!harness::claude_composer_empty(
+    assert!(harness::claude_composer_empty(
         &hidden_no_inverse_screen,
         false
     ));
@@ -1044,6 +1064,117 @@ fn claude_composer_empty_accepts_only_a_blank_composer() {
     let menu_screen = screen_from(menu.as_bytes());
     assert!(!harness::ready(Harness::Claude, &menu_screen, false));
     assert!(!harness::claude_composer_empty(&menu_screen, false));
+}
+
+#[test]
+fn claude_readiness_rejects_a_hidden_nonempty_composer() {
+    let rules = "─".repeat(40);
+    let typed =
+        format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ x\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l");
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(typed.as_bytes()),
+        false
+    ));
+}
+
+#[test]
+fn claude_readiness_rejects_a_hidden_cursor_outside_the_composer_start() {
+    let rules = "─".repeat(40);
+    let cursor_after_start =
+        format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;5H\x1b[?25l");
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(cursor_after_start.as_bytes()),
+        false
+    ));
+}
+
+#[test]
+fn claude_readiness_rejects_a_hidden_empty_composer_with_guard_failures() {
+    let rules = "─".repeat(40);
+    let empty =
+        format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;3H\x1b[?25l");
+    let empty_screen = screen_from(empty.as_bytes());
+    assert!(!harness::ready(Harness::Claude, &empty_screen, true));
+
+    let dialog = format!("{empty}\x1b[8;1HEnter to confirm\x1b[3;3H");
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(dialog.as_bytes()),
+        false
+    ));
+
+    let paste_off = format!("{empty}\x1b[?2004l");
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(paste_off.as_bytes()),
+        false
+    ));
+}
+
+#[test]
+fn claude_readiness_rejects_markerless_menu_row() {
+    let rules = "─".repeat(40);
+    let menu = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ 1. Yes\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(menu.as_bytes()),
+        false
+    ));
+}
+
+#[test]
+fn claude_readiness_rejects_mcp_row_with_glyph_at_column_two() {
+    let rules = "─".repeat(40);
+    let mcp = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H  ❯ view\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(mcp.as_bytes()),
+        false
+    ));
+}
+
+#[test]
+fn claude_readiness_rejects_a_slash_picker_row() {
+    let rules = "─".repeat(40);
+    let picker =
+        format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ /\x1b[4;1H{rules}\x1b[3;4H\x1b[?25l");
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(picker.as_bytes()),
+        false
+    ));
+}
+
+#[test]
+fn claude_readiness_rejects_text_in_the_last_column() {
+    let rules = "─".repeat(40);
+    let edge_text = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;40Hx\x1b[3;3H\x1b[?25l"
+    );
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(edge_text.as_bytes()),
+        false
+    ));
+}
+
+#[test]
+fn claude_readiness_rejects_a_plain_suggestion_without_an_inverse_cursor() {
+    let rules = "─".repeat(40);
+    let suggestion = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯\u{a0}c\x1b[2mheck\x1b[0m \x1b[2mmessage_status\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(suggestion.as_bytes()),
+        false
+    ));
 }
 
 #[test]
