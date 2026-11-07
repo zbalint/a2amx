@@ -934,12 +934,29 @@ impl Session {
                 .is_none_or(|input| input.elapsed() >= STALE_DRAFT_MARGIN)
     }
 
-    fn clear_stale_omp_draft(&self) {
-        if self.harness != Harness::Omp {
-            return;
+    fn stale_claude_draft(state: &State) -> bool {
+        state.hold == Some(Hold::HumanDraft)
+            && state.restore.is_none()
+            && state
+                .last_human_input
+                .is_none_or(|input| input.elapsed() >= STALE_DRAFT_MARGIN)
+            && harness::claude_composer_empty(
+                &state.emulator.screen(),
+                state.emulator.is_scrolled(),
+            )
+    }
+
+    fn draft_is_stale(&self, state: &State) -> bool {
+        match self.harness {
+            Harness::Omp => Self::stale_omp_draft(state),
+            Harness::Claude => Self::stale_claude_draft(state),
+            Harness::Generic | Harness::Codex => false,
         }
+    }
+
+    fn clear_stale_draft(&self) {
         let mut state = self.lock();
-        if Self::stale_omp_draft(&state) {
+        if self.draft_is_stale(&state) {
             state.hold = None;
         }
     }
@@ -952,7 +969,7 @@ impl Session {
     }
 
     fn reset_gate_reason(&self) -> Option<(&'static str, String)> {
-        self.clear_stale_omp_draft();
+        self.clear_stale_draft();
         self.reset_gate_decision()
     }
 
@@ -962,7 +979,7 @@ impl Session {
         }
         let gate = {
             let state = self.lock();
-            let hold = if self.harness == Harness::Omp && Self::stale_omp_draft(&state) {
+            let hold = if self.draft_is_stale(&state) {
                 None
             } else {
                 state.hold

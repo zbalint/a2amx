@@ -2353,17 +2353,23 @@ async fn explain_of(runtime: &Runtime, id: &str) -> Response {
             let activity = activity_cause.as_ref().map(|(activity, _)| *activity);
             let cause = activity_cause.map(|(_, cause)| cause);
             let needs_input = session.needs_input().map(str::to_owned);
-            let hold_reason = if session.deliver() == Deliver::Hold {
-                Some("deliver_hold".to_owned())
+            let hold = if session.deliver() == Deliver::Hold {
+                let reason = "deliver_hold";
+                Some(HoldInfo {
+                    explanation: messaging::hold_explanation(reason).map(str::to_owned),
+                    reason: reason.to_owned(),
+                })
+            } else if let Some(reason) = AnyChannel::for_session(session.clone()).hold_reason() {
+                Some(HoldInfo {
+                    explanation: messaging::hold_explanation(reason).map(str::to_owned),
+                    reason: reason.to_owned(),
+                })
             } else {
-                AnyChannel::for_session(session.clone())
-                    .hold_reason()
-                    .map(str::to_owned)
+                session.lock().hold.map(|hold| HoldInfo {
+                    reason: crate::delivery::hold_name(hold).to_owned(),
+                    explanation: None,
+                })
             };
-            let hold = hold_reason.map(|reason| HoldInfo {
-                explanation: messaging::hold_explanation(&reason).map(str::to_owned),
-                reason,
-            });
             let starting = session.starting();
             let ready = {
                 let state = session.lock();

@@ -801,6 +801,202 @@ fn claude_readiness_rejects_each_non_ready_fixture() {
 }
 
 #[test]
+fn claude_composer_empty_accepts_only_a_blank_composer() {
+    let rules = "─".repeat(40);
+    let empty = f1_bytes();
+    assert!(harness::claude_composer_empty(&screen_from(&empty), false));
+
+    let typed_after = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ hello\x1b[4;1H{rules}\x1b[3;8H\x1b[?25h"
+    );
+    assert!(!harness::claude_composer_empty(
+        &screen_from(typed_after.as_bytes()),
+        false
+    ));
+
+    let typed_at_start = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ hello\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    assert!(!harness::claude_composer_empty(
+        &screen_from(typed_at_start.as_bytes()),
+        false
+    ));
+
+    let two_rows = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ hello\x1b[4;1H world\x1b[5;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    assert!(!harness::claude_composer_empty(
+        &screen_from(two_rows.as_bytes()),
+        false
+    ));
+
+    assert!(!harness::claude_composer_empty(&screen_from(&empty), true));
+
+    let dialog = String::from_utf8([empty.as_slice(), b"\x1b[8;1HEnter to confirm"].concat())
+        .expect("ASCII suffix");
+    assert!(!harness::claude_composer_empty(
+        &screen_from(dialog.as_bytes()),
+        false
+    ));
+
+    let typed_inverse = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[7mx\x1b[0my\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    assert!(!harness::claude_composer_empty(
+        &screen_from(typed_inverse.as_bytes()),
+        false
+    ));
+
+    let spaces = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯   \x1b[4;1H{rules}\x1b[3;5H\x1b[?25h"
+    );
+    assert!(!harness::claude_composer_empty(
+        &screen_from(spaces.as_bytes()),
+        false
+    ));
+
+    let nbsp = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯\u{a0}\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    assert!(harness::claude_composer_empty(
+        &screen_from(nbsp.as_bytes()),
+        false
+    ));
+
+    let paste_off = [empty.as_slice(), b"\x1b[?2004l"].concat();
+    assert!(!harness::claude_composer_empty(
+        &screen_from(&paste_off),
+        false
+    ));
+
+    let hidden_inverse_blank = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;3H\x1b[7m \x1b[0m\x1b[3;3H\x1b[?25l"
+    );
+    let hidden_inverse_screen = screen_from(hidden_inverse_blank.as_bytes());
+    assert!(harness::ready(
+        Harness::Claude,
+        &hidden_inverse_screen,
+        false
+    ));
+    assert!(harness::claude_composer_empty(
+        &hidden_inverse_screen,
+        false
+    ));
+
+    let hidden_draft = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ xyz\x1b[4;1H{rules}\x1b[3;6H\x1b[7m \x1b[0m\x1b[3;6H\x1b[?25l"
+    );
+    let hidden_draft_screen = screen_from(hidden_draft.as_bytes());
+    assert!(harness::ready(Harness::Claude, &hidden_draft_screen, false));
+    assert!(!harness::claude_composer_empty(&hidden_draft_screen, false));
+
+    let hidden_leading_space = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯  xzya\x1b[4;1H{rules}\x1b[3;8H\x1b[7m \x1b[0m\x1b[3;8H\x1b[?25l"
+    );
+    let hidden_leading_space_screen = screen_from(hidden_leading_space.as_bytes());
+    assert!(harness::ready(
+        Harness::Claude,
+        &hidden_leading_space_screen,
+        false
+    ));
+    assert!(!harness::claude_composer_empty(
+        &hidden_leading_space_screen,
+        false
+    ));
+
+    let hidden_no_inverse =
+        format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;3H\x1b[?25l");
+    let hidden_no_inverse_screen = screen_from(hidden_no_inverse.as_bytes());
+    assert!(!harness::ready(
+        Harness::Claude,
+        &hidden_no_inverse_screen,
+        false
+    ));
+    assert!(!harness::claude_composer_empty(
+        &hidden_no_inverse_screen,
+        false
+    ));
+
+    let inverse_character = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[7mx\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    let inverse_character_screen = screen_from(inverse_character.as_bytes());
+    assert!(harness::ready(
+        Harness::Claude,
+        &inverse_character_screen,
+        false
+    ));
+    assert!(!harness::claude_composer_empty(
+        &inverse_character_screen,
+        false
+    ));
+
+    let suggestion = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯\u{a0}\x1b[7mc\x1b[0m\x1b[2mheck\x1b[0m \x1b[2mmessage_status\x1b[0m \x1b[2mfor\x1b[0m \x1b[2mm_5806\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    let suggestion_screen = screen_from(suggestion.as_bytes());
+    assert!(harness::ready(Harness::Claude, &suggestion_screen, false));
+    assert!(harness::claude_composer_empty(&suggestion_screen, false));
+
+    let mixed_attributes = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯\u{a0}\x1b[7mx\x1b[0my\x1b[2mz\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    let mixed_attributes_screen = screen_from(mixed_attributes.as_bytes());
+    assert!(harness::ready(
+        Harness::Claude,
+        &mixed_attributes_screen,
+        false
+    ));
+    assert!(!harness::claude_composer_empty(
+        &mixed_attributes_screen,
+        false
+    ));
+
+    // Synthetic visible-cursor frame isolates the suggestion first-cell attribute rule.
+    let plain_first_dim_tail = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯\u{a0}x\x1b[2myz\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    let plain_first_dim_tail_screen = screen_from(plain_first_dim_tail.as_bytes());
+    assert!(harness::ready(
+        Harness::Claude,
+        &plain_first_dim_tail_screen,
+        false
+    ));
+    assert!(!harness::claude_composer_empty(
+        &plain_first_dim_tail_screen,
+        false
+    ));
+
+    let inverse_only = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯\u{a0}\x1b[7mc\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    let inverse_only_screen = screen_from(inverse_only.as_bytes());
+    assert!(harness::ready(Harness::Claude, &inverse_only_screen, false));
+    assert!(!harness::claude_composer_empty(&inverse_only_screen, false));
+
+    let pasted_chip = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[7m[\x1b[2mPasted text #1 +4 lines]\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    let pasted_chip_screen = screen_from(pasted_chip.as_bytes());
+    assert!(harness::ready(Harness::Claude, &pasted_chip_screen, false));
+    assert!(!harness::claude_composer_empty(&pasted_chip_screen, false));
+
+    let image_chip = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[7m[\x1b[2mImage #1]\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    let image_chip_screen = screen_from(image_chip.as_bytes());
+    assert!(harness::ready(Harness::Claude, &image_chip_screen, false));
+    assert!(!harness::claude_composer_empty(&image_chip_screen, false));
+
+    let menu = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ 1. Yes\x1b[4;1H{rules}\x1b[3;3H\x1b[?25l"
+    );
+    let menu_screen = screen_from(menu.as_bytes());
+    assert!(!harness::ready(Harness::Claude, &menu_screen, false));
+    assert!(!harness::claude_composer_empty(&menu_screen, false));
+}
+
+#[test]
 fn generic_readiness_only_uses_bracketed_paste_and_scroll_state() {
     let f1 = f1_bytes();
     assert!(harness::ready(Harness::Generic, &screen_from(&f1), false));

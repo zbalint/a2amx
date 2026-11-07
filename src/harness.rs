@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, anyhow};
 
-use crate::emulator::Screen;
+use crate::emulator::{Attrs, Screen};
 
 #[derive(
     Debug,
@@ -101,6 +101,20 @@ fn cell_char(screen: &Screen, row: u16, col: u16) -> Option<char> {
     screen.cells.get(index).map(|cell| cell.ch)
 }
 
+fn cell_attrs(screen: &Screen, row: u16, col: u16) -> Option<Attrs> {
+    if row >= screen.size.rows || col >= screen.size.cols {
+        return None;
+    }
+    let index = usize::from(row) * usize::from(screen.size.cols) + usize::from(col);
+    screen.cells.get(index).map(|cell| cell.attrs)
+}
+
+fn claude_cursor_shown(screen: &Screen) -> bool {
+    screen.cursor.visible
+        || cell_attrs(screen, screen.cursor.row, screen.cursor.col)
+            .is_some_and(|attrs| attrs.contains(Attrs::INVERSE))
+}
+
 fn row_is_rule(screen: &Screen, row: u16) -> bool {
     if row >= screen.size.rows {
         return false;
@@ -182,7 +196,7 @@ pub fn channel_dialog_visible(screen: &Screen) -> bool {
 }
 
 fn claude_ready(screen: &Screen, scrolled: bool) -> bool {
-    if !screen.modes.bracketed_paste || scrolled || !screen.cursor.visible {
+    if !screen.modes.bracketed_paste || scrolled || !claude_cursor_shown(screen) {
         return false;
     }
 
@@ -200,6 +214,51 @@ fn claude_ready(screen: &Screen, scrolled: bool) -> bool {
         return false;
     }
     !has_dialog_marker(screen)
+}
+
+/// Returns whether the Claude composer is safely observed as empty.
+pub fn claude_composer_empty(screen: &Screen, scrolled: bool) -> bool {
+    if !claude_ready(screen, scrolled) || screen.cursor.col != 2 {
+        return false;
+    }
+    let row = screen.cursor.row;
+    let cols = usize::from(screen.size.cols);
+    let start = usize::from(row) * cols + 2;
+    let Some(cells) = screen
+        .cells
+        .get(start..start.saturating_add(cols.saturating_sub(2)))
+    else {
+        return false;
+    };
+    if cells.iter().all(|cell| matches!(cell.ch, ' ' | '\u{a0}')) {
+        return true;
+    }
+    if cells.first().is_none_or(|cell| {
+        matches!(cell.ch, ' ' | '\u{a0}') || !cell.attrs.contains(Attrs::INVERSE)
+    }) {
+        return false;
+    }
+    let mut has_dim = false;
+    for cell in &cells[1..] {
+        if matches!(cell.ch, ' ' | '\u{a0}') {
+            continue;
+        }
+        if !cell.attrs.contains(Attrs::DIM) {
+            return false;
+        }
+        has_dim = true;
+    }
+    if !has_dim {
+        return false;
+    }
+    for prefix in ["[Pasted text #", "[Image #"] {
+        if prefix.chars().enumerate().all(|(offset, expected)| {
+            cell_char(screen, row, 2 + u16::try_from(offset).unwrap_or(u16::MAX)) == Some(expected)
+        }) {
+            return false;
+        }
+    }
+    true
 }
 
 pub fn ready(harness: Harness, screen: &Screen, scrolled: bool) -> bool {

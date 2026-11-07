@@ -1595,6 +1595,37 @@ async fn omp_reset_target(
     )
 }
 
+async fn claude_reset_target(admin: &mut Client, composer: &str) -> String {
+    let rules = "─".repeat(40);
+    let command = format!(
+        "stty raw -echo; printf '\\033[2J\\033[?2004h\\033[2;1H{rules}\\033[3;1H❯ {composer}\\033[4;1H{rules}\\033[3;3H\\033[?25h'; exec cat >/dev/null"
+    );
+    match admin
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), command],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("target".into()),
+            harness: Harness::Claude,
+            deliver: Some(Deliver::Auto),
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected target response: {response:?}"),
+    }
+}
+
 async fn reset_rejection(
     address: SocketAddr,
     token: &str,
@@ -1638,6 +1669,97 @@ async fn reset_success(address: SocketAddr, token: &str, target: &str) -> u32 {
         }
     })
     .await
+}
+
+async fn reset_rejection_admin(
+    home: &Path,
+    target: &str,
+    expected_code: &str,
+    source: &str,
+) -> String {
+    let home = home.to_owned();
+    let target = target.to_owned();
+    let expected_code = expected_code.to_owned();
+    let source = source.to_owned();
+    common::eventually(|| {
+        let home = home.clone();
+        let target = target.clone();
+        let expected_code = expected_code.clone();
+        let source = source.clone();
+        async move {
+            let mut admin = Client::connect(&home).await.unwrap();
+            let response = admin
+                .request(Request::Reset { session: target })
+                .await
+                .unwrap();
+            match response {
+                Response::Failed { code, message }
+                    if code == expected_code && message.contains(&source) =>
+                {
+                    Some(message)
+                }
+                Response::Failed { .. } => None,
+                response => panic!("unexpected reset response: {response:?}"),
+            }
+        }
+    })
+    .await
+}
+
+async fn reset_success_admin(home: &Path, target: &str) -> u32 {
+    let home = home.to_owned();
+    let target = target.to_owned();
+    common::eventually(|| {
+        let home = home.clone();
+        let target = target.clone();
+        async move {
+            let mut admin = Client::connect(&home).await.unwrap();
+            match admin
+                .request(Request::Reset { session: target })
+                .await
+                .unwrap()
+            {
+                Response::Reset { steps } => Some(steps),
+                Response::Failed { .. } => None,
+                response => panic!("unexpected reset response: {response:?}"),
+            }
+        }
+    })
+    .await
+}
+
+async fn wait_claude_ready(home: &Path, target: &str) {
+    common::eventually(|| async {
+        let mut controller = Client::connect(home).await.ok()?;
+        let response = controller
+            .request(Request::Explain {
+                session: target.to_owned(),
+            })
+            .await
+            .ok()?;
+        let Response::Explain { info } = response else {
+            return None;
+        };
+        (info.ready == Some(true)).then_some(())
+    })
+    .await;
+}
+
+async fn wait_claude_hold(home: &Path, target: &str) {
+    common::eventually(|| async {
+        let mut controller = Client::connect(home).await.ok()?;
+        let response = controller
+            .request(Request::Explain {
+                session: target.to_owned(),
+            })
+            .await
+            .ok()?;
+        let Response::Explain { info } = response else {
+            return None;
+        };
+        (info.reset.reason.as_deref() == Some("hold human_draft")).then_some(())
+    })
+    .await;
 }
 
 fn timing_seconds(message: &str, field: &str) -> u64 {
@@ -2041,6 +2163,56 @@ async fn reset_stale_omp_draft_hold_clears_after_margin() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(2200)).await;
     assert_eq!(reset_success(address, &token, &target).await, 1);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_stale_claude_draft_hold_clears_after_margin() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = claude_reset_target(&mut admin, "").await;
+    wait_claude_ready(dir.path(), &target).await;
+
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    wait_claude_hold(dir.path(), &target).await;
+    reset_rejection_admin(dir.path(), &target, "draft_present", "hold human_draft").await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(reset_success_admin(dir.path(), &target).await, 1);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_nonempty_claude_composer_stays_held_after_margin() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = claude_reset_target(&mut admin, "draft").await;
+    wait_claude_ready(dir.path(), &target).await;
+
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    wait_claude_hold(dir.path(), &target).await;
+    reset_rejection_admin(dir.path(), &target, "draft_present", "hold human_draft").await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    reset_rejection_admin(dir.path(), &target, "draft_present", "hold human_draft").await;
     daemon.shutdown().await.unwrap();
 }
 

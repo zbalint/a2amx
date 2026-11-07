@@ -16,6 +16,7 @@ All notable user-visible changes are listed here. The format follows
 ### Fixed
 
 - The confinement plan no longer hangs when a repository's `.git/config` is a FIFO or another non-regular file (it is treated as absent), reads a config that is not valid UTF-8, finds `core.hooksPath` after lines without `=`, and fails the plan with an error when the config is larger than 1 MiB instead of ignoring its `hooksPath`.
+- Claude Code's default settings: a session whose composer cursor is hidden and drawn by Claude itself (an inverse cell) is now read as ready, so `list`, `explain` and message delivery work without custom settings. A stale `human_draft` hold on a Claude session clears at `a2amx reset` when the composer is empty, including the grey prompt suggestion, after the 2 second margin, as it already did for OMP; a typed draft, a pasted-text or image chip still holds. `a2amx explain` names the session's own hold for native Claude, OMP and Codex sessions when the channel reports none.
 
 ## [0.2.0] - 2026-11-06
 

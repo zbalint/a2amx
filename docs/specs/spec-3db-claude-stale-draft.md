@@ -123,6 +123,20 @@ Expected values are literal frames and strings, not recomputed with the code und
    spec is not closed until that passes. Scratch files stay under `target/scratch/3db/` and are removed
    before the report.
 
-## Amendment 2 (architect, 2026-11-07)
+## Amendment 1 (architect, 2026-11-07)
 
 BLOCKED by the developer (never destroy human work vs the accepted loss of one typed character). Resolved by evidence, not by waiver: the owner's capture of s5 after typing the suggestion's first letter and pressing Home shows the dim remainder is gone, so the suggestion shape cannot match a typed prefix. The shortcut text in section 2.1 is removed and case 1(u) is added; the suggestion-shape branch, cases 1(l) and 1(q) and mutant (c3) are restored to the scope. The 1(p)-shaped row (`INVERSE` letter alone) stays a hold. Not captured: a typed prefix longer than one letter (the second letter is plain, so the row holds), and whether Claude restores the grey remainder after the typed letter is deleted (then the row is the suggestion or blank again, both empty, correct).
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant Claude Code session, model not recorded; developer OMP, working slot openai-codex/gpt-5.6-luna (its report named no planning or advisor slot; the owner reports a fallback to glm-5.3-flash was configured, no switch was observed); tester OMP, slot openai-codex/gpt-5.6-luna (planning and advisor slots not exposed). BLOCKED/amend cycles: 1 (spec Amendment 1, the shortcut), plus one fixture correction that changed no spec text.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant, architect | Both accepted a shortcut that could lose one typed character when a typed prefix of the suggestion looks like the suggestion; it breaks the rule never to destroy human work | Developer reported BLOCKED at implementation; the owner's capture (typed first letter leaves no DIM cell) showed the ambiguity does not exist; Amendment 1 removed the shortcut and added case 1(u) |
+| Implementation | developer | The broker fixture `exec cat` echoed input despite `stty -echo`, so the screen read non-empty | Fixture redirects `cat` to `/dev/null` |
+| Architect review | architect (mutant) | Dropping the first-cell `INVERSE` clause of `claude_composer_empty` survived the spec's cases, the developer's mutants and the tester's six mutants | One synthetic visible-cursor case (plain `x`, DIM `yz`) added; the mutant is killed |
+| Architect review | developer | The architect's requested fixture used a hidden cursor, so `ready` refused before the clause was reached (BLOCKED, second round) | Architect answered: visible-cursor fixture; production unchanged |
+| Architect review | architect | Developer's diff dropped three blank lines | Restored |
+
+The live-capture release gate in section 5 is open until the owner installs the next rc.

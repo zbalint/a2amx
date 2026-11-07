@@ -139,6 +139,79 @@ fn bracketed_cat() -> &'static str {
     r"printf '\033[?2004h'; exec cat"
 }
 
+async fn claude_explain_target(admin: &mut Client, composer: &str) -> String {
+    let rules = "─".repeat(40);
+    let command = format!(
+        "stty raw -echo; printf '\\033[2J\\033[?2004h\\033[2;1H{rules}\\033[3;1H❯ {composer}\\033[4;1H{rules}\\033[3;3H\\033[?25h'; exec cat >/dev/null"
+    );
+    match admin
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), command],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![("A2AMX_CLAUDE_CHANNEL".into(), "1".into())],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("target".into()),
+            harness: Harness::Claude,
+            deliver: Some(Deliver::Auto),
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected target response: {response:?}"),
+    }
+}
+
+async fn wait_claude_explain_ready(home: &Path, target: &str) {
+    let home = home.to_owned();
+    let target = target.to_owned();
+    common::eventually(|| {
+        let home = home.clone();
+        let target = target.clone();
+        async move {
+            let mut client = Client::connect(&home).await.ok()?;
+            let response = client
+                .request(Request::Explain { session: target })
+                .await
+                .ok()?;
+            let Response::Explain { info } = response else {
+                return None;
+            };
+            (info.ready == Some(true)).then_some(())
+        }
+    })
+    .await;
+}
+
+async fn wait_claude_explain_hold(home: &Path, target: &str) {
+    let home = home.to_owned();
+    let target = target.to_owned();
+    common::eventually(|| {
+        let home = home.clone();
+        let target = target.clone();
+        async move {
+            let mut client = Client::connect(&home).await.ok()?;
+            let response = client
+                .request(Request::Explain { session: target })
+                .await
+                .ok()?;
+            let Response::Explain { info } = response else {
+                return None;
+            };
+            (info.reset.reason.as_deref() == Some("hold human_draft")).then_some(())
+        }
+    })
+    .await;
+}
+
 #[test]
 fn ready_generic_explain_reports_state_and_open_reset_gate() {
     let (state, _user_home, _runtime, _daemon) = start_process_daemon();
@@ -471,7 +544,92 @@ async fn stale_omp_draft_preview_does_not_clear_the_hold() {
         let Response::Explain { info } = response else {
             panic!("unexpected explain response: {response:?}");
         };
+        let hold = info.hold.as_ref().expect("registered session hold");
+        assert_eq!(hold.reason, "human_draft");
+        assert_eq!(hold.explanation, None);
         assert!(info.reset.allowed, "{info:?}");
     }
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_native_explain_reports_hold_and_stale_reset_gate() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = claude_explain_target(&mut admin, "").await;
+    wait_claude_explain_ready(dir.path(), &target).await;
+
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    wait_claude_explain_hold(dir.path(), &target).await;
+
+    let Response::Explain { info } = admin
+        .request(Request::Explain {
+            session: target.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected explain response");
+    };
+    let hold = info.hold.as_ref().expect("session hold");
+    assert_eq!(hold.reason, "human_draft");
+    assert_eq!(hold.explanation, None);
+    assert!(!info.reset.allowed);
+
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    let Response::Explain { info } = admin
+        .request(Request::Explain { session: target })
+        .await
+        .unwrap()
+    else {
+        panic!("expected explain response");
+    };
+    let hold = info.hold.as_ref().expect("registered session hold");
+    assert_eq!(hold.reason, "human_draft");
+    assert_eq!(hold.explanation, None);
+    assert!(info.reset.allowed, "{info:?}");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_native_explain_keeps_nonempty_composer_held() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = claude_explain_target(&mut admin, "draft").await;
+    wait_claude_explain_ready(dir.path(), &target).await;
+
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    wait_claude_explain_hold(dir.path(), &target).await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+
+    let Response::Explain { info } = admin
+        .request(Request::Explain { session: target })
+        .await
+        .unwrap()
+    else {
+        panic!("expected explain response");
+    };
+    let hold = info.hold.as_ref().expect("registered session hold");
+    assert_eq!(hold.reason, "human_draft");
+    assert_eq!(hold.explanation, None);
+    assert!(!info.reset.allowed);
     daemon.shutdown().await.unwrap();
 }
