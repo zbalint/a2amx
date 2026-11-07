@@ -171,6 +171,12 @@ pub enum Command {
         #[arg(long)]
         channel: bool,
     },
+    /// Render Claude Code's status line and optionally report its quota.
+    Statusline {
+        /// Report quota without printing the visible line.
+        #[arg(long)]
+        report: bool,
+    },
     /// Run the prompt-submit hook adapter (reads the harness payload on stdin).
     Hook,
 }

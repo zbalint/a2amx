@@ -496,11 +496,14 @@ async fn human_prompt_on_channel_session_allows_without_receipt() {
 
 #[test]
 fn channel_launch_adds_development_flags_and_preserves_plain_launch() {
+    let cwd_dir = TempDir::new().expect("temporary Claude cwd");
+    let config_dir = TempDir::new().expect("temporary Claude config dir");
     for (authorize, count) in [(true, 10), (false, 8)] {
         let argv = wire_claude_channel_argv(
             vec!["claude".into(), "--".into(), "prompt".into()],
             Path::new("/usr/bin/a2amx"),
-            Path::new("."),
+            cwd_dir.path(),
+            config_dir.path(),
             authorize,
             None,
         )
@@ -526,14 +529,18 @@ fn channel_launch_adds_development_flags_and_preserves_plain_launch() {
         let settings: Value = serde_json::from_str(&argv[argv.len() - 3]).unwrap();
         assert_eq!(
             settings,
-            json!({"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"'/usr/bin/a2amx' hook","timeout":5}]}]}})
+            json!({
+                "hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"'/usr/bin/a2amx' hook","timeout":5}]}]},
+                "statusLine":{"type":"command","command":"'/usr/bin/a2amx' statusline"}
+            })
         );
         assert_eq!(&argv[argv.len() - 2..], ["--", "prompt"]);
     }
     let plain = wire_claude_argv(
         vec!["claude".into()],
         Path::new("/usr/bin/a2amx"),
-        Path::new("."),
+        cwd_dir.path(),
+        config_dir.path(),
         false,
         None,
     )

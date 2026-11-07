@@ -30,6 +30,7 @@ pub mod privilege;
 pub mod quota;
 pub mod session;
 pub mod status;
+pub mod statusline;
 mod store;
 pub mod suggest;
 pub mod team;

@@ -11,6 +11,7 @@ All notable user-visible changes are listed here. The format follows
 
 ### Changed
 
+- A Claude session reports its quota through a status-line command that a2amx injects when it starts it (`a2amx statusline`), so `list`, `list_agents` and the status line show the 5-hour and weekly quota on a default install; a status line of your own is called afterwards with the same input and keeps its output. New control request `report_quota` (session token only) and new command `a2amx statusline [--report]`; a session with no quota data (an API-key account) shows an empty footer line.
 - The container-runtime grants (`docker`, `podman`, `containerd`, `crio`, `lxd`) now carry an escape text: `a2amx confine list` prints a warning line under each, and `team up` shows `grant NAME can escape: ...` for an explicitly granted one, because a privileged container started through a root daemon is root on the host.
 
 ### Fixed

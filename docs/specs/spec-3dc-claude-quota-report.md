@@ -207,3 +207,20 @@ BLOCKED by the developer, two findings, both correct. (1) Mutant (g) as written 
 ## Amendment 3 (architect, 2026-11-07)
 
 BLOCKED by the developer on mutant A and correct: section 2.3's sentence that `limit_reached` "still comes from the screen scrape" is false for Claude. `quota::read` sends Claude to `read_windows`, which only parses the `5h` and `weekly` tokens (`src/quota.rs:105`); the `usage_limit_reached` parser `read_omp_limit` runs for OMP only (`src/quota.rs:192`), so a Claude screen scrape never sets `limit_reached`. The `|| quota.limit_reached` clause in the Claude branch of `session_quota` is therefore dead, and mutant A (dropping it) is equivalent. Resolution: remove the clause (no behavior change, no dead code) and the sentence; Claude's `limit_reached` stays false as it was before this spec. No new test for A.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant Claude Code session, model not recorded; developer OMP, working slot openai-codex/gpt-5.6-luna (advisor slot not exposed); tester OMP, slot openai-codex/gpt-5.6-luna (other slots not exposed). BLOCKED/amend cycles: 3 (Amendments 1 to 3, the first an architect addition after an owner question, the other two developer BLOCKED reports).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Rounding mutant surviving on half values, an OMP-report mutant (g) that survived, missing stdin cases, the semgrep rule against `Command::new("sh")` | Fixed in the draft; the owner asked for another way and the snippet moved into the settings string |
+| Owner question | owner | Whether a confined session's status-line command can reach the daemon | Amendment 1: a test with only `A2AMX_ADDR` and `A2AMX_TOKEN`, a confined run in the release gate |
+| Implementation | developer | Mutant (g) was equivalent: the handler stores nothing for a non-Claude session, so a getter-only change cannot show | Amendment 2: the mutant removes both layers |
+| Implementation | developer | `i=$(cat)` strips trailing newlines, contradicting "the same bytes" | Amendment 2: `i=$(cat; echo x); i=${i%x}`, probed with dash |
+| Tester pass | tester | A broker test sent `now + 691201`; the daemon clock advanced a second and the value became the inclusive 8-day boundary (failed 2 of 3 runs and the final full run); the developer's single full run was green | Margin of 120 s; the exact boundary stays in the pure quota test; 10 repeat runs, 0 failures |
+| Architect review | architect (mutant) | Weekly window falling back to the five-hour window when `seven_day` is absent survived every test | Five-hour-only and weekly-only conversion assertions added |
+| Architect review | architect | The spec said `limit_reached` stays from the screen scrape; the Claude scrape never sets it, so a mutant I raised was equivalent and its clause was dead | Amendment 3: clause and sentence removed |
+| Architect review | architect | The developer's diff deleted an unrelated `shortcut:` comment and clippy allow in `src/wire.rs` by accident | Restored |
+
+Open: release gate 4 (tester on the next rc, including one confined Claude session) and the live check of a fresh install; the tester's confined probe could not run in its sandbox (`Read-only file system`).

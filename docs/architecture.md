@@ -525,7 +525,7 @@ machine; there is no central-versus-host split yet.
   ungrouped sessions show `-`. `--team` and `--as` are client-side AND filters; the picker
   remains the unfiltered operator view and presents team sections rather than a TEAM column.
 
-**Quota.** The daemon reads the last three screen rows of running Claude and Codex
+**Quota.** A Claude session started by a2amx has a `statusLine` command injected into its settings (`a2amx statusline`): Claude Code pipes its status-line JSON to it, the command converts `rate_limits.five_hour` and `rate_limits.seven_day` (used percent, `resets_at`) to percent left, rounding up, and reports them to the daemon with the session's own token (500 ms timeout, every failure ignored), and prints `5h N% left 7d N% left` as the footer. A user's own status line, found in Claude Code's precedence order (`--settings`, project local, project, user config directory), is wrapped: the report runs first and the user's command then gets the same input and keeps its output and exit status. The daemon keeps each window until its own `resets_at` and prefers a report over the screen scrape. Without a report, and for Codex, the daemon reads the last three screen rows of running
 sessions for `5h N% left`, `weekly N% left` and `7d N% left`. For running OMP sessions it
 looks in the last 12 rows for an `Error:` row naming `usage_limit_reached`, including wrapped
 errors, and reports it as `limit_reached`. A separate poller selects the lowest-id running OMP

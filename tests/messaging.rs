@@ -201,12 +201,15 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
     assert_eq!(Harness::Claude.default_deliver(), Deliver::Auto);
     assert_eq!(Harness::Generic.default_deliver(), Deliver::Hold);
 
+    let cwd_dir = TempDir::new().expect("temporary Claude cwd");
+    let config_dir = TempDir::new().expect("temporary Claude config dir");
+    let cwd = cwd_dir.path();
     let exe = Path::new("/tmp/a2amx binary");
-    let cwd = Path::new(".");
     let argv = harness::wire_claude_argv(
         vec!["claude".into(), "--model".into(), "sonnet".into()],
         exe,
         cwd,
+        config_dir.path(),
         true,
         Some("architect"),
     )
@@ -250,11 +253,22 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
                         "timeout": 5
                     }]
                 }]
+            },
+            "statusLine": {
+                "type": "command",
+                "command": "'/tmp/a2amx binary' statusline"
             }
         })
     );
-    let peer_only = harness::wire_claude_argv(vec!["claude".into()], exe, cwd, true, None)
-        .expect("Claude argv wiring");
+    let peer_only = harness::wire_claude_argv(
+        vec!["claude".into()],
+        exe,
+        cwd,
+        config_dir.path(),
+        true,
+        None,
+    )
+    .expect("Claude argv wiring");
     let peer_index = peer_only
         .iter()
         .position(|argument| argument == "--append-system-prompt")
@@ -271,9 +285,15 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
         1
     );
 
-    let role_only =
-        harness::wire_claude_argv(vec!["claude".into()], exe, cwd, false, Some("consultant"))
-            .expect("Claude argv wiring");
+    let role_only = harness::wire_claude_argv(
+        vec!["claude".into()],
+        exe,
+        cwd,
+        config_dir.path(),
+        false,
+        Some("consultant"),
+    )
+    .expect("Claude argv wiring");
     let role_index = role_only
         .iter()
         .position(|argument| argument == "--append-system-prompt")
@@ -290,16 +310,29 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
         1
     );
 
-    let no_prompt = harness::wire_claude_argv(vec!["claude".into()], exe, cwd, false, None)
-        .expect("Claude argv wiring");
+    let no_prompt = harness::wire_claude_argv(
+        vec!["claude".into()],
+        exe,
+        cwd,
+        config_dir.path(),
+        false,
+        None,
+    )
+    .expect("Claude argv wiring");
     assert!(
         !no_prompt
             .iter()
             .any(|argument| argument == "--append-system-prompt")
     );
-    let channel_combined =
-        harness::wire_claude_channel_argv(vec!["claude".into()], exe, cwd, true, Some("architect"))
-            .expect("Claude channel argv wiring");
+    let channel_combined = harness::wire_claude_channel_argv(
+        vec!["claude".into()],
+        exe,
+        cwd,
+        config_dir.path(),
+        true,
+        Some("architect"),
+    )
+    .expect("Claude channel argv wiring");
     let channel_index = channel_combined
         .iter()
         .position(|argument| argument == "--append-system-prompt")
@@ -315,6 +348,7 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
         vec!["claude".into()],
         exe,
         cwd,
+        config_dir.path(),
         false,
         Some("consultant"),
     )
@@ -332,6 +366,7 @@ fn harness_defaults_and_claude_argv_wiring_are_exact() {
         vec!["claude".into(), "--".into(), "positional".into()],
         exe,
         cwd,
+        config_dir.path(),
         false,
         None,
     )
@@ -360,6 +395,7 @@ fn claude_argv_shell_quotes_apostrophe_paths_exactly() {
         vec!["claude".into()],
         Path::new("/tmp/it's/a2amx"),
         Path::new("."),
+        Path::new("/nonexistent/a2amx-config"),
         false,
         None,
     )
@@ -376,6 +412,8 @@ fn claude_argv_shell_quotes_apostrophe_paths_exactly() {
 
 #[test]
 fn claude_settings_inline_preserves_user_settings_and_prompt() {
+    let cwd_dir = TempDir::new().expect("temporary Claude cwd");
+    let config_dir = TempDir::new().expect("temporary Claude config dir");
     let argv = harness::wire_claude_argv(
         vec![
             "claude".into(),
@@ -385,7 +423,8 @@ fn claude_settings_inline_preserves_user_settings_and_prompt() {
             "prompt".into(),
         ],
         Path::new("/usr/bin/a2amx"),
-        Path::new("."),
+        cwd_dir.path(),
+        config_dir.path(),
         false,
         None,
     )
@@ -404,7 +443,11 @@ fn claude_settings_inline_preserves_user_settings_and_prompt() {
             "model": "opus",
             "hooks": {"UserPromptSubmit": [{
                 "hooks": [{"type": "command", "command": "'/usr/bin/a2amx' hook", "timeout": 5}]
-            }]}
+            }]},
+            "statusLine": {
+                "type": "command",
+                "command": "'/usr/bin/a2amx' statusline"
+            }
         })
     );
     assert_eq!(&argv[7..], ["--", "prompt"]);
@@ -421,6 +464,7 @@ fn claude_settings_equal_form_and_whitespace_are_inline() {
         ],
         Path::new("/usr/bin/a2amx"),
         Path::new("."),
+        Path::new("/nonexistent/a2amx-config"),
         false,
         None,
     )
@@ -442,6 +486,7 @@ fn claude_settings_equal_form_and_whitespace_are_inline() {
         vec!["claude".into(), "--settings".into(), r#" {"a":1} "#.into()],
         Path::new("/usr/bin/a2amx"),
         Path::new("."),
+        Path::new("/nonexistent/a2amx-config"),
         false,
         None,
     )
@@ -465,6 +510,7 @@ fn claude_settings_existing_hooks_are_preserved_and_extended() {
         ],
         Path::new("/usr/bin/a2amx"),
         Path::new("."),
+        Path::new("/nonexistent/a2amx-config"),
         false,
         None,
     )
@@ -509,6 +555,7 @@ fn claude_settings_file_forms_resolve_against_session_cwd() {
             vec!["claude".into(), "--settings".into(), value],
             Path::new("/usr/bin/a2amx"),
             directory.path(),
+            Path::new("/nonexistent/a2amx-config"),
             false,
             None,
         )
@@ -542,6 +589,7 @@ fn claude_settings_last_occurrence_wins() {
         ],
         Path::new("/usr/bin/a2amx"),
         Path::new("."),
+        Path::new("/nonexistent/a2amx-config"),
         false,
         None,
     )
@@ -573,6 +621,7 @@ fn claude_settings_errors_fail_with_settings_context() {
             argv,
             Path::new("/usr/bin/a2amx"),
             directory.path(),
+            Path::new("/nonexistent/a2amx-config"),
             false,
             None,
         )
@@ -626,6 +675,7 @@ fn claude_channel_settings_merge_matches_plain_launch() {
         ],
         Path::new("/usr/bin/a2amx"),
         Path::new("."),
+        Path::new("/nonexistent/a2amx-config"),
         false,
         None,
     )
@@ -1324,4 +1374,175 @@ fn role_validation_accepts_architect_and_rejects_invalid_shapes() {
         assert!(validate_role(role).is_err(), "{role:?}");
     }
     assert!(validate_role(&"a".repeat(65)).is_err());
+}
+
+#[test]
+fn claude_status_line_precedence_and_command_metadata_are_preserved() {
+    let cwd = TempDir::new().expect("temporary Claude cwd");
+    let config = TempDir::new().expect("temporary Claude config");
+    std::fs::create_dir(cwd.path().join(".claude")).expect("Claude directory");
+    std::fs::write(
+        cwd.path().join(".claude/settings.local.json"),
+        r#"{"statusLine":{"type":"command","command":"local","padding":2,"refreshInterval":4}}"#,
+    )
+    .expect("local settings");
+    std::fs::write(
+        cwd.path().join(".claude/settings.json"),
+        r#"{"statusLine":{"type":"command","command":"project"}}"#,
+    )
+    .expect("project settings");
+    std::fs::write(
+        config.path().join("settings.json"),
+        r#"{"statusLine":{"type":"command","command":"global"}}"#,
+    )
+    .expect("global settings");
+
+    let argv = harness::wire_claude_argv(
+        vec![
+            "claude".into(),
+            "--settings".into(),
+            r#"{"statusLine":{"type":"command","command":"inline","padding":7,"refreshInterval":9}}"#.into(),
+        ],
+        Path::new("/usr/bin/a2amx"),
+        cwd.path(),
+        config.path(),
+        false,
+        None,
+    )
+    .expect("Claude argv wiring");
+    let index = argv
+        .iter()
+        .position(|argument| argument == "--settings")
+        .unwrap();
+    let settings: serde_json::Value = serde_json::from_str(&argv[index + 1]).unwrap();
+    assert_eq!(settings["statusLine"]["padding"], 7);
+    assert_eq!(settings["statusLine"]["refreshInterval"], 9);
+    assert!(
+        settings["statusLine"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("inline")
+    );
+
+    let argv = harness::wire_claude_argv(
+        vec!["claude".into()],
+        Path::new("/usr/bin/a2amx"),
+        cwd.path(),
+        config.path(),
+        false,
+        None,
+    )
+    .expect("Claude argv wiring");
+    let index = argv
+        .iter()
+        .position(|argument| argument == "--settings")
+        .unwrap();
+    let settings: serde_json::Value = serde_json::from_str(&argv[index + 1]).unwrap();
+    assert_eq!(settings["statusLine"]["padding"], 2);
+    assert_eq!(settings["statusLine"]["refreshInterval"], 4);
+    assert!(
+        settings["statusLine"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("local")
+    );
+    std::fs::remove_file(cwd.path().join(".claude/settings.local.json")).unwrap();
+    let argv = harness::wire_claude_argv(
+        vec!["claude".into()],
+        Path::new("/usr/bin/a2amx"),
+        cwd.path(),
+        config.path(),
+        false,
+        None,
+    )
+    .unwrap();
+    let index = argv
+        .iter()
+        .position(|argument| argument == "--settings")
+        .unwrap();
+    let settings: serde_json::Value = serde_json::from_str(&argv[index + 1]).unwrap();
+    assert!(
+        settings["statusLine"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("project")
+    );
+
+    std::fs::remove_file(cwd.path().join(".claude/settings.json")).unwrap();
+    let argv = harness::wire_claude_argv(
+        vec!["claude".into()],
+        Path::new("/usr/bin/a2amx"),
+        cwd.path(),
+        config.path(),
+        false,
+        None,
+    )
+    .unwrap();
+    let index = argv
+        .iter()
+        .position(|argument| argument == "--settings")
+        .unwrap();
+    let settings: serde_json::Value = serde_json::from_str(&argv[index + 1]).unwrap();
+    assert!(
+        settings["statusLine"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("global")
+    );
+}
+
+#[test]
+fn claude_status_line_invalid_files_and_shapes_are_fail_open() {
+    let cwd = TempDir::new().expect("temporary Claude cwd");
+    let config = TempDir::new().expect("temporary Claude config");
+    std::fs::create_dir(cwd.path().join(".claude")).expect("Claude directory");
+    std::fs::write(cwd.path().join(".claude/settings.local.json"), "{").expect("invalid local");
+    std::fs::write(
+        cwd.path().join(".claude/settings.json"),
+        r#"{"statusLine":{"type":"other","command":"untouched"}}"#,
+    )
+    .expect("project settings");
+    std::fs::write(config.path().join("settings.json"), "[]").expect("invalid global shape");
+
+    let argv = harness::wire_claude_argv(
+        vec!["claude".into()],
+        Path::new("/usr/bin/a2amx"),
+        cwd.path(),
+        config.path(),
+        false,
+        None,
+    )
+    .expect("Claude argv wiring");
+    let index = argv
+        .iter()
+        .position(|argument| argument == "--settings")
+        .unwrap();
+    let settings: serde_json::Value = serde_json::from_str(&argv[index + 1]).unwrap();
+    assert_eq!(
+        settings["statusLine"],
+        serde_json::json!({"type":"other","command":"untouched"})
+    );
+
+    let argv = harness::wire_claude_argv(
+        vec![
+            "claude".into(),
+            "--settings".into(),
+            r#"{"statusLine":{"type":"command","command":"bad\u0000command"}}"#.into(),
+        ],
+        Path::new("/usr/bin/a2amx"),
+        cwd.path(),
+        config.path(),
+        false,
+        None,
+    )
+    .expect("Claude argv wiring");
+    let index = argv
+        .iter()
+        .position(|argument| argument == "--settings")
+        .unwrap();
+    let settings: serde_json::Value = serde_json::from_str(&argv[index + 1]).unwrap();
+    assert_eq!(
+        settings["statusLine"],
+        serde_json::json!({"type":"command","command":"bad\u{0}command"})
+    );
 }

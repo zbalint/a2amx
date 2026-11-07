@@ -23,7 +23,7 @@ use crate::delivery;
 use crate::emulator::{Emulator, Size, window_size};
 use crate::harness::{self, Deliver, Harness};
 use crate::messaging;
-use crate::wire::{Activity, BridgeDown, ConfineInfo};
+use crate::wire::{Activity, BridgeDown, ConfineInfo, QuotaWindow};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionId(pub String);
@@ -141,6 +141,7 @@ pub(crate) struct State {
     pub last_human_input: Option<Instant>,
     pub restore: Option<String>,
     pub corrupted: u32,
+    pub quota_report: (Option<QuotaWindow>, Option<QuotaWindow>),
     pub native: NativeSlot,
 }
 
@@ -438,6 +439,7 @@ impl Session {
                 last_human_input: None,
                 restore: None,
                 corrupted: 0,
+                quota_report: (None, None),
                 native: NativeSlot::default(),
             }),
             notify: Notify::new(),
@@ -526,6 +528,34 @@ impl Session {
 
     pub fn harness(&self) -> Harness {
         self.harness
+    }
+
+    pub(crate) fn set_quota_report(
+        &self,
+        five_hour: Option<QuotaWindow>,
+        weekly: Option<QuotaWindow>,
+    ) {
+        let mut state = self.lock();
+        if five_hour.is_some() {
+            state.quota_report.0 = five_hour;
+        }
+        if weekly.is_some() {
+            state.quota_report.1 = weekly;
+        }
+    }
+
+    pub(crate) fn quota_report(&self, now_unix: u64) -> (Option<QuotaWindow>, Option<QuotaWindow>) {
+        let state = self.lock();
+        (
+            state
+                .quota_report
+                .0
+                .filter(|window| window.resets_at > now_unix),
+            state
+                .quota_report
+                .1
+                .filter(|window| window.resets_at > now_unix),
+        )
     }
 
     pub(crate) fn observe_ready(&self, state: &State) -> bool {

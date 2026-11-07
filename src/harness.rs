@@ -328,31 +328,36 @@ pub fn wire_claude_argv(
     argv: Vec<String>,
     exe: &Path,
     cwd: &Path,
+    config_dir: &Path,
     authorize_peers: bool,
     role: Option<&str>,
 ) -> anyhow::Result<Vec<String>> {
-    claude_argv(argv, exe, cwd, authorize_peers, role, false)
+    claude_argv(argv, exe, cwd, config_dir, authorize_peers, role, false)
 }
 
 pub fn wire_claude_channel_argv(
     argv: Vec<String>,
     exe: &Path,
     cwd: &Path,
+    config_dir: &Path,
     authorize_peers: bool,
     role: Option<&str>,
 ) -> anyhow::Result<Vec<String>> {
-    claude_argv(argv, exe, cwd, authorize_peers, role, true)
+    claude_argv(argv, exe, cwd, config_dir, authorize_peers, role, true)
 }
 
 fn claude_argv(
     argv: Vec<String>,
     exe: &Path,
     cwd: &Path,
+    config_dir: &Path,
     authorize_peers: bool,
     role: Option<&str>,
     channel: bool,
 ) -> anyhow::Result<Vec<String>> {
     let (argv, user_settings) = take_user_settings(argv, cwd)?;
+    let resolved_status_line = resolve_status_line(user_settings.as_ref(), cwd, config_dir);
+    let status_line = build_status_line(&resolved_status_line, exe);
     let config = serde_json::json!({
         "mcpServers": {
             "a2amx": {
@@ -361,7 +366,7 @@ fn claude_argv(
             }
         }
     });
-    let settings = serde_json::json!({
+    let mut settings = serde_json::json!({
         "hooks": {
             "UserPromptSubmit": [{
                 "hooks": [{
@@ -372,6 +377,7 @@ fn claude_argv(
             }]
         }
     });
+    settings["statusLine"] = status_line;
     let settings = match user_settings {
         Some(user_settings) => merge_settings(user_settings, settings)?,
         None => settings,
@@ -394,6 +400,72 @@ fn claude_argv(
     extras.push(settings.to_string());
 
     Ok(insert_extras(argv, extras))
+}
+
+fn resolve_status_line(
+    user_settings: Option<&serde_json::Value>,
+    cwd: &Path,
+    config_dir: &Path,
+) -> Option<serde_json::Value> {
+    if let Some(status_line) = user_settings.and_then(|settings| settings.get("statusLine")) {
+        return Some(status_line.clone());
+    }
+    // shortcut: only cwd/.claude is read; add project-root and git-root discovery if Claude's
+    // status-line precedence ever needs to follow those roots.
+    for path in [
+        cwd.join(".claude/settings.local.json"),
+        cwd.join(".claude/settings.json"),
+    ] {
+        if let Some(status_line) = read_status_line_file(&path) {
+            return Some(status_line);
+        }
+    }
+    if !config_dir.as_os_str().is_empty() {
+        return read_status_line_file(&config_dir.join("settings.json"));
+    }
+    None
+}
+
+fn read_status_line_file(path: &Path) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let settings = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    settings.get("statusLine").cloned()
+}
+
+fn build_status_line(resolved: &Option<serde_json::Value>, exe: &Path) -> serde_json::Value {
+    let Some(status_line) = resolved else {
+        return serde_json::json!({
+            "type": "command",
+            "command": format!("{} statusline", shell_quote(exe.to_string_lossy().as_ref())),
+        });
+    };
+    let Some(object) = status_line.as_object() else {
+        return status_line.clone();
+    };
+    let Some(command) = object.get("command").and_then(serde_json::Value::as_str) else {
+        return status_line.clone();
+    };
+    if object.get("type").and_then(serde_json::Value::as_str) != Some("command")
+        || command.as_bytes().contains(&0)
+    {
+        return status_line.clone();
+    }
+    let executable = shell_quote(exe.to_string_lossy().as_ref());
+    let command = format!(
+        "i=$(cat; echo x); i=${{i%x}}; printf '%s' \"$i\" | {executable} statusline --report; printf '%s' \"$i\" | ({command}\n)"
+    );
+    let mut chained = serde_json::Map::new();
+    chained.insert(
+        "type".to_owned(),
+        serde_json::Value::String("command".to_owned()),
+    );
+    chained.insert("command".to_owned(), serde_json::Value::String(command));
+    for key in ["padding", "refreshInterval"] {
+        if let Some(value) = object.get(key) {
+            chained.insert(key.to_owned(), value.clone());
+        }
+    }
+    serde_json::Value::Object(chained)
 }
 
 fn take_user_settings(
@@ -469,6 +541,10 @@ fn merge_settings(
     let user_object = user_settings
         .as_object_mut()
         .ok_or_else(|| anyhow!("--settings JSON must be an object"))?;
+    user_object.insert(
+        "statusLine".to_owned(),
+        a2amx_settings["statusLine"].clone(),
+    );
     match user_object.get_mut("hooks") {
         None => {
             user_object.insert("hooks".to_owned(), a2amx_settings["hooks"].clone());

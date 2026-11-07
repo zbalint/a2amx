@@ -35,8 +35,8 @@ use crate::session::{
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, ExplainInfo,
-    HoldInfo, MessageInfo, QuotaInfo, Request, ResetVerdict, Response, ServerFrame, SessionSummary,
-    StatusInfo, TeamMember,
+    HoldInfo, MessageInfo, QuotaInfo, QuotaWindow, Request, ResetVerdict, Response, ServerFrame,
+    SessionSummary, StatusInfo, TeamMember,
 };
 
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
@@ -1332,6 +1332,37 @@ impl Runtime {
         })
     }
 
+    async fn report_quota(
+        &self,
+        session_id: &str,
+        five_hour: Option<QuotaWindow>,
+        weekly: Option<QuotaWindow>,
+    ) -> anyhow::Result<Response> {
+        let now = store::now();
+        let latest = now.saturating_add(8 * 24 * 60 * 60);
+        for window in [five_hour, weekly].into_iter().flatten() {
+            if window.left > 100 {
+                return Ok(Response::Error {
+                    message: "quota left must be at most 100".into(),
+                });
+            }
+            if window.resets_at > latest {
+                return Ok(Response::Error {
+                    message: "quota reset is too far in the future".into(),
+                });
+            }
+        }
+        let Some((_, session)) = lookup(self, session_id) else {
+            return Ok(Response::Error {
+                message: "session is unavailable".into(),
+            });
+        };
+        if session.harness() == Harness::Claude {
+            session.set_quota_report(five_hour, weekly);
+        }
+        Ok(Response::Ok)
+    }
+
     fn is_awaiting_receipt(&self, message: &Message, session_id: &str) -> bool {
         message.boot == self.boot
             && message.recipient_session == session_id
@@ -2100,6 +2131,12 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 },
                 Role::Session(id) => runtime.report_prompt(id, prompt).await?,
             },
+            Request::ReportQuota { five_hour, weekly } => match &role {
+                Role::Admin => Response::Error {
+                    message: "report_quota needs a session token".into(),
+                },
+                Role::Session(id) => runtime.report_quota(id, five_hour, weekly).await?,
+            },
             Request::BridgeAttach => {
                 if let Some(result) = bridge_attach(&mut connection, &runtime, &role).await? {
                     result
@@ -2160,6 +2197,7 @@ fn session_token_permitted(request: &Request) -> bool {
             | Request::ListAgents
             | Request::MessageStatus { .. }
             | Request::ReportPrompt { .. }
+            | Request::ReportQuota { .. }
             | Request::BridgeAttach
     )
 }
@@ -2584,6 +2622,17 @@ fn session_quota(
         return None;
     }
     let screen = quota::read(&session.lock().emulator.screen(), harness);
+    if harness == Harness::Claude {
+        let (five_hour, weekly) = session.quota_report(store::now());
+        let mut quota = screen.unwrap_or_default();
+        if let Some(window) = five_hour {
+            quota.five_hour_left = Some(window.left);
+        }
+        if let Some(window) = weekly {
+            quota.weekly_left = Some(window.left);
+        }
+        return (quota.five_hour_left.is_some() || quota.weekly_left.is_some()).then_some(quota);
+    }
     if harness != Harness::Omp {
         return screen;
     }

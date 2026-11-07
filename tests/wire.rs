@@ -187,6 +187,22 @@ fn request_json_uses_exact_tagged_shapes() {
         serde_json::from_str::<Request>(&screen_json).ok(),
         Some(screen)
     );
+    let quota = Request::ReportQuota {
+        five_hour: Some(a2amx::wire::QuotaWindow {
+            left: 77,
+            resets_at: 2000,
+        }),
+        weekly: None,
+    };
+    let quota_json = serde_json::to_string(&quota).unwrap_or_default();
+    assert_eq!(
+        quota_json,
+        r#"{"type":"report_quota","five_hour":{"left":77,"resets_at":2000},"weekly":null}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Request>(&quota_json).ok(),
+        Some(quota)
+    );
 }
 
 #[test]
@@ -1287,4 +1303,24 @@ fn confine_request_round_trips_and_defaults_missing_fields() {
         panic!("old confine request tag");
     };
     assert!(confine.grants.is_empty());
+}
+
+#[test]
+fn report_quota_request_round_trips() {
+    let request = Request::ReportQuota {
+        five_hour: Some(a2amx::wire::QuotaWindow {
+            left: 77,
+            resets_at: 2000,
+        }),
+        weekly: Some(a2amx::wire::QuotaWindow {
+            left: 59,
+            resets_at: 2000,
+        }),
+    };
+    let encoded = serde_json::to_string(&request).unwrap();
+    assert_eq!(
+        encoded,
+        r#"{"type":"report_quota","five_hour":{"left":77,"resets_at":2000},"weekly":{"left":59,"resets_at":2000}}"#
+    );
+    assert_eq!(serde_json::from_str::<Request>(&encoded).unwrap(), request);
 }

@@ -9,6 +9,44 @@ use crate::emulator::Screen;
 use crate::harness::Harness;
 use crate::wire::QuotaInfo;
 
+/// One Claude rate-limit window converted to percent remaining.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClaudeWindow {
+    pub left: u8,
+    pub resets_at: u64,
+}
+
+/// Claude's independently optional five-hour and weekly rate-limit windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClaudeRateLimits {
+    pub five_hour: Option<ClaudeWindow>,
+    pub weekly: Option<ClaudeWindow>,
+}
+
+const CLAUDE_WINDOW_MAX_SECS: u64 = 8 * 24 * 60 * 60;
+
+/// Convert Claude Code's status-line rate-limit payload into bounded windows.
+pub fn from_claude_rate_limits(input: &Value, now_unix: u64) -> Option<ClaudeRateLimits> {
+    let limits = input.get("rate_limits")?;
+    let five_hour = claude_window(limits.get("five_hour"), now_unix);
+    let weekly = claude_window(limits.get("seven_day"), now_unix);
+    (five_hour.is_some() || weekly.is_some()).then_some(ClaudeRateLimits { five_hour, weekly })
+}
+
+fn claude_window(value: Option<&Value>, now_unix: u64) -> Option<ClaudeWindow> {
+    let object = value?.as_object()?;
+    let used = object.get("used_percentage")?.as_f64()?;
+    if !used.is_finite() || !(0.0..=100.0).contains(&used) {
+        return None;
+    }
+    let resets_at = object.get("resets_at")?.as_u64()?;
+    if resets_at <= now_unix || resets_at > now_unix.saturating_add(CLAUDE_WINDOW_MAX_SECS) {
+        return None;
+    }
+    let left = (100.0 - used).ceil().clamp(0.0, 100.0) as u8;
+    Some(ClaudeWindow { left, resets_at })
+}
+
 #[derive(Debug, Deserialize)]
 struct OmpUsage {
     #[serde(default)]

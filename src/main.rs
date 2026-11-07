@@ -31,6 +31,7 @@ use a2amx::picker::{
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::quota;
 use a2amx::status;
+use a2amx::statusline;
 use a2amx::team::{self, TeamSession};
 use a2amx::wire::{
     Activity, ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo,
@@ -120,6 +121,11 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 .map(|_| std::process::ExitCode::SUCCESS);
         }
         Command::Hook => return hook::run().await.map(|_| std::process::ExitCode::SUCCESS),
+        Command::Statusline { report } => {
+            return statusline::run(*report)
+                .await
+                .map(|_| std::process::ExitCode::SUCCESS);
+        }
         Command::OmpBridge => return bridge::run().await.map(|_| std::process::ExitCode::SUCCESS),
         Command::Confine {
             action: ConfineAction::List,
@@ -210,7 +216,11 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         Command::Confine {
             action: ConfineAction::Show { session },
         } => run_confine_show(home, session).await,
-        Command::Confine { .. } | Command::Mcp { .. } | Command::Hook | Command::OmpBridge => {
+        Command::Confine { .. }
+        | Command::Mcp { .. }
+        | Command::Hook
+        | Command::Statusline { .. }
+        | Command::OmpBridge => {
             unreachable!("early dispatch returned before resolving home")
         }
     };
@@ -659,6 +669,12 @@ async fn wired_command(
         Harness::Claude => {
             let exe = std::env::current_exe()?;
             let wire_cwd = cwd.to_owned();
+            let wire_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude"))
+                })
+                .unwrap_or_default();
             let wire_role = role.map(str::to_owned);
             let authorize_peers = !no_authorize_peers;
             if no_channel {
@@ -667,6 +683,7 @@ async fn wired_command(
                         command,
                         &exe,
                         &wire_cwd,
+                        &wire_config_dir,
                         authorize_peers,
                         wire_role.as_deref(),
                     )
@@ -678,6 +695,7 @@ async fn wired_command(
                         command,
                         &exe,
                         &wire_cwd,
+                        &wire_config_dir,
                         authorize_peers,
                         wire_role.as_deref(),
                     )

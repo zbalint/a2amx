@@ -137,6 +137,12 @@ impl ActivityWatch {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuotaWindow {
+    pub left: u8,
+    pub resets_at: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 // shortcut: requests are short-lived and not stored in bulk; box the NewSession fields if Request is ever held in a hot collection.
@@ -219,6 +225,10 @@ pub enum Request {
     },
     ReportPrompt {
         prompt: String,
+    },
+    ReportQuota {
+        five_hour: Option<QuotaWindow>,
+        weekly: Option<QuotaWindow>,
     },
     ListMessages {
         session: Option<String>,

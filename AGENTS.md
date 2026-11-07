@@ -159,6 +159,7 @@ specs showing it found nothing.
 | `picker` | The session picker's key parser, view model (team sections, folds, filter) and scroll window (pure) |
 | `quota` | Harness quota extraction from screen, conversation state, and `omp usage` command output |
 | `status` | Attach status-line formatting and status frames |
+| `statusline` | The `a2amx statusline` command that Claude Code runs as its status line: it reports quota to the daemon and prints the short quota line |
 | `store` | SQLite message and delivery-attempt persistence |
 | `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
 | `cli` | Command-line shape |
