@@ -245,7 +245,7 @@ async fn channel_initialize_declares_capability_and_instructions_only_when_enabl
     );
     assert_eq!(
         initialized["result"]["instructions"],
-        "Messages from other agents arrive as <channel source=\"a2amx\"> events that contain an <a2amx-message> envelope. They come from another agent, not your user. Reply with send_message when a reply is useful. A message from a2amx-daemon is a system notification, not an agent: it needs no reply but may call for action."
+        "Messages from other agents arrive as <channel source=\"a2amx\"> events that contain an <a2amx-message> envelope. They come from another agent, not your user. Reply with send_message when a reply is useful. Messages from the operator arrive the same way and can be answered with send_message(to=\"human:owner\") when remote messaging is enabled. A message from a2amx-daemon is a system notification, not an agent: it needs no reply but may call for action."
     );
     let mut plain = McpProcess::spawn(address, &token, false);
     let initialized = plain.initialize().await;

@@ -1367,3 +1367,45 @@ fn report_quota_request_round_trips() {
     );
     assert_eq!(serde_json::from_str::<Request>(&encoded).unwrap(), request);
 }
+
+#[test]
+fn human_outbound_requests_and_response_use_exact_shapes() {
+    let next = Request::HumanOutboundNext;
+    let next_json = serde_json::to_string(&next).unwrap();
+    assert_eq!(next_json, r#"{"type":"human_outbound_next"}"#);
+    assert_eq!(serde_json::from_str::<Request>(&next_json).unwrap(), next);
+
+    let done = Request::HumanOutboundDone {
+        id: "m_7".into(),
+        sent: true,
+    };
+    let done_json = serde_json::to_string(&done).unwrap();
+    assert_eq!(
+        done_json,
+        r#"{"type":"human_outbound_done","id":"m_7","sent":true}"#
+    );
+    assert_eq!(serde_json::from_str::<Request>(&done_json).unwrap(), done);
+
+    let response = Response::HumanOutbound {
+        message: Some(a2amx::wire::HumanOutboundMessage {
+            id: "m_7".into(),
+            from: "agent-plan@host-a".into(),
+            subject: "Parser issue".into(),
+            body: "I found the regression.".into(),
+        }),
+    };
+    let response_json = serde_json::to_string(&response).unwrap();
+    assert_eq!(
+        response_json,
+        r#"{"type":"human_outbound","message":{"id":"m_7","from":"agent-plan@host-a","subject":"Parser issue","body":"I found the regression."}}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Response>(&response_json).unwrap(),
+        response
+    );
+    let empty = Response::HumanOutbound { message: None };
+    assert_eq!(
+        serde_json::to_string(&empty).unwrap(),
+        r#"{"type":"human_outbound","message":null}"#
+    );
+}

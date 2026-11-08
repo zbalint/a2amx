@@ -231,7 +231,7 @@ async fn mcp_initialize_tools_and_message_calls() {
             },
             {
                 "name": "send_message",
-                "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. If recipient_quota is present, the recipient's harness reports that quota is used up and it may not answer until the quota resets. Plain text; do not write the text of a paste-wrapper tag in a body.",
+                "description": "Send a message to another agent session or to the operator at human:owner. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. If recipient_quota is present, the recipient's harness reports that quota is used up and it may not answer until the quota resets. Plain text; do not write the text of a paste-wrapper tag in a body. This works only for an agent the operator enabled for remote messaging.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

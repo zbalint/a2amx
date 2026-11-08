@@ -24,7 +24,7 @@ use crate::activity::{Thresholds, Tracker};
 use crate::client::Framed;
 use crate::codex;
 use crate::confine::{self, Host, Plan};
-use crate::delivery::{AnyChannel, Channel};
+use crate::delivery::{AnyChannel, Channel, RecheckFn};
 use crate::emulator::Size;
 use crate::harness::{self, Deliver, Harness};
 use crate::messaging::{self, Limits, MessageState, code, display_duration};
@@ -35,8 +35,8 @@ use crate::session::{
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, ExplainInfo,
-    HoldInfo, MessageInfo, QuotaInfo, QuotaWindow, Request, ResetVerdict, Response, ServerFrame,
-    SessionSummary, StatusInfo, TeamMember,
+    HoldInfo, HumanOutboundMessage, MessageInfo, QuotaInfo, QuotaWindow, Request, ResetVerdict,
+    Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
 };
 
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
@@ -94,6 +94,10 @@ struct Runtime {
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     leases: Mutex<PresenceLeases>,
     new_session_gate: tokio::sync::Mutex<()>,
+    // shortcut: a stopped gateway leaves messages delivering until daemon restart;
+    // each stuck message consumes the shared human queue limit, so add a timeout
+    // when gateway flakiness proves this path needs recovery.
+    human_attempts: Mutex<HashMap<i64, i64>>,
     deliveries: Mutex<Vec<JoinHandle<()>>>,
     stop_requested: tokio::sync::Notify,
     stop_now: AtomicBool,
@@ -770,10 +774,26 @@ impl Runtime {
     fn start_session_tasks(self: &Arc<Self>, session: Arc<Session>, channel: bool) {
         let store = self.store.clone();
         let boot = self.boot.clone();
+        let runtime = Arc::downgrade(self);
+        let recheck: RecheckFn = Arc::new(move |message| {
+            if message.sender_session != messaging::HUMAN_SESSION {
+                return None;
+            }
+            let Some(runtime) = runtime.upgrade() else {
+                return Some("recipient is no longer eligible for remote messaging");
+            };
+            let Some((_, recipient)) = lookup(&runtime, &message.recipient_session) else {
+                return Some("recipient is no longer eligible for remote messaging");
+            };
+            runtime
+                .remote_ineligible(&recipient, Instant::now(), messaging::Direction::ToAgent)
+                .map(|(_, detail)| detail)
+        });
         let mut tasks = vec![tokio::spawn(crate::delivery::run(
             AnyChannel::for_session(session.clone()),
             store.clone(),
             boot.clone(),
+            recheck,
         ))];
         tasks.push(tokio::spawn(self.clone().observe_exit(session.clone())));
         tasks.push(tokio::spawn(self.clone().sample_activity(session.clone())));
@@ -1183,11 +1203,40 @@ impl Runtime {
         if let Err(error) = messaging::validate_message(&subject, &body) {
             return failed(error.code, &error.message);
         }
-        let Some(recipient) = self.recipient(&to) else {
-            return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
-        };
         let Some((_, sender)) = lookup(self, sender_id) else {
             return failed(code::INTERNAL, "sender session is unavailable");
+        };
+        if to == messaging::HUMAN_SESSION {
+            if let Some((error_code, message)) =
+                self.remote_ineligible(&sender, Instant::now(), messaging::Direction::ToHuman)
+            {
+                return failed(error_code, message);
+            }
+            let new = NewMessage {
+                boot: self.boot.clone(),
+                sender_session: sender_id.into(),
+                sender_address: messaging::address(sender.name(), sender_id, &self.host_name),
+                recipient_session: messaging::HUMAN_SESSION.into(),
+                recipient_address: messaging::HUMAN_SESSION.into(),
+                subject,
+                body,
+            };
+            return match self.insert_message_rate_limited(sender_id, new).await {
+                Ok(Some(seq)) => Response::Accepted {
+                    id: format!("m_{seq}"),
+                    recipient_hold: None,
+                    recipient_quota: None,
+                },
+                Ok(None) => failed(code::RATE_LIMITED, "sender rate limit reached"),
+                Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
+                Err(InsertError::Internal(error)) => {
+                    tracing::error!(%error, "message acceptance failed");
+                    failed(code::INTERNAL, "message storage failed")
+                }
+            };
+        }
+        let Some(recipient) = self.recipient(&to) else {
+            return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
         };
         if !messaging::visible(sender.party(), recipient.party()) {
             return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
@@ -1197,17 +1246,6 @@ impl Runtime {
         }
         if recipient.exit_code().is_some() {
             return failed(code::RECIPIENT_EXITED, "recipient has exited");
-        }
-        let mut rate = self.rate.lock().await;
-        let timestamps = rate.entry(sender_id.into()).or_default();
-        while timestamps
-            .front()
-            .is_some_and(|time| time.elapsed() > Duration::from_secs(60))
-        {
-            timestamps.pop_front();
-        }
-        if timestamps.len() >= self.limits.rate_per_minute as usize {
-            return failed(code::RATE_LIMITED, "sender rate limit reached");
         }
         let new = NewMessage {
             boot: self.boot.clone(),
@@ -1222,9 +1260,8 @@ impl Runtime {
             subject,
             body,
         };
-        match self.store.insert_message(new).await {
-            Ok(seq) => {
-                timestamps.push_back(Instant::now());
+        match self.insert_message_rate_limited(sender_id, new).await {
+            Ok(Some(seq)) => {
                 recipient.message_notify().notify_one();
                 Response::Accepted {
                     id: format!("m_{seq}"),
@@ -1240,12 +1277,34 @@ impl Runtime {
                         .map(|window| format!("{window} quota exhausted")),
                 }
             }
+            Ok(None) => failed(code::RATE_LIMITED, "sender rate limit reached"),
             Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
             Err(InsertError::Internal(error)) => {
                 tracing::error!(%error, "message acceptance failed");
                 failed(code::INTERNAL, "message storage failed")
             }
         }
+    }
+
+    async fn insert_message_rate_limited(
+        &self,
+        sender_id: &str,
+        new: NewMessage,
+    ) -> std::result::Result<Option<i64>, InsertError> {
+        let mut rate = self.rate.lock().await;
+        let timestamps = rate.entry(sender_id.into()).or_default();
+        while timestamps
+            .front()
+            .is_some_and(|time| time.elapsed() > Duration::from_secs(60))
+        {
+            timestamps.pop_front();
+        }
+        if timestamps.len() >= self.limits.rate_per_minute as usize {
+            return Ok(None);
+        }
+        let sequence = self.store.insert_message(new).await?;
+        timestamps.push_back(Instant::now());
+        Ok(Some(sequence))
     }
 
     fn remote_members(&self, team: &str) -> Vec<(SessionId, String, messaging::RemoteMode)> {
@@ -1381,34 +1440,43 @@ impl Runtime {
         &self,
         session: &Session,
         now: Instant,
+        direction: messaging::Direction,
     ) -> Option<(&'static str, &'static str)> {
         if session.exit_code().is_some() {
-            Some((code::RECIPIENT_EXITED, "recipient has exited"))
-        } else if !session.confined() {
-            Some((
+            return Some((code::RECIPIENT_EXITED, "recipient has exited"));
+        }
+        if !session.confined() {
+            return Some((
                 code::NOT_PERMITTED,
                 "remote messaging needs a confined session",
-            ))
-        } else {
-            match session.remote() {
-                Some(messaging::RemoteMode::Both) => {
-                    let Some(team) = session.team() else {
-                        return Some((
-                            code::NOT_PERMITTED,
-                            "remote messaging is not active for this team; start it at the computer",
-                        ));
-                    };
-                    (!self.lease_valid(&team.name, &session.id().0, now)).then_some((
-                        code::NOT_PERMITTED,
-                        "remote messaging is not active for this team; start it at the computer",
-                    ))
-                }
-                None | Some(messaging::RemoteMode::Send) => Some((
-                    code::NOT_PERMITTED,
-                    "remote messages to this session are not enabled",
-                )),
-            }
+            ));
         }
+        let enabled = match direction {
+            messaging::Direction::ToAgent => match session.remote() {
+                None | Some(messaging::RemoteMode::Send) => false,
+                Some(messaging::RemoteMode::Both) => true,
+            },
+            messaging::Direction::ToHuman => match session.remote() {
+                None => false,
+                Some(messaging::RemoteMode::Send | messaging::RemoteMode::Both) => true,
+            },
+        };
+        if !enabled {
+            return Some((
+                code::NOT_PERMITTED,
+                "remote messages to this session are not enabled",
+            ));
+        }
+        let Some(team) = session.team() else {
+            return Some((
+                code::NOT_PERMITTED,
+                "remote messaging is not active for this team; start it at the computer",
+            ));
+        };
+        (!self.lease_valid(&team.name, &session.id().0, now)).then_some((
+            code::NOT_PERMITTED,
+            "remote messaging is not active for this team; start it at the computer",
+        ))
     }
 
     async fn human_inbound(&self, to: String, body: String) -> Response {
@@ -1418,7 +1486,9 @@ impl Runtime {
         let Some(recipient) = self.recipient(&to) else {
             return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
         };
-        if let Some((error_code, message)) = self.remote_ineligible(&recipient, Instant::now()) {
+        if let Some((error_code, message)) =
+            self.remote_ineligible(&recipient, Instant::now(), messaging::Direction::ToAgent)
+        {
             return failed(error_code, message);
         }
         let new = NewMessage {
@@ -1447,6 +1517,109 @@ impl Runtime {
             Err(InsertError::Internal(error)) => {
                 tracing::error!(%error, "human message acceptance failed");
                 failed(code::INTERNAL, "message storage failed")
+            }
+        }
+    }
+
+    async fn fail_human_bound(&self, seq: i64, detail: &'static str) -> anyhow::Result<()> {
+        if let Some(attempt) = self.store.begin_attempt(seq).await? {
+            self.store
+                .finish_attempt(seq, attempt, "failed", Some(detail))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn next_eligible_human(&self) -> anyhow::Result<Option<(Message, i64)>> {
+        for _ in 0..self.limits.max_pending_per_recipient {
+            let Some(message) = self
+                .store
+                .next_pending(&self.boot, messaging::HUMAN_SESSION)
+                .await?
+            else {
+                return Ok(None);
+            };
+            let eligible = lookup(self, &message.sender_session)
+                .map(|(_, sender)| {
+                    self.remote_ineligible(&sender, Instant::now(), messaging::Direction::ToHuman)
+                        .is_none()
+                })
+                .unwrap_or(false);
+            if !eligible {
+                self.fail_human_bound(
+                    message.seq,
+                    "sender is no longer eligible for remote messaging",
+                )
+                .await?;
+                continue;
+            }
+            let Some(attempt) = self.store.begin_attempt(message.seq).await? else {
+                continue;
+            };
+            return Ok(Some((message, attempt)));
+        }
+        Ok(None)
+    }
+
+    async fn human_outbound_next(&self) -> Response {
+        match self.next_eligible_human().await {
+            Ok(Some((message, attempt))) => {
+                self.human_attempts
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(message.seq, attempt);
+                Response::HumanOutbound {
+                    message: Some(HumanOutboundMessage {
+                        id: format!("m_{}", message.seq),
+                        from: message.sender_address,
+                        subject: message.subject,
+                        body: message.body,
+                    }),
+                }
+            }
+            Ok(None) => Response::HumanOutbound { message: None },
+            Err(error) => {
+                tracing::error!(%error, "human outbound lookup failed");
+                Response::Error {
+                    message: "human outbound lookup failed".into(),
+                }
+            }
+        }
+    }
+
+    async fn human_outbound_done(&self, id: String, sent: bool) -> Response {
+        let Some(seq) = parse_message_id(&id) else {
+            return Response::Error {
+                message: "unknown message".into(),
+            };
+        };
+        let Some(attempt) = self
+            .human_attempts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&seq)
+        else {
+            return Response::Error {
+                message: "unknown message".into(),
+            };
+        };
+        let outcome = if sent { "submitted" } else { "failed" };
+        let detail = (!sent).then_some("the gateway could not send it");
+        match self
+            .store
+            .finish_attempt(seq, attempt, outcome, detail)
+            .await
+        {
+            Ok(()) => Response::Ok,
+            Err(error) => {
+                self.human_attempts
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(seq, attempt);
+                tracing::error!(%error, "human outbound result failed");
+                Response::Error {
+                    message: "human outbound result failed".into(),
+                }
             }
         }
     }
@@ -2056,6 +2229,7 @@ impl Daemon {
             rate: tokio::sync::Mutex::new(HashMap::new()),
             leases: Mutex::new(PresenceLeases::default()),
             new_session_gate: tokio::sync::Mutex::new(()),
+            human_attempts: Mutex::new(HashMap::new()),
             deliveries: Mutex::new(Vec::new()),
             stop_requested: tokio::sync::Notify::new(),
             stop_now: AtomicBool::new(false),
@@ -2435,6 +2609,8 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
             }
             Request::MessageStatus { id } => runtime.message_status(&role, &id).await?,
             Request::HumanInbound { to, body } => runtime.human_inbound(to, body).await,
+            Request::HumanOutboundNext => runtime.human_outbound_next().await,
+            Request::HumanOutboundDone { id, sent } => runtime.human_outbound_done(id, sent).await,
             Request::IssueLeaseCode { team } => runtime.issue_lease_code(team).await?,
             Request::RedeemLeaseCode { code } => runtime.redeem_lease_code(code),
             Request::ListMessages { session, state } => {
@@ -2476,10 +2652,16 @@ fn request_permitted(role: &Role, request: &Request) -> bool {
             | Request::CancelMessage { .. }
             | Request::BridgeAttach
             | Request::IssueLeaseCode { .. } => true,
-            Request::HumanInbound { .. } | Request::RedeemLeaseCode { .. } => false,
+            Request::HumanInbound { .. }
+            | Request::HumanOutboundNext
+            | Request::HumanOutboundDone { .. }
+            | Request::RedeemLeaseCode { .. } => false,
         },
         Role::Gateway => match request {
-            Request::HumanInbound { .. } | Request::RedeemLeaseCode { .. } => true,
+            Request::HumanInbound { .. }
+            | Request::HumanOutboundNext
+            | Request::HumanOutboundDone { .. }
+            | Request::RedeemLeaseCode { .. } => true,
             Request::Hello { .. }
             | Request::Confine { .. }
             | Request::NewSession { .. }
@@ -2520,6 +2702,8 @@ fn request_permitted(role: &Role, request: &Request) -> bool {
             | Request::Explain { .. }
             | Request::Shutdown { .. }
             | Request::HumanInbound { .. }
+            | Request::HumanOutboundNext
+            | Request::HumanOutboundDone { .. }
             | Request::IssueLeaseCode { .. }
             | Request::RedeemLeaseCode { .. }
             | Request::ListMessages { .. }

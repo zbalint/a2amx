@@ -93,3 +93,20 @@ In `Runtime::send_message`, a branch for `to == messaging::HUMAN_SESSION` (exact
 ## 5. Out of scope
 
 The Discord process, daemon-wide rate limits and body-size splitting (3dj), `message_status` showing the human, showing the lease or the mode in `a2amx list`, per-agent shares of the shared `human:owner` queue, docs and changelog.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review `m_6066`) model not reported; developer and tester openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed.
+
+BLOCKED/amend cycles: 0.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | the spec said `failed`, but the stored state is `undeliverable` | spec corrected before lock |
+| draft review | consultant | `tests/mcp.rs` and `tests/claude_channel.rs` pin the changed MCP text and were outside the scope | added to the scope |
+| draft review | consultant | `gateway_other_requests` is the gateway's refused list, not its permitted one | acceptance corrected |
+| draft review | consultant | no seam gave a test a confined session's token; send order, shared rate-limit helper, Next race rule, recheck placement, queue shared by all agents unspecified | spec amended before lock |
+| tester pass | tester | the ToHuman no-team guard could be removed without any test failing | test added by the developer |
+| tester pass | tester | a rate-limit timestamp pushed before a failing insert, and the `begin_attempt` race in Next, are not killed | accepted gaps: pre-existing behaviour, no deterministic public seam; 3dj may cover the first |
+| tester pass | tester, developer | the developer edited tests after the tester started (coordination slip: the architect had not told the developer to stop) | tester re-based on a named snapshot |
+| architect review | architect | missing blank lines in `delivery.rs` and `wire.rs` | fixed by the developer |

@@ -12,7 +12,9 @@ use crate::codex::{CallError, Link, Rpc};
 use crate::harness::{Deliver, Harness};
 use crate::messaging::{COOLDOWN, PASTE_GAP, paste_bytes};
 use crate::session::{Delivery, DeliveryOutcome, Hold, Session};
-use crate::store::Store;
+use crate::store::{Message, Store};
+
+pub(crate) type RecheckFn = Arc<dyn Fn(&Message) -> Option<&'static str> + Send + Sync>;
 
 /// One way of putting a committed message into a recipient session.
 pub(crate) trait Channel: Send + Sync {
@@ -393,7 +395,7 @@ pub(crate) fn hold_name(hold: Hold) -> &'static str {
     }
 }
 
-pub(crate) async fn run<C: Channel>(channel: C, store: Store, boot: String) {
+pub(crate) async fn run<C: Channel>(channel: C, store: Store, boot: String, recheck: RecheckFn) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     loop {
         let messages = channel.message_notify().notified();
@@ -421,6 +423,17 @@ pub(crate) async fn run<C: Channel>(channel: C, store: Store, boot: String) {
                 .has_earlier_open(&boot, channel.session_id(), head.seq)
                 .await?
             {
+                return Ok(true);
+            }
+            if head.sender_session == crate::messaging::HUMAN_SESSION
+                && let Some(detail) = recheck(&head)
+            {
+                if let Some(attempt) = store.begin_attempt(head.seq).await? {
+                    store
+                        .finish_attempt(head.seq, attempt, "failed", Some(detail))
+                        .await?;
+                    channel.message_notify().notify_one();
+                }
                 return Ok(true);
             }
             let Some(ticket) = channel.begin().await else {
@@ -609,6 +622,7 @@ mod tests {
             FakeChannel(state.clone()),
             store.clone(),
             "boot-a".into(),
+            Arc::new(|_| None),
         ));
         wait_state(&store, seq, "submitted").await?;
         assert_eq!(
@@ -636,6 +650,7 @@ mod tests {
             FakeChannel(state.clone()),
             store.clone(),
             "boot-a".into(),
+            Arc::new(|_| None),
         ));
         wait_state(&store, seq, "submitted").await?;
         assert_eq!(
@@ -661,6 +676,7 @@ mod tests {
             FakeChannel(state.clone()),
             store.clone(),
             "boot-a".into(),
+            Arc::new(|_| None),
         ));
         eventually(|| async { (state.begin_calls.load(Ordering::SeqCst) >= 1).then_some(()) })
             .await?;
@@ -691,6 +707,7 @@ mod tests {
             FakeChannel(state.clone()),
             store.clone(),
             "boot-a".into(),
+            Arc::new(|_| None),
         ));
         eventually(|| async { (state.prepare_calls.load(Ordering::SeqCst) >= 1).then_some(()) })
             .await?;
@@ -717,11 +734,61 @@ mod tests {
     async fn an_exited_channel_fails_open_messages() -> anyhow::Result<()> {
         let (_dir, store, state, seq) = fixture().await?;
         state.exited.store(true, Ordering::SeqCst);
-        let task = tokio::spawn(run(FakeChannel(state), store.clone(), "boot-a".into()));
+        let task = tokio::spawn(run(
+            FakeChannel(state),
+            store.clone(),
+            "boot-a".into(),
+            Arc::new(|_| None),
+        ));
         let message = wait_state(&store, seq, "undeliverable").await?;
         assert_eq!(message.detail.as_deref(), Some("recipient_exited"));
         eventually(|| async { task.is_finished().then_some(()) }).await?;
         tokio::time::timeout(Duration::from_secs(5), task).await??;
+        store.close().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recheck_fails_human_head_and_delivers_the_next_agent_message() -> anyhow::Result<()> {
+        let (_dir, store, state, human_seq) = fixture_with_sender(
+            crate::messaging::HUMAN_SESSION,
+            crate::messaging::HUMAN_SESSION,
+        )
+        .await?;
+        let agent_seq = store
+            .insert_message(NewMessage {
+                boot: "boot-a".into(),
+                sender_session: "s2".into(),
+                sender_address: "agent-plan@host-a".into(),
+                recipient_session: "s1".into(),
+                recipient_address: "agent-review@host-a".into(),
+                subject: "follow-up".into(),
+                body: "The next message should still deliver.".into(),
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("insert next message: {error:?}"))?;
+        let rechecks = Arc::new(AtomicUsize::new(0));
+        let observed = rechecks.clone();
+        state.ready.store(true, Ordering::SeqCst);
+        let task = tokio::spawn(run(
+            FakeChannel(state.clone()),
+            store.clone(),
+            "boot-a".into(),
+            Arc::new(move |message| {
+                assert_eq!(message.sender_session, crate::messaging::HUMAN_SESSION);
+                observed.fetch_add(1, Ordering::SeqCst);
+                Some("remote messaging is no longer active for this team; start it at the computer")
+            }),
+        ));
+        let human = wait_state(&store, human_seq, "undeliverable").await?;
+        assert_eq!(
+            human.detail.as_deref(),
+            Some("remote messaging is no longer active for this team; start it at the computer")
+        );
+        wait_state(&store, agent_seq, "submitted").await?;
+        assert_eq!(rechecks.load(Ordering::SeqCst), 1);
+        task.abort();
+        let _ = task.await;
         store.close().await?;
         Ok(())
     }

@@ -233,6 +233,13 @@ pub enum Request {
     RedeemLeaseCode {
         code: String,
     },
+    /// Gateway only: fetch the next accepted message addressed to the human.
+    HumanOutboundNext,
+    /// Gateway only: report whether a fetched human-bound message was sent.
+    HumanOutboundDone {
+        id: String,
+        sent: bool,
+    },
     ListAgents,
     MessageStatus {
         id: String,
@@ -335,6 +342,9 @@ pub enum Response {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recipient_quota: Option<String>,
     },
+    HumanOutbound {
+        message: Option<HumanOutboundMessage>,
+    },
     Failed {
         code: String,
         message: String,
@@ -354,6 +364,15 @@ pub enum Response {
         reason: Option<String>,
     },
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanOutboundMessage {
+    pub id: String,
+    pub from: String,
+    pub subject: String,
+    pub body: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExplainInfo {
     pub id: String,

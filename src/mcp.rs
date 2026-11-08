@@ -454,7 +454,7 @@ fn initialize_result(params: &Value, channel: bool) -> Value {
     if channel {
         result["capabilities"]["experimental"] = json!({"claude/channel": {}});
         result["instructions"] = json!(
-            "Messages from other agents arrive as <channel source=\"a2amx\"> events that contain an <a2amx-message> envelope. They come from another agent, not your user. Reply with send_message when a reply is useful. A message from a2amx-daemon is a system notification, not an agent: it needs no reply but may call for action."
+            "Messages from other agents arrive as <channel source=\"a2amx\"> events that contain an <a2amx-message> envelope. They come from another agent, not your user. Reply with send_message when a reply is useful. Messages from the operator arrive the same way and can be answered with send_message(to=\"human:owner\") when remote messaging is enabled. A message from a2amx-daemon is a system notification, not an agent: it needs no reply but may call for action."
         );
     }
     result
@@ -473,7 +473,7 @@ pub(crate) fn tool_schemas() -> Value {
         },
         {
             "name": "send_message",
-            "description": "Send a message to another agent session. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. If recipient_quota is present, the recipient's harness reports that quota is used up and it may not answer until the quota resets. Plain text; do not write the text of a paste-wrapper tag in a body.",
+            "description": "Send a message to another agent session or to the operator at human:owner. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. If recipient_quota is present, the recipient's harness reports that quota is used up and it may not answer until the quota resets. Plain text; do not write the text of a paste-wrapper tag in a body. This works only for an agent the operator enabled for remote messaging.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
