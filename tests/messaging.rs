@@ -3,9 +3,9 @@ use std::path::Path;
 
 use a2amx::harness::{self, Deliver, Harness};
 use a2amx::messaging::{
-    COOLDOWN, Limits, MAX_MESSAGE_BYTES, MAX_SUBJECT_BYTES, MessageState, Origin, PASTE_GAP,
-    address, default_host_name, input_is_typing, local_part, origin_of, paste_bytes,
-    render_envelope, validate_host, validate_message, validate_name,
+    COOLDOWN, Limits, MAX_HUMAN_BODY_BYTES, MAX_MESSAGE_BYTES, MAX_SUBJECT_BYTES, MessageState,
+    Origin, PASTE_GAP, address, default_host_name, input_is_typing, local_part, origin_of,
+    paste_bytes, render_envelope, validate_host, validate_message, validate_name,
 };
 use tempfile::TempDir;
 
@@ -19,14 +19,16 @@ const WORKED_ENVELOPE: &str = "<a2amx-message id=\"m_1\" from=\"agent-plan@host-
 fn limits_and_message_states_have_locked_values() {
     assert_eq!(MAX_SUBJECT_BYTES, 200);
     assert_eq!(MAX_MESSAGE_BYTES, 32 * 1024);
+    assert_eq!(MAX_HUMAN_BODY_BYTES, 8000);
     assert_eq!(PASTE_GAP, std::time::Duration::from_millis(400));
     assert_eq!(COOLDOWN, std::time::Duration::from_secs(1));
 
     assert_eq!(Limits::default().max_pending_per_recipient, 50);
     assert_eq!(Limits::default().rate_per_minute, 20);
+    assert_eq!(Limits::default().human_inbound_per_minute, 20);
+    assert_eq!(Limits::default().human_outbound_per_minute, 30);
     assert_eq!(Limits::default().max_stored_messages, 10_000);
     assert_eq!(Limits::default().retention_secs, 7 * 24 * 3600);
-
     let states = [
         (MessageState::Pending, "pending", true),
         (MessageState::Delivering, "delivering", true),

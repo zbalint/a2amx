@@ -72,3 +72,18 @@ Claims (the consultant re-checks):
 ## 5. Out of scope
 
 The Discord process and splitting long messages, per-agent shares of the `human:owner` queue, a stuck-delivery timeout, the failed-lease-code counter (3dh), counting refused requests (a hijacked gateway can probe agent names through `unknown_recipient` and `not_permitted` answers at an unlimited rate), docs and changelog.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review) model not reported; developer and tester openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed.
+
+BLOCKED/amend cycles: 0.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | spec drafting findings (window tuple shape, refusal text carried per window, order of the size check, test limit values) | spec amended before lock |
+| draft (architect) | architect | a stale draft was committed as 96bd207 after a failed edit script; the locked text is 6ee4f19 | superseded by 6ee4f19, both pushed together |
+| tester pass | tester | no test fills both outbound windows, so a reversed window order survived | test `outbound_refusal_prefers_sender_when_both_windows_are_full` added by the developer, mutant killed |
+| tester pass | tester | no test showed a rate refusal does not push a timestamp, so a pushing mutant survived | test `outbound_rate_refusal_does_not_push_a_timestamp` added (about 61 s of real time), mutant killed; the confined sender fixture sleeps 90 s instead of 30 s so it survives that test |
+| tester pass | tester | key isolation of `human:out` is caught only by the per-sender sibling test | accepted: killed by a sibling |
+| tester pass | tester | no multibyte test at the 8000-byte boundary; no 60 s expiry probe beyond the new test | accepted gaps: the check uses `body.len()` (bytes) |

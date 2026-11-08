@@ -38,6 +38,7 @@ pub fn origin_of(sender_session: &str) -> Origin {
 pub const HEARTBEAT_SUBJECT: &str = "heartbeat";
 pub const ACTIVITY_SUBJECT: &str = "activity";
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
+pub const MAX_HUMAN_BODY_BYTES: usize = 8000;
 pub const HEARTBEAT_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 pub const LEASE_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 pub const CODE_TTL: Duration = Duration::from_secs(10 * 60);
@@ -143,6 +144,8 @@ pub fn hold_explanation(reason: &str) -> Option<&'static str> {
 pub struct Limits {
     pub max_pending_per_recipient: u32,
     pub rate_per_minute: u32,
+    pub human_inbound_per_minute: u32,
+    pub human_outbound_per_minute: u32,
     pub max_stored_messages: u32,
     pub retention_secs: u64,
     pub lease_secs: u64,
@@ -154,6 +157,8 @@ impl Default for Limits {
         Self {
             max_pending_per_recipient: 50,
             rate_per_minute: 20,
+            human_inbound_per_minute: 20,
+            human_outbound_per_minute: 30,
             max_stored_messages: 10_000,
             retention_secs: 7 * 24 * 3600,
             lease_secs: LEASE_MAX.as_secs(),

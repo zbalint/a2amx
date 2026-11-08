@@ -1221,13 +1221,25 @@ impl Runtime {
                 subject,
                 body,
             };
-            return match self.insert_message_rate_limited(sender_id, new).await {
-                Ok(Some(seq)) => Response::Accepted {
+            let windows = [
+                (
+                    sender_id,
+                    self.limits.rate_per_minute,
+                    "sender rate limit reached",
+                ),
+                (
+                    "human:out",
+                    self.limits.human_outbound_per_minute,
+                    "human outbound rate limit reached",
+                ),
+            ];
+            return match self.insert_message_rate_limited(&windows, new).await {
+                Ok(Ok(seq)) => Response::Accepted {
                     id: format!("m_{seq}"),
                     recipient_hold: None,
                     recipient_quota: None,
                 },
-                Ok(None) => failed(code::RATE_LIMITED, "sender rate limit reached"),
+                Ok(Err(message)) => failed(code::RATE_LIMITED, message),
                 Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
                 Err(InsertError::Internal(error)) => {
                     tracing::error!(%error, "message acceptance failed");
@@ -1260,8 +1272,13 @@ impl Runtime {
             subject,
             body,
         };
-        match self.insert_message_rate_limited(sender_id, new).await {
-            Ok(Some(seq)) => {
+        let windows = [(
+            sender_id,
+            self.limits.rate_per_minute,
+            "sender rate limit reached",
+        )];
+        match self.insert_message_rate_limited(&windows, new).await {
+            Ok(Ok(seq)) => {
                 recipient.message_notify().notify_one();
                 Response::Accepted {
                     id: format!("m_{seq}"),
@@ -1277,7 +1294,7 @@ impl Runtime {
                         .map(|window| format!("{window} quota exhausted")),
                 }
             }
-            Ok(None) => failed(code::RATE_LIMITED, "sender rate limit reached"),
+            Ok(Err(message)) => failed(code::RATE_LIMITED, message),
             Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
             Err(InsertError::Internal(error)) => {
                 tracing::error!(%error, "message acceptance failed");
@@ -1288,23 +1305,28 @@ impl Runtime {
 
     async fn insert_message_rate_limited(
         &self,
-        sender_id: &str,
+        windows: &[(&str, u32, &'static str)],
         new: NewMessage,
-    ) -> std::result::Result<Option<i64>, InsertError> {
+    ) -> std::result::Result<std::result::Result<i64, &'static str>, InsertError> {
         let mut rate = self.rate.lock().await;
-        let timestamps = rate.entry(sender_id.into()).or_default();
-        while timestamps
-            .front()
-            .is_some_and(|time| time.elapsed() > Duration::from_secs(60))
-        {
-            timestamps.pop_front();
-        }
-        if timestamps.len() >= self.limits.rate_per_minute as usize {
-            return Ok(None);
+        for &(key, limit, refusal) in windows {
+            let timestamps = rate.entry(key.into()).or_default();
+            while timestamps
+                .front()
+                .is_some_and(|time| time.elapsed() > Duration::from_secs(60))
+            {
+                timestamps.pop_front();
+            }
+            if timestamps.len() >= limit as usize {
+                return Ok(Err(refusal));
+            }
         }
         let sequence = self.store.insert_message(new).await?;
-        timestamps.push_back(Instant::now());
-        Ok(Some(sequence))
+        let now = Instant::now();
+        for &(key, _, _) in windows {
+            rate.entry(key.into()).or_default().push_back(now);
+        }
+        Ok(Ok(sequence))
     }
 
     fn remote_members(&self, team: &str) -> Vec<(SessionId, String, messaging::RemoteMode)> {
@@ -1483,6 +1505,12 @@ impl Runtime {
         if let Err(error) = messaging::validate_message(messaging::HUMAN_SUBJECT, &body) {
             return failed(error.code, &error.message);
         }
+        if body.len() > messaging::MAX_HUMAN_BODY_BYTES {
+            return failed(
+                code::TOO_LARGE,
+                "message exceeds the byte limit for a human message",
+            );
+        }
         let Some(recipient) = self.recipient(&to) else {
             return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
         };
@@ -1504,8 +1532,13 @@ impl Runtime {
             subject: messaging::HUMAN_SUBJECT.into(),
             body,
         };
-        match self.store.insert_message(new).await {
-            Ok(seq) => {
+        let windows = [(
+            "human:in",
+            self.limits.human_inbound_per_minute,
+            "human inbound rate limit reached",
+        )];
+        match self.insert_message_rate_limited(&windows, new).await {
+            Ok(Ok(seq)) => {
                 recipient.message_notify().notify_one();
                 Response::Accepted {
                     id: format!("m_{seq}"),
@@ -1513,6 +1546,7 @@ impl Runtime {
                     recipient_quota: None,
                 }
             }
+            Ok(Err(message)) => failed(code::RATE_LIMITED, message),
             Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
             Err(InsertError::Internal(error)) => {
                 tracing::error!(%error, "human message acceptance failed");

@@ -669,6 +669,8 @@ async fn pending_limit_and_content_errors() {
         Limits {
             max_pending_per_recipient: 2,
             rate_per_minute: 100,
+            human_inbound_per_minute: 20,
+            human_outbound_per_minute: 30,
             max_stored_messages: 100,
             retention_secs: 7 * 24 * 3600,
             lease_secs: 24 * 60 * 60,
@@ -981,6 +983,8 @@ async fn stored_limit_and_rate_limit_are_independent() {
         Limits {
             max_pending_per_recipient: 100,
             rate_per_minute: 100,
+            human_inbound_per_minute: 20,
+            human_outbound_per_minute: 30,
             max_stored_messages: 2,
             retention_secs: 7 * 24 * 3600,
             lease_secs: 24 * 60 * 60,
@@ -1045,6 +1049,8 @@ async fn rate_limit_does_not_cross_sender_sessions() {
         Limits {
             max_pending_per_recipient: 100,
             rate_per_minute: 2,
+            human_inbound_per_minute: 20,
+            human_outbound_per_minute: 30,
             max_stored_messages: 100,
             retention_secs: 7 * 24 * 3600,
             lease_secs: 24 * 60 * 60,
