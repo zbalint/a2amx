@@ -253,6 +253,7 @@ async fn status_line_session_sized(
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -341,6 +342,7 @@ async fn bridged_omp_session(
             activity: None,
             team: None,
             role: None,
+            remote: None,
             name: Some(name.into()),
             harness: Harness::Omp,
             deliver: Some(Deliver::Hold),
@@ -410,6 +412,7 @@ async fn direct_omp_session(
             activity: None,
             team: None,
             role: None,
+            remote: None,
             name: Some(name.into()),
             harness: Harness::Omp,
             deliver: Some(Deliver::Hold),

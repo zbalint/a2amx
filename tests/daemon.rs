@@ -96,6 +96,7 @@ async fn create(client: &mut Client, argv: &[&str], env: Vec<(String, String)>) 
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -129,6 +130,7 @@ fn confine_new_session_request() -> Request {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         }),
     }
 }
@@ -167,6 +169,7 @@ fn confined_reset_request() -> Request {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         }),
     }
 }
@@ -195,6 +198,7 @@ async fn nested_confine_is_rejected_without_closing_daemon_connection() {
                 deliver: None,
                 team: None,
                 role: None,
+                remote: None,
             }),
         }),
     };
@@ -651,6 +655,7 @@ async fn new_session_validation_messages_and_precedence() {
                 deliver: None,
                 team: None,
                 role: role.map(str::to_owned),
+                remote: None,
             })
             .await
             .unwrap();
@@ -683,6 +688,7 @@ async fn create_claude(client: &mut Client, command: &str) -> String {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -710,6 +716,7 @@ async fn create_claude_team(client: &mut Client, command: &str, team: TeamScope)
             activity: None,
             team: Some(team),
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -1570,6 +1577,7 @@ async fn failed_spawns_and_zero_sizes_leave_no_sessions() {
                     activity: None,
                     team: None,
                     role: None,
+                    remote: None,
                 })
                 .await
                 .unwrap(),
@@ -2076,6 +2084,7 @@ async fn cwd_environment_and_argument_boundaries_reach_the_child() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -2389,6 +2398,7 @@ async fn large_final_snapshot_is_split_at_the_data_limit_and_precedes_exit() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -2500,6 +2510,7 @@ async fn opted_in_attachments_receive_initial_and_changed_status_only() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -2666,6 +2677,7 @@ async fn team_attachment_status_lists_sorted_members_and_exited_state() {
             deliver: Some(Deliver::Auto),
             team: Some(team),
             role: None,
+            remote: None,
         })
         .await
         .unwrap()

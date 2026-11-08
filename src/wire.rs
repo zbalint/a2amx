@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::emulator::Scroll;
 use crate::harness::{Deliver, Harness};
-use crate::messaging::TeamScope;
+use crate::messaging::{RemoteMode, TeamScope};
 
 pub use crate::confine::ConfineRequest;
 
@@ -181,6 +181,8 @@ pub enum Request {
         team: Option<TeamScope>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         role: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote: Option<RemoteMode>,
     },
     List,
     Version,

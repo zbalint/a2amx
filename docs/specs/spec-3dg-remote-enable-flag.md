@@ -79,3 +79,15 @@ Existing accept tests turn red by this rule and are changed on purpose, not by a
 ## 5. Out of scope
 
 Lease and `team up` output (3dh), outbound direction (3di), rate limits (3dj), showing the mode in `a2amx list` or `ls --details`, docs, changelog (3di).
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review) model not reported; developer and tester openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed.
+
+BLOCKED/amend cycles: 0.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | findings on the draft (claims and scope) | spec amended before lock |
+| implementation | developer | team files also refuse `remote` without confinement at parse time, besides the daemon's check at creation | accepted: same meaning, fails earlier, no partial team start; the daemon check stays the one that decides for `a2amx new` |
+| tester pass | tester | no surviving mutants for 3dg (eight mutants killed) | none needed |

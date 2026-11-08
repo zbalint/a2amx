@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::grant::{self, Grant};
 use crate::harness::Harness;
 use crate::messaging::{
-    TeamScope, parse_interval, validate_name, validate_reset_steps, validate_role,
+    RemoteMode, TeamScope, parse_interval, validate_name, validate_reset_steps, validate_role,
 };
 use crate::wire::SessionSummary;
 
@@ -43,6 +43,8 @@ pub struct TeamSession {
     pub heartbeat: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
+    #[serde(default)]
+    pub remote: Option<RemoteMode>,
     #[serde(default)]
     pub allow: Vec<String>,
     #[serde(skip)]
@@ -943,6 +945,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             activity: None,
             heartbeat: None,
             role: None,
+            remote: None,
             allow: Vec::new(),
             confine: None,
             auto: false,
@@ -1092,6 +1095,7 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
         validate_session_heartbeat(session)?;
         validate_activity(session)?;
         validate_session_confine_options(session)?;
+        validate_session_remote_options(session)?;
         validate_session_role(session)?;
     }
     if let Some(cycle) = activity_cycle(sessions) {
@@ -1127,6 +1131,16 @@ fn validate_session_confine_options(session: &TeamSession) -> anyhow::Result<()>
                 session.name
             );
         }
+    }
+    Ok(())
+}
+
+fn validate_session_remote_options(session: &TeamSession) -> anyhow::Result<()> {
+    if session.remote.is_some() && session.confine.is_none() {
+        bail!(
+            "session {}: remote messaging needs a confined session",
+            session.name
+        );
     }
     Ok(())
 }
@@ -1246,6 +1260,7 @@ mod tests {
             activity: None,
             heartbeat: None,
             role: None,
+            remote: None,
             allow: Vec::new(),
             confine,
             auto,

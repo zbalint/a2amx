@@ -60,6 +60,9 @@ pub enum Command {
         no_channel: bool,
         #[arg(long)]
         confine: bool,
+        /// Enable remote human messaging as send-only or bidirectional.
+        #[arg(long)]
+        remote: Option<String>,
         #[arg(long = "confine-write")]
         confine_write: Vec<String>,
         #[arg(long = "confine-hide")]

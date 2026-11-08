@@ -10,6 +10,7 @@ use common::pty::PtyHarness;
 
 use a2amx::client::Client;
 use a2amx::harness::{Deliver, Harness};
+use a2amx::messaging::RemoteMode;
 use a2amx::team::{self, TeamSession};
 use a2amx::wire::{Request, Response, SessionSummary};
 
@@ -40,6 +41,56 @@ fn global_team_name_is_normalized_valid_and_bounded() {
     .unwrap();
     assert_eq!(sessions[0].name, format!("{bounded}-architect"));
     assert_eq!(sessions[1].name, format!("{bounded}-consultant"));
+}
+
+#[test]
+fn remote_modes_parse_and_require_confinement() {
+    let sessions = team::parse(
+        r#"
+        [[session]]
+        name = "both"
+        command = ["cat"]
+        remote = "both"
+        [session.confine]
+        enabled = true
+        [[session]]
+        name = "send"
+        command = ["cat"]
+        remote = "send"
+        [session.confine]
+        enabled = true
+        "#,
+    )
+    .unwrap();
+    assert_eq!(sessions[0].remote, Some(RemoteMode::Both));
+    assert_eq!(sessions[1].remote, Some(RemoteMode::Send));
+
+    let error = team::parse(
+        r#"
+        [[session]]
+        name = "worker"
+        command = ["cat"]
+        remote = "maybe"
+        [session.confine]
+        enabled = true
+        "#,
+    )
+    .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(error.contains("send"));
+    assert!(error.contains("both"));
+
+    let error = team::parse(
+        r#"
+        [[session]]
+        name = "worker"
+        command = ["cat"]
+        remote = "both"
+        "#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("remote messaging needs a confined session"));
 }
 
 #[test]
@@ -707,6 +758,7 @@ cwd = "."
                 heartbeat: None,
                 activity: None,
                 role: Some("architect".into()),
+                remote: None,
                 allow: Vec::new(),
                 confine: None,
                 auto: false,
@@ -723,6 +775,7 @@ cwd = "."
                 heartbeat: None,
                 activity: None,
                 role: None,
+                remote: None,
                 allow: Vec::new(),
                 confine: None,
                 auto: false,
@@ -1145,6 +1198,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 heartbeat: None,
                 activity: None,
                 role: None,
+                remote: None,
                 allow: Vec::new(),
                 confine: None,
                 auto: false,
@@ -1161,6 +1215,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 heartbeat: None,
                 activity: None,
                 role: None,
+                remote: None,
                 allow: Vec::new(),
                 confine: None,
                 auto: false,

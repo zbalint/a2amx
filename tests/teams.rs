@@ -6,6 +6,8 @@ use a2amx::client::Client;
 use a2amx::harness::{Deliver, Harness};
 use a2amx::messaging::TeamScope;
 use a2amx::wire::{Request, Response};
+use std::path::Path;
+use std::process::{Command, Output};
 
 fn scope(name: &str, private: bool, allow: &[&str]) -> TeamScope {
     scope_with_agents(name, private, allow, &[])
@@ -18,6 +20,111 @@ fn scope_with_agents(name: &str, private: bool, allow: &[&str], agents: &[&str])
         allow: allow.iter().map(|entry| (*entry).to_owned()).collect(),
         agents: agents.iter().map(|entry| (*entry).to_owned()).collect(),
     }
+}
+
+fn run_binary(home: &Path, cwd: &Path, user_home: &Path, runtime: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .arg("--home")
+        .arg(home)
+        .args(args)
+        .current_dir(cwd)
+        .env("HOME", user_home)
+        .env("XDG_RUNTIME_DIR", runtime)
+        .output()
+        .expect("run a2amx")
+}
+
+async fn gateway(dir: &Path, address: std::net::SocketAddr) -> Client {
+    let token = std::fs::read_to_string(dir.join("gateway.token")).expect("gateway token");
+    Client::connect_addr(address, token.trim())
+        .await
+        .expect("gateway connection")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_validates_remote_before_start_and_carries_it_to_the_session() {
+    let (dir, daemon) = common::start_daemon().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    let runtime = tempfile::tempdir().unwrap();
+    std::fs::write(
+        workspace.path().join("team.toml"),
+        r#"
+        [[session]]
+        name = "plain"
+        command = ["sleep", "30"]
+        [[session]]
+        name = "remote"
+        command = ["sleep", "30"]
+        remote = "both"
+        "#,
+    )
+    .unwrap();
+    let refused = run_binary(
+        dir.path(),
+        workspace.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--detach", "--file", "team.toml"],
+    );
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("remote messaging needs a confined session")
+    );
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let Response::Sessions { sessions } = admin.request(Request::List).await.unwrap() else {
+        panic!("expected session listing");
+    };
+    assert!(
+        sessions.is_empty(),
+        "team up started sessions before validation"
+    );
+    daemon.shutdown().await.unwrap();
+
+    let (dir, daemon) = common::start_daemon().await;
+    let Some(bwrap) = a2amx::confine::resolve_bwrap(None).ok() else {
+        daemon.shutdown().await.unwrap();
+        return;
+    };
+    std::os::unix::fs::symlink(bwrap, dir.path().join("bwrap-path/bwrap")).unwrap();
+    std::fs::write(
+        workspace.path().join("team.toml"),
+        r#"
+        [[session]]
+        name = "remote"
+        command = ["sleep", "30"]
+        cwd = "."
+        remote = "both"
+        [session.confine]
+        enabled = true
+        "#,
+    )
+    .unwrap();
+    let started = run_binary(
+        dir.path(),
+        workspace.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--detach", "--file", "team.toml"],
+    );
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    assert!(matches!(
+        gateway
+            .request(Request::HumanInbound {
+                to: "remote@host-a".into(),
+                body: "message".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Accepted { .. }
+    ));
+    daemon.shutdown().await.unwrap();
 }
 
 async fn session(
@@ -70,6 +177,7 @@ async fn exit_session(admin: &mut Client, name: &str, team: TeamScope) -> String
             deliver: Some(Deliver::Hold),
             team: Some(team),
             role: None,
+            remote: None,
             heartbeat: None,
             activity: None,
         })
@@ -343,6 +451,7 @@ async fn live_team_settings_are_consistent_until_the_first_member_exits() {
             deliver: Some(Deliver::Hold),
             team: Some(scope("a", false, &[])),
             role: None,
+            remote: None,
             heartbeat: None,
             activity: None,
         })
@@ -369,6 +478,7 @@ async fn live_team_settings_are_consistent_until_the_first_member_exits() {
             deliver: Some(Deliver::Hold),
             team: Some(scope("a", true, &[])),
             role: None,
+            remote: None,
             heartbeat: None,
             activity: None,
         })
@@ -413,6 +523,7 @@ async fn live_team_settings_are_consistent_until_the_first_member_exits() {
             deliver: Some(Deliver::Hold),
             team: Some(scope("a", false, &[])),
             role: None,
+            remote: None,
             heartbeat: None,
             activity: None,
         })
@@ -655,6 +766,7 @@ fn new_session_request(name: &str, team: TeamScope) -> Request {
         deliver: Some(Deliver::Hold),
         team: Some(team),
         role: None,
+        remote: None,
         heartbeat: None,
         activity: None,
     }

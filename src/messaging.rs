@@ -42,6 +42,23 @@ pub const UNMATCHABLE_SUBMISSION_REASON: &str = "A2AMX blocked this prompt becau
 pub const MAX_RESTORE_BYTES: usize = 64 * 1024;
 pub const CORRUPTED_SUBMISSION_REASON: &str = "A2AMX blocked this prompt because it mixed your text with a peer message. The message will be delivered again.";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteMode {
+    Send,
+    Both,
+}
+
+impl RemoteMode {
+    pub fn parse(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "send" => Ok(Self::Send),
+            "both" => Ok(Self::Both),
+            _ => bail!("invalid remote mode {value:?}: expected send or both"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamScope {
     pub name: String,

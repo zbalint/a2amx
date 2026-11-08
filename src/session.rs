@@ -81,6 +81,7 @@ pub struct SessionSpec {
     pub heartbeat: Option<Duration>,
     pub team: Option<messaging::TeamScope>,
     pub role: Option<String>,
+    pub remote: Option<messaging::RemoteMode>,
     pub token: String,
     pub(crate) codex: Option<Arc<crate::codex::Link>>,
     pub confine: Option<crate::confine::Plan>,
@@ -102,6 +103,7 @@ pub struct Session {
     heartbeat: Option<Duration>,
     team: Option<messaging::TeamScope>,
     role: Option<String>,
+    remote: Option<messaging::RemoteMode>,
     token: String,
     codex: Option<Arc<crate::codex::Link>>,
     confined: bool,
@@ -482,6 +484,7 @@ impl Session {
             heartbeat: spec.heartbeat,
             team: spec.team,
             role: spec.role,
+            remote: spec.remote,
             token: spec.token,
             codex: spec.codex,
             confined,
@@ -613,6 +616,10 @@ impl Session {
 
     pub fn role(&self) -> Option<&str> {
         self.role.as_deref()
+    }
+
+    pub fn remote(&self) -> Option<messaging::RemoteMode> {
+        self.remote
     }
 
     pub(crate) fn note_activity(&self, current: Activity, now: Instant) -> Duration {

@@ -161,6 +161,7 @@ async fn claude_explain_target(admin: &mut Client, composer: &str) -> String {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -457,6 +458,7 @@ async fn stale_omp_draft_preview_does_not_clear_the_hold() {
             deliver: Some(Deliver::Auto),
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()

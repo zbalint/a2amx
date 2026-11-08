@@ -85,6 +85,7 @@ async fn screen_session(admin: &mut Client, dir: &Path) -> (String, Client) {
             deliver: Some(Deliver::Hold),
             team: None,
             role: None,
+            remote: None,
             heartbeat: None,
             activity: None,
         })
@@ -263,6 +264,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -305,6 +307,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         },
         Request::Attach {
             session: sender_id.clone(),
@@ -418,6 +421,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
                 activity: None,
                 team: None,
                 role: None,
+                remote: None,
             })
             .await
             .unwrap();
@@ -440,6 +444,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -487,6 +492,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -527,6 +533,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -555,6 +562,7 @@ async fn list_agents_reports_harness_and_spawn_directory() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -754,6 +762,7 @@ async fn limit_edge_exact_body_is_delivered_and_submitted() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -1118,6 +1127,7 @@ async fn recipient_exit_cancelling_and_filtering() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -1279,6 +1289,7 @@ async fn reset_authorizes_controller_and_rejects_unlisted_or_self() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -1490,6 +1501,7 @@ async fn reset_holds_message_delivery_until_sequence_finishes() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -1602,6 +1614,7 @@ async fn omp_reset_target(
                 activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -1664,6 +1677,7 @@ async fn claude_reset_target(admin: &mut Client, composer: &str) -> String {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()
@@ -2367,6 +2381,7 @@ async fn reset_rejects_an_in_flight_native_delivery_as_busy() {
                 activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap()

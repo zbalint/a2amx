@@ -438,6 +438,7 @@ impl Runtime {
             deliver,
             team,
             role,
+            remote,
         } = request
         else {
             return Ok(Response::Error {
@@ -494,6 +495,12 @@ impl Runtime {
         {
             return Ok(Response::Error {
                 message: error.to_string(),
+            });
+        }
+
+        if remote.is_some() && confine_request.is_none() {
+            return Ok(Response::Error {
+                message: "remote messaging needs a confined session".into(),
             });
         }
         if confine_request.is_some() && harness == Harness::Codex {
@@ -558,6 +565,7 @@ impl Runtime {
             heartbeat,
             team,
             role,
+            remote,
             token,
             codex,
             confine: confine_plan,
@@ -2876,7 +2884,13 @@ fn remote_ineligible(session: &Session) -> Option<(&'static str, &'static str)> 
             "remote messaging needs a confined session",
         ))
     } else {
-        None
+        match session.remote() {
+            Some(messaging::RemoteMode::Both) => None,
+            None | Some(messaging::RemoteMode::Send) => Some((
+                code::NOT_PERMITTED,
+                "remote messages to this session are not enabled",
+            )),
+        }
     }
 }
 

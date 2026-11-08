@@ -153,6 +153,7 @@ fn request_json_uses_exact_tagged_shapes() {
         activity: None,
         team: None,
         role: None,
+        remote: None,
     };
     let json = serde_json::to_string(&request).unwrap_or_default();
     assert_eq!(
@@ -308,6 +309,7 @@ fn activity_watch_round_trips_on_new_session() {
         deliver: None,
         team: None,
         role: None,
+        remote: None,
     };
     let value = serde_json::to_value(&request).unwrap();
     assert_eq!(value["activity"]["working_after"], 120);
@@ -683,6 +685,7 @@ fn messaging_control_variants_round_trip() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         },
     ];
     let request_json = [
@@ -1198,6 +1201,7 @@ fn team_fields_round_trip_and_old_new_session_defaults_are_compatible() {
             agents: Vec::new(),
         }),
         role: Some("worker".into()),
+        remote: None,
     };
     let value = serde_json::to_value(&request).unwrap();
     assert_eq!(value["team"]["name"], "demo");
@@ -1260,6 +1264,7 @@ fn confine_request_round_trips_and_defaults_missing_fields() {
             deliver: None,
             team: None,
             role: None,
+            remote: None,
         }),
     };
     let encoded = serde_json::to_value(&request).unwrap();

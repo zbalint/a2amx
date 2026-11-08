@@ -732,6 +732,7 @@ async fn picker_clips_long_cwd_to_narrow_terminal() -> anyhow::Result<()> {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await?;
     let Response::Created { session } = response else {
@@ -1496,6 +1497,7 @@ gate.recv(1)
                 activity: None,
                 team: None,
                 role: None,
+                remote: None,
             })
             .await?
         else {

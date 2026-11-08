@@ -69,6 +69,7 @@ impl Case {
                 activity: None,
                 team: None,
                 role: None,
+                remote: None,
             })
             .await
             .unwrap();
@@ -389,6 +390,7 @@ async fn daemon_channel_receipt_is_visible_through_list_messages() {
             activity: None,
             team: None,
             role: None,
+            remote: None,
         })
         .await
         .unwrap();
@@ -640,6 +642,7 @@ async fn development_dialog_gets_exactly_one_enter_only_for_channel_sessions() {
         let response = admin.request(Request::NewSession {
             argv: vec!["sh".into(), "-c".into(), "printf 'I am using this for local development\\n'; read x; echo \"$x\" > \"$OUT\"; read x; echo \"$x\" >> \"$OUT\"; sleep 30".into()],
             cols:80, rows:24, cwd:None, env, reset:vec![], control_from:vec![], watch:vec![], name:Some("agent-review".into()), harness:Harness::Claude, deliver:Some(Deliver::Auto), heartbeat:None, team:None, role:None,
+            remote: None,
             activity: None,
         }).await.unwrap();
         assert!(matches!(response, Response::Created { .. }));

@@ -75,6 +75,7 @@ impl HookCase {
                 activity: None,
                 team: None,
                 role: None,
+                remote: None,
             })
             .await
             .unwrap();

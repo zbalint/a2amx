@@ -507,6 +507,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
         no_authorize_peers,
         no_channel,
         confine,
+        remote,
         confine_write,
         confine_hide,
         confine_unhide,
@@ -543,6 +544,10 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     if confine {
         a2amx::grant::validate(&confine_grant)?;
     }
+
+    let remote = remote
+        .map(|value| messaging::RemoteMode::parse(&value))
+        .transpose()?;
     let activity = parse_activity_watch(
         activity_working_after.as_deref(),
         activity_idle_after.as_deref(),
@@ -603,6 +608,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
             name,
             harness,
             role: None,
+            remote,
             team: None,
             deliver,
             no_authorize_peers,
@@ -636,6 +642,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
 struct NewOptions {
     name: Option<String>,
     role: Option<String>,
+    remote: Option<messaging::RemoteMode>,
     team: Option<TeamScope>,
     harness: Option<Harness>,
     deliver: Option<Deliver>,
@@ -847,6 +854,7 @@ async fn create_session(
         harness,
         deliver,
         role,
+        remote,
         team,
         no_authorize_peers,
         no_channel,
@@ -924,6 +932,7 @@ async fn create_session(
         deliver,
         team,
         role,
+        remote,
         heartbeat,
     };
     let confined = confine.is_some();
@@ -1463,6 +1472,7 @@ async fn start_planned_session(
             name: Some(name.clone()),
             harness: None,
             role: session.role,
+            remote: session.remote,
             team: session.team,
             no_authorize_peers: false,
             no_channel: false,

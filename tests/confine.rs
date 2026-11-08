@@ -162,6 +162,7 @@ fn confined_shell_request(
             deliver: None,
             team: None,
             role: None,
+            remote: None,
         }),
     }
 }
@@ -4866,6 +4867,7 @@ async fn confined_request_without_cwd_is_refused() -> anyhow::Result<()> {
             deliver: None,
             team: None,
             role: None,
+            remote: None,
         }),
     };
     let response = client.request(request).await?;

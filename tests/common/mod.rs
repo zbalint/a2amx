@@ -212,6 +212,7 @@ pub async fn new_team_agent(
             deliver: Some(deliver),
             team,
             role: None,
+            remote: None,
             heartbeat: None,
             activity: None,
         })

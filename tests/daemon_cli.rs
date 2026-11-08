@@ -2682,6 +2682,7 @@ async fn daemon_new_session_activity_validation_rejects_invalid_requests() {
                 deliver: None,
                 team: None,
                 role: None,
+                remote: None,
             })
             .await
             .unwrap();
