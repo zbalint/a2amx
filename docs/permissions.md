@@ -178,7 +178,11 @@ agent and nothing needs typing. A control channel carries lease codes and the bo
 - The bot is created by the operator in Discord's developer portal. Its permissions in the
   server are limited to what the layout needs: to read and send messages and, if the bot makes
   the channels, to manage channels. Whether the operator should make the channels instead is for
-  the spec.
+  the spec. A bot's effective permissions are its own role plus the server's default role
+  (@everyone), so the operator also removes Create Invite, Mention @everyone and the other
+  defaults the agents do not need from @everyone. In the 2026-11-08 experiment the bot could
+  create an invite until that was done, and was refused (403, code 50013) afterwards. The setup
+  guide has the operator check the bot's granted permissions on the server's Integrations page.
 - A server with a second member would show that member everything the agents send. The setup
   tells the operator to keep it private, and the spec evaluates whether the gateway can check
   the member count and stop sending when it is not one.
