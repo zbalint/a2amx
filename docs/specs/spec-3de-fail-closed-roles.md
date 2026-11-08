@@ -121,3 +121,15 @@ Known flaky tests: none expected; a failure in an unrelated PTY test is rerun on
 - Changing `session_only_request`, `session_has_exited` or any other `Role` match.
 - Splitting `src/daemon.rs`.
 - The changelog: no user-visible change.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review `m_5981`) model not reported to the architect; developer a2amx-developer (model as stated in its report `m_5986`); tester a2amx-tester, planning and working model openai-codex/gpt-5.6-luna, advisor slot model not exposed.
+
+BLOCKED/amend cycles: 0.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | findings on the first draft (anchors, claims, missing contract-test requests); all applied before locking | spec amended before lock |
+| tester pass | tester | the runtime tests cannot catch a wildcard arm for a variant that exists today (mutant with `_ => false` for `Version` survives) | expected: the compile probe (acceptance 4, E0004 in both inner matches) is the check for that; no change |
+| tester pass | tester | admin `Shutdown` and admin `ReportQuota` verdicts not pinned by a repo test (tester probe only) | recorded, not fixed here; a later hardening spec may add them |

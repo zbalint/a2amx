@@ -14,7 +14,7 @@ Terms: the **gateway** is the process that talks to Discord for the daemon. It i
 ## Why this page exists
 
 Today an authenticated caller is the admin or one session, and the daemon checks what a
-session may ask for in a single list (`session_token_permitted` in `src/daemon.rs`).
+session may ask for in a single list (`request_permitted` in `src/daemon.rs`, one exhaustive match per role).
 Messages come from an agent or from the daemon (`Origin::Agent`, `Origin::System`). A human
 who is away from the computer is neither. This page says who that human is, who may talk to
 them, and what their messages may do, before any code exists.
@@ -40,11 +40,10 @@ The gateway gets a third daemon role beside admin and session, with its own toke
 state directory (0600), never the admin token. Its requests are a short list: hand the daemon
 one inbound human message, fetch pending outbound human messages, acknowledge one.
 
-Today the check is a deny-list on sessions only: `session_request_denied` refuses a request
-only for `Role::Session`, so admin and any role added beside it pass every request. Adding the
-gateway role to that check would let it read and cancel messages and start sessions. The spec
-must make the check exhaustive per role, with no default allow, and a test per role that every
-request outside its list is refused.
+The check used to be a deny-list on sessions only, so a role added beside admin and session
+would have passed every request. Spec 3de replaced it with `request_permitted`, an exhaustive
+match per role and request with no default allow. The gateway spec adds its own arm there, with a
+test that every request outside its list is refused.
 
 No request carries an a2amx sender or origin; the daemon assigns both from the role and the
 pairing record. The gateway does supply the Discord identity of a message (user id and channel),

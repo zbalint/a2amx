@@ -283,6 +283,11 @@ async fn session_tokens_roles_permissions_and_child_identity() {
     assert!(unknown.is_err());
 
     for request in [
+        Request::Version,
+        Request::Hello {
+            token: sender_token.clone(),
+        },
+        Request::Shutdown { now: true },
         Request::List,
         Request::NewSession {
             argv: vec!["sh".into()],

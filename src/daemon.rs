@@ -2082,7 +2082,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 continue;
             }
         };
-        if session_request_denied(&role, &request) {
+        if !request_permitted(&role, &request) {
             response(
                 &mut connection,
                 Response::Error {
@@ -2174,8 +2174,53 @@ fn session_has_exited(runtime: &Runtime, role: &Role) -> bool {
     matches!(role, Role::Session(id) if !lookup(runtime, id).is_some_and(|(_, session)| session.exit_code().is_none()))
 }
 
-fn session_request_denied(role: &Role, request: &Request) -> bool {
-    matches!(role, Role::Session(_)) && !session_token_permitted(request)
+/// One verdict per role and request. Neither match has a wildcard arm: a new `Request`
+/// variant or a new `Role` does not compile until its verdict is written here.
+fn request_permitted(role: &Role, request: &Request) -> bool {
+    match role {
+        Role::Admin => match request {
+            Request::Hello { .. }
+            | Request::Confine { .. }
+            | Request::NewSession { .. }
+            | Request::List
+            | Request::Version
+            | Request::Attach { .. }
+            | Request::Kill { .. }
+            | Request::Reset { .. }
+            | Request::Screen { .. }
+            | Request::Explain { .. }
+            | Request::Shutdown { .. }
+            | Request::SendMessage { .. }
+            | Request::ListAgents
+            | Request::MessageStatus { .. }
+            | Request::ReportPrompt { .. }
+            | Request::ReportQuota { .. }
+            | Request::ListMessages { .. }
+            | Request::CancelMessage { .. }
+            | Request::BridgeAttach => true,
+        },
+        Role::Session(_) => match request {
+            Request::SendMessage { .. }
+            | Request::Reset { .. }
+            | Request::ListAgents
+            | Request::MessageStatus { .. }
+            | Request::ReportPrompt { .. }
+            | Request::ReportQuota { .. }
+            | Request::BridgeAttach => true,
+            Request::Hello { .. }
+            | Request::Confine { .. }
+            | Request::NewSession { .. }
+            | Request::List
+            | Request::Version
+            | Request::Attach { .. }
+            | Request::Kill { .. }
+            | Request::Screen { .. }
+            | Request::Explain { .. }
+            | Request::Shutdown { .. }
+            | Request::ListMessages { .. }
+            | Request::CancelMessage { .. } => false,
+        },
+    }
 }
 
 async fn authenticate_hello(
@@ -2202,19 +2247,6 @@ async fn authenticate_hello(
         return Ok(None);
     };
     Ok(Some(role))
-}
-
-fn session_token_permitted(request: &Request) -> bool {
-    matches!(
-        request,
-        Request::SendMessage { .. }
-            | Request::Reset { .. }
-            | Request::ListAgents
-            | Request::MessageStatus { .. }
-            | Request::ReportPrompt { .. }
-            | Request::ReportQuota { .. }
-            | Request::BridgeAttach
-    )
 }
 
 async fn list_sessions(runtime: &Runtime) -> anyhow::Result<Response> {
