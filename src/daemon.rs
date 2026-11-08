@@ -79,6 +79,7 @@ struct Runtime {
     sessions: Mutex<BTreeMap<u64, Arc<Session>>>,
     next_id: AtomicU64,
     token: String,
+    gateway_token: String,
     store: Store,
     host_name: String,
     boot: String,
@@ -198,6 +199,7 @@ fn activity_body(changes: &[(String, String, bool)]) -> String {
 
 enum Role {
     Admin,
+    Gateway,
     Session(String),
 }
 
@@ -334,6 +336,9 @@ impl Runtime {
                     role = Some(Role::Session(session.id().0.clone()));
                 }
             }
+        }
+        if role.is_none() && constant_time_eq(token, &self.gateway_token) {
+            role = Some(Role::Gateway);
         }
         role
     }
@@ -1127,6 +1132,16 @@ impl Runtime {
         }
     }
 
+    fn recipient(&self, to: &str) -> Option<Arc<Session>> {
+        let local = messaging::local_part(to, &self.host_name)?;
+        self.sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .find(|session| session.name().unwrap_or(&session.id().0) == local)
+            .cloned()
+    }
+
     async fn send_message(
         &self,
         sender_id: &str,
@@ -1137,15 +1152,7 @@ impl Runtime {
         if let Err(error) = messaging::validate_message(&subject, &body) {
             return failed(error.code, &error.message);
         }
-        let recipient = messaging::local_part(&to, &self.host_name).and_then(|local| {
-            self.sessions
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .values()
-                .find(|session| session.name().unwrap_or(&session.id().0) == local)
-                .cloned()
-        });
-        let Some(recipient) = recipient else {
+        let Some(recipient) = self.recipient(&to) else {
             return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
         };
         let Some((_, sender)) = lookup(self, sender_id) else {
@@ -1210,6 +1217,46 @@ impl Runtime {
         }
     }
 
+    async fn human_inbound(&self, to: String, body: String) -> Response {
+        if let Err(error) = messaging::validate_message(messaging::HUMAN_SUBJECT, &body) {
+            return failed(error.code, &error.message);
+        }
+        let Some(recipient) = self.recipient(&to) else {
+            return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
+        };
+        if let Some((error_code, message)) = remote_ineligible(&recipient) {
+            return failed(error_code, message);
+        }
+        let new = NewMessage {
+            boot: self.boot.clone(),
+            sender_session: messaging::HUMAN_SESSION.into(),
+            sender_address: messaging::HUMAN_SESSION.into(),
+            recipient_session: recipient.id().0.clone(),
+            recipient_address: messaging::address(
+                recipient.name(),
+                &recipient.id().0,
+                &self.host_name,
+            ),
+            subject: messaging::HUMAN_SUBJECT.into(),
+            body,
+        };
+        match self.store.insert_message(new).await {
+            Ok(seq) => {
+                recipient.message_notify().notify_one();
+                Response::Accepted {
+                    id: format!("m_{seq}"),
+                    recipient_hold: None,
+                    recipient_quota: None,
+                }
+            }
+            Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
+            Err(InsertError::Internal(error)) => {
+                tracing::error!(%error, "human message acceptance failed");
+                failed(code::INTERNAL, "message storage failed")
+            }
+        }
+    }
+
     fn reset_target(&self, reference: &str) -> Option<Arc<Session>> {
         if let Some((_, session)) = lookup(self, reference) {
             return Some(session);
@@ -1239,6 +1286,7 @@ impl Runtime {
     async fn reset_session(&self, role: &Role, reference: String) -> Response {
         let sender = match role {
             Role::Admin => "admin".to_owned(),
+            Role::Gateway => "gateway".to_owned(),
             Role::Session(id) => lookup(self, id).map_or_else(
                 || id.clone(),
                 |(_, session)| messaging::address(session.name(), id, &self.host_name),
@@ -1268,6 +1316,7 @@ impl Runtime {
         let target_address = messaging::address(target.name(), &target.id().0, &self.host_name);
         let permitted = match role {
             Role::Admin => true,
+            Role::Gateway => false,
             Role::Session(sender_id) => {
                 sender_id != &target.id().0
                     && lookup(self, sender_id)
@@ -1718,25 +1767,43 @@ impl Daemon {
         })
         .await??;
         let host_name = config.host_name;
-        let (token, host_name, boot) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let token = random_hex::<32>()?;
-            let host = match host_name {
-                Some(host) => {
-                    messaging::validate_host(&host).context("invalid host name")?;
-                    host
-                }
-                None => messaging::default_host_name(),
-            };
-            Ok((token, host, random_hex::<8>()?))
-        })
-        .await??;
+        let (token, gateway_token, host_name, boot) =
+            tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let token = random_hex::<32>()?;
+                let gateway_token = random_hex::<32>()?;
+                let host = match host_name {
+                    Some(host) => {
+                        messaging::validate_host(&host).context("invalid host name")?;
+                        host
+                    }
+                    None => messaging::default_host_name(),
+                };
+                Ok((token, gateway_token, host, random_hex::<8>()?))
+            })
+            .await??;
         let store = Store::open(config.state_dir.clone(), config.limits).await?;
         // Written only after the steps that can fail without binding, so an early
         // startup error never leaves a token for a daemon that is not running.
+        let gateway_path = config.state_dir.join("gateway.token");
         let token_path = config.state_dir.join("admin.token");
+        let gateway_text = gateway_token.clone();
         let token_text = token.clone();
-        tokio::task::spawn_blocking(move || write_state_file(&token_path, token_text.as_bytes()))
-            .await??;
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            write_state_file(&gateway_path, gateway_text.as_bytes())?;
+            if let Err(error) = write_state_file(&token_path, token_text.as_bytes()) {
+                return match std::fs::remove_file(&gateway_path) {
+                    Ok(()) => Err(error),
+                    Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {
+                        Err(error)
+                    }
+                    Err(cleanup) => Err(anyhow::anyhow!(
+                        "{error}; failed to remove gateway.token after admin.token write failure: {cleanup}"
+                    )),
+                };
+            }
+            Ok(())
+        })
+        .await??;
         let mut bound = Vec::new();
         let mut addrs = Vec::new();
         let listen = if config.listen.is_empty() {
@@ -1748,8 +1815,14 @@ impl Daemon {
             let listener = match TcpListener::bind(address).await {
                 Ok(listener) => listener,
                 Err(error) => {
-                    let path = config.state_dir.join("admin.token");
-                    tokio::task::spawn_blocking(move || std::fs::remove_file(path)).await??;
+                    let admin_path = config.state_dir.join("admin.token");
+                    let gateway_path = config.state_dir.join("gateway.token");
+                    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                        std::fs::remove_file(admin_path)?;
+                        std::fs::remove_file(gateway_path)?;
+                        Ok(())
+                    })
+                    .await??;
                     return Err(error.into());
                 }
             };
@@ -1772,6 +1845,7 @@ impl Daemon {
             sessions: Mutex::new(BTreeMap::new()),
             next_id: AtomicU64::new(1),
             token,
+            gateway_token,
             store,
             host_name,
             boot,
@@ -2083,10 +2157,15 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
             }
         };
         if !request_permitted(&role, &request) {
+            let message = if matches!(&role, Role::Session(_)) {
+                "not permitted for a session token"
+            } else {
+                "not permitted for this token"
+            };
             response(
                 &mut connection,
                 Response::Error {
-                    message: "not permitted for a session token".into(),
+                    message: message.into(),
                 },
             )
             .await?;
@@ -2160,6 +2239,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 }
             }
             Request::MessageStatus { id } => runtime.message_status(&role, &id).await?,
+            Request::HumanInbound { to, body } => runtime.human_inbound(to, body).await,
             Request::ListMessages { session, state } => {
                 list_messages(&runtime, session, state).await?
             }
@@ -2198,6 +2278,29 @@ fn request_permitted(role: &Role, request: &Request) -> bool {
             | Request::ListMessages { .. }
             | Request::CancelMessage { .. }
             | Request::BridgeAttach => true,
+            Request::HumanInbound { .. } => false,
+        },
+        Role::Gateway => match request {
+            Request::HumanInbound { .. } => true,
+            Request::Hello { .. }
+            | Request::Confine { .. }
+            | Request::NewSession { .. }
+            | Request::List
+            | Request::Version
+            | Request::Attach { .. }
+            | Request::Kill { .. }
+            | Request::Reset { .. }
+            | Request::Screen { .. }
+            | Request::Explain { .. }
+            | Request::Shutdown { .. }
+            | Request::SendMessage { .. }
+            | Request::ListAgents
+            | Request::MessageStatus { .. }
+            | Request::ReportPrompt { .. }
+            | Request::ReportQuota { .. }
+            | Request::ListMessages { .. }
+            | Request::CancelMessage { .. }
+            | Request::BridgeAttach => false,
         },
         Role::Session(_) => match request {
             Request::SendMessage { .. }
@@ -2217,6 +2320,7 @@ fn request_permitted(role: &Role, request: &Request) -> bool {
             | Request::Screen { .. }
             | Request::Explain { .. }
             | Request::Shutdown { .. }
+            | Request::HumanInbound { .. }
             | Request::ListMessages { .. }
             | Request::CancelMessage { .. } => false,
         },
@@ -2305,6 +2409,7 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
     let admin = matches!(role, Role::Admin);
     let viewer_id = match role {
         Role::Admin => None,
+        Role::Gateway => None,
         Role::Session(id) => Some(id.as_str()),
     };
     let sessions = runtime
@@ -2503,6 +2608,9 @@ async fn bridge_attach(
 ) -> anyhow::Result<Option<Response>> {
     match role {
         Role::Admin => Ok(Some(Response::Error {
+            message: "bridge_attach needs a session token".into(),
+        })),
+        Role::Gateway => Ok(Some(Response::Error {
             message: "bridge_attach needs a session token".into(),
         })),
         Role::Session(id) => {
@@ -2757,6 +2865,19 @@ fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {
         .get(&number)
         .filter(|session| session.id().0 == id)
         .map(|session| (number, session.clone()))
+}
+
+fn remote_ineligible(session: &Session) -> Option<(&'static str, &'static str)> {
+    if session.exit_code().is_some() {
+        Some((code::RECIPIENT_EXITED, "recipient has exited"))
+    } else if !session.confined() {
+        Some((
+            code::NOT_PERMITTED,
+            "remote messaging needs a confined session",
+        ))
+    } else {
+        None
+    }
 }
 
 struct AttachmentGuard {

@@ -127,3 +127,18 @@ Known flaky tests: none expected; an unrelated PTY failure is rerun once and rec
 - The delivery-time call of `remote_ineligible` (D3 runs the check at acceptance and at delivery): 3dg, together with the checks that can change after acceptance.
 - The MCP server instructions say every a2amx message is "from another agent, not your user" (`src/mcp.rs:457`); spec 3di updates them when human messages can reach an agent.
 - Converting `if let Role::Session` / `let ... else` sites to exhaustive matches: not needed while the gateway is refused every request that reaches them; revisit if a later spec permits the gateway any of those requests.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review `m_6000`) model not reported; developer and tester openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed.
+
+BLOCKED/amend cycles: 0.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | claims table said tests use a fake `bwrap`; they need the real one symlinked and a long-running argv | spec corrected before lock |
+| draft review | consultant | envelope test had no public seam | pure `render_envelope` and `origin_of` tests, `ListMessages` for the integration test |
+| draft review | consultant | the "failed start" test pattern fails before any token is written | test 7 points at the bind-failure pattern, and the cleanup mutant was added |
+| draft review | consultant | Role-site instructions ambiguous; probe site count; missing trust rows for `gateway.token`; MCP wording, delivery-time check and wire pin not placed | spec amended before lock |
+| tester pass | tester | mutant mapping `QueueFull` to `INTERNAL` in `human_inbound` survives (no inbound queue-full test) | accepted gap; the mapping is a copy of `send_message`'s; a later rate-limit/queue spec (3dj) should cover it |
+| tester pass | tester | mutant removing `role.is_none()` before the gateway token check survives (tokens are random, no fixture can collide them) | accepted; the guard is read in the diff |

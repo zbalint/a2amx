@@ -219,6 +219,10 @@ pub enum Request {
         subject: String,
         message: String,
     },
+    HumanInbound {
+        to: String,
+        body: String,
+    },
     ListAgents,
     MessageStatus {
         id: String,
