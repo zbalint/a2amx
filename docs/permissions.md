@@ -58,7 +58,11 @@ accepts a message and again when it delivers one. A session is eligible only whe
 hold:
 
 1. remote messaging is enabled for that agent in its team entry or by its command-line option
-   (off by default);
+   (off by default), in one of two modes (owner decision, 2026-11-08): `send`, where the agent
+   may message the human and nothing from the human reaches it, or `both`, where the human may
+   also write to it. The check takes the direction of the message, and a message in a direction
+   the mode does not allow is rejected at acceptance and again at delivery. When the owner does
+   not name a mode the draft default is `send`, the safer one;
 2. the team's presence lease is valid (D4);
 3. the session is running;
 4. it runs confined (owner decision, 2026-11-08: a message that arrives over the network could
@@ -227,6 +231,7 @@ reaches the human, not the agents, but it bypasses every daemon limit on that di
 | message body | text containing an envelope tag, to forge a peer or system message | constrain: existing body validation, applied to human messages | a body with `<a2amx-message` is rejected |
 | agent body | claims "the operator said so" | constrain: only the daemon-rendered sentence marks a human message (D1) | a peer body quoting the human sentence is delivered with the agent sentence |
 | team file from a repository | enables remote messaging | constrain: config grants nothing; `team up` lists the enabled agents and the lease returns from the paired account (D4) | a session enabled in the file with no lease cannot exchange messages |
+| inbound message to a `send` agent | a forged or hijacked message reaches an agent that was only meant to notify | remove: the mode forbids the direction, checked at acceptance and delivery (D3) | a message in the channel of a `send`-mode agent is not delivered and the human gets a fixed error line |
 | session name | an agent takes the human's address | remove: the name grammar forbids `:` | creating a session named `human:owner` fails |
 | restart or exit | pending messages reach a different session | constrain: the check runs again at delivery | a message for a session that exited is not delivered |
 | channel to agent mapping | a message in one agent's channel reaches another agent | constrain: the daemon takes the recipient from the channel the gateway names and rechecks eligibility for that agent | a message in agent A's channel is never delivered to agent B |
