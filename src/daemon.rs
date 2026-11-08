@@ -92,10 +92,33 @@ struct Runtime {
     omp_usage: Mutex<Option<(Instant, BTreeMap<String, QuotaInfo>)>>,
     omp_usage_attempt: Mutex<Option<Instant>>,
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
+    leases: Mutex<PresenceLeases>,
     new_session_gate: tokio::sync::Mutex<()>,
     deliveries: Mutex<Vec<JoinHandle<()>>>,
     stop_requested: tokio::sync::Notify,
     stop_now: AtomicBool,
+}
+
+#[derive(Default)]
+struct PresenceLeases {
+    teams: HashMap<String, TeamLease>,
+    wrong_codes: u32,
+}
+
+#[derive(Default)]
+struct TeamLease {
+    lease: Option<ActiveLease>,
+    pending: Option<PendingLeaseCode>,
+}
+
+struct ActiveLease {
+    expires: Instant,
+    members: Vec<SessionId>,
+}
+
+struct PendingLeaseCode {
+    code: String,
+    expires: Instant,
 }
 
 struct HeartbeatPeer {
@@ -1225,6 +1248,169 @@ impl Runtime {
         }
     }
 
+    fn remote_members(&self, team: &str) -> Vec<(SessionId, String, messaging::RemoteMode)> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter_map(|session| {
+                (session.exit_code().is_none()
+                    && session.team().is_some_and(|scope| scope.name == team))
+                .then(|| {
+                    session.remote().map(|mode| {
+                        let name = session
+                            .name()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| session.id().0.clone());
+                        (session.id().clone(), name, mode)
+                    })
+                })
+                .flatten()
+            })
+            .collect()
+    }
+
+    async fn issue_lease_code(&self, team: String) -> anyhow::Result<Response> {
+        let members = self.remote_members(&team);
+        if members.is_empty() {
+            return Ok(Response::Error {
+                message: "no agent in this team has remote messaging enabled".into(),
+            });
+        }
+        let code = tokio::task::spawn_blocking(random_hex::<6>).await??;
+        let agents = members
+            .iter()
+            .map(|(_, name, mode)| {
+                let mode = match mode {
+                    messaging::RemoteMode::Send => "send",
+                    messaging::RemoteMode::Both => "both",
+                };
+                format!("{name} ({mode})")
+            })
+            .collect();
+        let mut leases = self.leases.lock().unwrap_or_else(PoisonError::into_inner);
+        leases.teams.entry(team).or_default().pending = Some(PendingLeaseCode {
+            code: code.clone(),
+            expires: Instant::now() + Duration::from_secs(self.limits.code_secs),
+        });
+        leases.wrong_codes = 0;
+        Ok(Response::LeaseCode {
+            code,
+            agents,
+            valid_secs: self.limits.code_secs,
+        })
+    }
+
+    fn take_matching_lease_code(&self, code: &str, now: Instant) -> Option<String> {
+        let mut leases = self.leases.lock().unwrap_or_else(PoisonError::into_inner);
+        if leases.wrong_codes >= messaging::MAX_WRONG_CODES {
+            return None;
+        }
+        let mut matched_team = None;
+        for (team, state) in &leases.teams {
+            if let Some(pending) = state.pending.as_ref()
+                && now < pending.expires
+                && constant_time_eq(code, &pending.code)
+            {
+                matched_team.get_or_insert_with(|| team.clone());
+            }
+        }
+        let team = matched_team;
+        if let Some(team) = team {
+            leases
+                .teams
+                .get_mut(&team)
+                .and_then(|state| state.pending.take());
+            return Some(team);
+        }
+        for state in leases.teams.values_mut() {
+            if state
+                .pending
+                .as_ref()
+                .is_some_and(|pending| now >= pending.expires)
+            {
+                state.pending = None;
+            }
+        }
+        leases.wrong_codes = leases.wrong_codes.saturating_add(1);
+        if leases.wrong_codes >= messaging::MAX_WRONG_CODES {
+            for state in leases.teams.values_mut() {
+                state.pending = None;
+            }
+        }
+        None
+    }
+
+    fn start_lease(&self, team: &str, now: Instant) {
+        let members = self
+            .remote_members(team)
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        let mut leases = self.leases.lock().unwrap_or_else(PoisonError::into_inner);
+        leases.teams.entry(team.to_owned()).or_default().lease = Some(ActiveLease {
+            expires: now + Duration::from_secs(self.limits.lease_secs),
+            members,
+        });
+    }
+
+    fn redeem_lease_code(&self, code: String) -> Response {
+        let now = Instant::now();
+        let Some(team) = self.take_matching_lease_code(&code, now) else {
+            return Response::Error {
+                message: "invalid or expired code".into(),
+            };
+        };
+        self.start_lease(&team, now);
+        Response::Ok
+    }
+
+    fn lease_valid(&self, team: &str, id: &str, now: Instant) -> bool {
+        self.leases
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .teams
+            .get(team)
+            .and_then(|state| state.lease.as_ref())
+            .is_some_and(|lease| {
+                now < lease.expires && lease.members.iter().any(|member| member.0.as_str() == id)
+            })
+    }
+
+    fn remote_ineligible(
+        &self,
+        session: &Session,
+        now: Instant,
+    ) -> Option<(&'static str, &'static str)> {
+        if session.exit_code().is_some() {
+            Some((code::RECIPIENT_EXITED, "recipient has exited"))
+        } else if !session.confined() {
+            Some((
+                code::NOT_PERMITTED,
+                "remote messaging needs a confined session",
+            ))
+        } else {
+            match session.remote() {
+                Some(messaging::RemoteMode::Both) => {
+                    let Some(team) = session.team() else {
+                        return Some((
+                            code::NOT_PERMITTED,
+                            "remote messaging is not active for this team; start it at the computer",
+                        ));
+                    };
+                    (!self.lease_valid(&team.name, &session.id().0, now)).then_some((
+                        code::NOT_PERMITTED,
+                        "remote messaging is not active for this team; start it at the computer",
+                    ))
+                }
+                None | Some(messaging::RemoteMode::Send) => Some((
+                    code::NOT_PERMITTED,
+                    "remote messages to this session are not enabled",
+                )),
+            }
+        }
+    }
+
     async fn human_inbound(&self, to: String, body: String) -> Response {
         if let Err(error) = messaging::validate_message(messaging::HUMAN_SUBJECT, &body) {
             return failed(error.code, &error.message);
@@ -1232,7 +1418,7 @@ impl Runtime {
         let Some(recipient) = self.recipient(&to) else {
             return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
         };
-        if let Some((error_code, message)) = remote_ineligible(&recipient) {
+        if let Some((error_code, message)) = self.remote_ineligible(&recipient, Instant::now()) {
             return failed(error_code, message);
         }
         let new = NewMessage {
@@ -1868,6 +2054,7 @@ impl Daemon {
             // shortcut: accepted-send timestamps are memory-only; persist them if
             // rate limits must survive daemon restarts.
             rate: tokio::sync::Mutex::new(HashMap::new()),
+            leases: Mutex::new(PresenceLeases::default()),
             new_session_gate: tokio::sync::Mutex::new(()),
             deliveries: Mutex::new(Vec::new()),
             stop_requested: tokio::sync::Notify::new(),
@@ -2248,6 +2435,8 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
             }
             Request::MessageStatus { id } => runtime.message_status(&role, &id).await?,
             Request::HumanInbound { to, body } => runtime.human_inbound(to, body).await,
+            Request::IssueLeaseCode { team } => runtime.issue_lease_code(team).await?,
+            Request::RedeemLeaseCode { code } => runtime.redeem_lease_code(code),
             Request::ListMessages { session, state } => {
                 list_messages(&runtime, session, state).await?
             }
@@ -2285,11 +2474,12 @@ fn request_permitted(role: &Role, request: &Request) -> bool {
             | Request::ReportQuota { .. }
             | Request::ListMessages { .. }
             | Request::CancelMessage { .. }
-            | Request::BridgeAttach => true,
-            Request::HumanInbound { .. } => false,
+            | Request::BridgeAttach
+            | Request::IssueLeaseCode { .. } => true,
+            Request::HumanInbound { .. } | Request::RedeemLeaseCode { .. } => false,
         },
         Role::Gateway => match request {
-            Request::HumanInbound { .. } => true,
+            Request::HumanInbound { .. } | Request::RedeemLeaseCode { .. } => true,
             Request::Hello { .. }
             | Request::Confine { .. }
             | Request::NewSession { .. }
@@ -2308,7 +2498,8 @@ fn request_permitted(role: &Role, request: &Request) -> bool {
             | Request::ReportQuota { .. }
             | Request::ListMessages { .. }
             | Request::CancelMessage { .. }
-            | Request::BridgeAttach => false,
+            | Request::BridgeAttach
+            | Request::IssueLeaseCode { .. } => false,
         },
         Role::Session(_) => match request {
             Request::SendMessage { .. }
@@ -2329,6 +2520,8 @@ fn request_permitted(role: &Role, request: &Request) -> bool {
             | Request::Explain { .. }
             | Request::Shutdown { .. }
             | Request::HumanInbound { .. }
+            | Request::IssueLeaseCode { .. }
+            | Request::RedeemLeaseCode { .. }
             | Request::ListMessages { .. }
             | Request::CancelMessage { .. } => false,
         },
@@ -2873,25 +3066,6 @@ fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {
         .get(&number)
         .filter(|session| session.id().0 == id)
         .map(|session| (number, session.clone()))
-}
-
-fn remote_ineligible(session: &Session) -> Option<(&'static str, &'static str)> {
-    if session.exit_code().is_some() {
-        Some((code::RECIPIENT_EXITED, "recipient has exited"))
-    } else if !session.confined() {
-        Some((
-            code::NOT_PERMITTED,
-            "remote messaging needs a confined session",
-        ))
-    } else {
-        match session.remote() {
-            Some(messaging::RemoteMode::Both) => None,
-            None | Some(messaging::RemoteMode::Send) => Some((
-                code::NOT_PERMITTED,
-                "remote messages to this session are not enabled",
-            )),
-        }
-    }
 }
 
 struct AttachmentGuard {

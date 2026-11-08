@@ -6,7 +6,7 @@ use a2amx::client::Client;
 use a2amx::confine::ConfineRequest;
 use a2amx::daemon::{Daemon, DaemonConfig};
 use a2amx::harness::{Deliver, Harness};
-use a2amx::messaging::{HUMAN_SESSION, HUMAN_SUBJECT, Limits, RemoteMode, code};
+use a2amx::messaging::{HUMAN_SESSION, HUMAN_SUBJECT, Limits, RemoteMode, TeamScope, code};
 use a2amx::wire::{Request, Response};
 use std::net::SocketAddr;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -44,7 +44,7 @@ fn new_session_request_with_remote(
     }
 }
 
-async fn start_confined_daemon() -> Option<(TempDir, Daemon)> {
+async fn start_confined_daemon_with_limits(limits: Limits) -> Option<(TempDir, Daemon)> {
     let real_bwrap = a2amx::confine::resolve_bwrap(None).ok()?;
     let dir = tempfile::tempdir().expect("temp state dir");
     let bwrap_dir = dir.path().join("bwrap-path");
@@ -54,7 +54,7 @@ async fn start_confined_daemon() -> Option<(TempDir, Daemon)> {
         state_dir: dir.path().to_path_buf(),
         listen: vec!["127.0.0.1:0".parse().expect("loopback address")],
         host_name: Some("host-a".into()),
-        limits: Limits::default(),
+        limits,
         bwrap_path: Some(bwrap_dir.into_os_string()),
         env_path: None,
     })
@@ -63,11 +63,16 @@ async fn start_confined_daemon() -> Option<(TempDir, Daemon)> {
     Some((dir, daemon))
 }
 
-async fn create_confined(
+async fn start_confined_daemon() -> Option<(TempDir, Daemon)> {
+    start_confined_daemon_with_limits(Limits::default()).await
+}
+
+async fn create_confined_with_team(
     admin: &mut Client,
     fixture: &Path,
     name: &str,
     remote: Option<RemoteMode>,
+    team: Option<TeamScope>,
 ) -> String {
     let response = admin
         .request(Request::Confine {
@@ -86,7 +91,7 @@ async fn create_confined(
                 name: Some(name.into()),
                 harness: Harness::Generic,
                 deliver: Some(Deliver::Hold),
-                team: None,
+                team,
                 role: None,
                 remote,
             }),
@@ -97,6 +102,62 @@ async fn create_confined(
         Response::Created { session } => session,
         response => panic!("confined session creation failed: {response:?}"),
     }
+}
+
+async fn create_confined(
+    admin: &mut Client,
+    fixture: &Path,
+    name: &str,
+    remote: Option<RemoteMode>,
+) -> String {
+    create_confined_with_team(admin, fixture, name, remote, None).await
+}
+
+#[tokio::test]
+async fn inbound_requires_a_valid_team_lease_before_storage() {
+    let Some((dir, daemon)) = start_confined_daemon().await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let _recipient = create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "leased-target",
+        Some(RemoteMode::Both),
+        Some(TeamScope {
+            name: "lease-team".into(),
+            private: false,
+            allow: vec![],
+            agents: vec![],
+        }),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    let response = gateway
+        .request(Request::HumanInbound {
+            to: "leased-target@host-a".into(),
+            body: "message".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(failed_code(response.clone()), code::NOT_PERMITTED);
+    assert_eq!(
+        failed_message(response),
+        "remote messaging is not active for this team; start it at the computer"
+    );
+    let Response::Messages { messages } = admin
+        .request(Request::ListMessages {
+            session: None,
+            state: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected message listing");
+    };
+    assert!(messages.is_empty());
+    daemon.shutdown().await.unwrap();
 }
 
 async fn gateway(dir: &Path, address: SocketAddr) -> Client {
@@ -139,6 +200,330 @@ fn failed_message(response: Response) -> String {
     }
 }
 
+fn team_scope(name: &str) -> TeamScope {
+    TeamScope {
+        name: name.into(),
+        private: false,
+        allow: vec![],
+        agents: vec![],
+    }
+}
+
+async fn issue_code(admin: &mut Client, team: &str) -> String {
+    let response = admin
+        .request(Request::IssueLeaseCode { team: team.into() })
+        .await
+        .unwrap();
+    let Response::LeaseCode { code, .. } = response else {
+        panic!("expected lease code, got {response:?}");
+    };
+    code
+}
+
+async fn issue_and_redeem(admin: &mut Client, gateway: &mut Client, team: &str) {
+    let code = issue_code(admin, team).await;
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+}
+
+fn limits_with(lease_secs: u64, code_secs: u64) -> Limits {
+    Limits {
+        lease_secs,
+        code_secs,
+        ..Limits::default()
+    }
+}
+
+async fn kill(admin: &mut Client, session: &str) {
+    assert!(matches!(
+        admin
+            .request(Request::Kill {
+                session: session.into(),
+                now: true,
+            })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+}
+
+#[tokio::test]
+async fn issue_lease_code_requires_a_running_remote_member_of_the_team() {
+    let code_secs = 17;
+    let Some((dir, daemon)) = start_confined_daemon_with_limits(limits_with(10, code_secs)).await
+    else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    assert!(matches!(
+        admin
+            .request(Request::IssueLeaseCode {
+                team: "missing-team".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Error { message }
+            if message == "no agent in this team has remote messaging enabled"
+    ));
+    let fixture = tempfile::tempdir().unwrap();
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "send-only",
+        Some(RemoteMode::Send),
+        Some(team_scope("send-team")),
+    )
+    .await;
+    let response = admin
+        .request(Request::IssueLeaseCode {
+            team: "send-team".into(),
+        })
+        .await
+        .unwrap();
+    let Response::LeaseCode {
+        code,
+        agents,
+        valid_secs,
+    } = response
+    else {
+        panic!("expected lease code, got {response:?}");
+    };
+    assert_eq!(code.len(), 12);
+    assert!(
+        code.bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    assert_eq!(agents, vec!["send-only (send)"]);
+    assert_eq!(valid_secs, code_secs);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn inbound_lease_expires_and_does_not_store_late_messages() {
+    let Some((dir, daemon)) = start_confined_daemon_with_limits(limits_with(1, 10)).await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "expiring-target",
+        Some(RemoteMode::Both),
+        Some(team_scope("expiry-team")),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "expiry-team").await;
+    assert!(matches!(
+        gateway
+            .request(Request::HumanInbound {
+                to: "expiring-target@host-a".into(),
+                body: "before expiry".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Accepted { .. }
+    ));
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let response = gateway
+        .request(Request::HumanInbound {
+            to: "expiring-target@host-a".into(),
+            body: "after expiry".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        failed_message(response),
+        "remote messaging is not active for this team; start it at the computer"
+    );
+    let Response::Messages { messages } = admin
+        .request(Request::ListMessages {
+            session: None,
+            state: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected message listing");
+    };
+    assert_eq!(messages.len(), 1);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn lease_codes_expire_are_single_use_and_wrong_attempts_reset_on_issue() {
+    let Some((dir, daemon)) = start_confined_daemon_with_limits(limits_with(10, 1)).await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "code-target",
+        Some(RemoteMode::Both),
+        Some(team_scope("code-team")),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    let expired = issue_code(&mut admin, "code-team").await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code: expired })
+            .await
+            .unwrap(),
+        Response::Error { message } if message == "invalid or expired code"
+    ));
+    let code = issue_code(&mut admin, "code-team").await;
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code: code.clone() })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code })
+            .await
+            .unwrap(),
+        Response::Error { message } if message == "invalid or expired code"
+    ));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn five_wrong_codes_drop_pending_codes_until_issue_resets_the_counter() {
+    let Some((dir, daemon)) = start_confined_daemon().await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "guess-target",
+        Some(RemoteMode::Both),
+        Some(team_scope("guess-team")),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    let code = issue_code(&mut admin, "guess-team").await;
+    for _ in 0..5 {
+        assert!(matches!(
+            gateway
+                .request(Request::RedeemLeaseCode {
+                    code: "ffffffffffff".into(),
+                })
+                .await
+                .unwrap(),
+            Response::Error { message } if message == "invalid or expired code"
+        ));
+    }
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code })
+            .await
+            .unwrap(),
+        Response::Error { message } if message == "invalid or expired code"
+    ));
+    let replacement = issue_code(&mut admin, "guess-team").await;
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code: replacement })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn lease_membership_is_fixed_and_survivors_keep_access_after_partial_down() {
+    let Some((dir, daemon)) = start_confined_daemon().await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let team = team_scope("members-team");
+    let first = create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "first-member",
+        Some(RemoteMode::Both),
+        Some(team.clone()),
+    )
+    .await;
+    let second = create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "second-member",
+        Some(RemoteMode::Both),
+        Some(team.clone()),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "members-team").await;
+    kill(&mut admin, &first).await;
+    assert!(matches!(
+        gateway
+            .request(Request::HumanInbound {
+                to: "second-member@host-a".into(),
+                body: "survivor".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Accepted { .. }
+    ));
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "joined-member",
+        Some(RemoteMode::Both),
+        Some(team.clone()),
+    )
+    .await;
+    let joined = gateway
+        .request(Request::HumanInbound {
+            to: "joined-member@host-a".into(),
+            body: "joiner".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        failed_message(joined),
+        "remote messaging is not active for this team; start it at the computer"
+    );
+    kill(&mut admin, &second).await;
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "restarted-member",
+        Some(RemoteMode::Both),
+        Some(team),
+    )
+    .await;
+    let restarted = gateway
+        .request(Request::HumanInbound {
+            to: "restarted-member@host-a".into(),
+            body: "restart".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        failed_message(restarted),
+        "remote messaging is not active for this team; start it at the computer"
+    );
+    daemon.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn gateway_inbound_is_stored_as_a_human_message_for_a_confined_session() {
     let Some((dir, daemon)) = start_confined_daemon().await else {
@@ -146,14 +531,16 @@ async fn gateway_inbound_is_stored_as_a_human_message_for_a_confined_session() {
     };
     let mut admin = Client::connect(dir.path()).await.unwrap();
     let fixture = tempfile::tempdir().unwrap();
-    let recipient = create_confined(
+    let recipient = create_confined_with_team(
         &mut admin,
         fixture.path(),
         "confined-target",
         Some(RemoteMode::Both),
+        Some(team_scope("inbound-team")),
     )
     .await;
     let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "inbound-team").await;
 
     let response = gateway
         .request(Request::HumanInbound {
@@ -359,16 +746,18 @@ async fn cli_remote_mode_reaches_new_session_and_controls_inbound_direction() {
         ),
         "remote messages to this session are not enabled"
     );
-    assert!(matches!(
-        gateway
-            .request(Request::HumanInbound {
-                to: "cli-both@host-a".into(),
-                body: "message".into(),
-            })
-            .await
-            .unwrap(),
-        Response::Accepted { .. }
-    ));
+    assert_eq!(
+        failed_message(
+            gateway
+                .request(Request::HumanInbound {
+                    to: "cli-both@host-a".into(),
+                    body: "message".into(),
+                })
+                .await
+                .unwrap()
+        ),
+        "remote messaging is not active for this team; start it at the computer"
+    );
     daemon.shutdown().await.unwrap();
 }
 
@@ -529,6 +918,9 @@ fn gateway_other_requests() -> Vec<Request> {
         },
         Request::CancelMessage { id: "m_1".into() },
         Request::BridgeAttach,
+        Request::IssueLeaseCode {
+            team: "gateway-team".into(),
+        },
     ]
 }
 
@@ -539,14 +931,16 @@ async fn gateway_can_only_send_human_inbound_and_keeps_connection_usable() {
     };
     let mut admin = Client::connect(dir.path()).await.unwrap();
     let fixture = tempfile::tempdir().unwrap();
-    let _recipient = create_confined(
+    let _recipient = create_confined_with_team(
         &mut admin,
         fixture.path(),
         "confined-target",
         Some(RemoteMode::Both),
+        Some(team_scope("gateway-team")),
     )
     .await;
     let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "gateway-team").await;
     for request in gateway_other_requests() {
         assert_eq!(
             error_message(gateway.request(request).await.unwrap()),
@@ -582,6 +976,17 @@ async fn admin_and_session_tokens_cannot_speak_as_the_human() {
         ),
         "not permitted for this token"
     );
+    assert_eq!(
+        error_message(
+            admin
+                .request(Request::RedeemLeaseCode {
+                    code: "0123456789ab".into(),
+                })
+                .await
+                .unwrap()
+        ),
+        "not permitted for this token"
+    );
     let (session, token, address) = common::new_agent(
         &mut admin,
         dir.path(),
@@ -597,6 +1002,28 @@ async fn admin_and_session_tokens_cannot_speak_as_the_human() {
                 .request(Request::HumanInbound {
                     to: format!("{session}@host-a"),
                     body: "message".into(),
+                })
+                .await
+                .unwrap()
+        ),
+        "not permitted for a session token"
+    );
+    assert_eq!(
+        error_message(
+            session_client
+                .request(Request::IssueLeaseCode {
+                    team: "agent-team".into(),
+                })
+                .await
+                .unwrap()
+        ),
+        "not permitted for a session token"
+    );
+    assert_eq!(
+        error_message(
+            session_client
+                .request(Request::RedeemLeaseCode {
+                    code: "0123456789ab".into(),
                 })
                 .await
                 .unwrap()

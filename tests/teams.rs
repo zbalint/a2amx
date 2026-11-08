@@ -91,11 +91,19 @@ async fn team_up_validates_remote_before_start_and_carries_it_to_the_session() {
     std::fs::write(
         workspace.path().join("team.toml"),
         r#"
+        team = "team-a"
         [[session]]
-        name = "remote"
+        name = "architect"
         command = ["sleep", "30"]
         cwd = "."
         remote = "both"
+        [session.confine]
+        enabled = true
+        [[session]]
+        name = "developer"
+        command = ["sleep", "30"]
+        cwd = "."
+        remote = "send"
         [session.confine]
         enabled = true
         "#,
@@ -113,17 +121,137 @@ async fn team_up_validates_remote_before_start_and_carries_it_to_the_session() {
         "{}",
         String::from_utf8_lossy(&started.stderr)
     );
+    let stdout = String::from_utf8_lossy(&started.stdout);
+    assert!(
+        stdout.contains("remote messaging for: team-a-architect (both), team-a-developer (send)")
+    );
+    let code = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("post this code in the control channel within "))
+        .and_then(|line| line.rsplit_once(": "))
+        .map(|(_, code)| code.to_owned())
+        .expect("team up prints lease code");
     let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
     assert!(matches!(
         gateway
+            .request(Request::RedeemLeaseCode { code })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+    assert!(matches!(
+        gateway
             .request(Request::HumanInbound {
-                to: "remote@host-a".into(),
+                to: "team-a-architect@host-a".into(),
                 body: "message".into(),
             })
             .await
             .unwrap(),
         Response::Accepted { .. }
     ));
+    assert!(matches!(
+        gateway
+            .request(Request::HumanInbound {
+                to: "team-a-developer@host-a".into(),
+                body: "message".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Failed { message, .. }
+            if message == "remote messages to this session are not enabled"
+    ));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
+    let (dir, daemon) = common::start_daemon().await;
+    let Some(bwrap) = a2amx::confine::resolve_bwrap(None).ok() else {
+        daemon.shutdown().await.unwrap();
+        return;
+    };
+    std::os::unix::fs::symlink(bwrap, dir.path().join("bwrap-path/bwrap")).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    let runtime = tempfile::tempdir().unwrap();
+
+    std::fs::write(
+        workspace.path().join("team.toml"),
+        r#"
+        team = "quiet"
+        [[session]]
+        name = "plain"
+        command = ["sleep", "30"]
+        "#,
+    )
+    .unwrap();
+    let plain = run_binary(
+        dir.path(),
+        workspace.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--detach", "--file", "team.toml"],
+    );
+    assert!(plain.status.success());
+    let plain_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&plain.stdout),
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert!(!plain_output.contains("remote messaging"));
+
+    std::fs::write(
+        workspace.path().join("team.toml"),
+        r#"
+        team = "dry-run"
+        [[session]]
+        name = "remote"
+        command = ["sleep", "30"]
+        remote = "both"
+        [session.confine]
+        enabled = true
+        "#,
+    )
+    .unwrap();
+    let dry = run_binary(
+        dir.path(),
+        workspace.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run", "--file", "team.toml"],
+    );
+    assert!(dry.status.success());
+    let dry_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&dry.stdout),
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    assert!(!dry_output.contains("post this code in the control channel"));
+
+    std::fs::write(
+        workspace.path().join("team.toml"),
+        r#"
+        [[session]]
+        name = "unscoped-remote"
+        command = ["sleep", "30"]
+        remote = "both"
+        [session.confine]
+        enabled = true
+        "#,
+    )
+    .unwrap();
+    let unscoped = run_binary(
+        dir.path(),
+        workspace.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--detach", "--file", "team.toml"],
+    );
+    assert!(unscoped.status.success());
+    assert!(
+        String::from_utf8_lossy(&unscoped.stderr)
+            .contains("remote messaging is set but the file has no team name; no lease can start")
+    );
     daemon.shutdown().await.unwrap();
 }
 

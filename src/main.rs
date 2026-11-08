@@ -1574,6 +1574,10 @@ async fn run_team_up(
             team::Action::Start(session) if session.auto_confine().is_some()
         )
     });
+    let remote_requested = wanted.iter().any(|session| session.remote.is_some());
+    let remote_team = wanted
+        .iter()
+        .find_map(|session| session.team.as_ref().map(|team| team.name.clone()));
     let accepted = if has_auto {
         load_accepted_grants(&home).await?
     } else {
@@ -1617,6 +1621,51 @@ async fn run_team_up(
         };
         if attach_name == Some(name.as_str()) {
             attached_id = Some(id);
+        }
+    }
+    if remote_requested {
+        if let Some(team) = remote_team {
+            match client.request(Request::IssueLeaseCode { team }).await {
+                Ok(Response::LeaseCode {
+                    code,
+                    agents,
+                    valid_secs,
+                }) => {
+                    write_stdout(
+                        format!("remote messaging for: {}\n", agents.join(", ")).into_bytes(),
+                    )
+                    .await?;
+                    write_stdout(
+                        format!(
+                            "post this code in the control channel within {}: {code}\n",
+                            display_duration(Duration::from_secs(valid_secs))
+                        )
+                        .into_bytes(),
+                    )
+                    .await?;
+                }
+                Ok(Response::Error { message }) => {
+                    write_stderr(format!("warning: {message}\n").into_bytes()).await?;
+                }
+                Ok(other) => {
+                    write_stderr(
+                        format!("warning: unexpected lease response: {other:?}\n").into_bytes(),
+                    )
+                    .await?;
+                }
+                Err(error) => {
+                    write_stderr(
+                        format!("warning: could not obtain lease code: {error}\n").into_bytes(),
+                    )
+                    .await?;
+                }
+            }
+        } else {
+            write_stderr(
+                b"remote messaging is set but the file has no team name; no lease can start\n"
+                    .to_vec(),
+            )
+            .await?;
         }
     }
     if !detach

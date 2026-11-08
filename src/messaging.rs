@@ -33,6 +33,9 @@ pub const HEARTBEAT_SUBJECT: &str = "heartbeat";
 pub const ACTIVITY_SUBJECT: &str = "activity";
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 pub const HEARTBEAT_MAX: Duration = Duration::from_secs(24 * 60 * 60);
+pub const LEASE_MAX: Duration = Duration::from_secs(24 * 60 * 60);
+pub const CODE_TTL: Duration = Duration::from_secs(10 * 60);
+pub const MAX_WRONG_CODES: u32 = 5;
 // shortcut: delivery uses one fixed 400 ms paste gap; the threshold was not bisected below 300 ms.
 pub const PASTE_GAP: Duration = Duration::from_millis(400);
 pub const COOLDOWN: Duration = Duration::from_secs(1);
@@ -136,6 +139,8 @@ pub struct Limits {
     pub rate_per_minute: u32,
     pub max_stored_messages: u32,
     pub retention_secs: u64,
+    pub lease_secs: u64,
+    pub code_secs: u64,
 }
 
 impl Default for Limits {
@@ -145,6 +150,8 @@ impl Default for Limits {
             rate_per_minute: 20,
             max_stored_messages: 10_000,
             retention_secs: 7 * 24 * 3600,
+            lease_secs: LEASE_MAX.as_secs(),
+            code_secs: CODE_TTL.as_secs(),
         }
     }
 }

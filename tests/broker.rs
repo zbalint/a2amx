@@ -671,6 +671,8 @@ async fn pending_limit_and_content_errors() {
             rate_per_minute: 100,
             max_stored_messages: 100,
             retention_secs: 7 * 24 * 3600,
+            lease_secs: 24 * 60 * 60,
+            code_secs: 10 * 60,
         },
     )
     .await;
@@ -981,6 +983,8 @@ async fn stored_limit_and_rate_limit_are_independent() {
             rate_per_minute: 100,
             max_stored_messages: 2,
             retention_secs: 7 * 24 * 3600,
+            lease_secs: 24 * 60 * 60,
+            code_secs: 10 * 60,
         },
     )
     .await;
@@ -1043,6 +1047,8 @@ async fn rate_limit_does_not_cross_sender_sessions() {
             rate_per_minute: 2,
             max_stored_messages: 100,
             retention_secs: 7 * 24 * 3600,
+            lease_secs: 24 * 60 * 60,
+            code_secs: 10 * 60,
         },
     )
     .await;

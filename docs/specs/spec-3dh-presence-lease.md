@@ -101,3 +101,21 @@ The Discord side of pairing and who is paired (the gateway keeps it), rate limit
 ## Amendments
 
 1. (after BLOCKED m_6040) `a2amx new` has no team flag; the CLI acceptance test in `tests/human_inbound.rs` expects the lease denial for `both` and the mode denial for `send` instead of a team scope. The consultant's review wrongly named `a2amx new --team`; the three mentions are corrected.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review `m_6035`) model not reported; developer and tester openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed.
+
+BLOCKED/amend cycles: 1 (amendment 1).
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | a lease tied to the team name lets a later session of the same name join without a code | lease bound to the session ids captured at redeem |
+| draft review | consultant | wrong-code counter was described per team but a redeem names no team | made daemon-wide |
+| draft review | consultant | existing accept tests use sessions with no team and could not get a lease; `remote_ineligible` needed `Runtime`; `team up` output hidden by attach | spec amended before lock |
+| draft review | consultant | named `a2amx new --team`, which does not exist | found at implementation (next row) |
+| implementation | developer | BLOCKED: the CLI acceptance test cannot join a team; `src/cli.rs` is out of scope | amendment 1: the test expects the lease denial for `both` and the mode denial for `send` |
+| implementation | developer | matching stopped at the first matching code instead of comparing every pending code (spec says every) | fixed after an advisor note, before handoff of the final diff |
+| tester pass | tester | clippy `collapsible_if` in the new matcher | fixed by the developer |
+| tester pass | tester | no assertion on code shape (12 hex) or the issued duration | assertions added |
+| architect review | architect | missing blank line between functions | fixed by the developer |

@@ -398,6 +398,44 @@ fn version_request_and_response_use_exact_shapes() {
 }
 
 #[test]
+fn lease_requests_and_response_use_exact_shapes() {
+    let issue = Request::IssueLeaseCode {
+        team: "team-a".into(),
+    };
+    let issue_json = serde_json::to_string(&issue).unwrap();
+    assert_eq!(issue_json, r#"{"type":"issue_lease_code","team":"team-a"}"#);
+    assert_eq!(serde_json::from_str::<Request>(&issue_json).unwrap(), issue);
+
+    let redeem = Request::RedeemLeaseCode {
+        code: "0123456789ab".into(),
+    };
+    let redeem_json = serde_json::to_string(&redeem).unwrap();
+    assert_eq!(
+        redeem_json,
+        r#"{"type":"redeem_lease_code","code":"0123456789ab"}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Request>(&redeem_json).unwrap(),
+        redeem
+    );
+
+    let response = Response::LeaseCode {
+        code: "0123456789ab".into(),
+        agents: vec!["team-a-architect (both)".into()],
+        valid_secs: 600,
+    };
+    let response_json = serde_json::to_string(&response).unwrap();
+    assert_eq!(
+        response_json,
+        r#"{"type":"lease_code","code":"0123456789ab","agents":["team-a-architect (both)"],"valid_secs":600}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Response>(&response_json).unwrap(),
+        response
+    );
+}
+
+#[test]
 fn reset_request_and_response_use_exact_shapes() {
     let request = Request::Reset {
         session: "s2".to_owned(),

@@ -225,6 +225,14 @@ pub enum Request {
         to: String,
         body: String,
     },
+    /// Admin only: issue a one-time code for a team's presence lease.
+    IssueLeaseCode {
+        team: String,
+    },
+    /// Gateway only: redeem a one-time presence lease code.
+    RedeemLeaseCode {
+        code: String,
+    },
     ListAgents,
     MessageStatus {
         id: String,
@@ -309,6 +317,11 @@ pub enum Response {
         top_rows: u16,
     },
     Ok,
+    LeaseCode {
+        code: String,
+        agents: Vec<String>,
+        valid_secs: u64,
+    },
     Error {
         message: String,
     },
