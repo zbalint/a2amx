@@ -2,7 +2,9 @@
 
 Status: draft, not locked. This is the first part of the permissions design (F21), written
 for remote human messaging (F81, roadmap 0.3.0). It decides only what that feature needs
-and leaves a place for the rest of F21. Nothing here is built.
+and leaves a place for the rest of F21. The daemon side is built (specs 3df to 3dj: the gateway
+role, the per-agent mode, the presence lease, human-bound messages and the rate limits); the Discord
+gateway process is not.
 
 The first transport is Discord (owner decision, 2026-11-08); Telegram may follow. Everything
 except the sections on the bot token, pairing and the server layout is independent of the
@@ -85,9 +87,12 @@ A team file can come from a repository, so the file alone grants nothing: the le
 - **Lifetime.** At most 24 hours. It belongs to the team, is kept in memory only, and ends when
   the team has no running agent left (a whole `team down`) or when the daemon stops. Stopping
   one agent does not end it. A restart always needs a new lease.
-- **What persists.** The pairing record (the Discord user id and the server id) is stored, in a
-  0600 file or `messages.db` under the state directory, and only the daemon writes it. The lease
-  does not persist.
+- **What persists.** The pairing record (the Discord user id and the server id) is kept by the
+  gateway, in a 0600 file under the state directory, not by the daemon (decided during
+  implementation: the daemon never needs the Discord ids). The lease does not persist.
+- **Who is covered.** The lease names the session ids that were team members when the code was
+  redeemed, not the team name, so a session that joins or reuses the name later gets no remote
+  messaging until a new lease starts.
 - **Expiry.** A message that arrives while the lease is invalid is rejected with a fixed error
   line from the bot; nothing reaches an agent, and no agent message reaches the human.
 - **The code** is random, single use, compared in constant time, with a capped number of wrong
@@ -125,13 +130,17 @@ reuse the shape of the existing per-sender limit (in memory, sliding 60 s window
 - queue length and body size for human messages (a Discord bot message is at most 2000
   characters, so a longer agent message is split or refused; the spec decides).
 
-Failed lease attempts need a counter of their own: the existing limit is keyed by sender session
-and only counts accepted messages. That is new code. The numbers are decided in the spec and
-tested, not set here.
+Failed lease attempts have a counter of their own: five wrong codes per issued code, daemon-wide.
+Built defaults: 20 human messages a minute in, 30 a minute from all agents to the human in total
+(plus each agent's own 20), and 8000 bytes for a human message; the gateway splits long agent messages
+(not built yet). Refused requests are not counted, so a hijacked gateway can probe agent names without
+a limit (accepted, listed in spec 3dj).
 
 ### D7. Delivery reports only what is known
 
-For an agent-to-human message the states are: accepted by the daemon, sent to Discord, failed.
+For an agent-to-human message the states are the store's: accepted (pending), delivering, submitted (the
+gateway sent it to Discord), and `undeliverable` when the gateway reports a failure (the stored detail is
+a fixed line, never the transport's error text).
 For a human-to-agent message: accepted, delivered to the session's channel, and the receipt the
 harness gives. Nothing is reported as processed by the model. The human sees "delivered to
 architect", or the reason it was rejected.

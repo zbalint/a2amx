@@ -417,7 +417,10 @@ machine; there is no central-versus-host split yet.
   connection that presents a session token has only session powers (`list_agents`,
   `send_message`, `message_status` for its own messages, `reset_session` when the
   target grants `control_from`, and `report_prompt` for the hook); the sender is
-  always that session. The admin token keeps the human's powers and cannot send.
+  always that session. The admin token keeps the human's powers and cannot send. A third
+  token, `gateway.token` in the state directory, gives the gateway role: it may only post the human's
+  inbound messages, fetch and report the human-bound ones, and redeem lease codes (`docs/permissions.md`).
+  The human's address is `human:owner`; the daemon sets the sender, never the caller.
 - **Addresses.** A session is `<name>@<host>` (`a2amx new --name`, daemon
   `--host-name`) or `<id>@<host>` when unnamed. Names match `[a-z0-9][a-z0-9-]{0,62}`,
   may not look like a session id (`s12`), and are unique among all sessions still in

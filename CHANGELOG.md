@@ -5,6 +5,20 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Remote human messaging, daemon side (F81, in progress; the Discord gateway process is not part of this yet, so nothing
+  reaches a phone). A new per-agent setting `remote` (`a2amx new --remote send|both`, team file key `remote`) lets an
+  agent message the owner (`send_message(to="human:owner")`): `send` means the agent may message the human only, `both`
+  also lets the human write to it. It needs a confined session; the daemon refuses it otherwise. A presence lease
+  (at most 24 hours, in memory, bound to the team members at the time it starts) must be active: `a2amx team up` prints
+  the agents it enables and a single-use code, and the gateway hands the code back to start the lease. The daemon limits
+  traffic from the human to 20 messages a minute, all agents to the human to 30 a minute, each agent to its existing 20,
+  and a human message to 8000 bytes (`rate_limited`, `too_large`). New requests `IssueLeaseCode`, `RedeemLeaseCode`,
+  `HumanInbound`, `HumanOutboundNext` and `HumanOutboundDone`, a new `gateway.token` file in the state directory, and
+  new `Limits` fields; the message database schema is unchanged. Additive; an older client ignores the new fields
+  (`docs/permissions.md`).
+
 ## [0.2.0] - 2026-11-07
 
 ### Added
