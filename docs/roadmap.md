@@ -44,15 +44,27 @@ Make what exists on one machine dependable and explainable before adding more.
   and a failing flaky PTY test (I7, I14, I18) that prints the screen, the raw bytes and the
   daemon's view, so its cause can be found (spec 3cq). The flakes themselves are not fixed yet.
 
-### 0.3.0: Worktrees
+### 0.3.0: Remote human messaging
 
-- An authorized agent or operator can move a session into a git worktree. A2AMX stops
-  the session's process and starts it again in the worktree, with the same name and
-  settings and a fresh conversation, as after a reset. Several sessions can share one
-  worktree, so an implementer and a reviewer can work in the same tree while another
-  pair, or a separate team, works in parallel on the same repository (F20).
-- A2AMX creates the worktrees it needs and never removes one; cleaning up stays with
-  the operator.
+Let an agent on a long task reach its operator while the operator is away from the
+computer, and let the operator answer, or write first, from a phone. The first
+transport is Telegram. The design is not final (F81).
+
+- A human is a messaging participant with its own message envelope, distinct from
+  agent messages and daemon notifications. An agent addresses the paired human through
+  the existing send tool, and the human reaches chosen agents from the phone.
+- It is off by default. The operator enables it for each agent in the team file or with
+  a command-line option, and only sessions running under confinement can use it.
+- The operator pairs a phone at the computer, and a time-limited presence lease, at
+  most a day, starts when the operator brings a team up. The lease ends when the team
+  goes down or the daemon stops. A message that arrives without a valid lease is
+  rejected.
+- A message from the phone carries less authority than input typed at the computer.
+- Remote messaging has its own rate limits, enforced by the daemon.
+- It is a messaging feature only: no terminal output, remote control, attachments or
+  group chats. Telegram bot messages are not end-to-end encrypted, and the
+  documentation says so. The core does not depend on Telegram, so another transport
+  can be added later.
 
 ### 0.4.0: Multiple hosts, messaging and management
 
@@ -80,6 +92,18 @@ clearly attributed message, and report a receipt when the harness provides one.
 - Start a session on another host, and team files that place sessions on hosts (G3).
 - A trusted working directory, so a startup dialog cannot block an unattended launch
   on a remote host (part of F2).
+
+### Later: Worktrees
+
+Not scheduled; it has no version yet (owner decision, 2026-11-08).
+
+- An authorized agent or operator can move a session into a git worktree. A2AMX stops
+  the session's process and starts it again in the worktree, with the same name and
+  settings and a fresh conversation, as after a reset. Several sessions can share one
+  worktree, so an implementer and a reviewer can work in the same tree while another
+  pair, or a separate team, works in parallel on the same repository (F20).
+- A2AMX creates the worktrees it needs and never removes one; cleaning up stays with
+  the operator.
 
 ## Design work ahead of the milestones
 
