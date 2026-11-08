@@ -48,7 +48,7 @@ Make what exists on one machine dependable and explainable before adding more.
 
 Let an agent on a long task reach its operator while the operator is away from the
 computer, and let the operator answer, or write first, from a phone. The first
-transport is Telegram. The design is not final (F81).
+transport is Discord; Telegram may follow. The design is not final (F81).
 
 - A human is a messaging participant with its own message envelope, distinct from
   agent messages and daemon notifications. An agent addresses the paired human through
@@ -62,8 +62,8 @@ transport is Telegram. The design is not final (F81).
 - A message from the phone carries less authority than input typed at the computer.
 - Remote messaging has its own rate limits, enforced by the daemon.
 - It is a messaging feature only: no terminal output, remote control, attachments or
-  group chats. Telegram bot messages are not end-to-end encrypted, and the
-  documentation says so. The core does not depend on Telegram, so another transport
+  direct messages with agents. Discord text is not end-to-end encrypted, and the
+  documentation says so. The core does not depend on Discord, so another transport
   can be added later.
 
 ### 0.4.0: Multiple hosts, messaging and management
