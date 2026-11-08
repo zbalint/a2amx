@@ -149,6 +149,7 @@ specs showing it found nothing.
 | `bridge` | The `omp-bridge` relay between an OMP extension and the daemon |
 | `channel` | The `a2amx mcp --channel` process that relays daemon deliveries to Claude Code as channel events |
 | `delivery` | Ordered delivery attempts and the PTY, native, and Codex delivery channels |
+| `gateway` | The chat-independent core of the remote messaging gateway: author check, channel mapping, dedup file, fixed reply lines, message splitting |
 | `harness` | Harness profiles, command wiring, readiness, and peer authorization |
 | `hook` | The Claude Code `UserPromptSubmit` hook adapter |
 | `messaging` | Message envelopes, validation, limits, states, and rendering |
