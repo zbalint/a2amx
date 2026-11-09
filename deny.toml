@@ -16,6 +16,9 @@ allow = [
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
+    "ISC", # ring, rustls-webpki and untrusted
+    "CDLA-Permissive-2.0", # webpki-roots
+    "BSD-3-Clause", # subtle
 ]
 confidence-threshold = 0.93
 

@@ -15,6 +15,7 @@ pub mod codex;
 pub mod confine;
 pub mod daemon;
 mod delivery;
+pub mod discord;
 pub mod emulator;
 pub mod gateway;
 pub mod grant;

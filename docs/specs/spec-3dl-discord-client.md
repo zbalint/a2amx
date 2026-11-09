@@ -158,3 +158,22 @@ Amendment 1 (tester pass and architect review): the tests also pin: a client-ini
 ## 5. Out of scope
 
 `a2amx gateway up`, reading config or the token from files, who may set `api_base` and `gateway_url`, pairing, the control channel, acting on the member count (this spec only reads it), a "connected" signal for readiness (3dm decides if it needs one), keeping the token out of logs (tungstenite logs frames, Identify included, at trace level and ureq's trace level is not redacted: the gateway process of 3dm must filter `tungstenite`, `tokio_tungstenite` and `ureq` out of its log output, and the module itself never initializes or configures logging), the confinement allowlist (it needs `discord.com` and `*.discord.gg`), channel permission overwrites (the private server's `@everyone` rights are set up by the operator, spec 3do), deleting or renaming channels, rebuilding the channel-to-agent bindings after a restart (3dm), sharding, compression, intents beyond the three, interactions, attachments, message edits, Discord's per-route rate-limit buckets, proxies, and a live test against the real Discord (the architect and owner do that by hand after 3dm).
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review) model not reported; developer openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed; tester reported GLM (zai) under OMP.
+
+BLOCKED/amend cycles: 1 (amendment 1, written from the tester and architect findings, not from a developer BLOCKED). Fix rounds after amendment: 3.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | 4 high, 7 medium and 5 low findings on the first draft (reconnect and resume rules, rate limit handling, limits, test gaps) | spec amended before lock |
+| draft review | architect | `webpki-roots` is a direct dependency the spec did not list | noted in amendment 1 |
+| tester pass | tester | a transient reconnect reset the backoff, so repeated 4007/4009 would not grow the wait; stale exponent after a stable connection | amendment 1: 4007/4009 clear the session and grow the backoff; a stable connection waits the base time |
+| architect review | architect | no timeout around TCP connect, TLS handshake and Hello | amendment 1: all within `request_timeout`; test with a silent server |
+| architect review | architect | `identify_gap` also delayed a Resume | amendment 1: the gap applies to Identify only |
+| implementation | developer | the invalid `guild_id` case had no test | test added |
+| implementation | developer's advisor | suggested resetting the backoff on READY | overruled: Discord bans repeated Identifies, READY is not proof of a stable link; mutant now killed by a test |
+| tester pass (rebaseline) | tester | two surviving mutants: Resume subject to `identify_gap`, and the Resume sequence after a queue hand-over | two tests added, mutants killed |
+| architect review | architect | a surviving mutant: the stored Resume sequence lost after a filtered or non-message dispatch | two tests added (lines 777 and 808 mutants killed) |
+| architect review | architect | the first `cargo test` run overlapped a developer edit of the test file | rerun on the final snapshot |
