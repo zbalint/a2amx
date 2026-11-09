@@ -28,6 +28,15 @@ async fn settled(task: tokio::task::JoinHandle<anyhow::Result<()>>) -> anyhow::R
         .expect("relay task must settle");
     result.expect("relay task finished without panic")
 }
+async fn kill_and_wait(child: std::process::Child) -> std::process::Output {
+    tokio::task::spawn_blocking(move || {
+        let mut child = child;
+        child.kill().unwrap();
+        child.wait_with_output().unwrap()
+    })
+    .await
+    .unwrap()
+}
 
 fn write_file(path: &std::path::Path, text: &str, mode: u32) {
     fs::write(path, text).unwrap();
@@ -1202,16 +1211,21 @@ async fn gateway_run_with_trace_logs_leak_no_token() {
         ),
         0o600,
     );
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .arg("--home")
-        .arg(home.path())
-        .args(["gateway", "run"])
-        .env("RUST_LOG", "trace")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let home_path = home.path().to_owned();
+    let child = tokio::task::spawn_blocking(move || {
+        ProcessCommand::new(env!("CARGO_BIN_EXE_a2amx"))
+            .arg("--home")
+            .arg(home_path)
+            .args(["gateway", "run"])
+            .env("RUST_LOG", "trace")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    })
+    .await
+    .unwrap();
     let control = match tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             let found = discord
@@ -1229,8 +1243,7 @@ async fn gateway_run_with_trace_logs_leak_no_token() {
     {
         Ok(id) => id,
         Err(_) => {
-            child.kill().unwrap();
-            let output = child.wait_with_output().unwrap();
+            let output = kill_and_wait(child).await;
             eprintln!("child stdout: {}", String::from_utf8_lossy(&output.stdout));
             eprintln!("child stderr: {}", String::from_utf8_lossy(&output.stderr));
             panic!("control channel never appeared");
@@ -1241,8 +1254,7 @@ async fn gateway_run_with_trace_logs_leak_no_token() {
         .await
         .unwrap();
     eventually(|| async { (!discord.posts(&control).is_empty()).then_some(()) }).await;
-    child.kill().unwrap();
-    let output = child.wait_with_output().unwrap();
+    let output = kill_and_wait(child).await;
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -1275,15 +1287,20 @@ async fn gateway_run_pair_binary_prompts_and_writes_record() {
         ),
         0o600,
     );
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .arg("--home")
-        .arg(home.path())
-        .args(["gateway", "run", "--pair"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let home_path = home.path().to_owned();
+    let mut child = tokio::task::spawn_blocking(move || {
+        ProcessCommand::new(env!("CARGO_BIN_EXE_a2amx"))
+            .arg("--home")
+            .arg(home_path)
+            .args(["gateway", "run", "--pair"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    })
+    .await
+    .unwrap();
     let stderr = child.stderr.take().unwrap();
     let stderr_text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let copy = std::sync::Arc::clone(&stderr_text);
@@ -1351,8 +1368,7 @@ async fn gateway_run_pair_binary_prompts_and_writes_record() {
             & 0o777,
         0o600
     );
-    child.kill().unwrap();
-    let _ = child.wait_with_output().unwrap();
+    let _ = kill_and_wait(child).await;
 }
 
 #[test]
