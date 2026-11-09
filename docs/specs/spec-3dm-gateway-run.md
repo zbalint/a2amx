@@ -4,6 +4,8 @@
 
 LOCKED (base: 75fd8d2, which accepts spec 3dl).
 
+Amendment 2: the Sonar gate failed on the 3dl push (75fd8d2) for one issue, rust:S3776 on `tests/discord.rs` line 1279 (the test `gateway_queue_reads_heartbeats_while_consumer_is_slow`, cognitive complexity 42, limit 30). `tests/discord.rs` is already in scope, so this spec also splits that test into smaller helper functions (same assertions, same behaviour, complexity at most 20 by the developer's hand count) in the same diff; its mutant (socket read gated on an empty queue) must still be killed by it.
+
 Amendment 1: section 2.5 item 5 no longer says a daemon `Response::Error` breaks the connection through `inbound` (the core maps it to a fixed line and `src/gateway.rs` stays out of scope).
 
 Scope (files that may be edited): `src/relay.rs` and `src/relay_files.rs` (new modules), `src/lib.rs` (two `pub mod` lines), `src/cli.rs` (the `gateway` command), `src/main.rs` (dispatch, signal handling, the pairing prompt, the log filter in section 2.6), `src/client.rs` (section 2.2), `tests/relay.rs` (new), `tests/common/fake_discord.rs` (new, section 2.7), `tests/common/mod.rs` (one `mod` line), `tests/discord.rs` (the moved helpers removed). Does not touch: `src/gateway.rs`, `src/discord.rs`, `src/daemon.rs`, `src/wire.rs`, `Cargo.toml`, `Cargo.lock`, `deny.toml`, the docs, `CHANGELOG.md`, `AGENTS.md` (the architect adds the module-table rows when committing).
