@@ -5,7 +5,7 @@
 [![Quality gate (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
 [![Coverage (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=coverage)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
 [![Security rating (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
-[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-orange?logo=rust)](https://github.com/zbalint/a2amx/blob/develop/Cargo.toml)
+[![Rust 1.89+](https://img.shields.io/badge/Rust-1.89%2B-orange?logo=rust)](https://github.com/zbalint/a2amx/blob/develop/Cargo.toml)
 [![Platform Linux](https://img.shields.io/badge/platform-Linux-blue?logo=linux)](https://github.com/zbalint/a2amx)
 [![License AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](https://spdx.org/licenses/AGPL-3.0-or-later.html)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/zbalint/a2amx/badge)](https://securityscorecards.dev/viewer/?uri=github.com/zbalint/a2amx)
@@ -79,7 +79,7 @@ Then start the two sessions from [the example above](#example). See [Installatio
 
 ## Compatibility and limits
 
-- Linux only; build requires Rust 1.88 or newer.
+- Linux only; build requires Rust 1.89 or newer.
 - Claude Code, OMP, and Codex have native delivery profiles. Other commands are held unless explicitly opted into blind delivery.
 - The daemon currently owns one machine; cross-host routing and remote launch are not built.
 - Agents cannot launch other sessions. Teams provide visibility and coordination, not OS-user or process isolation.

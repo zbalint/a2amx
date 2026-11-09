@@ -4,7 +4,7 @@ How-to for operators installing a stable executable separately from development 
 
 ## Install
 
-From a clone, with Rust 1.88 or newer:
+From a clone, with Rust 1.89 or newer:
 
 ```sh
 scripts/install.sh

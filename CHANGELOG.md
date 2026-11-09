@@ -19,6 +19,12 @@ All notable user-visible changes are listed here. The format follows
   new `Limits` fields; the message database schema is unchanged. Additive; an older client ignores the new fields
   (`docs/permissions.md`).
 
+### Changed
+
+- The minimum Rust version is 1.89 (was 1.88), and the bundled SQLite is 3.54 (`rusqlite` 0.41), which fixes the
+  advisory RUSTSEC-2026-0459 (CVE-2026-119375) for a database file that a less trusted party could have written. The
+  message database schema and its files are unchanged.
+
 ## [0.2.0] - 2026-11-07
 
 ### Added
