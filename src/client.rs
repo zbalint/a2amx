@@ -44,6 +44,14 @@ pub(crate) struct PreparedRequest(Vec<u8>);
 
 impl Client {
     pub async fn connect(state_dir: &Path) -> anyhow::Result<Self> {
+        Self::connect_with(state_dir, "admin.token").await
+    }
+
+    pub async fn connect_gateway(state_dir: &Path) -> anyhow::Result<Self> {
+        Self::connect_with(state_dir, "gateway.token").await
+    }
+
+    async fn connect_with(state_dir: &Path, token_file: &'static str) -> anyhow::Result<Self> {
         let path = state_dir.to_owned();
         let (addr, token) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let addresses = match std::fs::read_to_string(path.join("addr")) {
@@ -56,15 +64,20 @@ impl Client {
                 .next()
                 .context("daemon addr file is empty")?
                 .parse()?;
-            let token = std::fs::read_to_string(path.join("admin.token"))
-                .context("cannot read the daemon admin.token file")?;
+            let token_path = path.join(token_file);
+            let token = std::fs::read_to_string(&token_path)
+                .with_context(|| format!("cannot read the daemon {token_file} file"))?;
             Ok((addr, token))
         })
         .await??;
-        Self::connect_addr(addr, token.trim()).await
+        Self::connect_addr_with_token_file(addr, token.trim(), token_file).await
     }
 
-    pub async fn connect_addr(addr: SocketAddr, token: &str) -> anyhow::Result<Self> {
+    async fn connect_addr_with_token_file(
+        addr: SocketAddr,
+        token: &str,
+        token_file: &str,
+    ) -> anyhow::Result<Self> {
         let stream = match TcpStream::connect(addr).await {
             Ok(stream) => stream,
             Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
@@ -82,8 +95,12 @@ impl Client {
             .await?
         {
             Response::Ok => Ok(client),
-            _ => bail!("daemon rejected authentication; check the admin.token file"),
+            _ => bail!("daemon rejected authentication; check the {token_file} file"),
         }
+    }
+
+    pub async fn connect_addr(addr: SocketAddr, token: &str) -> anyhow::Result<Self> {
+        Self::connect_addr_with_token_file(addr, token, "admin.token").await
     }
 
     pub async fn request(&mut self, request: Request) -> anyhow::Result<Response> {

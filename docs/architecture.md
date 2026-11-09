@@ -421,6 +421,7 @@ machine; there is no central-versus-host split yet.
   token, `gateway.token` in the state directory, gives the gateway role: it may only post the human's
   inbound messages, fetch and report the human-bound ones, and redeem lease codes (`docs/permissions.md`).
   The human's address is `human:owner`; the daemon sets the sender, never the caller.
+- **Remote gateway.** `a2amx gateway run` (a separate process, started by the owner) relays between the daemon and Discord: the `relay` module drives the `gateway` core (author check, channel mapping, message splitting) and the `discord` client, with its config, Discord token and pairing under `<home>/gateway/` (`relay_files`). It talks to the daemon only with `gateway.token`, replies to the paired Discord account only, and pauses when the server has more members than `max_members`.
 - **Addresses.** A session is `<name>@<host>` (`a2amx new --name`, daemon
   `--host-name`) or `<id>@<host>` when unnamed. Names match `[a-z0-9][a-z0-9-]{0,62}`,
   may not look like a session id (`s12`), and are unique among all sessions still in

@@ -4,6 +4,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, dead_code)]
 
 pub mod fake_codex;
+pub mod fake_discord;
 pub mod pty;
 
 use a2amx::client::Client;

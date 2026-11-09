@@ -30,6 +30,8 @@ pub mod picker;
 pub mod prefix;
 pub mod privilege;
 pub mod quota;
+pub mod relay;
+pub mod relay_files;
 pub mod session;
 pub mod status;
 pub mod statusline;

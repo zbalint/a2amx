@@ -151,6 +151,8 @@ specs showing it found nothing.
 | `delivery` | Ordered delivery attempts and the PTY, native, and Codex delivery channels |
 | `discord` | The Discord side of the gateway: REST calls (channels, messages), the gateway websocket connection and its reconnect rules; names no a2amx policy |
 | `gateway` | The chat-independent core of the remote messaging gateway: author check, channel mapping, dedup file, fixed reply lines, message splitting |
+| `relay` | The `a2amx gateway run` loop: pairing, channel sync from the daemon, relay of inbound and outbound messages, member-count pause, reconnect to the daemon; uses `gateway` and `discord` |
+| `relay_files` | The gateway's files under `<home>/gateway/` (config, Discord token, pairing): secure reads and atomic writes |
 | `harness` | Harness profiles, command wiring, readiness, and peer authorization |
 | `hook` | The Claude Code `UserPromptSubmit` hook adapter |
 | `messaging` | Message envelopes, validation, limits, states, and rendering |

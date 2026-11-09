@@ -1,20 +1,21 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod common;
+
 use a2amx::discord::{ChannelInfo, Discord, DiscordConfig, DiscordError, Fatal};
 use a2amx::gateway::{Event, MAX_CHAT_CHARS};
-use futures_util::{SinkExt, StreamExt};
+use common::fake_discord::{
+    HttpReply, discord_for_http, discord_for_ws, hello, http_fake, next_close_code, next_json,
+    send_json, ws_fake,
+};
+use futures_util::SinkExt;
 use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc as std_mpsc};
-use std::thread;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::net::TcpListener as TokioTcpListener;
 use tokio::time::timeout;
+use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::{Message, protocol::CloseFrame};
-use tokio_tungstenite::{WebSocketStream, accept_async};
 
 #[test]
 fn defaults_use_discord_gateway_and_api() {
@@ -51,180 +52,6 @@ fn rustls_gateway_config_is_constructed_without_network() {
         let result = timeout(Duration::from_millis(100), watch.recv()).await;
         assert!(result.is_err());
     });
-}
-
-#[derive(Clone)]
-struct HttpReply {
-    status: u16,
-    body: String,
-    headers: Vec<(String, String)>,
-    silent: bool,
-}
-
-impl HttpReply {
-    fn json(status: u16, body: Value) -> Self {
-        Self {
-            status,
-            body: body.to_string(),
-            headers: Vec::new(),
-            silent: false,
-        }
-    }
-
-    fn text(status: u16, body: impl Into<String>) -> Self {
-        Self {
-            status,
-            body: body.into(),
-            headers: Vec::new(),
-            silent: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct HttpRequest {
-    method: String,
-    path: String,
-    headers: HashMap<String, String>,
-    body: String,
-}
-
-struct HttpFake {
-    base: String,
-    requests: Arc<Mutex<Vec<HttpRequest>>>,
-    stop: Option<std_mpsc::Sender<()>>,
-    join: Option<thread::JoinHandle<()>>,
-}
-
-impl Drop for HttpFake {
-    fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        let _ = TcpStream::connect(self.base.trim_start_matches("http://"));
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
-    }
-}
-
-fn http_fake(replies: Vec<HttpReply>) -> HttpFake {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let addr = listener.local_addr().unwrap();
-    let base = format!("http://{addr}");
-    let requests = Arc::new(Mutex::new(Vec::new()));
-    let records = Arc::clone(&requests);
-    let (stop, stop_rx) = std_mpsc::channel();
-    let join = thread::spawn(move || {
-        let mut index = 0;
-        loop {
-            if stop_rx.try_recv().is_ok() {
-                break;
-            }
-            let (mut stream, _) = match listener.accept() {
-                Ok(value) => value,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(2));
-                    continue;
-                }
-                Err(_) => break,
-            };
-            let request = read_http_request(&mut stream);
-            if let Some(request) = request {
-                records.lock().unwrap().push(request);
-            }
-            let reply = replies
-                .get(index)
-                .cloned()
-                .unwrap_or_else(|| HttpReply::json(200, Value::Null));
-            index += 1;
-            if reply.silent {
-                thread::sleep(Duration::from_secs(2));
-                let _ = stream.shutdown(Shutdown::Both);
-                continue;
-            }
-            let mut response = format!(
-                "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-                reply.status,
-                if reply.status == 429 {
-                    "Too Many Requests"
-                } else {
-                    "OK"
-                },
-                reply.body.len()
-            );
-            for (key, value) in &reply.headers {
-                response.push_str(&format!("{key}: {value}\r\n"));
-            }
-            response.push_str("\r\n");
-            let _ = stream.write_all(response.as_bytes());
-            let _ = stream.write_all(reply.body.as_bytes());
-            let _ = stream.shutdown(Shutdown::Both);
-        }
-    });
-    HttpFake {
-        base,
-        requests,
-        stop: Some(stop),
-        join: Some(join),
-    }
-}
-
-fn read_http_request(stream: &mut TcpStream) -> Option<HttpRequest> {
-    stream.set_read_timeout(Some(Duration::from_secs(1))).ok()?;
-    let mut bytes = Vec::new();
-    let header_end = loop {
-        let mut chunk = [0_u8; 4096];
-        let count = stream.read(&mut chunk).ok()?;
-        if count == 0 {
-            return None;
-        }
-        bytes.extend_from_slice(&chunk[..count]);
-        if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-            break position + 4;
-        }
-        if bytes.len() > 64 * 1024 {
-            return None;
-        }
-    };
-    let header = std::str::from_utf8(&bytes[..header_end]).ok()?;
-    let mut lines = header.split("\r\n");
-    let mut request_line = lines.next()?.split_whitespace();
-    let method = request_line.next()?.to_owned();
-    let path = request_line.next()?.to_owned();
-    let mut headers = HashMap::new();
-    let mut content_length = 0;
-    for line in lines.filter(|line| !line.is_empty()) {
-        let (key, value) = line.split_once(':')?;
-        let value = value.trim().to_owned();
-        if key.eq_ignore_ascii_case("content-length") {
-            content_length = value.parse().ok()?;
-        }
-        headers.insert(key.to_ascii_lowercase(), value);
-    }
-    while bytes.len() < header_end + content_length {
-        let mut chunk = [0_u8; 4096];
-        let count = stream.read(&mut chunk).ok()?;
-        if count == 0 {
-            return None;
-        }
-        bytes.extend_from_slice(&chunk[..count]);
-    }
-    let body = String::from_utf8(bytes[header_end..header_end + content_length].to_vec()).ok()?;
-    Some(HttpRequest {
-        method,
-        path,
-        headers,
-        body,
-    })
-}
-
-fn discord_for_http(fake: &HttpFake) -> Discord {
-    let mut config = DiscordConfig::new("test-token".into(), "123".into());
-    config.api_base = fake.base.clone();
-    config.request_timeout = Duration::from_secs(1);
-    Discord::new(config)
 }
 
 #[tokio::test]
@@ -502,93 +329,6 @@ async fn rest_timeout_and_response_limit_are_errors() {
         discord.list_channels().await,
         Err(DiscordError::Transport("response too large"))
     );
-}
-
-struct WsFake {
-    url: String,
-    task: tokio::task::JoinHandle<()>,
-}
-
-impl Drop for WsFake {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
-async fn ws_fake<F, Fut>(connections: usize, handler: F) -> WsFake
-where
-    F: Fn(usize, WebSocketStream<tokio::net::TcpStream>) -> Fut + Send + Sync + Clone + 'static,
-    Fut: std::future::Future<Output = ()> + Send + 'static,
-{
-    let listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let url = format!("ws://{addr}");
-    let task = tokio::spawn(async move {
-        for index in 0..connections {
-            let Ok((stream, _)) = listener.accept().await else {
-                return;
-            };
-            let Ok(socket) = accept_async(stream).await else {
-                return;
-            };
-            let handler = handler.clone();
-            tokio::spawn(async move {
-                handler(index, socket).await;
-            });
-        }
-    });
-    WsFake { url, task }
-}
-
-async fn send_json<S>(socket: &mut WebSocketStream<S>, value: Value)
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    socket
-        .send(Message::Text(value.to_string().into()))
-        .await
-        .unwrap();
-}
-
-async fn next_json<S>(socket: &mut WebSocketStream<S>) -> Option<Value>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    while let Some(message) = socket.next().await {
-        match message.ok()? {
-            Message::Text(text) => return serde_json::from_str(&text).ok(),
-            Message::Close(_) => return None,
-            _ => {}
-        }
-    }
-    None
-}
-async fn next_close_code<S>(socket: &mut WebSocketStream<S>) -> Option<u16>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    while let Some(message) = socket.next().await {
-        if let Message::Close(frame) = message.ok()? {
-            return frame.map(|close| u16::from(close.code));
-        }
-    }
-    None
-}
-
-fn discord_for_ws(url: &str, guild: &str) -> Discord {
-    let mut config = DiscordConfig::new("bot-token".into(), guild.into());
-    config.gateway_url = url.into();
-    config.reconnect_base = Duration::from_millis(1);
-    config.identify_gap = Duration::from_millis(1);
-    config.stable_after = Duration::from_secs(30);
-    Discord::new(config)
-}
-
-async fn hello<S>(socket: &mut WebSocketStream<S>, interval: u64)
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    send_json(socket, json!({"op":10,"d":{"heartbeat_interval":interval}})).await;
 }
 
 #[tokio::test]
@@ -1275,15 +1015,92 @@ async fn gateway_resume_seq_tracks_last_handoff_before_reconnect() {
     assert_eq!(resume.lock().unwrap().as_ref().unwrap()["d"]["seq"], 3);
 }
 
+async fn answer_heartbeat(
+    socket: &mut WebSocketStream<tokio::net::TcpStream>,
+    ack_count: Arc<AtomicUsize>,
+) -> bool {
+    let mut responded = false;
+    while let Ok(Some(value)) = timeout(Duration::from_millis(100), next_json(socket)).await {
+        if value["op"] == 1 {
+            ack_count.fetch_add(1, Ordering::SeqCst);
+            send_json(socket, json!({"op":11,"d":null})).await;
+            responded = true;
+            break;
+        }
+    }
+    responded
+}
+
+async fn serve_first_connection(
+    socket: &mut WebSocketStream<tokio::net::TcpStream>,
+    ack_count: Arc<AtomicUsize>,
+) {
+    hello(socket, 1000).await;
+    let identify = next_json(socket).await.unwrap();
+    assert_eq!(identify["op"], 2);
+    send_json(
+        socket,
+        json!({"op":0,"s":1,"t":"READY","d":{"session_id":"session"}}),
+    )
+    .await;
+    for sequence in 2..=4 {
+        send_json(&mut *socket, json!({"op":0,"s":sequence,"t":"MESSAGE_CREATE","d":{"guild_id":"123","id":sequence.to_string(),"channel_id":"1","author":{"id":"a"},"content":sequence.to_string()}})).await;
+    }
+    for _ in 0..2 {
+        send_json(&mut *socket, json!({"op":1,"d":null})).await;
+        if !answer_heartbeat(socket, Arc::clone(&ack_count)).await {
+            return;
+        }
+    }
+    for sequence in 5..=6 {
+        send_json(&mut *socket, json!({"op":0,"s":sequence,"t":"MESSAGE_CREATE","d":{"guild_id":"123","id":sequence.to_string(),"channel_id":"1","author":{"id":sequence.to_string()},"content":sequence.to_string()}})).await;
+    }
+    while let Some(value) = next_json(socket).await {
+        if value["op"] == 1 {
+            ack_count.fetch_add(1, Ordering::SeqCst);
+            send_json(socket, json!({"op":11,"d":null})).await;
+        }
+    }
+}
+
+async fn serve_replayed_connection(
+    socket: &mut WebSocketStream<tokio::net::TcpStream>,
+    resume: Arc<Mutex<Option<Value>>>,
+    release: Arc<tokio::sync::Notify>,
+    replay_step: Arc<tokio::sync::Notify>,
+) {
+    hello(socket, 100).await;
+    let identify = next_json(socket).await.unwrap();
+    *resume.lock().unwrap() = Some(identify);
+    release.notified().await;
+    for sequence in 4..=6 {
+        send_json(&mut *socket, json!({"op":0,"s":sequence,"t":"MESSAGE_CREATE","d":{"guild_id":"123","id":sequence.to_string(),"channel_id":"1","author":{"id":"a"},"content":sequence.to_string()}})).await;
+        replay_step.notified().await;
+    }
+}
+
+async fn wait_for_resume(resume: Arc<Mutex<Option<Value>>>) {
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if resume.lock().unwrap().is_some() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn gateway_queue_reads_heartbeats_while_consumer_is_slow() {
     let ack_count = Arc::new(AtomicUsize::new(0));
-    let ack_slot = Arc::clone(&ack_count);
     let resume = Arc::new(Mutex::new(None));
-    let resume_slot = Arc::clone(&resume);
     let release = Arc::new(tokio::sync::Notify::new());
-    let release_slot = Arc::clone(&release);
     let replay_step = Arc::new(tokio::sync::Notify::new());
+    let ack_slot = Arc::clone(&ack_count);
+    let resume_slot = Arc::clone(&resume);
+    let release_slot = Arc::clone(&release);
     let replay_step_slot = Arc::clone(&replay_step);
     let fake = ws_fake(2, move |index, mut socket| {
         let ack_slot = Arc::clone(&ack_slot);
@@ -1291,48 +1108,20 @@ async fn gateway_queue_reads_heartbeats_while_consumer_is_slow() {
         let release_slot = Arc::clone(&release_slot);
         let replay_step_slot = Arc::clone(&replay_step_slot);
         async move {
-            hello(&mut socket, if index == 0 { 1000 } else { 100 }).await;
-            let identify = next_json(&mut socket).await.unwrap();
             if index == 0 {
-                assert_eq!(identify["op"], 2);
-                send_json(&mut socket, json!({"op":0,"s":1,"t":"READY","d":{"session_id":"session"}})).await;
-                for sequence in 2..=4 {
-                    send_json(&mut socket, json!({"op":0,"s":sequence,"t":"MESSAGE_CREATE","d":{"guild_id":"123","id":sequence.to_string(),"channel_id":"1","author":{"id":"a"},"content":sequence.to_string()}})).await;
-                }
-                for _ in 0..2 {
-                    send_json(&mut socket, json!({"op":1,"d":null})).await;
-                    let mut responded = false;
-                    while let Ok(Some(value)) = timeout(Duration::from_millis(100), next_json(&mut socket)).await {
-                        if value["op"] == 1 {
-                            ack_slot.fetch_add(1, Ordering::SeqCst);
-                            send_json(&mut socket, json!({"op":11,"d":null})).await;
-                            responded = true;
-                            break;
-                        }
-                    }
-                    if !responded {
-                        return;
-                    }
-                }
-                for sequence in 5..=6 {
-                    send_json(&mut socket, json!({"op":0,"s":sequence,"t":"MESSAGE_CREATE","d":{"guild_id":"123","id":sequence.to_string(),"channel_id":"1","author":{"id":sequence.to_string()},"content":sequence.to_string()}})).await;
-                }
-                while let Some(value) = next_json(&mut socket).await {
-                    if value["op"] == 1 {
-                        ack_slot.fetch_add(1, Ordering::SeqCst);
-                        send_json(&mut socket, json!({"op":11,"d":null})).await;
-                    }
-                }
+                serve_first_connection(&mut socket, Arc::clone(&ack_slot)).await;
             } else {
-                *resume_slot.lock().unwrap() = Some(identify.clone());
-                release_slot.notified().await;
-                for sequence in 4..=6 {
-                    send_json(&mut socket, json!({"op":0,"s":sequence,"t":"MESSAGE_CREATE","d":{"guild_id":"123","id":sequence.to_string(),"channel_id":"1","author":{"id":"a"},"content":sequence.to_string()}})).await;
-                    replay_step_slot.notified().await;
-                }
+                serve_replayed_connection(
+                    &mut socket,
+                    Arc::clone(&resume_slot),
+                    Arc::clone(&release_slot),
+                    Arc::clone(&replay_step_slot),
+                )
+                .await;
             }
         }
-    }).await;
+    })
+    .await;
     let mut config = DiscordConfig::new("token".into(), "123".into());
     config.gateway_url = fake.url.clone();
     config.queue = 2;
@@ -1341,16 +1130,7 @@ async fn gateway_queue_reads_heartbeats_while_consumer_is_slow() {
     config.stable_after = Duration::from_secs(30);
     let discord = Discord::new(config);
     let mut watch = discord.watch();
-    timeout(Duration::from_secs(1), async {
-        loop {
-            if resume.lock().unwrap().is_some() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_for_resume(Arc::clone(&resume)).await;
     assert!(ack_count.load(Ordering::SeqCst) >= 2);
     let first = timeout(Duration::from_secs(1), watch.recv())
         .await

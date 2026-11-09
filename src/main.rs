@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
@@ -12,12 +12,14 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, anyhow, bail};
 use clap::Parser;
 use tokio::sync::mpsc;
+use tracing_subscriber::prelude::*;
 
 use a2amx::bridge;
-use a2amx::cli::{Cli, Command, ConfineAction, DaemonAction, TeamAction};
+use a2amx::cli::{Cli, Command, ConfineAction, DaemonAction, GatewayAction, TeamAction};
 use a2amx::client::{Attachment, Client};
 use a2amx::confine::ConfineRequest;
 use a2amx::daemon::{self, Daemon, DaemonConfig};
+use a2amx::discord::DiscordConfig;
 use a2amx::emulator::Scroll;
 use a2amx::harness::{Deliver, Harness};
 use a2amx::hook;
@@ -30,6 +32,8 @@ use a2amx::picker::{
 };
 use a2amx::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use a2amx::quota;
+use a2amx::relay::{Io as RelayIo, PairIo};
+use a2amx::relay_files;
 use a2amx::status;
 use a2amx::statusline;
 use a2amx::team::{self, TeamSession};
@@ -86,11 +90,34 @@ async fn save_accepted_grants(home: &Path, accepted: &BTreeSet<String>) -> anyho
 const MOUSE_CAPTURE: &[u8] = b"\x1b[?1000h\x1b[?1006h";
 const RESTORE_TERMINAL: &[u8] = b"\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1l\x1b>\x1b[?25h\x1b[?1049l";
 
+fn log_target_allowed(target: &str) -> bool {
+    ![
+        "tungstenite",
+        "tokio_tungstenite",
+        "ureq",
+        "ureq_proto",
+        "rustls",
+    ]
+    .iter()
+    .any(|prefix| {
+        target == *prefix
+            || target
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with("::"))
+    })
+}
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .with_filter(tracing_subscriber::filter::FilterFn::new(|metadata| {
+                    log_target_allowed(metadata.target())
+                })),
+        )
         .init();
     let result = match Cli::try_parse() {
         Ok(cli) => match a2amx::privilege::ensure_not_root() {
@@ -160,6 +187,10 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
     }
     let home = resolve_home(home_arg)?;
     let result = match cli.command {
+        Command::Gateway { action } => match action {
+            GatewayAction::Token => run_gateway_token(&home).await,
+            GatewayAction::Run { pair } => run_gateway(home, pair).await,
+        },
         Command::Daemon { action } => match action {
             DaemonAction::Start {
                 listen,
@@ -241,6 +272,92 @@ fn resolve_home(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
         return Ok(PathBuf::from(base).join(".local/state/a2amx"));
     }
     Err(anyhow!("cannot determine the a2amx state directory"))
+}
+
+const MAX_GATEWAY_TOKEN_BYTES: usize = 64 * 1024;
+
+async fn run_gateway_token(home: &Path) -> anyhow::Result<()> {
+    let token = tokio::task::spawn_blocking(read_gateway_token).await??;
+    relay_files::write_token(home, &token)
+}
+
+fn read_gateway_token() -> anyhow::Result<String> {
+    let token = if stdin_is_terminal() {
+        let guard = EchoGuard::enter()?;
+        let result = read_gateway_token_line();
+        drop(guard);
+        result?
+    } else {
+        read_gateway_token_line()?
+    };
+    let token = token.trim().to_owned();
+    if token.is_empty() {
+        bail!("gateway token is empty");
+    }
+    Ok(token)
+}
+
+fn read_gateway_token_line() -> anyhow::Result<String> {
+    let stdin = io::stdin();
+    let mut stdin = stdin.lock();
+    let mut bytes = Vec::with_capacity(MAX_GATEWAY_TOKEN_BYTES);
+    for _ in 0..=MAX_GATEWAY_TOKEN_BYTES {
+        let mut byte = [0_u8; 1];
+        let count = stdin.read(&mut byte)?;
+        if count == 0 {
+            break;
+        }
+        bytes.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    if bytes.len() > MAX_GATEWAY_TOKEN_BYTES {
+        bail!("gateway token exceeds 64 KiB");
+    }
+    Ok(String::from_utf8(bytes)?)
+}
+
+async fn run_gateway(home: PathBuf, pair: bool) -> anyhow::Result<()> {
+    let loaded = a2amx::relay::load(&home)?;
+    let mut discord = DiscordConfig::new(loaded.token.clone(), loaded.config.guild_id.clone());
+    discord.api_base = loaded.config.api_base.clone();
+    discord.gateway_url = loaded.config.gateway_url.clone();
+    let pair_io = pair.then(|| PairIo {
+        announce: Box::new(|line| eprintln!("{line}")),
+        confirm: Box::new(|prompt| {
+            eprint!("{prompt} ");
+            let _ = io::stderr().flush();
+            let mut line = String::new();
+            if io::stdin().lock().read_line(&mut line).is_err() {
+                return false;
+            }
+            matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+        }),
+    });
+    let stop = Box::pin(async {
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(error) => {
+                    tracing::error!(%error, "cannot install SIGTERM handler");
+                    return;
+                }
+            };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = sigterm.recv() => {},
+        }
+    });
+    a2amx::relay::run(
+        loaded,
+        discord,
+        RelayIo {
+            stop,
+            pair: pair_io,
+        },
+    )
+    .await
 }
 
 async fn run_daemon(
@@ -3483,6 +3600,45 @@ impl OutputHandle {
             .recv()
             .map_err(|_| anyhow!("terminal output thread stopped"))??;
         Ok(())
+    }
+}
+
+struct EchoGuard {
+    original: rustix::termios::Termios,
+    restored: bool,
+}
+
+impl EchoGuard {
+    fn enter() -> anyhow::Result<Self> {
+        let stdin = io::stdin();
+        let original = rustix::termios::tcgetattr(stdin.as_fd())?;
+        let mut quiet = original.clone();
+        quiet.local_modes.remove(rustix::termios::LocalModes::ECHO);
+        rustix::termios::tcsetattr(stdin.as_fd(), rustix::termios::OptionalActions::Now, &quiet)?;
+        Ok(Self {
+            original,
+            restored: false,
+        })
+    }
+
+    fn restore(&mut self) -> anyhow::Result<()> {
+        if self.restored {
+            return Ok(());
+        }
+        let stdin = io::stdin();
+        rustix::termios::tcsetattr(
+            stdin.as_fd(),
+            rustix::termios::OptionalActions::Now,
+            &self.original,
+        )?;
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for EchoGuard {
+    fn drop(&mut self) {
+        let _ = self.restore();
     }
 }
 

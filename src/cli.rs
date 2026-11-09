@@ -32,6 +32,11 @@ pub struct Cli {
 // The parsed command line is built once at startup; boxing `New` would only add indirection.
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
+    /// Manage the Discord gateway relay.
+    Gateway {
+        #[command(subcommand)]
+        action: GatewayAction,
+    },
     /// Manage the host daemon: start, status, stop.
     Daemon {
         #[command(subcommand)]
@@ -223,6 +228,18 @@ pub enum DaemonAction {
         /// Skip the graceful exit and stop at once.
         #[arg(long)]
         now: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GatewayAction {
+    /// Read a bot token from standard input and store it securely.
+    Token,
+    /// Run the gateway relay in the foreground.
+    Run {
+        /// Pair the Discord account before starting message delivery.
+        #[arg(long)]
+        pair: bool,
     },
 }
 #[derive(Debug, Subcommand)]

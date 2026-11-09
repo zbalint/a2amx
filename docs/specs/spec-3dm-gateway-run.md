@@ -121,3 +121,24 @@ The websocket helpers and `HttpReply` move from `tests/discord.rs` (moved, not c
 ## 5. Out of scope
 
 `a2amx gateway up`, the sandbox and its network rules (3dn); the setup guide, firewall notes, the privacy warning and the residual member-count risk (3do); the `relay` row in `AGENTS.md` and `docs/architecture.md` (architect); more than one guild; Telegram; a systemd unit; reloading the config without a restart; acting on `max_members` with anything stronger than pausing; hiding history from a late joiner; exactly-once posting; the live Discord test (architect and owner, by hand after 3dn).
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review) model not reported; developer openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed; tester openai-codex/gpt-5.6-luna under OMP.
+
+BLOCKED/amend cycles: 2 (amendment 1: a developer BLOCKED; amendment 2: the Sonar gate on the previous push). Fix rounds after the first implementation: 3.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | 11 findings on the first draft | spec amended before lock |
+| implementation | developer | spec claim false: a daemon `Response::Error` returned through `Gateway::inbound` breaks the daemon connection | amendment 1 |
+| after the previous push | Sonar | S3776 cognitive complexity on a test in `tests/discord.rs` | amendment 2: the slow-consumer test split |
+| tester pass | tester | the member-pause test was flaky (timing) | counters and barriers in the fake and the test |
+| tester pass | tester | the fake Discord accepted one websocket only, so the daemon-down test closed it | `FakeDiscord` accepts successive websockets |
+| tester pass | tester | five surviving mutants (reply author check, `NeedChannel` failure not marked undeliverable, reconnect interval, gateway vs admin token, stdin 64 KiB bound) | tests added or strengthened in fix round 3; all killed on the rebaseline |
+| tester pass | tester, architect | the `relay.rs` Err-branch author guard mutant survives | classified equivalent: `Gateway::inbound` applies the same author check first; kept as defense in depth with a comment |
+| tester pass | tester | the owner-uid check in `read_secure` has no test | accepted gap: an ordinary user cannot create a foreign-owned file |
+| architect review | architect | `libc::O_NOFOLLOW` where AGENTS.md prefers `rustix`; an unused `Config` type alias | replaced with `rustix::fs::OFlags`; alias removed |
+| implementation | process | a developer sat 1 h 43 min on a hung mutant test unnoticed | tests and mutant runs get timeouts; backlog F82 (detect an unchanged screen) |
+
+Architect checks on the final snapshot: fmt, clippy `-D warnings`, `git diff --check`, full `cargo test` (exit 0), three own mutants (member limit `>` to `>=`, the paused guard, the stale unbind) all killed. `cargo deny` fails on RUSTSEC-2026-0459 (`libsqlite3-sys` 0.38.2 through `rusqlite` 0.40.2), a new advisory in a dependency this spec does not touch.
