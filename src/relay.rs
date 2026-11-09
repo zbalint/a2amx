@@ -28,7 +28,7 @@ pub fn load(home: &std::path::Path) -> anyhow::Result<Loaded> {
 }
 
 pub async fn run(loaded: Loaded, discord_config: DiscordConfig, mut io: Io) -> anyhow::Result<()> {
-    let daemon = Client::connect_gateway(&loaded.home).await?;
+    let daemon = Client::connect_gateway(&loaded.link_dir).await?;
     let discord = Discord::new(discord_config);
     let members = discord.member_count().await?;
     if members > loaded.config.max_members {
@@ -62,7 +62,7 @@ pub async fn run(loaded: Loaded, discord_config: DiscordConfig, mut io: Io) -> a
 
     let state_path = loaded.gateway_dir.join("seen.json");
     let mut relay = Relay {
-        home: loaded.home.clone(),
+        link_dir: loaded.link_dir.clone(),
         paired_author: paired_author.clone(),
         daemon,
         discord,
@@ -138,7 +138,7 @@ pub async fn run(loaded: Loaded, discord_config: DiscordConfig, mut io: Io) -> a
 }
 
 struct Relay {
-    home: PathBuf,
+    link_dir: PathBuf,
     paired_author: String,
     daemon: Client,
     discord: Discord,
@@ -161,7 +161,7 @@ impl Relay {
         if !self.broken || Instant::now() < self.next_reconnect {
             return;
         }
-        match Client::connect_gateway(&self.home).await {
+        match Client::connect_gateway(&self.link_dir).await {
             Ok(client) => {
                 self.daemon = client;
                 self.broken = false;

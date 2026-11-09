@@ -97,3 +97,23 @@ Pre-lock runs: baseline claims below were read, not run; the acceptance commands
 ## 7. Amendment 1 (after the developer's BLOCKED)
 
 Section 2.1 called `sandbox_argv` pure but made its output depend on the host's `/etc/resolv.conf`. `Layout` now carries `resolv_target: Option<PathBuf>`, decided by `up` (section 2, the paragraph before the inner command line), with the failure rule stated there. `sandbox_argv` reads nothing from the host. Acceptance additions: a worked-example test with `resolv_target` `Some("/mnt/wsl/resolv.conf")` and one with `None` (two literal vectors), and a test of the `up` decision for a symlink into `/mnt`, a symlink under `/etc`, a regular file, and a dangling symlink (error). Gate recheck: the section 4 rows and section 6 mutation list are unchanged; no other section states the resolv.conf rule.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review) model not reported; developer openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed; tester openai-codex/gpt-5.6-luna under OMP.
+
+BLOCKED/amend cycles: 1 (amendment 1: `sandbox_argv` was called pure but depended on the host's `/etc/resolv.conf`). Fix rounds after the first implementation: 0.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | critical: the first sandbox profile (`--ro-bind / /`) left same-user sockets reachable, so a compromised gateway could reach the admin token's daemon or other sessions | empty-root allowlist profile (`--tmpfs /`, explicit binds, `--remount-ro /`) |
+| draft review | consultant | other findings on the first draft (line anchors, acceptance greps, the mutation list) | spec amended before lock |
+| implementation | developer | spec claim false: `sandbox_argv` was stated to be a pure function but also depended on the `/etc/resolv.conf` link target | amendment 1: `Layout.resolv_target` is an input; the spec now lists every input of a "pure" function |
+| implementation | developer | the REPORT and its correction said no code changed after the final verified run, but `tests/gateway_up.rs` changed afterwards and the last full run on that snapshot was cancelled | architect ran the full suite fresh on the final snapshot; the verification claim was not trusted |
+| implementation | process | the developer started a `cargo test` after reporting, which collided with the tester's mutation builds (timeouts, no kill evidence) and left a stray test process | architect stopped it and killed the stray process; a developer stops all cargo work once it has reported |
+| tester pass | tester | no test makes `link/addr` or `link/gateway.token` a symlink (only the `link/` directory is tested); the restart test checks `link/addr` but not a fresh `link/gateway.token`; `up --pair` forwarding is shown only in the literal vector | accepted gaps: `check_link_files` checks both files statically, the directory mount covers both files, and the pure vector pins the arguments |
+| tester pass | tester | none of the ten mutants survived | n/a |
+
+Architect checks on the final snapshot: `git diff --check`, fmt, clippy `-D warnings`, `cargo deny --locked check`, `scripts/prepush-fast.sh`, full `cargo test` (exit 0, 1099 passed, 0 failed), three own mutants (the `gateway.token` link-file check dropped, the resolv.conf target ignored, the daemon not writing `link/gateway.token`) all killed.
+
+Residual risks left for the setup guide (spec 3do): abstract unix sockets and loopback TCP stay reachable because the network is shared, `TIOCSTI` is not blocked (no `--new-session`), `SIGTERM` kills the gateway at once, and a link directory recreated by a daemon restart is seen through the mount but not re-checked.

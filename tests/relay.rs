@@ -1175,7 +1175,11 @@ async fn reconnect_waits_for_configured_interval() {
             drop(stream);
         }
     });
-    write_file(&home.path().join("addr"), &format!("{address}\n"), 0o600);
+    write_file(
+        &home.path().join("link/addr"),
+        &format!("{address}\n"),
+        0o600,
+    );
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert_eq!(attempts.load(Ordering::SeqCst), 0);

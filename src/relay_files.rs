@@ -22,6 +22,7 @@ const DEFAULT_GATEWAY_URL: &str = "wss://gateway.discord.gg";
 pub struct Loaded {
     pub home: PathBuf,
     pub gateway_dir: PathBuf,
+    pub link_dir: PathBuf,
     pub token: String,
     pub config: GatewayConfig,
     pub pairing: Option<Pairing>,
@@ -148,6 +149,7 @@ pub fn load(home: &Path) -> anyhow::Result<Loaded> {
     Ok(Loaded {
         home: home.to_owned(),
         gateway_dir,
+        link_dir: home.join("link"),
         token,
         config,
         pairing,

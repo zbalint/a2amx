@@ -18,6 +18,7 @@ mod delivery;
 pub mod discord;
 pub mod emulator;
 pub mod gateway;
+pub mod gateway_launch;
 pub mod grant;
 pub mod harness;
 pub mod hook;

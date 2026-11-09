@@ -233,9 +233,16 @@ pub enum DaemonAction {
 
 #[derive(Debug, Subcommand)]
 pub enum GatewayAction {
+    /// Start the confined gateway relay.
+    Up {
+        /// Pair the Discord account before starting message delivery.
+        #[arg(long)]
+        pair: bool,
+    },
     /// Read a bot token from standard input and store it securely.
     Token,
-    /// Run the gateway relay in the foreground.
+    /// Internal: the unconfined relay that `up` starts inside the sandbox.
+    #[command(hide = true)]
     Run {
         /// Pair the Discord account before starting message delivery.
         #[arg(long)]

@@ -153,6 +153,7 @@ specs showing it found nothing.
 | `gateway` | The chat-independent core of the remote messaging gateway: author check, channel mapping, dedup file, fixed reply lines, message splitting |
 | `relay` | The `a2amx gateway run` loop: pairing, channel sync from the daemon, relay of inbound and outbound messages, member-count pause, reconnect to the daemon; uses `gateway` and `discord` |
 | `relay_files` | The gateway's files under `<home>/gateway/` (config, Discord token, pairing): secure reads and atomic writes |
+| `gateway_launch` | The `a2amx gateway up` launch: pre-checks (config, token, link files, `bwrap` preflight), the sandbox argument vector (`sandbox_argv`, pure over a `Layout`) and the confined re-exec of `gateway run` |
 | `harness` | Harness profiles, command wiring, readiness, and peer authorization |
 | `hook` | The Claude Code `UserPromptSubmit` hook adapter |
 | `messaging` | Message envelopes, validation, limits, states, and rendering |

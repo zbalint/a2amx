@@ -189,6 +189,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
     let result = match cli.command {
         Command::Gateway { action } => match action {
             GatewayAction::Token => run_gateway_token(&home).await,
+            GatewayAction::Up { pair } => run_gateway_up(home, pair).await,
             GatewayAction::Run { pair } => run_gateway(home, pair).await,
         },
         Command::Daemon { action } => match action {
@@ -316,6 +317,10 @@ fn read_gateway_token_line() -> anyhow::Result<String> {
         bail!("gateway token exceeds 64 KiB");
     }
     Ok(String::from_utf8(bytes)?)
+}
+
+async fn run_gateway_up(home: PathBuf, pair: bool) -> anyhow::Result<()> {
+    a2amx::gateway_launch::up(&home, pair)
 }
 
 async fn run_gateway(home: PathBuf, pair: bool) -> anyhow::Result<()> {

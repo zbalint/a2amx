@@ -2220,19 +2220,27 @@ impl Daemon {
         // Written only after the steps that can fail without binding, so an early
         // startup error never leaves a token for a daemon that is not running.
         let gateway_path = config.state_dir.join("gateway.token");
+        let link_dir = config.state_dir.join("link");
+        let link_gateway_path = link_dir.join("gateway.token");
         let token_path = config.state_dir.join("admin.token");
         let gateway_text = gateway_token.clone();
         let token_text = token.clone();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            ensure_state_dir(&link_dir)?;
             write_state_file(&gateway_path, gateway_text.as_bytes())?;
-            if let Err(error) = write_state_file(&token_path, token_text.as_bytes()) {
-                return match std::fs::remove_file(&gateway_path) {
+            if let Err(error) = write_state_file(&link_gateway_path, gateway_text.as_bytes()) {
+                return match remove_state_files(&[&gateway_path, &link_gateway_path]) {
                     Ok(()) => Err(error),
-                    Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {
-                        Err(error)
-                    }
                     Err(cleanup) => Err(anyhow::anyhow!(
-                        "{error}; failed to remove gateway.token after admin.token write failure: {cleanup}"
+                        "{error}; failed to remove gateway tokens after link write failure: {cleanup}"
+                    )),
+                };
+            }
+            if let Err(error) = write_state_file(&token_path, token_text.as_bytes()) {
+                return match remove_state_files(&[&gateway_path, &link_gateway_path]) {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(anyhow::anyhow!(
+                        "{error}; failed to remove gateway tokens after admin.token write failure: {cleanup}"
                     )),
                 };
             }
@@ -2252,10 +2260,9 @@ impl Daemon {
                 Err(error) => {
                     let admin_path = config.state_dir.join("admin.token");
                     let gateway_path = config.state_dir.join("gateway.token");
+                    let link_gateway_path = config.state_dir.join("link/gateway.token");
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        std::fs::remove_file(admin_path)?;
-                        std::fs::remove_file(gateway_path)?;
-                        Ok(())
+                        remove_state_files(&[&admin_path, &gateway_path, &link_gateway_path])
                     })
                     .await??;
                     return Err(error.into());
@@ -2265,12 +2272,24 @@ impl Daemon {
             bound.push(listener);
         }
         let path = config.state_dir.clone();
+        let link_path = path.join("link");
         let addresses = addrs
             .iter()
             .map(|addr| format!("{addr}\n"))
             .collect::<String>();
-        tokio::task::spawn_blocking(move || {
-            write_state_file(&path.join("addr"), addresses.as_bytes())
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            write_state_file(&path.join("addr"), addresses.as_bytes())?;
+            if let Err(error) = write_state_file(&link_path.join("addr"), addresses.as_bytes()) {
+                if let Err(cleanup) =
+                    remove_state_files(&[&path.join("addr"), &link_path.join("addr")])
+                {
+                    return Err(anyhow::anyhow!(
+                        "{error}; failed to remove daemon addresses after link write failure: {cleanup}"
+                    ));
+                }
+                return Err(error);
+            }
+            Ok(())
         })
         .await??;
         // shortcut: sessions live only in this daemon; add persistence only with
@@ -2470,13 +2489,10 @@ impl Daemon {
             failure.get_or_insert(error);
         }
         let addr = self.state_dir.join("addr");
+        let link_addr = self.state_dir.join("link/addr");
         let lock = self.lock.take();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            match std::fs::remove_file(addr) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
+            remove_state_files(&[&addr, &link_addr])?;
             drop(lock);
             Ok(())
         })
@@ -2512,6 +2528,25 @@ pub fn random_hex<const N: usize>() -> anyhow::Result<String> {
         write!(&mut text, "{byte:02x}")?;
     }
     Ok(text)
+}
+
+fn remove_state_files(paths: &[&Path]) -> anyhow::Result<()> {
+    let mut first_error = None;
+    for path in paths {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                first_error.get_or_insert_with(|| {
+                    anyhow::anyhow!("cannot remove state file {}: {error}", path.display())
+                });
+            }
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn write_state_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {

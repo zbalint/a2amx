@@ -1437,6 +1437,16 @@ async fn state_is_owner_only_and_exclusively_locked() {
             0o600
         );
     }
+    for file in ["gateway.token", "addr"] {
+        assert_eq!(
+            std::fs::metadata(dir.path().join("link").join(file))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
     let second = Daemon::start(DaemonConfig {
         state_dir: dir.path().to_owned(),
         listen: vec!["127.0.0.1:0".parse().unwrap()],
@@ -1452,6 +1462,7 @@ async fn state_is_owner_only_and_exclusively_locked() {
     );
     daemon.shutdown().await.unwrap();
     assert!(!dir.path().join("addr").exists());
+    assert!(!dir.path().join("link/addr").exists());
 }
 
 #[tokio::test]
@@ -1957,6 +1968,8 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
     );
     assert!(!home.join("addr").exists());
     assert!(!home.join("admin.token").exists());
+    assert!(!home.join("gateway.token").exists());
+    assert!(!home.join("link/gateway.token").exists());
     for path in [home.clone(), temp.path().join("parent")] {
         assert_eq!(
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777,

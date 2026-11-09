@@ -1397,8 +1397,25 @@ async fn human_session_name_is_reserved() {
 }
 
 #[tokio::test]
-async fn gateway_token_is_owner_only() {
+async fn gateway_token_and_link_files_are_owner_only_and_follow_daemon_lifecycle() {
     let (dir, daemon) = common::start_daemon().await;
+    let gateway_token = std::fs::read_to_string(dir.path().join("gateway.token")).unwrap();
+    let link_dir = dir.path().join("link");
+    assert_eq!(
+        std::fs::metadata(&link_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    let link_token = link_dir.join("gateway.token");
+    assert_eq!(
+        std::fs::metadata(&link_token).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(std::fs::read_to_string(&link_token).unwrap(), gateway_token);
+    let addr = std::fs::read_to_string(dir.path().join("addr")).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(link_dir.join("addr")).unwrap(),
+        addr
+    );
     assert_eq!(
         std::fs::metadata(dir.path().join("gateway.token"))
             .unwrap()
@@ -1408,6 +1425,10 @@ async fn gateway_token_is_owner_only() {
         0o600
     );
     daemon.shutdown().await.unwrap();
+    assert!(!dir.path().join("addr").exists());
+    assert!(!link_dir.join("addr").exists());
+    assert!(dir.path().join("gateway.token").exists());
+    assert!(link_token.exists());
 }
 
 #[tokio::test]
@@ -1428,6 +1449,7 @@ async fn bind_failure_removes_both_capability_tokens() {
     assert!(result.is_err());
     assert!(!home.join("admin.token").exists());
     assert!(!home.join("gateway.token").exists());
+    assert!(!home.join("link/gateway.token").exists());
     assert!(!home.join("addr").exists());
 }
 
