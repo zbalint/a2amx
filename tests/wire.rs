@@ -1409,3 +1409,32 @@ fn human_outbound_requests_and_response_use_exact_shapes() {
         r#"{"type":"human_outbound","message":null}"#
     );
 }
+
+#[test]
+fn gateway_agents_request_and_response_use_exact_shapes() {
+    let request = Request::GatewayAgents;
+    let request_json = serde_json::to_string(&request).unwrap();
+    assert_eq!(request_json, r#"{"type":"gateway_agents"}"#);
+    assert_eq!(
+        serde_json::from_str::<Request>(&request_json).unwrap(),
+        request
+    );
+
+    let response = Response::GatewayAgents {
+        agents: vec![a2amx::wire::GatewayAgent {
+            address: "agent-plan@host-a".into(),
+            name: "agent-plan".into(),
+            team: "team-a".into(),
+            mode: "both".into(),
+        }],
+    };
+    let response_json = serde_json::to_string(&response).unwrap();
+    assert_eq!(
+        response_json,
+        r#"{"type":"gateway_agents","agents":[{"address":"agent-plan@host-a","name":"agent-plan","team":"team-a","mode":"both"}]}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Response>(&response_json).unwrap(),
+        response
+    );
+}

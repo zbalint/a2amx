@@ -123,3 +123,20 @@ pub const MAX_CHAT_CHARS: usize = 2000;
 ## 5. Out of scope
 
 The Discord connection, creating channels and categories, `a2amx gateway up`, pairing the first Discord account, the gateway's confinement and launch, reconnect and retry timing, the member-count check, the setup guide, docs and changelog, a mutex or shared state between several gateways, bot-side rate limits, recovery of a message the gateway fetched and then crashed on, and the points 3dl must handle: send with an empty allowed-mentions list so agent text cannot ping, a possible UTF-16 length limit, cancel-safety of the daemon calls (do not drop an `inbound` or `outbound` future mid-request), and rebuilding the bindings from the chat after a restart.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review) model not reported; developer openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed; tester reported GLM (zai) under OMP.
+
+BLOCKED/amend cycles: 1 (amendment 1).
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | an agent's first message would be failed for good when its channel did not exist yet | `NeedChannel`: the gateway holds the message and the caller creates the channel and retries |
+| draft review | consultant | two of the nine mutants could not be killed as the tests were described (write order, first-bound channel) | tests named in the spec |
+| draft review | consultant | error mapping not total; no fsync; API gaps (unbind, channel lookup, control channel); incomplete helper list to move; send-mode wording; inline `inbound` over the complexity limit | spec amended before lock |
+| tester pass | tester | `NeedChannel` carried no message id, so the give-up the spec asks for could not be called | amendment 1: `NeedChannel { id, agent }` (spec gap, architect) |
+| tester pass | tester | the exit-code filter in `GatewayAgents`, and the `sent:false` report for an unlisted sender, were not covered | tests added; mutants killed |
+| architect review | architect | `outbound` had two near-identical resolve paths and a one-field wrapper | merged into one path by the developer |
+| architect review | architect | the mode label mapping (`send` / `both`) now exists in two places; `messaging.rs` was out of scope for a shared method | accepted; follow-up for the next spec that touches `messaging.rs` |
+| tester pass | tester | removing the directory sync after the rename is not detectable by any test | accepted: needs fault injection, stated in the spec |

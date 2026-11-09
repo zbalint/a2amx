@@ -240,6 +240,8 @@ pub enum Request {
         id: String,
         sent: bool,
     },
+    /// Gateway only: list the currently enabled and leased remote agents.
+    GatewayAgents,
     ListAgents,
     MessageStatus {
         id: String,
@@ -345,6 +347,9 @@ pub enum Response {
     HumanOutbound {
         message: Option<HumanOutboundMessage>,
     },
+    GatewayAgents {
+        agents: Vec<GatewayAgent>,
+    },
     Failed {
         code: String,
         message: String,
@@ -371,6 +376,14 @@ pub struct HumanOutboundMessage {
     pub from: String,
     pub subject: String,
     pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewayAgent {
+    pub address: String,
+    pub name: String,
+    pub team: String,
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

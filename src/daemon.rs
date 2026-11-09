@@ -35,8 +35,8 @@ use crate::session::{
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, ExplainInfo,
-    HoldInfo, HumanOutboundMessage, MessageInfo, QuotaInfo, QuotaWindow, Request, ResetVerdict,
-    Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
+    GatewayAgent, HoldInfo, HumanOutboundMessage, MessageInfo, QuotaInfo, QuotaWindow, Request,
+    ResetVerdict, Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
 };
 
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
@@ -1458,6 +1458,40 @@ impl Runtime {
             })
     }
 
+    fn gateway_agents(&self) -> Response {
+        let now = Instant::now();
+        let agents = self
+            .sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter_map(|session| {
+                if session.exit_code().is_some() || !session.confined() {
+                    return None;
+                }
+                let mode = session.remote()?;
+                let team = session.team()?;
+                if !self.lease_valid(&team.name, &session.id().0, now) {
+                    return None;
+                }
+                let mode = match mode {
+                    messaging::RemoteMode::Send => "send",
+                    messaging::RemoteMode::Both => "both",
+                };
+                Some(GatewayAgent {
+                    address: messaging::address(session.name(), &session.id().0, &self.host_name),
+                    name: session
+                        .name()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| session.id().0.clone()),
+                    team: team.name.clone(),
+                    mode: mode.into(),
+                })
+            })
+            .collect();
+        Response::GatewayAgents { agents }
+    }
+
     fn remote_ineligible(
         &self,
         session: &Session,
@@ -2643,6 +2677,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
             }
             Request::MessageStatus { id } => runtime.message_status(&role, &id).await?,
             Request::HumanInbound { to, body } => runtime.human_inbound(to, body).await,
+            Request::GatewayAgents => runtime.gateway_agents(),
             Request::HumanOutboundNext => runtime.human_outbound_next().await,
             Request::HumanOutboundDone { id, sent } => runtime.human_outbound_done(id, sent).await,
             Request::IssueLeaseCode { team } => runtime.issue_lease_code(team).await?,
@@ -2686,13 +2721,15 @@ fn request_permitted(role: &Role, request: &Request) -> bool {
             | Request::CancelMessage { .. }
             | Request::BridgeAttach
             | Request::IssueLeaseCode { .. } => true,
-            Request::HumanInbound { .. }
+            Request::GatewayAgents
+            | Request::HumanInbound { .. }
             | Request::HumanOutboundNext
             | Request::HumanOutboundDone { .. }
             | Request::RedeemLeaseCode { .. } => false,
         },
         Role::Gateway => match request {
-            Request::HumanInbound { .. }
+            Request::GatewayAgents
+            | Request::HumanInbound { .. }
             | Request::HumanOutboundNext
             | Request::HumanOutboundDone { .. }
             | Request::RedeemLeaseCode { .. } => true,
@@ -2735,6 +2772,7 @@ fn request_permitted(role: &Role, request: &Request) -> bool {
             | Request::Screen { .. }
             | Request::Explain { .. }
             | Request::Shutdown { .. }
+            | Request::GatewayAgents
             | Request::HumanInbound { .. }
             | Request::HumanOutboundNext
             | Request::HumanOutboundDone { .. }

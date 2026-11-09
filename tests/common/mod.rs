@@ -7,15 +7,231 @@ pub mod fake_codex;
 pub mod pty;
 
 use a2amx::client::Client;
+use a2amx::confine::ConfineRequest;
 use a2amx::daemon::{Daemon, DaemonConfig};
 use a2amx::harness::{Deliver, Harness};
-use a2amx::messaging::{Limits, TeamScope};
+use a2amx::messaging::{Limits, RemoteMode, TeamScope};
 use a2amx::wire::{Request, Response};
 use std::net::SocketAddr;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+pub fn new_session_request(name: Option<&str>, argv: &[&str]) -> Request {
+    new_session_request_with_remote(name, argv, None)
+}
+
+pub fn new_session_request_with_remote(
+    name: Option<&str>,
+    argv: &[&str],
+    remote: Option<RemoteMode>,
+) -> Request {
+    Request::NewSession {
+        argv: argv.iter().map(|argument| (*argument).to_owned()).collect(),
+        cols: 40,
+        rows: 10,
+        cwd: None,
+        env: vec![],
+        reset: vec![],
+        control_from: vec![],
+        watch: vec![],
+        activity: None,
+        heartbeat: None,
+        name: name.map(str::to_owned),
+        harness: Harness::Generic,
+        deliver: Some(Deliver::Hold),
+        team: None,
+        role: None,
+        remote,
+    }
+}
+
+pub async fn start_confined_daemon_with_limits(limits: Limits) -> Option<(TempDir, Daemon)> {
+    let real_bwrap = a2amx::confine::resolve_bwrap(None).ok()?;
+    let dir = tempfile::tempdir().expect("temp state dir");
+    let bwrap_dir = dir.path().join("bwrap-path");
+    std::fs::create_dir_all(&bwrap_dir).expect("bwrap directory");
+    symlink(real_bwrap, bwrap_dir.join("bwrap")).expect("bwrap symlink");
+    let daemon = Daemon::start(DaemonConfig {
+        state_dir: dir.path().to_path_buf(),
+        listen: vec!["127.0.0.1:0".parse().expect("loopback address")],
+        host_name: Some("host-a".into()),
+        limits,
+        bwrap_path: Some(bwrap_dir.into_os_string()),
+        env_path: None,
+    })
+    .await
+    .expect("confined daemon starts");
+    Some((dir, daemon))
+}
+
+pub async fn start_confined_daemon() -> Option<(TempDir, Daemon)> {
+    start_confined_daemon_with_limits(Limits::default()).await
+}
+
+pub async fn create_confined_with_team(
+    admin: &mut Client,
+    fixture: &Path,
+    name: &str,
+    remote: Option<RemoteMode>,
+    team: Option<TeamScope>,
+) -> String {
+    let response = admin
+        .request(Request::Confine {
+            confine: ConfineRequest::default(),
+            request: Box::new(Request::NewSession {
+                argv: vec!["sleep".into(), "30".into()],
+                cols: 40,
+                rows: 10,
+                cwd: Some(fixture.to_string_lossy().into_owned()),
+                env: vec![],
+                reset: vec![],
+                control_from: vec![],
+                watch: vec![],
+                activity: None,
+                heartbeat: None,
+                name: Some(name.into()),
+                harness: Harness::Generic,
+                deliver: Some(Deliver::Hold),
+                team,
+                role: None,
+                remote,
+            }),
+        })
+        .await
+        .expect("create confined session");
+    match response {
+        Response::Created { session } => session,
+        response => panic!("confined session creation failed: {response:?}"),
+    }
+}
+
+pub async fn create_confined_with_token(
+    admin: &mut Client,
+    fixture: &Path,
+    name: &str,
+    remote: Option<RemoteMode>,
+    team: Option<TeamScope>,
+    harness: Harness,
+    deliver: Option<Deliver>,
+) -> (String, String) {
+    let response = admin
+        .request(Request::Confine {
+            confine: ConfineRequest::default(),
+            request: Box::new(Request::NewSession {
+                argv: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "printf %s \"$A2AMX_TOKEN\" > token; exec sleep 90".into(),
+                ],
+                cols: 40,
+                rows: 10,
+                cwd: Some(fixture.to_string_lossy().into_owned()),
+                env: vec![],
+                reset: vec![],
+                control_from: vec![],
+                watch: vec![],
+                activity: None,
+                heartbeat: None,
+                name: Some(name.into()),
+                harness,
+                deliver,
+                team,
+                role: None,
+                remote,
+            }),
+        })
+        .await
+        .expect("create confined token session");
+    let session = match response {
+        Response::Created { session } => session,
+        response => panic!("confined token session creation failed: {response:?}"),
+    };
+    let token_path = fixture.join("token");
+    let token = eventually(|| async {
+        let token = std::fs::read_to_string(&token_path).ok()?;
+        (token.len() == 64).then_some(token)
+    })
+    .await;
+    (session, token)
+}
+
+pub async fn create_confined(
+    admin: &mut Client,
+    fixture: &Path,
+    name: &str,
+    remote: Option<RemoteMode>,
+) -> String {
+    create_confined_with_team(admin, fixture, name, remote, None).await
+}
+
+pub async fn gateway(dir: &Path, address: SocketAddr) -> Client {
+    let token = std::fs::read_to_string(dir.join("gateway.token")).expect("gateway token");
+    Client::connect_addr(address, token.trim())
+        .await
+        .expect("gateway connection")
+}
+
+pub fn error_message(response: Response) -> String {
+    match response {
+        Response::Error { message } => message,
+        response => panic!("expected error response, got {response:?}"),
+    }
+}
+
+pub fn failed_code(response: Response) -> String {
+    match response {
+        Response::Failed { code, .. } => code,
+        response => panic!("expected failed response, got {response:?}"),
+    }
+}
+
+pub fn failed_message(response: Response) -> String {
+    match response {
+        Response::Failed { message, .. } => message,
+        response => panic!("expected failed response, got {response:?}"),
+    }
+}
+
+pub fn team_scope(name: &str) -> TeamScope {
+    TeamScope {
+        name: name.into(),
+        private: false,
+        allow: vec![],
+        agents: vec![],
+    }
+}
+
+pub async fn issue_code(admin: &mut Client, team: &str) -> String {
+    let response = admin
+        .request(Request::IssueLeaseCode { team: team.into() })
+        .await
+        .unwrap();
+    let Response::LeaseCode { code, .. } = response else {
+        panic!("expected lease code, got {response:?}");
+    };
+    code
+}
+
+pub async fn issue_and_redeem(admin: &mut Client, gateway: &mut Client, team: &str) {
+    let code = issue_code(admin, team).await;
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+}
+
+pub fn limits_with(lease_secs: u64, code_secs: u64) -> Limits {
+    Limits {
+        lease_secs,
+        code_secs,
+        ..Limits::default()
+    }
+}
 
 pub fn keep_coverage_env(command: &mut Command) -> &mut Command {
     if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
