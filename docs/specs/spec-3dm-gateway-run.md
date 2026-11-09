@@ -4,6 +4,8 @@
 
 LOCKED (base: 75fd8d2, which accepts spec 3dl).
 
+Amendment 1: section 2.5 item 5 no longer says a daemon `Response::Error` breaks the connection through `inbound` (the core maps it to a fixed line and `src/gateway.rs` stays out of scope).
+
 Scope (files that may be edited): `src/relay.rs` and `src/relay_files.rs` (new modules), `src/lib.rs` (two `pub mod` lines), `src/cli.rs` (the `gateway` command), `src/main.rs` (dispatch, signal handling, the pairing prompt, the log filter in section 2.6), `src/client.rs` (section 2.2), `tests/relay.rs` (new), `tests/common/fake_discord.rs` (new, section 2.7), `tests/common/mod.rs` (one `mod` line), `tests/discord.rs` (the moved helpers removed). Does not touch: `src/gateway.rs`, `src/discord.rs`, `src/daemon.rs`, `src/wire.rs`, `Cargo.toml`, `Cargo.lock`, `deny.toml`, the docs, `CHANGELOG.md`, `AGENTS.md` (the architect adds the module-table rows when committing).
 
 Location: main checkout, branch `develop`. Context id `a2amx-remote-human-messaging-2026-11-08`. Public seams: `a2amx::relay::run` against a real daemon and the fake Discord server; the `a2amx` binary for the command-line, pairing-prompt and log tests.
@@ -79,7 +81,7 @@ The loop is `loop { let wake = select! { ... }; match wake { ... } }` over: `Wat
 2. Sync tick (not when paused): `Gateway::agents`; for each agent `ensure_category(team)`, `ensure_text_channel(category, name)` (ids cached for the process lifetime) and `bind_channel(channel, address)`; a bound channel whose agent is no longer listed is unbound (the Discord channel stays).
 3. Pump tick (not when paused or broken): `Gateway::outbound` until `Idle`: `Send(out)`: post each piece in order; all succeed then `outbound_done(id, true)`, else `outbound_done(id, false)`. `NeedChannel { id, agent }`: ensure and bind the channel as in the sync step and continue; if that fails `outbound_done(id, false)`.
 4. Member tick: `Discord::member_count`; above `max_members` sets `paused` (no outbound, no sync, inbound dropped, one line on standard error); at or below clears it; an `Err` keeps the last known state. The start check is strict (an `Err` fails the start). Residual risk, stated in the docs (3do): the count is approximate and can lag, and a new member can read past messages.
-5. Any `Err` from a call that takes the daemon client (`agents`, `inbound`, `outbound`, `outbound_done`) marks the connection broken, including a daemon `Response::Error`. A broken connection is rebuilt with `connect_gateway` at the next tick, at most every `reconnect_ms`. Delivery is at-least-once: if a post succeeded and `outbound_done` then failed, the held message is offered again after the reconnect and may be posted twice; accepted.
+5. Any `Err` from a call that takes the daemon client (`agents`, `inbound`, `outbound`, `outbound_done`) marks the connection broken. A daemon `Response::Error` reaches the relay as an `Err` from `agents`, `outbound` and `outbound_done` (`gateway.rs:67`, `164`) and so also marks it broken; `inbound` turns every daemon response, errors included, into a fixed line (`gateway.rs:197-227`), so only its transport `Err` marks the connection broken. A broken connection is rebuilt with `connect_gateway` at the next tick, at most every `reconnect_ms`. Delivery is at-least-once: if a post succeeded and `outbound_done` then failed, the held message is offered again after the reconnect and may be posted twice; accepted.
 
 ### 2.6 Log filter
 
