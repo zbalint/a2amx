@@ -97,3 +97,27 @@ The tester runs the project-docs truth check on the touched pages and reports ea
 8. The architect reads the README diff against the move rule (nothing removed from the README) and the page against the outline in section 2.
 
 No code changes, so `cargo test` is not part of the acceptance; the architect still runs `cargo fmt --check` and `git diff --check`.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review) model not reported; developer openai-codex/gpt-5.6-luna (planning and working), advisor slot model not exposed; tester openai-codex/gpt-5.6-luna under OMP.
+
+BLOCKED/amend cycles: 2 (amendments 1 and 2), plus amendment 3, a scope widening the developer proposed. A causal review after the second cycle found the common cause: behaviour claims copied from earlier spec text without reading the code. Fix rounds after the first implementation: 1.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | eleven findings: the page named `new --remote` as a way to switch the feature on (a session outside a team never reaches the gateway); acceptance commands that could not pass (`A2AMX_BIN` does not change the `a2amx` on `PATH`; `git diff --name-only` misses an untracked page; rg patterns with runtime placeholders); two stale sentences in `permissions.md` outside the scope; Read Message History listed though nothing reads history; a false "cannot see /run"; a missing residual risk; missing lease, code and pairing facts | all applied before lock |
+| implementation | developer | spec claim false: the relay "keeps retrying" after a stale link, but the first daemon connection is not retried (`src/relay.rs:30-32`) | amendment 1 |
+| implementation | developer | spec claim false: a daemon restart recreates `link/`; the daemon reuses the directory. The same wrong sentence was in the 3dn review record | amendment 2; 3dn record corrected; architect read every remaining behaviour claim in section 2 against the code and found that channels appear only once the lease has started |
+| implementation | developer | `permissions.md` states two behaviours the code lacks (the lease ends when no agent runs; the gateway is "always confined") | amendment 3 widens the scope to those three bullets |
+| tester pass | tester | `gateway token` prints no prompt, so "when prompted" was false | reworded |
+| tester pass | tester | `--pair` does not require an interactive terminal (it reads standard input) | reworded |
+| tester pass | tester | `new --remote` is refused without `--confine`, so the example failed | `--confine` added in `cli.md` and the guide |
+| tester pass | tester | `teams.md` said `team up` prints a code for any remote team file; without a team name it warns instead | condition added |
+| tester pass | tester, advisor | "always runs confined" is true of `gateway up` only; the hidden `gateway run` runs unconfined if started by hand (two places on the page, plus `cli.md`, `permissions.md`) | scoped to `gateway up`, with a warning not to run the hidden command |
+| tester pass | tester | the `not paired` row named one cause; an invalid pairing file fails earlier with its own error | reworded |
+| tester pass | tester | the config shell block ignored an explicit `--home` | `<state>` placeholder |
+| tester pass | tester | a finding that the page says the lease ends on member exit | withdrawn by the tester (misread); the lease wording kept, one clause added that the record stays until expiry |
+| architect review | architect | `cli.md` said remote-enabled sessions "belong to a named team"; only reaching the gateway needs one | reworded |
+
+Architect checks on the final snapshot: `git diff --check`, `cargo fmt --check`, a link check over the six touched pages (nothing missing), `rg -c "not yet tested"` finds 2, `git status --porcelain` shows only the scope files and `CHANGELOG.md` (the architect's). The tester's per-sentence pass counted 107 source-backed behaviour statements. No code changed, so `cargo test` was not run. The Discord portal steps and the gateway against a real Discord server are not tested; the page says so.

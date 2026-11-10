@@ -161,6 +161,22 @@ future projects.
 
 See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.
 
+## Remote messaging
+
+Remote messaging lets a confined, remote-enabled agent message its paired human in Discord.
+With `both`, the human can write back. It is off by default; setup, lease and sandbox details
+are in [Remote messaging](remote-messaging.md).
+
+```text
+a2amx gateway token                 # store the Discord bot token without echoing it
+a2amx gateway up [--pair]           # start the confined gateway; --pair binds an account
+a2amx new --confine --remote <send|both> -- <command> # mark a confined session for remote messaging
+```
+
+`a2amx gateway up` is the supported launcher: the hidden internal relay should not be run directly,
+because direct invocation is unconfined. Remote-enabled sessions must be confined; to reach the
+gateway they must also belong to a named team.
+
 ## State directory and attachment
 
 The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,

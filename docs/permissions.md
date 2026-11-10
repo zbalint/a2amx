@@ -3,8 +3,9 @@
 Status: draft, not locked. This is the first part of the permissions design (F21), written
 for remote human messaging (F81, roadmap 0.3.0). It decides only what that feature needs
 and leaves a place for the rest of F21. The daemon side is built (specs 3df to 3dj: the gateway
-role, the per-agent mode, the presence lease, human-bound messages and the rate limits); the Discord
-gateway process is not.
+role, the per-agent mode, the presence lease, human-bound messages and the rate limits); the
+Discord gateway process and its sandbox are built too. The setup guide is
+`docs/remote-messaging.md`.
 
 The first transport is Discord (owner decision, 2026-11-08); Telegram may follow. Everything
 except the sections on the bot token, pairing and the server layout is independent of the
@@ -84,9 +85,9 @@ A team file can come from a repository, so the file alone grants nothing: the le
   Discord account can return it. A process that can read the admin token is the same user as
   the operator, which the [philosophy](philosophy.md#what-to-expect-and-what-not) does not
   defend against.
-- **Lifetime.** At most 24 hours. It belongs to the team, is kept in memory only, and ends when
-  the team has no running agent left (a whole `team down`) or when the daemon stops. Stopping
-  one agent does not end it. A restart always needs a new lease.
+- **Lifetime.** At most 24 hours. It covers the team's running members at redemption. Once all
+  covered members have exited, nothing passes, but the lease record stays until it expires or the
+  daemon stops. Stopping one agent does not end it. A restart always needs a new lease.
 - **What persists.** The pairing record (the Discord user id and the server id) is kept by the
   gateway, in a 0600 file under the state directory, not by the daemon (decided during
   implementation: the daemon never needs the Discord ids). The lease does not persist.
@@ -133,8 +134,8 @@ reuse the shape of the existing per-sender limit (in memory, sliding 60 s window
 Failed lease attempts have a counter of their own: five wrong codes per issued code, daemon-wide.
 Built defaults: 20 human messages a minute in, 30 a minute from all agents to the human in total
 (plus each agent's own 20), and 8000 bytes for a human message; the gateway splits long agent messages
-(not built yet). Refused requests are not counted, so a hijacked gateway can probe agent names without
-a limit (accepted, listed in spec 3dj).
+(built: 2000 characters a piece, `MAX_CHAT_CHARS` in `src/gateway.rs`). Refused requests are not
+counted, so a hijacked gateway can probe agent names without a limit (accepted, listed in spec 3dj).
 
 ### D7. Delivery reports only what is known
 
@@ -160,9 +161,9 @@ bot token out of the daemon. The alternative, a transport inside the daemon, is 
 network code next to the admin token. The gateway costs a role and a token file (D2), something
 to launch and supervise, and its own confinement.
 
-The gateway always runs confined, and the daemon refuses to start it if confinement cannot be
-set up; there is no unconfined option. What the spec has to settle, because bubblewrap alone
-does not cover it:
+`a2amx gateway up` starts the gateway in a confined sandbox and refuses to start it if confinement
+cannot be set up; the supported launcher has no unconfined option. What the spec has to settle,
+because bubblewrap alone does not cover it:
 
 - The gateway needs the network to reach Discord and the daemon's local address. Bubblewrap
   either shares the host network or removes it; it cannot allow one host and refuse others. The
@@ -264,9 +265,9 @@ Decided by the owner on 2026-11-08:
   list in the [philosophy](philosophy.md); the spec adds it there.
 - After the lease expires no agent message passes in either direction. The bot answers a message
   from the phone with a fixed error line (D4).
-- The lease stays valid for as long as the team has any running agent; a partial `team down`
-  does not end it (D4).
-- The gateway is a separate, always confined process (D9).
+- The lease covers the team's running members at redemption; once they have all exited nothing passes,
+  but the record stays until it expires or the daemon stops. Stopping one agent does not end it (D4).
+- The gateway is a separate process; `a2amx gateway up` always confines it (D9).
 - The first transport is Discord, with the layout in D10 as the working design.
 
 Still open:

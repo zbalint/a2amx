@@ -62,6 +62,7 @@ The planner agent calls `send_message` to `reviewer`; the reviewer receives it a
 - **Operator controls:** attach, switch, scroll, inspect, reset, and stop sessions from the CLI.
 - **Confinement:** opt-in protection for trusted sessions that keeps accidental writes away from protected paths.
 - **Teams and status:** group sessions with visibility rules, roles, watches, heartbeats, activity transition notices, and quota status.
+- **Remote messaging:** an agent on a long task can message you on Discord, and you can write back; off by default, confined sessions only.
 
 ## Quick start
 
@@ -84,6 +85,7 @@ Then start the two sessions from [the example above](#example). See [Installatio
 - The daemon currently owns one machine; cross-host routing and remote launch are not built.
 - Agents cannot launch other sessions. Teams provide visibility and coordination, not OS-user or process isolation.
 - Confinement is opt-in (`--confine`), a safety net against accidents by a trusted agent rather than a sandbox; it needs `bwrap` on the daemon's `PATH`. See [Confinement](docs/confinement.md).
+- Remote messaging is messaging only; Discord text is not end-to-end encrypted.
 - PTY bytes do not prove prompt submission. Receipts report harness evidence, not model processing.
 - A2AMX is not an agent planner, an LLM orchestration framework, a memory system, or a container management platform, and has no LLM of its own.
 
@@ -107,6 +109,7 @@ All code, tests and documentation are written by AI agents; no human writes or h
 - [Delivery](docs/delivery.md) — input arbitration, evidence, retries, ordering, and recovery.
 - [Validation plan](docs/validation-plan.md) — implementation-slice checks and recorded results.
 - [Backlog](docs/backlog.md) — open gaps, issues, untested behavior, and ideas.
+- [Remote messaging](docs/remote-messaging.md) — pair a Discord account, configure the confined gateway, and enable agents.
 - [Contributing](CONTRIBUTING.md) — setup, checks, and public-repository rules.
 - [Security](SECURITY.md) — private vulnerability reporting and security scope.
 - [Changelog](CHANGELOG.md) — user-visible changes.

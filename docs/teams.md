@@ -107,6 +107,12 @@ to the same injected operator text as the peer-authorization line, including whe
 
 Within a `[[session]]` table, `name` may be omitted when `role` is set; the role is then used as the name and must itself be a valid name (otherwise set `name` explicitly). An explicit `name` always wins.
 
+`remote` is optional and enables remote human messaging for this session. Set it to `send` to
+let the agent message the paired human, or `both` to allow messages in both directions. It
+requires confinement; remote messaging is off when the key is omitted. A team name is required
+for the gateway lease, so an ungrouped session does not reach the gateway. See
+[Remote messaging](remote-messaging.md).
+
 ### Confinement settings
 
 Use an optional team-level `[confine]` table for defaults and a `[session.confine]`
@@ -165,6 +171,11 @@ names select full session names directly, including any team-prefixed name. It u
 same graceful Ctrl-D default as `kill`; pass `--now` to use the immediate HUP/KILL
 path. Missing names are reported without failing; explicit missing names also print
 a stderr hint to use full names from `a2amx list`.
+When a team file with a team name enables remote messaging, `a2amx team up` prints the enabled
+agents and a single-use code to post in the Discord control channel:
+`post this code in the control channel within 10m: <code>`.
+If remote messaging is set but the file has no team name, it warns:
+`remote messaging is set but the file has no team name; no lease can start`.
 
 `a2amx team reset [--file F | NAME ...] [--except NAME]... [--include-attached] [--yes]`
 runs the configured reset sequence (default `/clear`) for each selected session, in file order or NAME

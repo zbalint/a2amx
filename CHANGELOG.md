@@ -7,8 +7,7 @@ All notable user-visible changes are listed here. The format follows
 
 ### Added
 
-- Remote human messaging, daemon side (F81, in progress; the Discord gateway process is not part of this yet, so nothing
-  reaches a phone). A new per-agent setting `remote` (`a2amx new --remote send|both`, team file key `remote`) lets an
+- Remote human messaging, daemon side (F81). A new per-agent setting `remote` (`a2amx new --remote send|both`, team file key `remote`) lets an
   agent message the owner (`send_message(to="human:owner")`): `send` means the agent may message the human only, `both`
   also lets the human write to it. It needs a confined session; the daemon refuses it otherwise. A presence lease
   (at most 24 hours, in memory, bound to the team members at the time it starts) must be active: `a2amx team up` prints
@@ -18,6 +17,15 @@ All notable user-visible changes are listed here. The format follows
   `HumanInbound`, `HumanOutboundNext` and `HumanOutboundDone`, a new `gateway.token` file in the state directory, and
   new `Limits` fields; the message database schema is unchanged. Additive; an older client ignores the new fields
   (`docs/permissions.md`).
+- Remote human messaging, the Discord gateway (F81; not yet tested against a real Discord server). `a2amx gateway token`
+  stores the Discord bot token, and `a2amx gateway up [--pair]` starts the gateway: it re-executes the hidden `gateway run`
+  inside its own bubblewrap sandbox (an empty root with `/usr`, `/etc` and the executable read-only, `<state>/gateway/`
+  writable, `<state>/link/` read-only, a cleared environment) and refuses to start without `bwrap`. The gateway creates a
+  Discord category per team and a channel per agent, relays messages for the paired account only, and pauses when the
+  server has more members than `max_members`. Its files live in `<state>/gateway/` (`config.toml`, `discord.token`,
+  `pairing.json`, `seen.json`); the daemon now also writes `addr` and `gateway.token` into `<state>/link/`, which is the
+  only part of the state directory the gateway can read, and removes them like the originals. New request
+  `GatewayAgents`. Additive; the message database schema is unchanged. Setup guide: `docs/remote-messaging.md`.
 
 ### Changed
 

@@ -48,7 +48,8 @@ Make what exists on one machine dependable and explainable before adding more.
 
 Let an agent on a long task reach its operator while the operator is away from the
 computer, and let the operator answer, or write first, from a phone. The first
-transport is Discord; Telegram may follow. The design is not final (F81).
+transport is Discord; Telegram may follow. The daemon side, the gateway and the guide are
+built; the live test with a real Discord server is pending.
 
 - A human is a messaging participant with its own message envelope, distinct from
   agent messages and daemon notifications. An agent addresses the paired human through
