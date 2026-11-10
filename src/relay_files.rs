@@ -210,7 +210,7 @@ fn validate_pairing(pairing: &Pairing, guild_id: &str, path: &Path) -> anyhow::R
     Ok(())
 }
 
-fn valid_id(value: &str) -> bool {
+pub(crate) fn valid_id(value: &str) -> bool {
     (1..=20).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 

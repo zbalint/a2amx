@@ -122,12 +122,19 @@ Start the daemon first, then run:
 a2amx gateway up --pair
 ```
 
-`up --pair` starts the gateway in its confined sandbox. It creates the `a2amx` control category
-and `control` channel (or the configured names), prints a pairing code, and waits for that code
-to appear in the control channel. Post the code from the Discord account that should be paired.
-The terminal then asks whether to bind that Discord account; answer `y` or `yes`. A decline ends
-with `pairing not confirmed`. The code expires after 10 minutes, and a successful pairing is
-saved in `<state>/gateway/pairing.json` with mode `0600`.
+`up --pair` starts the gateway in its confined sandbox. Pairing is a one-time setup step: it
+creates the `a2amx` control category and `control` channel (or the configured names), prints a
+pairing code, and waits for that code to appear in the control channel. Post the code from the
+Discord account that should be paired. The terminal then asks whether to bind that Discord
+account; answer `y` or `yes`. A decline ends with `pairing not confirmed`. The code expires after
+10 minutes, and a successful pairing is saved in `<state>/gateway/pairing.json` with mode `0600`.
+
+If a pairing already exists, `--pair` first warns which Discord account and server are currently
+paired, then asks `replace Discord account <old-id> with <new-id>? [y/N]`. Confirming writes the
+new pairing and prints `paired with Discord account <new-id>; starting the gateway`; the command
+keeps running as the gateway until you stop it with Ctrl-C. Moving to a different Discord server
+requires deleting `<state>/gateway/pairing.json` first, because the gateway refuses a pairing whose
+server differs from `config.toml`.
 
 The pairing confirmation is read from standard input; answer `y` or `yes` at the terminal. The
 gateway accepts control and agent-channel messages only from the paired Discord account. After

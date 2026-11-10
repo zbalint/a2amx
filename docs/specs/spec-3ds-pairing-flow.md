@@ -57,3 +57,19 @@ Running the gateway in the background and any change to what `gateway up` does a
 4. `git diff` touches only the files in section 0.
 5. Mutation check (developer, assigned checkout, restore by checksum, `timeout 120` each): drop the warning (test a fails); keep the `bind` prompt text when a pairing exists (test a fails); announce the section 2.3 line before the `if !accepted` check (test c fails); announce it between that check and `write_pairing` (test a or b fails through the recorded file check); print the warning when no pairing exists (test b fails); remove the section 2.4 author check (test d fails). Name the failing test for each. Name the failing test for each.
 6. Trust boundary. Attack path: the author ID of the Discord event that carries the pairing code is printed to the owner's terminal in the confirmation prompt without validation (terminal escape sequences in the prompt). Disposition: constrained by section 2.4 (a non-ID author is refused before anything is printed). Abuse test (red on the current code): `FakeDiscord` pushes the matching code with author `9\u{1b}[31mX`; `run` returns an error whose text is `pairing refused: the message author is not a Discord user ID`, `confirm` is never called, and no `pairing.json` is written. The old and new IDs in the section 2.1 and 2.2 lines come from `pairing.json`, which `relay_files::load` validates with the same function.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (one pre-lock review) Claude, model not reported; developer and tester openai-codex/gpt-5.6-luna (planning and working, advisor slot not exposed).
+
+BLOCKED/amend cycles: 0. Fix rounds after the first implementation: 1 (a test strengthened by the developer, one assertion by the architect).
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | the "now relaying" wording in the success line was untrue at that point | wording changed to `starting the gateway` (section 2.3) |
+| draft review | consultant | an author that is not a Discord ID could reach the prompt; the check needed `valid_id` made `pub(crate)` | section 2.4 and the `relay_files.rs` scope line |
+| draft review | consultant | a mutation that moves the success line earlier within a success path survives a decline test | tests check the file on disk at the moment of the announcement |
+| implementation | developer | the mutant "success line before the write" passed because a single recorded value was overwritten by the later correct line | both success tests record every callback and expect exactly one `true` |
+| tester pass | tester | the no-pairing test rejected only the exact existing-pairing warning, so a different `warning:` line on a first pairing survived | architect widened the assertion to any line starting `warning`; the mutant now fails |
+
+Architect checks on the final snapshot: `git diff --check`, fmt, clippy `-D warnings`, `cargo deny check`, `scripts/prepush-fast.sh`, full `cargo test --no-fail-fast` (only the two confined-HOME failures of backlog I24: `tests/gateway_up.rs::sandbox_hides_state_host_and_limits_writes_to_gateway` and `tests/human_inbound.rs::queued_human_message_rechecks_recipient_eligibility_before_delivery`; CI runs unconfined and is the judge).

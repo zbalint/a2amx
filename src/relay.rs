@@ -314,6 +314,12 @@ async fn pair(
     watch: &mut Watch,
     io: &mut PairIo,
 ) -> anyhow::Result<Pairing> {
+    if let Some(old) = &loaded.pairing {
+        (io.announce)(&format!(
+            "warning: this gateway is already paired with Discord account {} in server {}; confirming a new pairing replaces it, and the old account can no longer message your agents",
+            old.user_id, old.guild_id
+        ));
+    }
     let code = random_hex::<6>()?;
     (io.announce)(&format!("post this code in the control channel: {code}"));
     let event = time::timeout(Duration::from_secs(10 * 60), async {
@@ -329,7 +335,16 @@ async fn pair(
     })
     .await
     .map_err(|_| anyhow!("pairing timed out"))??;
-    let prompt = format!("bind Discord account {}? [y/N]", event.author);
+    if !relay_files::valid_id(&event.author) {
+        bail!("pairing refused: the message author is not a Discord user ID");
+    }
+    let prompt = match &loaded.pairing {
+        Some(old) => format!(
+            "replace Discord account {} with {}? [y/N]",
+            old.user_id, event.author
+        ),
+        None => format!("bind Discord account {}? [y/N]", event.author),
+    };
     let mut confirm = std::mem::replace(&mut io.confirm, Box::new(|_| false));
     let accepted = tokio::task::spawn_blocking(move || confirm(&prompt)).await?;
     if !accepted {
@@ -340,5 +355,9 @@ async fn pair(
         user_id: event.author,
     };
     relay_files::write_pairing(&loaded.home, &pairing)?;
+    (io.announce)(&format!(
+        "paired with Discord account {}; starting the gateway (Ctrl-C stops it)",
+        pairing.user_id
+    ));
     Ok(pairing)
 }

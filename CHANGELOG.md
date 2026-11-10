@@ -31,6 +31,10 @@ All notable user-visible changes are listed here. The format follows
 
 ### Changed
 
+- `a2amx gateway up --pair` on an existing pairing now warns which Discord account and server are currently paired and
+  asks `replace Discord account OLD with NEW?` before it replaces the pairing (spec 3ds). After a confirmed pairing it
+  prints `paired with Discord account ...; starting the gateway (Ctrl-C stops it)`. A message author that is not a
+  Discord user ID is refused before the prompt. The pairing file format is unchanged.
 - `a2amx team up` waits for Enter before it attaches when a session in the team has `remote` set (spec 3dr). The lease
   code or the warning that explains why there is none stays on screen until then (the attach switches to the alternate
   screen). With `--detach`, without a terminal, or without `remote` nothing changes.
