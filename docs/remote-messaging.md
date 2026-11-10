@@ -256,6 +256,10 @@ yet tested with A2AMX.
   remains the old, stale directory until the gateway restarts. The daemon itself does not remove
   or recreate `link/` while running; a daemon restart rewrites the files inside the existing
   directory, and the mount shows those files.
+- A message from Discord is recorded as seen before the daemon accepts it, and it is not retried.
+  If the daemon cannot be reached at that moment, the gateway posts `a2amx is not reachable right
+  now` (a best-effort reply that can itself fail) and the message is not delivered; send it again.
+  If the daemon accepted a message but its reply was lost, sending it again delivers it twice.
 - The bot token and pairing record are files on disk with mode `0600`.
 - A message from the phone carries less authority than input typed at the computer.
 
