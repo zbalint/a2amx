@@ -2661,6 +2661,37 @@ impl AttachmentState {
         }
     }
 
+    async fn forward_or_block(&mut self, input: Vec<u8>, now: Instant) -> anyhow::Result<()> {
+        if self.viewer.is_viewer() {
+            if !is_focus_report(&input) {
+                self.viewer.blocked(now);
+                self.draw_viewer_decorations(now)?;
+            }
+        } else if let Some(attached) = self.attachment.as_mut() {
+            attached.send(ClientFrame::Input(input)).await?;
+        }
+        Ok(())
+    }
+
+    async fn toggle_viewer_mode(&mut self, now: Instant) -> anyhow::Result<()> {
+        let viewer = self.viewer.toggle(now);
+        if let Some(attached) = self.attachment.as_mut() {
+            attached.send(ClientFrame::Mode { viewer }).await?;
+            if !viewer {
+                attached
+                    .send(ClientFrame::Resize {
+                        cols: self.cols,
+                        rows: pty_rows(self.rows, self.status_visible, self.top_rows),
+                    })
+                    .await?;
+                attached.send(ClientFrame::Redraw).await?;
+            }
+        }
+        self.draw_status()?;
+        self.draw_viewer_decorations(now)?;
+        Ok(())
+    }
+
     async fn handle_prefix_actions(
         &mut self,
         actions: Vec<Action>,
@@ -2668,16 +2699,7 @@ impl AttachmentState {
     ) -> anyhow::Result<Option<AttachOutcome>> {
         for action in actions {
             match action {
-                Action::Forward(input) => {
-                    if self.viewer.is_viewer() {
-                        if !is_focus_report(&input) {
-                            self.viewer.blocked(now);
-                            self.draw_viewer_decorations(now)?;
-                        }
-                    } else if let Some(attached) = self.attachment.as_mut() {
-                        attached.send(ClientFrame::Input(input)).await?;
-                    }
-                }
+                Action::Forward(input) => self.forward_or_block(input, now).await?,
                 Action::Command(PrefixCommand::Detach) => {
                     if let Some(attached) = self.attachment.as_mut() {
                         attached.send(ClientFrame::Detach).await?;
@@ -2696,21 +2718,7 @@ impl AttachmentState {
                     self.toggle_status_line().await?;
                 }
                 Action::Command(PrefixCommand::ViewerMode) => {
-                    let viewer = self.viewer.toggle(now);
-                    if let Some(attached) = self.attachment.as_mut() {
-                        attached.send(ClientFrame::Mode { viewer }).await?;
-                        if !viewer {
-                            attached
-                                .send(ClientFrame::Resize {
-                                    cols: self.cols,
-                                    rows: pty_rows(self.rows, self.status_visible, self.top_rows),
-                                })
-                                .await?;
-                            attached.send(ClientFrame::Redraw).await?;
-                        }
-                    }
-                    self.draw_status()?;
-                    self.draw_viewer_decorations(now)?;
+                    self.toggle_viewer_mode(now).await?;
                 }
                 Action::Command(PrefixCommand::TeamMember(number)) => {
                     if let Some(id) = self.member_by_number(number) {
