@@ -231,7 +231,13 @@ impl McpServer {
             ToolCall::ListAgents => {
                 let response = self.read_request(Request::ListAgents).await?;
                 match response {
-                    Response::Agents { agents } => Ok(json!({"agents": agents})),
+                    Response::Agents { agents, owner } => {
+                        let mut payload = json!({"agents": agents});
+                        if let Some(owner) = owner {
+                            payload["owner"] = json!(owner);
+                        }
+                        Ok(payload)
+                    }
                     response => response_payload(response),
                 }
             }
@@ -464,7 +470,7 @@ pub(crate) fn tool_schemas() -> Value {
     json!([
         {
             "name": "list_agents",
-            "description": "List the agent sessions you can message. Sessions outside the caller's visibility are not listed. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages. Each entry's \"team\" is its team name when it has one, and \"you\" marks the caller. \"quota\" gives the percent left in each window (\"five_hour_left\", \"weekly_left\"; 100 means all of it is left, 0 means used up); \"limit_reached\" means the harness reported a usage limit.",
+            "description": "List the agent sessions you can message. Sessions outside the caller's visibility are not listed. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages. Each entry's \"team\" is its team name when it has one, and \"you\" marks the caller. \"quota\" gives the percent left in each window (\"five_hour_left\", \"weekly_left\"; 100 means all of it is left, 0 means used up); \"limit_reached\" means the harness reported a usage limit. A remote-enabled session also gets \"owner\", which is \"present\" or \"away\".",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -473,7 +479,7 @@ pub(crate) fn tool_schemas() -> Value {
         },
         {
             "name": "send_message",
-            "description": "Send a message to another agent session or to the operator at human:owner. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. If recipient_quota is present, the recipient's harness reports that quota is used up and it may not answer until the quota resets. Plain text; do not write the text of a paste-wrapper tag in a body. This works only for an agent the operator enabled for remote messaging.",
+            "description": "Send a message to another agent session or to the operator at human:owner. Returns a message id once the message is accepted; acceptance does not mean it was delivered, read, or acted on. Check message_status when the reply matters. If recipient_hold is present, the recipient is held and a person may need to act. If recipient_quota is present, the recipient's harness reports that quota is used up and it may not answer until the quota resets. Plain text; do not write the text of a paste-wrapper tag in a body. This works only for an agent the operator enabled for remote messaging. Sending to human:owner is refused with owner_present while the owner is at the computer.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

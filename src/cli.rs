@@ -217,6 +217,9 @@ pub enum DaemonAction {
         /// Keep the daemon in the foreground.
         #[arg(long)]
         foreground: bool,
+        /// Seconds the owner remains present after the last interactive attachment ends.
+        #[arg(long, env = "A2AMX_OWNER_AWAY_SECS", default_value_t = 60)]
+        owner_away_secs: u64,
     },
     /// Show daemon state and sessions.
     Status,

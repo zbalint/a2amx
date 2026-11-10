@@ -447,7 +447,7 @@ async fn list_and_list_agents_report_a_claude_session_quota() {
             ..Default::default()
         }
     );
-    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = admin.request(Request::ListAgents).await.unwrap() else {
         panic!("list_agents failed");
     };
     let agent = agents
@@ -489,7 +489,7 @@ async fn list_and_list_agents_report_an_omp_limit() {
             ..Default::default()
         }
     );
-    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = admin.request(Request::ListAgents).await.unwrap() else {
         panic!("list_agents failed");
     };
     let agent = agents
@@ -865,7 +865,7 @@ async fn list_and_list_agents_report_omp_usage_percentages() {
             ..Default::default()
         }
     );
-    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = admin.request(Request::ListAgents).await.unwrap() else {
         panic!("list_agents failed");
     };
     let agent = agents
@@ -894,7 +894,7 @@ async fn list_and_list_agents_report_omp_usage_percentages() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(cleared, "provider omission did not clear List quota");
-    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = admin.request(Request::ListAgents).await.unwrap() else {
         panic!("list_agents failed");
     };
     let agent = agents

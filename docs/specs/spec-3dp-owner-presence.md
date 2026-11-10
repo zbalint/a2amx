@@ -109,3 +109,21 @@ Commands run from the repository root with `env -u A2AMX_BIN -u NO_COLOR`; every
 ## 7. Amendments
 
 1. (Developer BLOCKED, verified by the architect against `src/daemon.rs:3505-3548`.) The locked text said an attach to an already exited session is refused. It succeeds today (final render, then `Exit`) and `tests/attach_cli.rs:623-630` pins it. Section 2.2 now keeps that behaviour and only withholds the count. Add a test: an attach to an exited session does not make the owner present.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review) Claude, model not reported; developer and tester openai-codex/gpt-5.6-luna (planning and working, advisor slot not exposed).
+
+BLOCKED/amend cycles: 1 (amendment 1: an attach to an exited session was claimed refused, it succeeds and a test pins it). Fix rounds after the first implementation: 1 (tests only).
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | scope missed test files that stop compiling when `Request::Attach`, `Response::Agents` and `Limits` gain fields, and `tests/mcp.rs` strings that pin the two descriptions | scope widened to mechanical edits in those files |
+| draft review | consultant | spec said `Direction::ToHuman` is used once; `next_eligible_human` also reads it, so a check inside `remote_ineligible` would fail queued messages when the owner returns | claim corrected, placement rule stated |
+| draft review | consultant | guard counting at reservation, `AttachmentSlot` in an out-of-scope file, catch-all `unreachable!()` panic on `Mode`, no client attach entry point, `attached` semantics, eligibility mismatch, no pure time seam | `counted`/`viewer` on the guard, explicit `Mode` arm, `Client::attach_viewer`, pure `Presence`, rules stated |
+| implementation | developer | spec claim false: attach to an exited session is refused (it succeeds, `tests/attach_cli.rs:623-630`); the claim came from a consultant note the architect did not read in the code | amendment 1: it succeeds and does not count |
+| tester pass | tester | five mutants survived: return notice, exited-session counting, uncounted-guard drop, viewer `Release`, `attach_viewer` sending `Resize` (a sixth, reservation-time counting, was withdrawn as an unisolated probe) | tests added; the architect reran three of the mutants and all were killed; the uncounted-guard-drop mutant has no deterministic public seam and stays an accepted gap |
+| tester pass | tester | smaller gaps: `attached` for a viewer, exact notice sender and body, five-cycle pure test | tests added |
+
+Architect checks on the final snapshot: `git diff --check`, fmt, clippy `-D warnings`, `cargo deny --locked check`, `scripts/prepush-fast.sh`, full `cargo test` (1116 passed, 0 failed, 3 ignored OMP tests). Own mutants (checksum restore, all killed): `poll` returning on change, exited-session attach counted, viewer `Release` forwarded.
+

@@ -40,6 +40,7 @@ fn client_frames() -> impl Strategy<Value = ClientFrame> {
         Just(ClientFrame::Redraw),
         scrolls().prop_map(ClientFrame::Scroll),
         Just(ClientFrame::Release),
+        any::<bool>().prop_map(|viewer| ClientFrame::Mode { viewer }),
     ]
 }
 
@@ -84,7 +85,22 @@ fn malformed_client_frames() -> impl Strategy<Value = Vec<u8>> {
             !valid.contains(byte)
         })
         .prop_map(|byte| vec![0x05, byte]);
-    prop_oneof![resize, empty_body, scroll_length, invalid_scroll]
+    let mode_length = (0usize..=8)
+        .prop_filter("mode body length is not one", |length| *length != 1)
+        .prop_map(|length| {
+            let mut frame = vec![0x07];
+            frame.extend(std::iter::repeat_n(0, length));
+            frame
+        });
+    let invalid_mode = (2u8..=u8::MAX).prop_map(|value| vec![0x07, value]);
+    prop_oneof![
+        resize,
+        empty_body,
+        scroll_length,
+        invalid_scroll,
+        mode_length,
+        invalid_mode
+    ]
 }
 
 fn malformed_server_frames() -> impl Strategy<Value = Vec<u8>> {
@@ -172,7 +188,7 @@ proptest! {
             prop_assert!(client.is_err());
             prop_assert!(server.is_err());
         } else {
-            if !matches!(bytes[0], 0x01..=0x06) {
+            if !matches!(bytes[0], 0x01..=0x07) {
                 prop_assert!(client.is_err());
             }
             if !matches!(bytes[0], 0x01..=0x04) {

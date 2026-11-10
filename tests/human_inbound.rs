@@ -1188,6 +1188,7 @@ fn gateway_other_requests() -> Vec<Request> {
             rows: 10,
             status: false,
             top_rows: 0,
+            viewer: false,
         },
         Request::Kill {
             session: "s1".into(),

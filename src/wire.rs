@@ -196,6 +196,8 @@ pub enum Request {
         status: bool,
         #[serde(default, skip_serializing_if = "is_default")]
         top_rows: u16,
+        #[serde(default, skip_serializing_if = "is_default")]
+        viewer: bool,
     },
     Kill {
         session: String,
@@ -356,6 +358,8 @@ pub enum Response {
     },
     Agents {
         agents: Vec<AgentSummary>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
     },
     Status {
         message: MessageInfo,
@@ -633,6 +637,7 @@ pub enum ClientFrame {
     Redraw,
     Scroll(Scroll),
     Release,
+    Mode { viewer: bool },
 }
 impl ServerFrame {
     pub fn encode(&self) -> Vec<u8> {
@@ -722,6 +727,7 @@ impl ClientFrame {
             Self::Redraw => vec![0x04],
             Self::Scroll(scroll) => vec![0x05, scroll_to_byte(*scroll)],
             Self::Release => vec![0x06],
+            Self::Mode { viewer } => vec![0x07, u8::from(*viewer)],
         }
     }
 
@@ -772,6 +778,16 @@ impl ClientFrame {
                     bail!("client release frame body must be empty");
                 }
                 Ok(Self::Release)
+            }
+            0x07 => {
+                if body.len() != 1 {
+                    bail!("client mode frame body must be one byte");
+                }
+                match body[0] {
+                    0 => Ok(Self::Mode { viewer: false }),
+                    1 => Ok(Self::Mode { viewer: true }),
+                    value => bail!("unknown client mode value {value}"),
+                }
             }
             _ => bail!("unknown client stream frame tag 0x{tag:02x}"),
         }

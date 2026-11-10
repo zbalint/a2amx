@@ -37,6 +37,8 @@ pub fn origin_of(sender_session: &str) -> Origin {
 
 pub const HEARTBEAT_SUBJECT: &str = "heartbeat";
 pub const ACTIVITY_SUBJECT: &str = "activity";
+pub const PRESENCE_SUBJECT: &str = "owner away";
+pub const OWNER_AWAY_BODY: &str = "The owner is away from the computer. You may message them with send_message(to=\"human:owner\").";
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 pub const MAX_HUMAN_BODY_BYTES: usize = 8000;
 pub const HEARTBEAT_MAX: Duration = Duration::from_secs(24 * 60 * 60);
@@ -150,6 +152,7 @@ pub struct Limits {
     pub retention_secs: u64,
     pub lease_secs: u64,
     pub code_secs: u64,
+    pub away_secs: u64,
 }
 
 impl Default for Limits {
@@ -163,7 +166,69 @@ impl Default for Limits {
             retention_secs: 7 * 24 * 3600,
             lease_secs: LEASE_MAX.as_secs(),
             code_secs: CODE_TTL.as_secs(),
+            away_secs: 60,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Presence {
+    away_secs: u64,
+    interactive: u32,
+    last_interactive: Option<std::time::Instant>,
+    last_announced: bool,
+}
+
+impl Presence {
+    pub fn new(away_secs: u64) -> Self {
+        Self {
+            away_secs,
+            interactive: 0,
+            last_interactive: None,
+            last_announced: false,
+        }
+    }
+
+    pub fn attach_started(&mut self, _now: std::time::Instant, viewer: bool) {
+        if !viewer {
+            self.interactive += 1;
+        }
+    }
+
+    pub fn mode_changed(&mut self, now: std::time::Instant, viewer: bool) {
+        if viewer {
+            if self.interactive > 0 {
+                self.interactive -= 1;
+                if self.interactive == 0 {
+                    self.last_interactive = Some(now);
+                }
+            }
+        } else {
+            self.interactive += 1;
+        }
+    }
+
+    pub fn attach_ended(&mut self, now: std::time::Instant, was_viewer: bool) {
+        if !was_viewer && self.interactive > 0 {
+            self.interactive -= 1;
+            if self.interactive == 0 {
+                self.last_interactive = Some(now);
+            }
+        }
+    }
+
+    pub fn present(&self, now: std::time::Instant) -> bool {
+        self.interactive > 0
+            || self
+                .last_interactive
+                .is_some_and(|last| now < last + Duration::from_secs(self.away_secs))
+    }
+
+    pub fn poll(&mut self, now: std::time::Instant) -> bool {
+        let present = self.present(now);
+        let away_transition = self.last_announced && !present;
+        self.last_announced = present;
+        away_transition
     }
 }
 
@@ -215,6 +280,7 @@ pub mod code {
     pub const INVALID_CONTENT: &str = "invalid_content";
     pub const UNKNOWN_MESSAGE: &str = "unknown_message";
     pub const INTERNAL: &str = "internal";
+    pub const OWNER_PRESENT: &str = "owner_present";
     pub const NOT_PERMITTED: &str = "not_permitted";
     pub const UNKNOWN_SESSION: &str = "unknown_session";
     pub const EXITED: &str = "exited";

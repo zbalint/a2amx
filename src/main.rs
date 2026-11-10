@@ -197,11 +197,12 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 listen,
                 host_name,
                 foreground,
+                owner_away_secs,
             } => {
                 if foreground {
-                    run_daemon(home, listen, host_name).await
+                    run_daemon(home, listen, host_name, owner_away_secs).await
                 } else {
-                    run_daemon_background(home, listen, host_name).await
+                    run_daemon_background(home, listen, host_name, owner_away_secs).await
                 }
             }
             DaemonAction::Status => return run_daemon_status(home).await,
@@ -369,6 +370,7 @@ async fn run_daemon(
     home: PathBuf,
     listen: Vec<std::net::SocketAddr>,
     host_name: Option<String>,
+    owner_away_secs: u64,
 ) -> anyhow::Result<()> {
     let listen = if listen.is_empty() {
         vec![
@@ -383,7 +385,10 @@ async fn run_daemon(
         state_dir: home,
         listen,
         host_name,
-        limits: a2amx::messaging::Limits::default(),
+        limits: a2amx::messaging::Limits {
+            away_secs: owner_away_secs,
+            ..Default::default()
+        },
         bwrap_path: None,
         env_path: None,
     })
@@ -405,6 +410,7 @@ async fn run_daemon_background(
     home: PathBuf,
     listen: Vec<std::net::SocketAddr>,
     host_name: Option<String>,
+    owner_away_secs: u64,
 ) -> anyhow::Result<()> {
     if Client::connect(&home).await.is_ok() {
         let running = read_addrs(&home).await.unwrap_or_default();
@@ -434,6 +440,9 @@ async fn run_daemon_background(
         .arg("--home")
         .arg(&home)
         .args(["daemon", "start", "--foreground"]);
+    command
+        .arg("--owner-away-secs")
+        .arg(owner_away_secs.to_string());
     for addr in &listen {
         command.arg("--listen").arg(addr.to_string());
     }

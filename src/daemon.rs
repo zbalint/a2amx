@@ -71,6 +71,7 @@ pub struct Daemon {
     listeners: Vec<JoinHandle<()>>,
     purge: Option<JoinHandle<()>>,
     omp_usage: Option<JoinHandle<()>>,
+    presence: Option<JoinHandle<()>>,
     state_dir: PathBuf,
     lock: Option<File>,
 }
@@ -92,6 +93,7 @@ struct Runtime {
     omp_usage: Mutex<Option<(Instant, BTreeMap<String, QuotaInfo>)>>,
     omp_usage_attempt: Mutex<Option<Instant>>,
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
+    presence: Arc<Mutex<messaging::Presence>>,
     leases: Mutex<PresenceLeases>,
     new_session_gate: tokio::sync::Mutex<()>,
     // shortcut: a stopped gateway leaves messages delivering until daemon restart;
@@ -817,6 +819,96 @@ impl Runtime {
             .extend(tasks);
     }
 
+    async fn poll_presence(self: Arc<Self>, mut stopping: watch::Receiver<bool>) {
+        let mut ticker = tokio::time::interval(HEARTBEAT_POLL);
+        ticker.tick().await;
+        loop {
+            tokio::select! {
+                _ = stopping.changed() => return,
+                _ = ticker.tick() => {
+                    let away = self
+                        .presence
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .poll(Instant::now());
+                    if away {
+                        self.send_presence_notices().await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn send_presence_notices(&self) {
+        let now = Instant::now();
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for session in sessions {
+            if self
+                .remote_ineligible(&session, now, messaging::Direction::ToHuman)
+                .is_some()
+            {
+                continue;
+            }
+            let open = match self
+                .store
+                .open_system_message(&self.boot, &session.id().0, messaging::PRESENCE_SUBJECT)
+                .await
+            {
+                Ok(open) => open,
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        recipient = %session.id().0,
+                        "presence state lookup failed"
+                    );
+                    continue;
+                }
+            };
+            if open {
+                continue;
+            }
+            let message = NewMessage {
+                boot: self.boot.clone(),
+                sender_session: messaging::SYSTEM_SESSION.into(),
+                sender_address: messaging::address(
+                    Some(messaging::SYSTEM_SENDER),
+                    messaging::SYSTEM_SENDER,
+                    &self.host_name,
+                ),
+                recipient_session: session.id().0.clone(),
+                recipient_address: messaging::address(
+                    session.name(),
+                    &session.id().0,
+                    &self.host_name,
+                ),
+                subject: messaging::PRESENCE_SUBJECT.into(),
+                body: messaging::OWNER_AWAY_BODY.into(),
+            };
+            match self.store.insert_message(message).await {
+                Ok(_) => session.message_notify().notify_one(),
+                Err(InsertError::QueueFull) => {
+                    tracing::warn!(
+                        recipient = %session.id().0,
+                        "presence message queue is full"
+                    );
+                }
+                Err(InsertError::Internal(error)) => {
+                    tracing::error!(
+                        %error,
+                        recipient = %session.id().0,
+                        "presence message acceptance failed"
+                    );
+                }
+            }
+        }
+    }
+
     async fn observe_exit(self: Arc<Self>, session: Arc<Session>) {
         session.wait_exit().await;
         if session.daemon_ended() {
@@ -1211,6 +1303,17 @@ impl Runtime {
                 self.remote_ineligible(&sender, Instant::now(), messaging::Direction::ToHuman)
             {
                 return failed(error_code, message);
+            }
+            if self
+                .presence
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .present(Instant::now())
+            {
+                return failed(
+                    code::OWNER_PRESENT,
+                    "the owner is at the computer; write to them in the terminal instead",
+                );
             }
             let new = NewMessage {
                 boot: self.boot.clone(),
@@ -2314,6 +2417,9 @@ impl Daemon {
             // shortcut: accepted-send timestamps are memory-only; persist them if
             // rate limits must survive daemon restarts.
             rate: tokio::sync::Mutex::new(HashMap::new()),
+            presence: Arc::new(Mutex::new(messaging::Presence::new(
+                config.limits.away_secs,
+            ))),
             leases: Mutex::new(PresenceLeases::default()),
             new_session_gate: tokio::sync::Mutex::new(()),
             human_attempts: Mutex::new(HashMap::new()),
@@ -2355,6 +2461,11 @@ impl Daemon {
                     }
                 }
             })
+        };
+        let presence = {
+            let runtime = runtime.clone();
+            let stopping = shutdown.subscribe();
+            tokio::spawn(runtime.poll_presence(stopping))
         };
         let listeners = bound.into_iter().map(|listener| {
             let runtime = runtime.clone();
@@ -2401,6 +2512,7 @@ impl Daemon {
             listeners,
             purge: Some(purge),
             omp_usage: Some(omp_usage),
+            presence: Some(presence),
             state_dir: config.state_dir,
             lock: Some(lock),
         })
@@ -2430,6 +2542,9 @@ impl Daemon {
         }
         if let Some(omp_usage) = self.omp_usage.take() {
             omp_usage.await?;
+        }
+        if let Some(presence) = self.presence.take() {
+            presence.await?;
         }
         let mut failure = None;
         let deliveries = std::mem::take(
@@ -2672,6 +2787,7 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 rows,
                 status,
                 top_rows,
+                viewer,
             } => {
                 if cols == 0 || rows == 0 {
                     Response::Error {
@@ -2684,7 +2800,9 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                         force,
                         Size { cols, rows },
                         top_rows,
-                        status.then(|| runtime.clone()),
+                        viewer,
+                        status,
+                        runtime.clone(),
                     )
                     .await?
                     {
@@ -2919,6 +3037,17 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
             message: "sender session is unavailable".into(),
         };
     }
+    let owner = viewer
+        .as_ref()
+        .filter(|viewer| viewer.remote().is_some())
+        .map(|_| {
+            let present = runtime
+                .presence
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .present(Instant::now());
+            if present { "present" } else { "away" }.to_owned()
+        });
     let omp_usage = runtime.omp_usage();
     let agents = sessions
         .values()
@@ -2954,7 +3083,7 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
             }
         })
         .collect();
-    Response::Agents { agents }
+    Response::Agents { agents, owner }
 }
 
 async fn kill_session(runtime: &Runtime, id: &str, now: bool) -> Response {
@@ -3363,20 +3492,31 @@ struct AttachmentGuard {
     session: Arc<Session>,
     generation: u64,
     closed: watch::Sender<bool>,
+    presence: Arc<Mutex<messaging::Presence>>,
+    viewer: bool,
+    counted: bool,
 }
 
 impl Drop for AttachmentGuard {
     fn drop(&mut self) {
-        let mut state = self.session.lock();
-        if state
-            .attachment
-            .as_ref()
-            .is_some_and(|slot| slot.generation == self.generation)
         {
-            state.attachment = None;
+            let mut state = self.session.lock();
+            if state
+                .attachment
+                .as_ref()
+                .is_some_and(|slot| slot.generation == self.generation)
+            {
+                state.attachment = None;
+            }
+            if state.pending_attachment == Some(self.generation) {
+                state.pending_attachment = None;
+            }
         }
-        if state.pending_attachment == Some(self.generation) {
-            state.pending_attachment = None;
+        if self.counted {
+            self.presence
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .attach_ended(Instant::now(), self.viewer);
         }
         let _ = self.closed.send(true);
     }
@@ -3441,13 +3581,16 @@ async fn attachment_status(
     })
 }
 
+#[allow(clippy::too_many_arguments)] // Locked attach flow keeps status, viewer, and runtime handles explicit.
 async fn attach(
     connection: &mut Framed,
     session: Arc<Session>,
     force: bool,
     size: Size,
     top_rows: u16,
-    status: Option<Arc<Runtime>>,
+    viewer: bool,
+    status: bool,
+    runtime: Arc<Runtime>,
 ) -> anyhow::Result<bool> {
     if top_rows > 8 {
         response(
@@ -3489,10 +3632,13 @@ async fn attach(
         .await?;
         return Ok(false);
     };
-    let _guard = AttachmentGuard {
+    let mut guard = AttachmentGuard {
         session: session.clone(),
         generation,
         closed,
+        presence: runtime.presence.clone(),
+        viewer,
+        counted: false,
     };
     if let Some((previous, mut previous_closed)) = previous {
         let _ = previous.send(true);
@@ -3508,7 +3654,12 @@ async fn attach(
             Err(anyhow::anyhow!("attachment was taken over"))
         } else {
             state.emulator.set_row_origin(top_rows);
-            session.resize_locked(&mut state, size).map(|()| {
+            let resize = if viewer {
+                Ok(())
+            } else {
+                session.resize_locked(&mut state, size)
+            };
+            resize.map(|()| {
                 let bytes = state.emulator.render_full();
                 state.dirty = false;
                 state.attachment = Some(AttachmentSlot {
@@ -3534,6 +3685,14 @@ async fn attach(
             return Ok(false);
         }
     };
+    if exited.is_none() {
+        runtime
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .attach_started(Instant::now(), viewer);
+        guard.counted = true;
+    }
     let attached = if top_rows == 0 {
         Response::Attached
     } else {
@@ -3547,8 +3706,8 @@ async fn attach(
         return Ok(true);
     }
     let mut last = None;
-    if let Some(runtime) = status.as_ref() {
-        let info = attachment_status(&session, runtime).await?;
+    if status {
+        let info = attachment_status(&session, &runtime).await?;
         connection
             .send(&ServerFrame::Status(info.clone()).encode())
             .await?;
@@ -3580,8 +3739,8 @@ async fn attach(
             // shortcut: one-second poll per attachment; push from the store's write path if latency
             // or load matters.
             _ = ticker.tick() => {
-                if let Some(runtime) = status.as_ref() {
-                    let info = attachment_status(&session, runtime).await?;
+                if status {
+                    let info = attachment_status(&session, &runtime).await?;
                     if last.as_ref() != Some(&info) {
                         connection.send(&ServerFrame::Status(info.clone()).encode()).await?;
                         last = Some(info);
@@ -3607,18 +3766,31 @@ async fn attach(
                 let Some(payload) = payload? else { return Ok(true); };
                 match ClientFrame::decode(&payload)? {
                     ClientFrame::Detach => return Ok(true),
-                    ClientFrame::Input(bytes) => {
+                    ClientFrame::Input(bytes) if !guard.viewer => {
                         session.note_human_input(&bytes);
                         if !session.enqueue(bytes).await? {
                             session.notify().notify_one();
                         }
                     },
-                    ClientFrame::Release => session.release(),
+                    ClientFrame::Input(_) => {},
+                    ClientFrame::Release if !guard.viewer => session.release(),
+                    ClientFrame::Release => {},
+                    ClientFrame::Mode { viewer } => {
+                        if guard.counted && guard.viewer != viewer {
+                            runtime
+                                .presence
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .mode_changed(Instant::now(), viewer);
+                            guard.viewer = viewer;
+                        }
+                    },
                     frame => {
                         let (bytes, exited) = {
                             let mut state = session.lock();
                             match frame {
-                                ClientFrame::Resize { cols, rows } if state.exit_code.is_none() =>
+                                ClientFrame::Resize { cols, rows }
+                                    if !guard.viewer && state.exit_code.is_none() =>
                                     session.resize_locked(&mut state, Size { cols, rows })?,
                                 ClientFrame::Resize { .. } => {},
                                 ClientFrame::Scroll(scroll) => state.emulator.scroll(scroll),

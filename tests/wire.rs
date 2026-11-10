@@ -175,6 +175,7 @@ fn request_json_uses_exact_tagged_shapes() {
             rows: 40,
             status: false,
             top_rows: 0,
+            viewer: false,
         })
         .unwrap_or_default(),
         r#"{"type":"attach","session":"s1","force":true,"cols":120,"rows":40}"#
@@ -600,6 +601,8 @@ fn every_client_stream_frame_round_trips() {
         ClientFrame::Scroll(Scroll::PageDown),
         ClientFrame::Scroll(Scroll::Top),
         ClientFrame::Scroll(Scroll::Bottom),
+        ClientFrame::Mode { viewer: false },
+        ClientFrame::Mode { viewer: true },
     ];
     for frame in frames {
         let payload = frame.encode();
@@ -655,6 +658,9 @@ fn stream_decoders_reject_malformed_payloads() {
         vec![0x04, 0],
         vec![0x05],
         vec![0x05, 6],
+        vec![0x07],
+        vec![0x07, 2],
+        vec![0x07, 0, 1],
     ] {
         assert!(
             ClientFrame::decode(&payload).is_err(),
@@ -689,6 +695,23 @@ fn release_has_an_empty_body_and_rejects_extra_bytes() {
         Some(ClientFrame::Release)
     );
     assert!(ClientFrame::decode(&[0x06, 0]).is_err());
+}
+
+#[test]
+fn mode_frame_has_a_boolean_body_and_rejects_invalid_encodings() {
+    assert_eq!(ClientFrame::Mode { viewer: false }.encode(), vec![7, 0]);
+    assert_eq!(ClientFrame::Mode { viewer: true }.encode(), vec![7, 1]);
+    assert_eq!(
+        ClientFrame::decode(&[7, 0]).unwrap(),
+        ClientFrame::Mode { viewer: false }
+    );
+    assert_eq!(
+        ClientFrame::decode(&[7, 1]).unwrap(),
+        ClientFrame::Mode { viewer: true }
+    );
+    for payload in [&[7][..], &[7, 2], &[7, 0, 1]] {
+        assert!(ClientFrame::decode(payload).is_err());
+    }
 }
 
 #[test]
@@ -775,6 +798,7 @@ fn messaging_control_variants_round_trip() {
                 cwd: None,
                 activity: None,
             }],
+            owner: None,
         },
         Response::Status {
             message: message.clone(),
@@ -812,6 +836,7 @@ fn messaging_control_variants_round_trip() {
             cwd: Some("/tmp/agent".into()),
             activity: None,
         }],
+        owner: None,
     };
     let with_cwd_json = serde_json::json!({"type":"agents","agents":[{"address":"agent-omp@host-a","state":"running","attached":false,"harness":"omp","cwd":"/tmp/agent"}]});
     assert_eq!(serde_json::to_value(&with_cwd).unwrap(), with_cwd_json);
@@ -827,9 +852,10 @@ fn messaging_control_variants_round_trip() {
             "attached": false,
         }],
     });
-    let Response::Agents { agents } = serde_json::from_value(old_agents).unwrap() else {
+    let Response::Agents { agents, owner } = serde_json::from_value(old_agents).unwrap() else {
         panic!("old agents payload did not deserialize");
     };
+    assert_eq!(owner, None);
     assert_eq!(agents[0].harness, Harness::Generic);
     assert_eq!(agents[0].cwd, None);
 }
@@ -1119,6 +1145,7 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
         rows: 23,
         status: true,
         top_rows: 0,
+        viewer: false,
     };
     assert_eq!(
         serde_json::to_string(&request).unwrap(),
@@ -1136,6 +1163,7 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
             rows: 23,
             status: false,
             top_rows: 0,
+            viewer: false,
         }
     );
 }

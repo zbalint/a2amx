@@ -176,7 +176,7 @@ async fn wait_agents(
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             match client.request(Request::ListAgents).await.unwrap() {
-                Response::Agents { agents } if predicate(&agents) => return,
+                Response::Agents { agents, .. } if predicate(&agents) => return,
                 _ => tokio::task::yield_now().await,
             }
         }
@@ -316,6 +316,7 @@ async fn session_tokens_roles_permissions_and_child_identity() {
             rows: 10,
             status: false,
             top_rows: 0,
+            viewer: false,
         },
         Request::Kill {
             session: sender_id.clone(),
@@ -385,7 +386,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
     assert_eq!(named_id, "s1");
     assert_eq!(unnamed_id, "s2");
     let agents = match admin.request(Request::ListAgents).await.unwrap() {
-        Response::Agents { agents } => agents,
+        Response::Agents { agents, .. } => agents,
         response => panic!("unexpected response: {response:?}"),
     };
     assert!(agents.iter().any(|agent| {
@@ -504,7 +505,7 @@ async fn naming_addresses_and_role_expires_after_exit() {
     })
     .await;
     let role_agents = match unnamed.request(Request::ListAgents).await.unwrap() {
-        Response::Agents { agents } => agents,
+        Response::Agents { agents, .. } => agents,
         response => panic!("unexpected response: {response:?}"),
     };
     assert!(role_agents.iter().any(|agent| {
@@ -567,7 +568,7 @@ async fn list_agents_reports_harness_and_spawn_directory() {
         .await
         .unwrap();
     assert!(matches!(response, Response::Created { .. }));
-    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = admin.request(Request::ListAgents).await.unwrap() else {
         panic!("list_agents failed");
     };
     let agent = agents
@@ -675,6 +676,7 @@ async fn pending_limit_and_content_errors() {
             retention_secs: 7 * 24 * 3600,
             lease_secs: 24 * 60 * 60,
             code_secs: 10 * 60,
+            away_secs: 60,
         },
     )
     .await;
@@ -989,6 +991,7 @@ async fn stored_limit_and_rate_limit_are_independent() {
             retention_secs: 7 * 24 * 3600,
             lease_secs: 24 * 60 * 60,
             code_secs: 10 * 60,
+            away_secs: 60,
         },
     )
     .await;
@@ -1055,6 +1058,7 @@ async fn rate_limit_does_not_cross_sender_sessions() {
             retention_secs: 7 * 24 * 3600,
             lease_secs: 24 * 60 * 60,
             code_secs: 10 * 60,
+            away_secs: 60,
         },
     )
     .await;

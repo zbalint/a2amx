@@ -136,7 +136,7 @@ impl Client {
         cols: u16,
         rows: u16,
     ) -> anyhow::Result<Attachment> {
-        self.attach_with_status(session, force, cols, rows, false, 0)
+        self.attach_with_status(session, force, cols, rows, false, false, 0)
             .await
     }
 
@@ -148,16 +148,30 @@ impl Client {
         rows: u16,
         top_rows: u16,
     ) -> anyhow::Result<Attachment> {
-        self.attach_with_status(session, force, cols, rows, true, top_rows)
+        self.attach_with_status(session, force, cols, rows, false, true, top_rows)
             .await
     }
 
+    pub async fn attach_viewer(
+        self,
+        session: &str,
+        force: bool,
+        cols: u16,
+        rows: u16,
+        top_rows: u16,
+    ) -> anyhow::Result<Attachment> {
+        self.attach_with_status(session, force, cols, rows, true, true, top_rows)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // Locked attach API keeps status and viewer parameters explicit.
     async fn attach_with_status(
         mut self,
         session: &str,
         force: bool,
         cols: u16,
         rows: u16,
+        viewer: bool,
         status: bool,
         top_rows: u16,
     ) -> anyhow::Result<Attachment> {
@@ -169,6 +183,7 @@ impl Client {
                 rows,
                 status,
                 top_rows,
+                viewer,
             })
             .await?
         {

@@ -2,6 +2,7 @@
 
 mod common;
 
+use anyhow::Context;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::{
@@ -1524,6 +1525,7 @@ gate.recv(1)
                     rows: 512,
                     status: false,
                     top_rows: 0,
+                    viewer: false,
                 },
                 Response::Attached,
             ),
@@ -2004,5 +2006,48 @@ async fn switch_waits_for_old_attachment_eof_with_delayed_fake_daemon() -> anyho
     );
     server.abort();
     let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn attach_viewer_sends_no_resize_frame() -> anyhow::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let hello = fake_recv_frame(&mut stream)
+            .await?
+            .context("missing hello")?;
+        anyhow::ensure!(
+            matches!(
+                serde_json::from_slice::<Request>(&hello)?,
+                Request::Hello { .. }
+            ),
+            "expected hello request"
+        );
+        fake_send_frame(&mut stream, &serde_json::to_vec(&Response::Ok)?).await?;
+        let attach = fake_recv_frame(&mut stream)
+            .await?
+            .context("missing attach")?;
+        let Request::Attach { viewer, .. } = serde_json::from_slice(&attach)? else {
+            anyhow::bail!("expected attach request");
+        };
+        anyhow::ensure!(viewer, "attach_viewer did not set viewer mode");
+        fake_send_frame(&mut stream, &serde_json::to_vec(&Response::Attached)?).await?;
+        let next =
+            tokio::time::timeout(Duration::from_millis(250), fake_recv_frame(&mut stream)).await;
+        Ok::<_, anyhow::Error>(matches!(next, Ok(Ok(Some(_)))))
+    });
+
+    let attachment = Client::connect_addr(address, "fake-token")
+        .await?
+        .attach_viewer("s1", false, 80, 24, 0)
+        .await?;
+    let resize_or_other_frame = server.await??;
+    assert!(
+        !resize_or_other_frame,
+        "attach_viewer wrote an unexpected frame after Attach"
+    );
+    drop(attachment);
     Ok(())
 }

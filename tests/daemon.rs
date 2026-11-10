@@ -272,6 +272,7 @@ async fn session_tokens_cannot_confine_and_admin_confine_rejects_invalid_targets
     };
     let Response::Agents {
         agents: before_agents,
+        ..
     } = admin.request(Request::ListAgents).await.unwrap()
     else {
         panic!("admin list_agents failed");
@@ -308,6 +309,7 @@ async fn session_tokens_cannot_confine_and_admin_confine_rejects_invalid_targets
     );
     let Response::Agents {
         agents: after_agents,
+        ..
     } = admin.request(Request::ListAgents).await.unwrap()
     else {
         panic!("admin list_agents after reset failed");
@@ -422,6 +424,7 @@ async fn resize_and_redraw_preserve_top_rows_origin() {
         rows: 5,
         status: false,
         top_rows: 1,
+        viewer: false,
     };
     socket
         .write_all(&encode_frame(&serde_json::to_vec(&request).unwrap()).unwrap())
@@ -1220,6 +1223,7 @@ async fn serve_control_validation_messages_and_attachment_precedence() {
                 rows: 5,
                 status: false,
                 top_rows: 0,
+                viewer: false,
             },
             "unknown session s999",
         ),
@@ -1231,6 +1235,7 @@ async fn serve_control_validation_messages_and_attachment_precedence() {
                 rows: 5,
                 status: false,
                 top_rows: 0,
+                viewer: false,
             },
             "attachment dimensions must be nonzero",
         ),
@@ -1242,6 +1247,7 @@ async fn serve_control_validation_messages_and_attachment_precedence() {
                 rows: 0,
                 status: false,
                 top_rows: 0,
+                viewer: false,
             },
             "attachment dimensions must be nonzero",
         ),
@@ -2145,6 +2151,7 @@ async fn malformed_stream_frame_disconnects_without_killing_the_session() {
                     rows: 5,
                     status: false,
                     top_rows: 0,
+                    viewer: false,
                 })
                 .unwrap(),
             )
@@ -2188,6 +2195,7 @@ async fn failed_attach_leaves_the_control_connection_usable() {
                 rows: 5,
                 status: false,
                 top_rows: 0,
+                viewer: false,
             })
             .await
             .unwrap(),

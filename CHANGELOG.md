@@ -7,6 +7,7 @@ All notable user-visible changes are listed here. The format follows
 
 ### Added
 
+- Owner presence (F83, daemon side). The daemon treats the owner as present while an interactive attach exists, and for 60 seconds after the last one ends or turns into a viewer (`a2amx daemon start --owner-away-secs`, env `A2AMX_OWNER_AWAY_SECS`). While the owner is present, `send_message(to="human:owner")` is refused with the new code `owner_present`; messages accepted earlier are still delivered. `list_agents` shows `owner: present|away` to agents with remote messaging on, and each such agent gets one fixed "owner away" message when the owner turns away. New wire items: `viewer` on the attach request, the client frame `Mode` (tag 0x07) and `owner` on the agents response; all additive. A viewer attach does not resize the session and its input is ignored; the attach client's viewer mode is a separate change.
 - Remote human messaging, daemon side (F81). A new per-agent setting `remote` (`a2amx new --remote send|both`, team file key `remote`) lets an
   agent message the owner (`send_message(to="human:owner")`): `send` means the agent may message the human only, `both`
   also lets the human write to it. It needs a confined session; the daemon refuses it otherwise. A presence lease

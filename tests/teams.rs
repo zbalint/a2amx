@@ -341,7 +341,7 @@ async fn private_team_visibility_hides_other_private_teams_but_not_ungrouped() {
     .await;
     let (_plain_id, _plain) = session(&mut admin, dir.path(), "plain", None, &[], &[]).await;
 
-    let Response::Agents { agents } = a.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = a.request(Request::ListAgents).await.unwrap() else {
         panic!("expected agent list");
     };
     assert!(
@@ -371,7 +371,7 @@ async fn private_team_visibility_hides_other_private_teams_but_not_ungrouped() {
             message: "unknown recipient".into()
         }
     );
-    let Response::Agents { agents } = admin.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = admin.request(Request::ListAgents).await.unwrap() else {
         panic!("expected admin agent list");
     };
     assert_eq!(agents.len(), 3);
@@ -409,7 +409,7 @@ async fn mutual_allow_is_required_for_private_team_message_visibility() {
         .await
         .unwrap();
     assert!(matches!(sent, Response::Accepted { .. }), "{sent:?}");
-    let Response::Agents { agents } = b.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = b.request(Request::ListAgents).await.unwrap() else {
         panic!("expected agent list");
     };
     assert!(agents.iter().any(|agent| agent.address.starts_with("a@")));
@@ -701,7 +701,7 @@ async fn mutual_agent_allow_limits_private_team_visibility_and_messaging() {
     )
     .await;
 
-    let Response::Agents { agents } = a_arch.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = a_arch.request(Request::ListAgents).await.unwrap() else {
         panic!("expected agent list");
     };
     assert!(
@@ -792,7 +792,7 @@ async fn mutual_agent_allow_limits_private_team_visibility_and_messaging() {
         &[],
     )
     .await;
-    let Response::Agents { agents } = a.request(Request::ListAgents).await.unwrap() else {
+    let Response::Agents { agents, .. } = a.request(Request::ListAgents).await.unwrap() else {
         panic!("expected agent list");
     };
     assert!(
