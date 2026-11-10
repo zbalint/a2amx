@@ -164,8 +164,9 @@ If a later spawn fails, already-started sessions remain and no further session s
 
 Without a file, `a2amx team up architect=claude developer=omp` accepts bare
 executables only and has no team; commands with arguments need the file's argv
-arrays. The file may select one session to attach; the flag form attaches the
-first. `--detach` suppresses attachment, and nonterminal invocation never attaches.
+arrays. The file may select one session to attach; the flag form attaches the first.
+`--detach` suppresses attachment, and nonterminal invocation never attaches. When a session in the
+team has `remote` set, `team up` waits for Enter before attaching.
 `a2amx team down` kills the file's named sessions, running or exited; explicit
 names select full session names directly, including any team-prefixed name. It uses the
 same graceful Ctrl-D default as `kill`; pass `--now` to use the immediate HUP/KILL

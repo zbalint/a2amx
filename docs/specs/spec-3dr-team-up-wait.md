@@ -82,3 +82,21 @@ All commands run in the main checkout with `env -u A2AMX_BIN -u NO_COLOR` as `AG
 ## 7. Known accepted gaps
 
 The terminal size re-read after the wait (section 2.4) has no test: resizing a PTY during the pause is not worth a fixture. It is a deliberate shortcut and the mutation that removes it is expected to survive.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (one pre-lock review) Claude, model not reported; developer and tester openai-codex/gpt-5.6-luna (planning and working, advisor slot not exposed).
+
+BLOCKED/amend cycles: 0. Fix rounds after the first implementation: 2 (both on the tests).
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | the wait applied only when a lease code printed, so a refused lease or a missing team name (warnings the attach hides) still scrolled away | the wait applies whenever `remote` is set (section 2.1) |
+| draft review | consultant | the claim that complexity stays unchanged was false; the block to extract was not named | `issue_lease_code` extraction named in scope and section 2.2 |
+| draft review | consultant | existing PTY tests of `team up` (`tests/team.rs:2480`, `tests/auto_confine.rs`) were not mentioned; test 1 needed an order of checks, an unambiguous marker, an end-of-test pattern and a bounded exit | sections 5 items 1 to 5 |
+| draft review | consultant | the attach switches to the alternate screen, it does not clear the screen; the terminal size can be stale after a pause | wording fixed; size re-read added (section 2.4) |
+| tester pass | tester | the mutant "`wait_for_enter` returns at once" survived the main test: the absence of the marker was asserted before an instant attach could draw it | fix round 1: a 1.5 s settle loop before Enter in both wait tests; the mutant now fails both |
+| implementation | developer advisor | the settle helper used a blocking `std::thread::sleep` in an async test | fix round 2: async helper with `tokio::time::sleep` |
+| architect review | architect | none found in the diff; own mutants (inverted condition, dropped `remote messaging for` line, silent no-team branch) were killed by the named tests | none |
+
+Architect checks on the final snapshot: `git diff --check`, fmt, clippy `-D warnings`, `cargo deny check`, `scripts/prepush-fast.sh`, full `cargo test --no-fail-fast` (52 suites passed; two environmental failures in the confined architect session: `tests/gateway_up.rs::sandbox_hides_state_host_and_limits_writes_to_gateway` creates a temp directory under the read-only `$HOME`, and `tests/human_inbound.rs::queued_human_message_rechecks_recipient_eligibility_before_delivery` fails creating a confined session with "Read-only file system"; both reproduce alone and neither touches `team up`; CI runs unconfined and is the judge; recorded as backlog I24).

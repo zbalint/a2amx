@@ -1669,6 +1669,60 @@ async fn write_auto_summaries(actions: &[team::Action]) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn issue_lease_code(client: &mut Client, remote_team: Option<String>) -> anyhow::Result<()> {
+    if let Some(team) = remote_team {
+        match client.request(Request::IssueLeaseCode { team }).await {
+            Ok(Response::LeaseCode {
+                code,
+                agents,
+                valid_secs,
+            }) => {
+                write_stdout(format!("remote messaging for: {}\n", agents.join(", ")).into_bytes())
+                    .await?;
+                write_stdout(
+                    format!(
+                        "post this code in the control channel within {}: {code}\n",
+                        display_duration(Duration::from_secs(valid_secs))
+                    )
+                    .into_bytes(),
+                )
+                .await?;
+            }
+            Ok(Response::Error { message }) => {
+                write_stderr(format!("warning: {message}\n").into_bytes()).await?;
+            }
+            Ok(other) => {
+                write_stderr(
+                    format!("warning: unexpected lease response: {other:?}\n").into_bytes(),
+                )
+                .await?;
+            }
+            Err(error) => {
+                write_stderr(
+                    format!("warning: could not obtain lease code: {error}\n").into_bytes(),
+                )
+                .await?;
+            }
+        }
+    } else {
+        write_stderr(
+            b"remote messaging is set but the file has no team name; no lease can start\n".to_vec(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn wait_for_enter() -> anyhow::Result<()> {
+    write_stderr(b"press Enter to attach to the session".to_vec()).await?;
+    tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)
+    })
+    .await??;
+    Ok(())
+}
+
 async fn run_team_up(
     home: PathBuf,
     attach_options: AttachOptions,
@@ -1769,55 +1823,28 @@ async fn run_team_up(
         }
     }
     if remote_requested {
-        if let Some(team) = remote_team {
-            match client.request(Request::IssueLeaseCode { team }).await {
-                Ok(Response::LeaseCode {
-                    code,
-                    agents,
-                    valid_secs,
-                }) => {
-                    write_stdout(
-                        format!("remote messaging for: {}\n", agents.join(", ")).into_bytes(),
-                    )
-                    .await?;
-                    write_stdout(
-                        format!(
-                            "post this code in the control channel within {}: {code}\n",
-                            display_duration(Duration::from_secs(valid_secs))
-                        )
-                        .into_bytes(),
-                    )
-                    .await?;
-                }
-                Ok(Response::Error { message }) => {
-                    write_stderr(format!("warning: {message}\n").into_bytes()).await?;
-                }
-                Ok(other) => {
-                    write_stderr(
-                        format!("warning: unexpected lease response: {other:?}\n").into_bytes(),
-                    )
-                    .await?;
-                }
-                Err(error) => {
-                    write_stderr(
-                        format!("warning: could not obtain lease code: {error}\n").into_bytes(),
-                    )
-                    .await?;
-                }
-            }
-        } else {
-            write_stderr(
-                b"remote messaging is set but the file has no team name; no lease can start\n"
-                    .to_vec(),
-            )
-            .await?;
-        }
+        issue_lease_code(&mut client, remote_team).await?;
     }
     if !detach
         && stdin_is_terminal()
         && let Some(session) = attached_id
     {
-        run_attachment(client, &home, attach_options, session, false, cols, rows).await?;
+        let (attach_cols, attach_rows) = if remote_requested {
+            wait_for_enter().await?;
+            terminal_size_with_default()?
+        } else {
+            (cols, rows)
+        };
+        run_attachment(
+            client,
+            &home,
+            attach_options,
+            session,
+            false,
+            attach_cols,
+            attach_rows,
+        )
+        .await?;
     }
     Ok(())
 }

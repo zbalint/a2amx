@@ -204,6 +204,13 @@ Post that 12-hex code in the Discord control channel. A successful redemption ge
 `remote messaging is on`. The code is valid for 10 minutes. Five wrong codes, counted across the
 whole daemon, clear every pending code; run `a2amx team up` again to print a new code.
 
+When standard input is a terminal, `team up` pauses after the lease output with
+`press Enter to attach to the session`. This keeps the code visible before attachment switches
+to the alternate screen. Press Enter to attach. Ctrl-C at the prompt ends `team up` but leaves
+the sessions running; use `a2amx attach NAME` to attach later. With `--detach`, `team up` does
+not pause or attach. Running `a2amx team up --detach` again prints a new code and leaves running
+sessions alone.
+
 The redeemed lease lasts at most 24 hours, is held in daemon memory, and covers the team members
 running with remote messaging enabled at the moment of redemption. The lease record remains until
 it expires or the daemon stops. An agent restarted or added after redemption is not covered until

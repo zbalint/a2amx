@@ -6,8 +6,65 @@ use a2amx::client::Client;
 use a2amx::harness::{Deliver, Harness};
 use a2amx::messaging::TeamScope;
 use a2amx::wire::{Request, Response};
+use common::pty::PtyHarness;
 use std::path::Path;
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
+
+fn team_up_pty_args(home: &Path, team_file: &Path, detach: bool) -> Vec<String> {
+    let mut args = vec![
+        "--home".to_owned(),
+        home.to_string_lossy().into_owned(),
+        "team".to_owned(),
+        "up".to_owned(),
+    ];
+    if detach {
+        args.push("--detach".to_owned());
+    }
+    args.extend([
+        "--file".to_owned(),
+        team_file.to_string_lossy().into_owned(),
+    ]);
+    args
+}
+
+fn team_up_pty(
+    home: &Path,
+    workspace: &Path,
+    user_home: &Path,
+    runtime: &Path,
+    team_file: &Path,
+    detach: bool,
+) -> anyhow::Result<PtyHarness> {
+    PtyHarness::spawn_with_env_in(
+        &team_up_pty_args(home, team_file, detach),
+        user_home,
+        workspace,
+        &[
+            (
+                "HOME",
+                user_home.to_str().expect("home path is valid UTF-8"),
+            ),
+            (
+                "XDG_RUNTIME_DIR",
+                runtime.to_str().expect("runtime path is valid UTF-8"),
+            ),
+        ],
+    )
+}
+
+async fn assert_waiting_before_enter(pty: &mut PtyHarness, settle: Duration) -> anyhow::Result<()> {
+    let deadline = Instant::now() + settle;
+    while Instant::now() < deadline {
+        pty.expect_screen_lacks("SESSION-MARK-9f3a")?;
+        assert!(
+            pty.wait_exit(Duration::from_millis(1)).is_err(),
+            "team up exited before Enter"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(())
+}
 
 fn scope(name: &str, private: bool, allow: &[&str]) -> TeamScope {
     scope_with_agents(name, private, allow, &[])
@@ -253,6 +310,139 @@ async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
             .contains("remote messaging is set but the file has no team name; no lease can start")
     );
     daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_remote_waits_before_attaching() -> anyhow::Result<()> {
+    let Some((dir, daemon)) = common::start_confined_daemon().await else {
+        return Ok(());
+    };
+    let workspace = tempfile::tempdir()?;
+    let user_home = tempfile::tempdir()?;
+    let runtime = tempfile::tempdir()?;
+    let team_file = workspace.path().join("team.toml");
+    std::fs::write(
+        &team_file,
+        r#"
+team = "team-a"
+[[session]]
+name = "remote"
+command = ["sh", "-c", "printf SESSION-MARK-9f3a; sleep 30"]
+attach = true
+remote = "send"
+[session.confine]
+enabled = true
+"#,
+    )?;
+
+    let mut pty = team_up_pty(
+        dir.path(),
+        workspace.path(),
+        user_home.path(),
+        runtime.path(),
+        &team_file,
+        false,
+    )?;
+    let wait = Duration::from_secs(10);
+    pty.wait_for_text("press Enter to attach to the session", wait)?;
+    assert!(
+        pty.screen_text()
+            .contains("post this code in the control channel within")
+    );
+    assert_waiting_before_enter(&mut pty, Duration::from_millis(1500)).await?;
+    pty.send(b"\r")?;
+    pty.wait_for_text("SESSION-MARK-9f3a", wait)?;
+    pty.send(&[2, b'd'])?;
+    pty.wait_for_text("[detached from", wait)?;
+    assert_eq!(pty.wait_exit(wait)?, 0);
+    daemon.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_remote_without_team_name_still_waits_before_attaching() -> anyhow::Result<()> {
+    let Some((dir, daemon)) = common::start_confined_daemon().await else {
+        return Ok(());
+    };
+    let workspace = tempfile::tempdir()?;
+    let user_home = tempfile::tempdir()?;
+    let runtime = tempfile::tempdir()?;
+    let team_file = workspace.path().join("team.toml");
+    std::fs::write(
+        &team_file,
+        r#"
+[[session]]
+name = "remote"
+command = ["sh", "-c", "printf SESSION-MARK-9f3a; sleep 30"]
+attach = true
+remote = "send"
+[session.confine]
+enabled = true
+"#,
+    )?;
+
+    let mut pty = team_up_pty(
+        dir.path(),
+        workspace.path(),
+        user_home.path(),
+        runtime.path(),
+        &team_file,
+        false,
+    )?;
+    let wait = Duration::from_secs(10);
+    pty.wait_for_text("press Enter to attach to the session", wait)?;
+    assert!(
+        pty.screen_text()
+            .contains("remote messaging is set but the file has no team name; no lease can start")
+    );
+    assert_waiting_before_enter(&mut pty, Duration::from_millis(1500)).await?;
+    pty.send(b"\r")?;
+    pty.wait_for_text("SESSION-MARK-9f3a", wait)?;
+    pty.send(&[2, b'd'])?;
+    pty.wait_for_text("[detached from", wait)?;
+    assert_eq!(pty.wait_exit(wait)?, 0);
+    daemon.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_remote_detach_does_not_wait_for_enter() -> anyhow::Result<()> {
+    let Some((dir, daemon)) = common::start_confined_daemon().await else {
+        return Ok(());
+    };
+    let workspace = tempfile::tempdir()?;
+    let user_home = tempfile::tempdir()?;
+    let runtime = tempfile::tempdir()?;
+    let team_file = workspace.path().join("team.toml");
+    std::fs::write(
+        &team_file,
+        r#"
+team = "team-a"
+[[session]]
+name = "remote"
+command = ["sh", "-c", "printf SESSION-MARK-9f3a; sleep 30"]
+attach = true
+remote = "send"
+[session.confine]
+enabled = true
+"#,
+    )?;
+
+    let mut pty = team_up_pty(
+        dir.path(),
+        workspace.path(),
+        user_home.path(),
+        runtime.path(),
+        &team_file,
+        true,
+    )?;
+    let wait = Duration::from_secs(10);
+    assert_eq!(pty.wait_exit(wait)?, 0);
+    let screen = pty.screen_text();
+    assert!(screen.contains("post this code in the control channel within"));
+    assert!(!screen.contains("press Enter to attach to the session"));
+    daemon.shutdown().await?;
+    Ok(())
 }
 
 async fn session(
