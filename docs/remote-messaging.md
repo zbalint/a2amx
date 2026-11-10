@@ -8,7 +8,23 @@ terminal output, provide remote control, carry attachments, or support direct me
 agents. Discord text is not end-to-end encrypted; Discord and everyone with access to the server
 can read it.
 
+## When you are at the computer
+
+Presence is an interactive attach. The daemon keeps the owner present for 60 seconds after the
+last interactive attachment ends by default; `a2amx daemon start --owner-away-secs SECONDS` (or
+`A2AMX_OWNER_AWAY_SECS`) changes that grace period. `owner_present` refuses an agent's
+`send_message(to="human:owner", ...)` while the owner is present. `list_agents` reports `owner`
+as `present` or `away` for remote-enabled sessions, and the daemon emits one
+“The owner is away from the computer...” notice when the state changes to away. Human inbound
+messages are accepted regardless of that state.
+
 Remote messaging is off by default, enabled per agent, and available only to confined sessions.
+A human can watch an attached session without claiming owner presence by using viewer mode (`v` after
+the attach prefix). Viewer mode is read-only for the session: terminal input, resize, and release
+frames are suppressed while local picker, scroll, and team-line controls remain available.
+A complete mouse report never displays the viewer notice; ignored keys and pastes do.
+A timer can enter viewer mode automatically with the global `--viewer-after SECONDS` option;
+`0` disables the timer.
 A message from the phone is less trusted than input typed at the computer; it is not approval to
 change the default branch, use production, handle secrets, or delete data.
 

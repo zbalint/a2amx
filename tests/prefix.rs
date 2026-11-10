@@ -86,6 +86,23 @@ fn recognizes_each_command() {
         assert_eq!(machine.feed(&[0, key]), vec![Action::Command(command)]);
     }
 }
+#[test]
+fn viewer_mode_survives_split_reads_and_is_protected_inside_paste() {
+    let mut machine = PrefixMachine::new(0);
+    assert!(machine.feed(&[0]).is_empty());
+    assert_eq!(
+        machine.feed(b"v"),
+        vec![Action::Command(Command::ViewerMode)]
+    );
+
+    let mut machine = PrefixMachine::new(0);
+    let paste = b"\x1b[200~\0v\x1b[201~";
+    assert_eq!(machine.feed(paste), vec![Action::Forward(paste.to_vec())]);
+    assert_eq!(
+        machine.feed(&[0, b'v']),
+        vec![Action::Command(Command::ViewerMode)]
+    );
+}
 
 #[test]
 fn team_member_commands_drop_zero_and_unknown_bytes() {

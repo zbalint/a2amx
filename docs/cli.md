@@ -7,13 +7,13 @@ Reference for operators looking up commands, attachment controls, and status fie
 The brackets below describe optional arguments; angle brackets name required values.
 
 ```text
-a2amx daemon start [--foreground]  # start the daemon; detached by default
+a2amx daemon start [--foreground] [--owner-away-secs SECONDS] # start the daemon; detached by default
 a2amx daemon status               # show daemon state, build version and session counts
 a2amx daemon stop [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx new --watch developer --heartbeat 30m -- sh # digest watched peers after idle
 a2amx new --watch developer --activity-working-after 2m --activity-idle-after 30s -- sh # notices on peer transitions
 a2amx list [--details]
-a2amx attach <id|name> [--force]
+a2amx [--viewer-after SECONDS] attach <id|name> [--force]
 a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx kill --exited              # remove every exited session without prompting
 a2amx reset <id|name>               # type the configured reset sequence
@@ -180,21 +180,35 @@ gateway they must also belong to a named team.
 ## State directory and attachment
 
 The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,
-then `$HOME/.local/state/a2amx`. The prefix key is Ctrl-B (`--prefix` or
-`A2AMX_PREFIX` to change it). After the prefix: `d` detach, `w` session picker, `[`
-scroll mode, `s` toggles the status and team lines, `r` releases the session's message hold,
-`1`–`9` select a team member, `n` and `p` select the next or previous non-exited member,
-and the prefix twice sends a literal prefix. The picker accepts PageUp/PageDown and Home/End and scrolls when sessions do not fit. When teams
-exist it groups sessions into foldable sections: `Space`/`Enter` fold or unfold a selected header, `h`/`l` and
-`Left`/`Right` fold or unfold its section, and `/` starts a case-insensitive filter that `Esc` clears and exits.
-When more than two teams exist, other teams start folded; the current session's team starts open.
-While a session has not turned on mouse reporting, the mouse wheel scrolls it (three lines a step) and
-enters scroll mode; hold Shift to select text with the mouse. Scrollback in the real terminal after you detach is not
-kept. The status line takes the terminal's last row, keeps a thin rule above it, and shows the session address, optional activity,
-low-quota, role and team, and harness details, pending-message count, and a HELD alert with the hold reason and (for
-releasable holds) a prefix-key hint for `r`. Team sessions with a visible status line and at least five rows also show
-the clickable member line at the top; terminals with at least six rows add a dim separator rule underneath. `s` hides
-both top rows, the status line, and both separator rules.
+then `$HOME/.local/state/a2amx`.
+
+The global `--viewer-after SECONDS` option (or `A2AMX_VIEWER_AFTER`) switches an interactive
+attachment to read-only viewer mode after that many seconds without input from the owner at the computer (keys, paste, mouse, prefix, picker, or scroll input; agent output does not reset it).
+The default is 300 seconds; `0` disables the timer. Viewer mode can also be toggled with the prefix
+key followed by `v`.
+Viewer mode does not send terminal input, resize, or release frames to the session. It still
+updates the local screen, lets prefix commands open the picker or scroll mode, and routes team
+line clicks on their release. A complete mouse report never displays the viewer notice; an
+ignored key or paste displays it briefly. Switching back with prefix `v` sends the normal resize
+and redraw sequence. Viewer attachment does not count as owner presence.
+
+The prefix key is Ctrl-B (`--prefix` or `A2AMX_PREFIX` to change it). After the prefix: `d` detach,
+`v` toggle viewer mode, `w` session picker, `[` scroll mode, `s` toggles the status and team lines,
+`r` releases the session's message hold, `1`–`9` select a team member, `n` and `p` select the next
+or previous non-exited member, and the prefix twice sends a literal prefix. The picker accepts
+PageUp/PageDown and Home/End and scrolls when sessions do not fit. When teams exist it groups
+sessions into foldable sections: `Space`/`Enter` fold or unfold a selected header, `h`/`l` and
+`Left`/`Right` fold or unfold its section, and `/` starts a case-insensitive filter that `Esc`
+clears and exits. When more than two teams exist, other teams start folded; the current session's
+team starts open.
+While a session has not turned on mouse reporting, the mouse wheel scrolls it (three lines a step)
+and enters scroll mode; hold Shift to select text with the mouse. Scrollback in the real terminal
+after you detach is not kept. The status line takes the terminal's last row, keeps a thin rule
+above it, and shows the session address, optional activity, low-quota, role and team, and harness
+details, pending-message count, and a HELD alert with the hold reason and (for releasable holds) a
+prefix-key hint for `r`. Team sessions with a visible status line and at least five rows also show
+the clickable member line at the top; terminals with at least six rows add a dim separator rule
+underneath. `s` hides both top rows, the status line, and both separator rules.
 
 ## Selecting and copying text
 

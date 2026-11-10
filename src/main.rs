@@ -37,6 +37,7 @@ use a2amx::relay_files;
 use a2amx::status;
 use a2amx::statusline;
 use a2amx::team::{self, TeamSession};
+use a2amx::viewer::{self, Viewer};
 use a2amx::wire::{
     Activity, ClientFrame, MessageInfo, Request, Response, ServerFrame, SessionSummary, StatusInfo,
 };
@@ -138,8 +139,17 @@ async fn main() -> std::process::ExitCode {
     }
 }
 
+#[derive(Clone, Copy)]
+struct AttachOptions {
+    prefix: u8,
+    viewer_after: Option<Duration>,
+}
+
 async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
-    let prefix = cli.prefix;
+    let attach_options = AttachOptions {
+        prefix: cli.prefix,
+        viewer_after: (cli.viewer_after != 0).then(|| Duration::from_secs(cli.viewer_after)),
+    };
     let home_arg = cli.home;
     match &cli.command {
         Command::Mcp { channel } => {
@@ -208,7 +218,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
             DaemonAction::Status => return run_daemon_status(home).await,
             DaemonAction::Stop { yes, now } => run_stop(home, yes, now).await,
         },
-        options @ Command::New { .. } => run_new(home, prefix, options).await,
+        options @ Command::New { .. } => run_new(home, attach_options, options).await,
         Command::List {
             details,
             team,
@@ -222,7 +232,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 dry_run,
                 yes,
                 items,
-            } => run_team_up(home, prefix, file, detach, dry_run, yes, items).await,
+            } => run_team_up(home, attach_options, file, detach, dry_run, yes, items).await,
             TeamAction::Down { file, names, now } => run_team_down(home, file, names, now).await,
             TeamAction::Reset {
                 file,
@@ -233,7 +243,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
             } => run_team_reset(home, file, names, except, include_attached, yes).await,
         },
         Command::Attach { session, force } => {
-            run_attach_command(home, prefix, session, force).await
+            run_attach_command(home, attach_options, session, force).await
         }
         Command::Kill {
             session,
@@ -629,7 +639,11 @@ fn parse_activity_watch(
     })
 }
 
-async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<()> {
+async fn run_new(
+    home: PathBuf,
+    attach_options: AttachOptions,
+    options: Command,
+) -> anyhow::Result<()> {
     let Command::New {
         detach,
         name,
@@ -767,7 +781,7 @@ async fn run_new(home: PathBuf, prefix: u8, options: Command) -> anyhow::Result<
     if !stdin_is_terminal() {
         return Err(anyhow!("attach needs a terminal on stdin"));
     }
-    run_attachment(client, &home, prefix, session, false, cols, rows).await
+    run_attachment(client, &home, attach_options, session, false, cols, rows).await
 }
 
 struct NewOptions {
@@ -1657,7 +1671,7 @@ async fn write_auto_summaries(actions: &[team::Action]) -> anyhow::Result<()> {
 
 async fn run_team_up(
     home: PathBuf,
-    prefix: u8,
+    attach_options: AttachOptions,
     file: Option<PathBuf>,
     detach: bool,
     dry_run: bool,
@@ -1803,7 +1817,7 @@ async fn run_team_up(
         && stdin_is_terminal()
         && let Some(session) = attached_id
     {
-        run_attachment(client, &home, prefix, session, false, cols, rows).await?;
+        run_attachment(client, &home, attach_options, session, false, cols, rows).await?;
     }
     Ok(())
 }
@@ -2316,7 +2330,7 @@ async fn run_cancel(home: PathBuf, message: String) -> anyhow::Result<()> {
 
 async fn run_attach_command(
     home: PathBuf,
-    prefix: u8,
+    attach_options: AttachOptions,
     session: String,
     force: bool,
 ) -> anyhow::Result<()> {
@@ -2326,18 +2340,22 @@ async fn run_attach_command(
     let session = resolve_session(&home, &session).await?;
     let client = Client::connect(&home).await?;
     let (cols, rows) = terminal_size_with_default()?;
-    run_attachment(client, &home, prefix, session, force, cols, rows).await
+    run_attachment(client, &home, attach_options, session, force, cols, rows).await
 }
 
 async fn run_attachment(
     client: Client,
     home: &Path,
-    prefix: u8,
+    attach_options: AttachOptions,
     session: String,
     force: bool,
     cols: u16,
     rows: u16,
 ) -> anyhow::Result<()> {
+    let AttachOptions {
+        prefix,
+        viewer_after,
+    } = attach_options;
     let in_team = session_in_team(home, &session).await?;
     let requested_top = team_rows(rows, true, in_team);
     let mut attachment = client
@@ -2374,6 +2392,7 @@ async fn run_attachment(
             cols,
             rows,
             in_team,
+            viewer_after,
             output: output.handle()?,
         },
     );
@@ -2430,6 +2449,7 @@ struct AttachmentConfig {
     cols: u16,
     rows: u16,
     in_team: bool,
+    viewer_after: Option<Duration>,
     output: OutputHandle,
 }
 
@@ -2446,6 +2466,8 @@ struct AttachmentState {
     prefix_machine: PrefixMachine,
     prefix_byte: u8,
     after_prefix: bool,
+    viewer: Viewer,
+    viewer_after: Option<Duration>,
     status_visible: bool,
     status: Option<StatusInfo>,
     session_mouse: bool,
@@ -2464,6 +2486,7 @@ impl AttachmentState {
             cols,
             rows,
             in_team,
+            viewer_after,
             output,
         } = config;
         let top_rows = attachment.top_rows();
@@ -2486,6 +2509,8 @@ impl AttachmentState {
             scroll_mode: false,
             scroll_parser: ScrollParser::default(),
             picker: None,
+            viewer: Viewer::new(Instant::now(), false),
+            viewer_after,
             output,
         }
     }
@@ -2522,16 +2547,40 @@ impl AttachmentState {
         self.output.send(bytes)?;
         Ok(())
     }
+    fn draw_viewer_decorations(&mut self, now: Instant) -> anyhow::Result<()> {
+        if !self.viewer.is_viewer()
+            || !self.status_visible
+            || self.picker.is_some()
+            || self.scroll_mode
+        {
+            return Ok(());
+        }
+        self.output.send(viewer::marker(self.cols, self.rows))?;
+        if self.viewer.overlay_active(now) {
+            self.output.send(viewer::overlay(
+                self.cols,
+                pty_rows(self.rows, self.status_visible, self.top_rows),
+                self.top_rows,
+                self.prefix_byte,
+            ))?;
+        }
+        Ok(())
+    }
 
     async fn handle_input(&mut self, bytes: &[u8]) -> anyhow::Result<Option<AttachOutcome>> {
+        let now = Instant::now();
+        if !is_focus_report(bytes) {
+            self.viewer.own_input(now);
+        }
         let mut offset = 0;
         while offset < bytes.len() {
+            let session_mouse = self.session_mouse && !self.viewer.is_viewer();
             let report = if self.picker.is_some() || self.scroll_mode {
-                (!self.session_mouse)
+                (!session_mouse)
                     .then(|| find_mouse_report(bytes, offset))
                     .flatten()
             // shortcut: with top_rows > 0 and session_mouse, split input remains unshifted until a complete report is found.
-            } else if self.top_rows > 0 || !self.session_mouse {
+            } else if self.top_rows > 0 || !session_mouse {
                 find_mouse_report(bytes, offset)
             } else {
                 None
@@ -2565,7 +2614,7 @@ impl AttachmentState {
             } else {
                 let count = self.prefix_batch_len(bytes, offset, segment_end);
                 let actions = self.prefix_machine.feed(&bytes[offset..offset + count]);
-                if let Some(outcome) = self.handle_prefix_actions(actions).await? {
+                if let Some(outcome) = self.handle_prefix_actions(actions, now).await? {
                     return Ok(Some(outcome));
                 }
                 offset += count;
@@ -2615,11 +2664,17 @@ impl AttachmentState {
     async fn handle_prefix_actions(
         &mut self,
         actions: Vec<Action>,
+        now: Instant,
     ) -> anyhow::Result<Option<AttachOutcome>> {
         for action in actions {
             match action {
                 Action::Forward(input) => {
-                    if let Some(attached) = self.attachment.as_mut() {
+                    if self.viewer.is_viewer() {
+                        if !is_focus_report(&input) {
+                            self.viewer.blocked(now);
+                            self.draw_viewer_decorations(now)?;
+                        }
+                    } else if let Some(attached) = self.attachment.as_mut() {
                         attached.send(ClientFrame::Input(input)).await?;
                     }
                 }
@@ -2640,6 +2695,23 @@ impl AttachmentState {
                 Action::Command(PrefixCommand::StatusLine) => {
                     self.toggle_status_line().await?;
                 }
+                Action::Command(PrefixCommand::ViewerMode) => {
+                    let viewer = self.viewer.toggle(now);
+                    if let Some(attached) = self.attachment.as_mut() {
+                        attached.send(ClientFrame::Mode { viewer }).await?;
+                        if !viewer {
+                            attached
+                                .send(ClientFrame::Resize {
+                                    cols: self.cols,
+                                    rows: pty_rows(self.rows, self.status_visible, self.top_rows),
+                                })
+                                .await?;
+                            attached.send(ClientFrame::Redraw).await?;
+                        }
+                    }
+                    self.draw_status()?;
+                    self.draw_viewer_decorations(now)?;
+                }
                 Action::Command(PrefixCommand::TeamMember(number)) => {
                     if let Some(id) = self.member_by_number(number) {
                         self.select_member(id).await?;
@@ -2656,7 +2728,9 @@ impl AttachmentState {
                     }
                 }
                 Action::Command(PrefixCommand::Release) => {
-                    if let Some(attached) = self.attachment.as_mut() {
+                    if !self.viewer.is_viewer()
+                        && let Some(attached) = self.attachment.as_mut()
+                    {
                         attached.send(ClientFrame::Release).await?;
                     }
                 }
@@ -2749,6 +2823,9 @@ impl AttachmentState {
         if desired_top != self.top_rows {
             self.mouse_press = None;
             let _ = self.switch_session(self.session.clone()).await?;
+        } else if self.viewer.is_viewer() {
+            self.draw_status()?;
+            self.draw_viewer_decorations(Instant::now())?;
         } else if let Some(attached) = self.attachment.as_mut() {
             attached
                 .send(ClientFrame::Resize {
@@ -2799,6 +2876,7 @@ impl AttachmentState {
     }
 
     async fn handle_mouse_report(&mut self, report: MouseReport<'_>) -> anyhow::Result<()> {
+        let session_mouse = self.session_mouse && !self.viewer.is_viewer();
         match mouse::shift_row(&report, self.top_rows) {
             Shifted::Claimed(claimed) => {
                 if claimed.release {
@@ -2806,7 +2884,7 @@ impl AttachmentState {
                         Some(MousePress::Team) if claimed.row == 1 => {
                             self.team_click(claimed.column).await?
                         }
-                        Some(MousePress::Grid) if self.session_mouse => {
+                        Some(MousePress::Grid) if session_mouse => {
                             self.send_session_mouse(mouse::with_row(&claimed, 1))
                                 .await?;
                         }
@@ -2824,7 +2902,7 @@ impl AttachmentState {
                 if report.release {
                     match self.mouse_press.take() {
                         Some(MousePress::Team) => {}
-                        Some(MousePress::Grid) | None if self.session_mouse => {
+                        Some(MousePress::Grid) | None if session_mouse => {
                             self.send_session_mouse(bytes).await?;
                         }
                         _ => {}
@@ -2833,7 +2911,7 @@ impl AttachmentState {
                     if report.button == 0 {
                         self.mouse_press = Some(MousePress::Grid);
                     }
-                    if self.session_mouse {
+                    if session_mouse {
                         self.send_session_mouse(bytes).await?;
                     } else {
                         self.handle_mouse_button(report.button).await?;
@@ -2895,17 +2973,30 @@ impl AttachmentState {
         let in_team = session_in_team(&self.home, session).await?;
         let requested_top = team_rows(self.rows, self.status_visible, in_team);
         let client = Client::connect(&self.home).await?;
-        let mut attachment = client
-            .attach_status(
-                session,
-                false,
-                self.cols,
-                pty_rows(self.rows, self.status_visible, requested_top),
-                requested_top,
-            )
-            .await?;
+        let viewer = self.viewer.is_viewer();
+        let mut attachment = if viewer {
+            client
+                .attach_viewer(
+                    session,
+                    false,
+                    self.cols,
+                    pty_rows(self.rows, self.status_visible, requested_top),
+                    requested_top,
+                )
+                .await?
+        } else {
+            client
+                .attach_status(
+                    session,
+                    false,
+                    self.cols,
+                    pty_rows(self.rows, self.status_visible, requested_top),
+                    requested_top,
+                )
+                .await?
+        };
         let top_rows = attachment.top_rows();
-        if requested_top > 0 && top_rows == 0 {
+        if !viewer && requested_top > 0 && top_rows == 0 {
             attachment
                 .send(ClientFrame::Resize {
                     cols: self.cols,
@@ -3063,6 +3154,9 @@ fn parse_decimal(bytes: &[u8]) -> u16 {
                 .saturating_add(u16::from(byte - b'0'))
         })
 }
+fn is_focus_report(bytes: &[u8]) -> bool {
+    matches!(bytes, b"\x1b[I" | b"\x1b[O")
+}
 
 // shortcut: a report split across input chunks is typed input; reassemble only if it proves noisy; this scan covers SGR and X10.
 fn find_mouse_report(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
@@ -3083,6 +3177,8 @@ async fn run_attachment_loop(mut state: AttachmentState) -> anyhow::Result<Attac
     spawn_stdin_reader(input_tx)?;
     let mut sigwinch =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         let has_attachment = state.attachment.is_some();
@@ -3118,9 +3214,34 @@ async fn run_attachment_loop(mut state: AttachmentState) -> anyhow::Result<Attac
                         picker.recompute_offset();
                         picker.render(&state.output)?;
                     }
-                    if let Some(attached) = state.attachment.as_mut() {
-                        attached.send(ClientFrame::Resize { cols: new_cols, rows: pty_rows(new_rows, state.status_visible, state.top_rows) }).await?;
+                    if state.viewer.is_viewer() {
+                        state.draw_status()?;
+                        state.draw_viewer_decorations(Instant::now())?;
+                    } else if let Some(attached) = state.attachment.as_mut() {
+                        attached
+                            .send(ClientFrame::Resize {
+                                cols: new_cols,
+                                rows: pty_rows(new_rows, state.status_visible, state.top_rows),
+                            })
+                            .await?;
                     }
+                }
+            }
+            _ = tick.tick() => {
+                let now = Instant::now();
+                if state.viewer.idle_expired(now, state.viewer_after) {
+                    if let Some(attached) = state.attachment.as_mut() {
+                        attached.send(ClientFrame::Mode { viewer: true }).await?;
+                    }
+                    state.draw_status()?;
+                    state.draw_viewer_decorations(now)?;
+                }
+                if state.viewer.take_overlay_end(now) {
+                    if let Some(attached) = state.attachment.as_mut() {
+                        attached.send(ClientFrame::Redraw).await?;
+                    }
+                    state.draw_status()?;
+                    state.draw_viewer_decorations(now)?;
                 }
             }
             frame = recv_attachment(&mut state.attachment), if has_attachment => {
@@ -3143,11 +3264,13 @@ async fn run_attachment_loop(mut state: AttachmentState) -> anyhow::Result<Attac
                             if state.scroll_mode {
                                 state.output.send(scroll_status(state.cols, state.rows))?;
                             }
+                            state.draw_viewer_decorations(Instant::now())?;
                         }
                     }
                     ServerFrame::Status(info) => {
                         state.status = Some(info);
                         state.draw_status()?;
+                        state.draw_viewer_decorations(Instant::now())?;
                     }
                     ServerFrame::Exit(code) => {
                         return Ok(AttachOutcome {

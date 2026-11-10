@@ -109,3 +109,21 @@ Commands run from the repository root with `env -u A2AMX_BIN -u NO_COLOR`; every
 
 1. (Developer BLOCKED, verified by the architect.) Section 1 said an ignored "non-scroll mouse report" shows the overlay and in the same sentence that mouse events never show it. The owner's decision (`docs/backlog.md` F83) is that mouse events show no overlay; sections 2.3, 3 and 6 already say so. Section 1 now reads "a key or paste that is ignored shows". Nothing else changes.
 2. (Developer BLOCKED again, verified by the architect.) Section 1 said mouse events never show the overlay while section 2.3 lets a split, incomplete report show it once (a deliberate `// shortcut:`). The shortcut stays, because dropping partial escape sequences needs a stateful parser the spec does not ask for. Section 1 now says "complete mouse reports" and names the exception. No behaviour change.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (two pre-lock reviews) Claude, model not reported; developer and tester openai-codex/gpt-5.6-luna (planning and working, advisor slot not exposed).
+
+BLOCKED/amend cycles: 2 (both the same sentence of section 1, see the first two rows). Fix rounds after the first implementation: 1.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| implementation | developer | section 1 said an ignored mouse report shows the overlay and, in the same sentence, that mouse events never show it (architect drafting slip; gate step 7 was not run on this rule; both consultant reviews missed it) | amendment 1: section 1 says "a key or paste" |
+| implementation | developer | section 1 said mouse events never show the overlay, section 2.3 let a split report show it once | amendment 2: section 1 names the exception |
+| draft review 1 | consultant | mouse reports were handed to the prefix machine as keys when the session has mouse reporting on and no team rows; Grid presses and wheel went to the session; `StatusLine` sent a `Resize`; the marker covered the HELD alert; overlay and marker geometry had no worked bytes; the fake daemon records no frames; focus reports would show the overlay; several anchors and `run_attachment` callers | spec rewritten with the effective flag, marker on the separator row, worked byte vectors, focus rule, three callers |
+| draft review 2 | consultant | "drop mouse releases" would break team-line clicks (they act on the release) and the scroll branch needed the same flag | rule changed to the effective flag `session_mouse && !viewer` everywhere, releases not dropped |
+| implementation | developer | added `parsed.release \|\|` to the release routing, an unneeded change that moved every release through `handle_mouse_report` in all modes | found by the architect and the tester (a mutant survived); removed in the fix round |
+| tester pass | tester | five mutants survived: that clause, daemon output counted as own input, focus own-input guard, focus overlay guard, `StatusLine` same-top-row branch; timer test checked 0 and the maximum value without waiting two ticks; docs said "input typed" | tests added, wait widened, docs reworded; the developer ran each new test's mutant |
+
+Architect checks on the final snapshot: `git diff --check`, fmt, clippy `-D warnings`, `cargo deny --locked check`, `scripts/prepush-fast.sh`, full `cargo test` (1134 passed, 0 failed, 3 ignored OMP tests; the developer's own full runs timed out at its 600 s limit while the suite takes about six minutes, so the architect's run is the evidence). Own mutants (checksum restore, killed): idle threshold changed, `prefix v` mapped to the wrong command; the marker-blink mutant did not apply (pattern mismatch) and is covered by the tester's kill.
+

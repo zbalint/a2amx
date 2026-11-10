@@ -39,4 +39,5 @@ pub mod statusline;
 mod store;
 pub mod suggest;
 pub mod team;
+pub mod viewer;
 pub mod wire;

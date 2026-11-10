@@ -6,10 +6,10 @@ use anyhow::Context;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use a2amx::client::Client;
 use a2amx::harness::{Deliver, Harness};
@@ -77,7 +77,7 @@ fn fake_team() -> TeamScope {
     }
 }
 
-fn fake_sessions(team: &TeamScope) -> Vec<SessionSummary> {
+fn fake_sessions(team: &TeamScope, include_team: bool) -> Vec<SessionSummary> {
     [
         ("s1", "demo-alpha", "alpha@host-a"),
         ("s2", "demo-beta", "beta@host-a"),
@@ -91,7 +91,7 @@ fn fake_sessions(team: &TeamScope) -> Vec<SessionSummary> {
         exit_code: None,
         attached: false,
         name: Some(name.into()),
-        team: Some(team.clone()),
+        team: include_team.then(|| team.clone()),
         address: address.into(),
         pending: 0,
         held: false,
@@ -148,22 +148,87 @@ fn fake_status(session: &str, team: &TeamScope) -> StatusInfo {
 #[derive(Clone)]
 struct FakeDaemon {
     team: TeamScope,
+    sessions_have_team: Arc<AtomicBool>,
+    forced_top_rows: Option<u16>,
+    stop_on_detach: bool,
     old_open: Arc<AtomicBool>,
     early_switch: Arc<AtomicBool>,
     attach_count: Arc<AtomicUsize>,
+    attach_viewers: Arc<Mutex<Vec<(String, bool)>>>,
+    frames: Arc<Mutex<Vec<ClientFrame>>>,
+    data_after: Arc<Mutex<Option<Duration>>>,
     done: Arc<tokio::sync::Notify>,
 }
 
 impl FakeDaemon {
     fn new(team: TeamScope) -> Self {
+        let mut daemon = Self::with_top_rows(team, None);
+        daemon.stop_on_detach = true;
+        daemon
+    }
+
+    fn with_top_rows(team: TeamScope, forced_top_rows: Option<u16>) -> Self {
         Self {
             team,
+            forced_top_rows,
+            stop_on_detach: false,
             old_open: Arc::new(AtomicBool::new(false)),
             early_switch: Arc::new(AtomicBool::new(false)),
             attach_count: Arc::new(AtomicUsize::new(0)),
+            attach_viewers: Arc::new(Mutex::new(Vec::new())),
+            frames: Arc::new(Mutex::new(Vec::new())),
+            sessions_have_team: Arc::new(AtomicBool::new(true)),
+            data_after: Arc::new(Mutex::new(None)),
             done: Arc::new(tokio::sync::Notify::new()),
         }
     }
+
+    fn attach_viewers(&self) -> Vec<(String, bool)> {
+        match self.attach_viewers.lock() {
+            Ok(values) => values.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    fn frames(&self) -> Vec<ClientFrame> {
+        match self.frames.lock() {
+            Ok(values) => values.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+    fn schedule_data_after(&self, delay: Duration) {
+        match self.data_after.lock() {
+            Ok(mut value) => *value = Some(delay),
+            Err(poisoned) => *poisoned.into_inner() = Some(delay),
+        }
+    }
+
+    fn scheduled_data_after(&self) -> Option<Duration> {
+        match self.data_after.lock() {
+            Ok(value) => *value,
+            Err(poisoned) => *poisoned.into_inner(),
+        }
+    }
+    fn hide_session_teams(&self) {
+        self.sessions_have_team.store(false, Ordering::SeqCst);
+    }
+}
+
+async fn start_fake_daemon(
+    forced_top_rows: Option<u16>,
+) -> anyhow::Result<(
+    tempfile::TempDir,
+    FakeDaemon,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+)> {
+    let dir = tempfile::tempdir()?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    std::fs::write(dir.path().join("addr"), format!("{address}\n"))?;
+    std::fs::write(dir.path().join("admin.token"), "fake-token\n")?;
+    let daemon = FakeDaemon::with_top_rows(fake_team(), forced_top_rows);
+    let server = tokio::spawn(run_fake_daemon(listener, daemon.clone()));
+    Ok((dir, daemon, server))
 }
 
 async fn fake_connection(mut stream: TcpStream, daemon: FakeDaemon) -> anyhow::Result<()> {
@@ -175,14 +240,20 @@ async fn fake_connection(mut stream: TcpStream, daemon: FakeDaemon) -> anyhow::R
                 }
                 Request::List => {
                     let response = Response::Sessions {
-                        sessions: fake_sessions(&daemon.team),
+                        sessions: fake_sessions(
+                            &daemon.team,
+                            daemon.sessions_have_team.load(Ordering::SeqCst),
+                        ),
                     };
                     fake_send_frame(&mut stream, &serde_json::to_vec(&response)?).await?;
                 }
                 Request::Attach {
-                    session, top_rows, ..
+                    session,
+                    top_rows,
+                    viewer,
+                    ..
                 } => {
-                    return fake_attach(&mut stream, &session, top_rows, &daemon).await;
+                    return fake_attach(&mut stream, &session, top_rows, viewer, &daemon).await;
                 }
                 _ => {
                     let response = Response::Error {
@@ -200,18 +271,32 @@ async fn fake_attach(
     stream: &mut TcpStream,
     session: &str,
     top_rows: u16,
+    viewer: bool,
     daemon: &FakeDaemon,
 ) -> anyhow::Result<()> {
+    match daemon.attach_viewers.lock() {
+        Ok(mut values) => values.push((session.to_owned(), viewer)),
+        Err(poisoned) => poisoned.into_inner().push((session.to_owned(), viewer)),
+    }
     let attach_number = daemon.attach_count.fetch_add(1, Ordering::SeqCst) + 1;
+    let actual_top_rows = daemon.forced_top_rows.unwrap_or(top_rows);
     if session == "s2" && daemon.old_open.load(Ordering::SeqCst) {
         daemon.early_switch.store(true, Ordering::SeqCst);
     }
-    let response = Response::AttachedTop { top_rows };
+    let response = Response::AttachedTop {
+        top_rows: actual_top_rows,
+    };
     fake_send_frame(stream, &serde_json::to_vec(&response)?).await?;
     let output = if session == "s1" {
-        format!("\x1b[{};1H\x1b[?1000hALPHA\n", top_rows.saturating_add(1))
+        format!(
+            "\x1b[{};1H\x1b[?1000hALPHA\n",
+            actual_top_rows.saturating_add(1)
+        )
     } else {
-        format!("\x1b[{};1H\x1b[?1000hBETA\n", top_rows.saturating_add(1))
+        format!(
+            "\x1b[{};1H\x1b[?1000hBETA\n",
+            actual_top_rows.saturating_add(1)
+        )
     };
     fake_send_frame(stream, &ServerFrame::Data(output.into_bytes()).encode()).await?;
     fake_send_frame(
@@ -222,7 +307,7 @@ async fn fake_attach(
     if session == "s1" {
         daemon.old_open.store(true, Ordering::SeqCst);
     }
-    fake_serve_detach(stream, session, attach_number, daemon).await?;
+    fake_serve_detach(stream, session, attach_number, actual_top_rows, daemon).await?;
     Ok(())
 }
 
@@ -230,26 +315,68 @@ async fn fake_serve_detach(
     stream: &mut TcpStream,
     session: &str,
     attach_number: usize,
+    top_rows: u16,
     daemon: &FakeDaemon,
 ) -> anyhow::Result<()> {
-    while let Some(payload) = fake_recv_frame(stream).await? {
+    let data_deadline = daemon
+        .scheduled_data_after()
+        .map(|delay| Instant::now() + delay);
+    let mut data_sent = data_deadline.is_none();
+    loop {
+        let payload = match data_deadline {
+            Some(deadline) if !data_sent => {
+                let timeout = deadline.saturating_duration_since(Instant::now());
+                match tokio::time::timeout(timeout, fake_recv_frame(stream)).await {
+                    Ok(payload) => payload?,
+                    Err(_) => {
+                        fake_send_frame(
+                            stream,
+                            &ServerFrame::Data(b"scheduled daemon data".to_vec()).encode(),
+                        )
+                        .await?;
+                        data_sent = true;
+                        continue;
+                    }
+                }
+            }
+            _ => fake_recv_frame(stream).await?,
+        };
+        let Some(payload) = payload else {
+            break;
+        };
         let frame = ClientFrame::decode(&payload)?;
-        if !matches!(frame, ClientFrame::Detach) {
-            continue;
+        match daemon.frames.lock() {
+            Ok(mut frames) => frames.push(frame.clone()),
+            Err(poisoned) => poisoned.into_inner().push(frame.clone()),
         }
-        if session == "s1" && attach_number == 1 {
-            fake_send_frame(
-                stream,
-                &ServerFrame::Data(b"late old frame".to_vec()).encode(),
-            )
-            .await?;
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            daemon.old_open.store(false, Ordering::SeqCst);
-        } else {
-            fake_send_frame(stream, &ServerFrame::Detached("done".into()).encode()).await?;
-            daemon.done.notify_one();
+        match frame {
+            ClientFrame::Redraw => {
+                let label = if session == "s1" { "ALPHA" } else { "BETA" };
+                let repaint = format!(
+                    "\x1b[2J\x1b[{};1H\x1b[?1000h{label}\n",
+                    top_rows.saturating_add(1)
+                );
+                fake_send_frame(stream, &ServerFrame::Data(repaint.into_bytes()).encode()).await?;
+            }
+            ClientFrame::Detach => {
+                if session == "s1" && attach_number == 1 {
+                    fake_send_frame(
+                        stream,
+                        &ServerFrame::Data(b"late old frame".to_vec()).encode(),
+                    )
+                    .await?;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    daemon.old_open.store(false, Ordering::SeqCst);
+                } else {
+                    fake_send_frame(stream, &ServerFrame::Detached("done".into()).encode()).await?;
+                    if daemon.stop_on_detach {
+                        daemon.done.notify_one();
+                    }
+                }
+                break;
+            }
+            _ => {}
         }
-        break;
     }
     Ok(())
 }
@@ -2049,5 +2176,618 @@ async fn attach_viewer_sends_no_resize_frame() -> anyhow::Result<()> {
         "attach_viewer wrote an unexpected frame after Attach"
     );
     drop(attachment);
+    Ok(())
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_toggle_blocks_input_and_shows_overlay() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(None).await?;
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+
+    attached.send(&[2, b'v'])?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                .then_some(())
+        }
+    })
+    .await;
+    attached.wait_for_text("VIEW", WAIT)?;
+    let raw_before_resize = attached.raw_output().len();
+    attached.resize(90, 24)?;
+    eventually(|| {
+        let changed = attached.raw_output().len() > raw_before_resize;
+        async move { changed.then_some(()) }
+    })
+    .await;
+    assert!(
+        !daemon
+            .frames()
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Resize { .. })),
+        "viewer resize sent a daemon frame: {:?}",
+        daemon.frames()
+    );
+    attached.send(b"\x1b[<0;10")?;
+    attached.send(b";5M")?;
+
+    let mode_frame_count = daemon
+        .frames()
+        .iter()
+        .filter(|frame| matches!(frame, ClientFrame::Mode { .. }))
+        .count();
+    attached.send(b"x")?;
+    attached.wait_for_text("VIEW MODE", WAIT)?;
+    attached.send(b"\x1b[200~paste\x1b[201~")?;
+    attached.send(&[2, b'r'])?;
+    attached.wait_for_text("VIEW MODE", WAIT)?;
+    attached.send(b"\x1b[<0;10")?;
+    attached.send(b";5M")?;
+    eventually(|| {
+        let absent = !attached.screen_text().contains("VIEW MODE");
+        async move { absent.then_some(()) }
+    })
+    .await;
+    assert!(
+        daemon
+            .frames()
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Redraw)),
+        "overlay expiry did not request a repaint: {:?}",
+        daemon.frames()
+    );
+    attached.send(b"\x1b[O")?;
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("a2amx sessions:", WAIT)?;
+    attached.send(b"\x1b")?;
+    eventually(|| {
+        let screen = attached.screen_text();
+        async move {
+            (screen.contains("ALPHA") && screen.contains("VIEW") && !screen.contains("VIEW MODE"))
+                .then_some(())
+        }
+    })
+    .await;
+    let frames = daemon.frames();
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|frame| matches!(frame, ClientFrame::Mode { .. }))
+            .count(),
+        mode_frame_count
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Release)),
+        "viewer forwarded a release frame: {frames:?}"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Input(_))),
+        "viewer forwarded an input frame: {frames:?}"
+    );
+
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+async fn assert_viewer_after_stays_interactive(after: &str) -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(None).await?;
+    let mut attached = PtyHarness::spawn(
+        &cli_args(dir.path(), &["--viewer-after", after, "attach", "s1"]),
+        dir.path(),
+    )?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(b"x")?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Input(bytes) if bytes == b"x"))
+                .then_some(())
+        }
+    })
+    .await;
+    let observe_until = Instant::now() + Duration::from_millis(2500);
+    eventually(|| {
+        let screen = attached.screen_text();
+        let no_mode = !daemon
+            .frames()
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }));
+        async move {
+            (Instant::now() >= observe_until && screen.contains("ALPHA") && no_mode).then_some(())
+        }
+    })
+    .await;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_idle_switches_once_and_toggle_redraws_after_overlay() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(None).await?;
+    let mut attached = PtyHarness::spawn(
+        &cli_args(dir.path(), &["--viewer-after", "1", "attach", "s1"]),
+        dir.path(),
+    )?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                .then_some(())
+        }
+    })
+    .await;
+    attached.send(b"x")?;
+    attached.wait_for_text("VIEW MODE", WAIT)?;
+    attached.send(&[2, b'v'])?;
+    eventually(|| {
+        let frames = daemon.frames();
+        let ready = frames
+            .iter()
+            .position(|frame| matches!(frame, ClientFrame::Mode { viewer: false }))
+            .is_some_and(|left| {
+                matches!(frames.get(left + 1), Some(ClientFrame::Resize { .. }))
+                    && matches!(frames.get(left + 2), Some(ClientFrame::Redraw))
+            });
+        async move { ready.then_some(()) }
+    })
+    .await;
+    eventually(|| {
+        let absent = !attached.screen_text().contains("VIEW MODE");
+        async move { absent.then_some(()) }
+    })
+    .await;
+
+    let frames = daemon.frames();
+    let entered = frames
+        .iter()
+        .position(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+        .expect("automatic viewer mode frame");
+    let left = frames
+        .iter()
+        .enumerate()
+        .find_map(|(index, frame)| {
+            (index > entered && matches!(frame, ClientFrame::Mode { viewer: false }))
+                .then_some(index)
+        })
+        .expect("toggle back mode frame");
+    assert!(left > entered);
+    assert!(matches!(
+        frames.get(left + 1),
+        Some(ClientFrame::Resize { .. })
+    ));
+    assert!(matches!(frames.get(left + 2), Some(ClientFrame::Redraw)));
+    assert!(
+        frames[entered + 1..left]
+            .iter()
+            .all(|frame| !matches!(frame, ClientFrame::Mode { .. }))
+    );
+
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_idle_switch_ignores_daemon_data() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(None).await?;
+    daemon.schedule_data_after(Duration::from_millis(2500));
+    let mut attached = PtyHarness::spawn(
+        &cli_args(dir.path(), &["--viewer-after", "3", "attach", "s1"]),
+        dir.path(),
+    )?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.wait_for_text("scheduled daemon data", WAIT)?;
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        eventually(|| {
+            let frames = daemon.frames();
+            async move {
+                frames
+                    .iter()
+                    .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                    .then_some(())
+            }
+        }),
+    )
+    .await?;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interactive_focus_report_forwards_without_resetting_idle_clock() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(None).await?;
+    let mut attached = PtyHarness::spawn(
+        &cli_args(dir.path(), &["--viewer-after", "3", "attach", "s1"]),
+        dir.path(),
+    )?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(b"x")?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Input(bytes) if bytes == b"x"))
+                .then_some(())
+        }
+    })
+    .await;
+    let focus_deadline = Instant::now() + Duration::from_millis(2500);
+    eventually(|| async move { (Instant::now() >= focus_deadline).then_some(()) }).await;
+    attached.send(b"\x1b[I")?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Input(bytes) if bytes == b"\x1b[I"))
+                .then_some(())
+        }
+    })
+    .await;
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        eventually(|| {
+            let frames = daemon.frames();
+            async move {
+                frames
+                    .iter()
+                    .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                    .then_some(())
+            }
+        }),
+    )
+    .await?;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_focus_report_does_not_show_overlay() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(None).await?;
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(&[2, b'v'])?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                .then_some(())
+        }
+    })
+    .await;
+    attached.wait_for_text("VIEW", WAIT)?;
+    assert!(!attached.screen_text().contains("VIEW MODE"));
+    let raw_before = attached.raw_output().len();
+    attached.send(b"\x1b[I")?;
+    let showed_overlay = tokio::time::timeout(Duration::from_millis(300), async {
+        loop {
+            let has_overlay = {
+                let raw = attached.raw_output();
+                raw.len() > raw_before
+                    && raw[raw_before..]
+                        .windows(b"VIEW MODE".len())
+                        .any(|window| window == b"VIEW MODE")
+            };
+            if has_overlay {
+                return true;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(!showed_overlay, "focus report showed the viewer overlay");
+    assert!(!attached.screen_text().contains("VIEW MODE"));
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_after_zero_and_maximum_never_switch() -> anyhow::Result<()> {
+    assert_viewer_after_stays_interactive("0").await?;
+    assert_viewer_after_stays_interactive("18446744073709551615").await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_status_toggle_same_top_rows_redraws_without_resize() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(Some(0)).await?;
+    daemon.hide_session_teams();
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(&[2, b'v'])?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                .then_some(())
+        }
+    })
+    .await;
+    attached.wait_for_text("VIEW", WAIT)?;
+    let frames_before_hide = daemon.frames().len();
+
+    let raw_before_hide = attached.raw_output().len();
+    attached.send(&[2, b's'])?;
+    eventually(|| {
+        let raw_changed = attached.raw_output().len() > raw_before_hide;
+        let frames = daemon.frames();
+        let no_resize = !frames[frames_before_hide..]
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Resize { .. }));
+        async move { (raw_changed && no_resize).then_some(()) }
+    })
+    .await;
+
+    let frames_before_show = daemon.frames().len();
+    let raw_before_show = attached.raw_output().len();
+    attached.send(&[2, b's'])?;
+    eventually(|| {
+        let has_marker = {
+            let raw = attached.raw_output();
+            raw.len() > raw_before_show
+                && raw
+                    .windows(b"\x1b[1;30;43m VIEW \x1b[0m".len())
+                    .any(|window| window == b"\x1b[1;30;43m VIEW \x1b[0m")
+        };
+        let frames = daemon.frames();
+        let no_resize = !frames[frames_before_show..]
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Resize { .. }));
+        async move { (has_marker && no_resize).then_some(()) }
+    })
+    .await;
+    assert_eq!(daemon.attach_viewers().len(), 1);
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_picker_switch_and_status_toggle_keep_viewer_attach() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(None).await?;
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(&[2, b'v'])?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                .then_some(())
+        }
+    })
+    .await;
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("a2amx sessions:", WAIT)?;
+    attached.send(b"\x1b")?;
+    eventually(|| {
+        let screen = attached.screen_text();
+        async move { (screen.contains("ALPHA") && screen.contains("VIEW")).then_some(()) }
+    })
+    .await;
+
+    attached.send(&[2, b'n'])?;
+    attached.wait_for_text("BETA", WAIT)?;
+    eventually(|| {
+        let attaches = daemon.attach_viewers();
+        async move { (attaches.len() >= 2).then_some(()) }
+    })
+    .await;
+    attached.send(&[2, b's'])?;
+    eventually(|| {
+        let attaches = daemon.attach_viewers();
+        async move { (attaches.len() >= 3).then_some(()) }
+    })
+    .await;
+
+    let attaches = daemon.attach_viewers();
+    assert!(!attaches[0].1);
+    assert!(
+        attaches.iter().skip(1).all(|(_, viewer)| *viewer),
+        "{attaches:?}"
+    );
+    let frames = daemon.frames();
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Resize { .. })),
+        "viewer switch or status toggle resized: {frames:?}"
+    );
+
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s2]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+async fn assert_viewer_mouse_is_not_forwarded(top_rows: Option<u16>) -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(top_rows).await?;
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(&[2, b'v'])?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                .then_some(())
+        }
+    })
+    .await;
+    let resize_count = daemon
+        .frames()
+        .iter()
+        .filter(|frame| matches!(frame, ClientFrame::Resize { .. }))
+        .count();
+    if top_rows == Some(0) {
+        attached.send(&[2, b's'])?;
+    }
+
+    let raw_before_mouse = attached.raw_output().to_vec();
+    attached.send(b"\x1b[<0;10;5M\x1b[<0;10;5m\x1b[<35;10;5M")?;
+    attached.send(b"\x1b[<64;10;5M")?;
+    eventually(|| {
+        let changed = attached.raw_output().len() > raw_before_mouse.len();
+        async move { changed.then_some(()) }
+    })
+    .await;
+    attached.wait_for_text("[scroll: q to exit]", WAIT)?;
+    let raw_after_mouse = attached.raw_output();
+    let suffix = &raw_after_mouse[raw_before_mouse.len()..];
+    assert!(
+        !suffix
+            .windows(b"VIEW MODE".len())
+            .any(|window| window == b"VIEW MODE"),
+        "complete mouse report showed the viewer overlay in raw output"
+    );
+    attached.wait_for_text("[scroll: q to exit]", WAIT)?;
+    assert!(
+        !attached.screen_text().contains("VIEW MODE"),
+        "mouse report showed the viewer overlay"
+    );
+    assert!(
+        !daemon
+            .frames()
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Input(_))),
+        "viewer forwarded a mouse frame: {:?}",
+        daemon.frames()
+    );
+    assert_eq!(
+        daemon
+            .frames()
+            .iter()
+            .filter(|frame| matches!(frame, ClientFrame::Resize { .. }))
+            .count(),
+        resize_count,
+        "viewer status toggle or mouse path resized the daemon: {:?}",
+        daemon.frames()
+    );
+    attached.send(b"q")?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_team_click_acts_on_release_and_keeps_viewer_mode() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(None).await?;
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(&[2, b'v'])?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                .then_some(())
+        }
+    })
+    .await;
+    attached.send(b"\x1b[<0;30;1M\x1b[<0;30;1m")?;
+    attached.wait_for_text("BETA", WAIT)?;
+    let attaches = daemon.attach_viewers();
+    assert_eq!(attaches.get(1).map(|(_, viewer)| *viewer), Some(true));
+    assert!(
+        !daemon
+            .frames()
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Input(_))),
+        "viewer team click forwarded input: {:?}",
+        daemon.frames()
+    );
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s2]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_overlay_uses_the_configured_prefix_name() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(None).await?;
+    let mut attached = PtyHarness::spawn(
+        &cli_args(dir.path(), &["--prefix", "C-space", "attach", "s1"]),
+        dir.path(),
+    )?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(&[0, b'v'])?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                .then_some(())
+        }
+    })
+    .await;
+    attached.send(b"x")?;
+    attached.wait_for_text("Ctrl-Space", WAIT)?;
+    assert!(!attached.screen_text().contains("Ctrl-B"));
+    attached.send(&[0, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_mouse_reports_are_dropped_with_and_without_team_rows() -> anyhow::Result<()> {
+    assert_viewer_mouse_is_not_forwarded(None).await?;
+    assert_viewer_mouse_is_not_forwarded(Some(0)).await?;
     Ok(())
 }

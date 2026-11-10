@@ -23,6 +23,9 @@ pub struct Cli {
         value_parser = parse_prefix
     )]
     pub prefix: u8,
+    /// Seconds without owner input before an interactive attachment becomes a viewer.
+    #[arg(long, global = true, env = "A2AMX_VIEWER_AFTER", default_value_t = 300)]
+    pub viewer_after: u64,
 
     #[command(subcommand)]
     pub command: Command,

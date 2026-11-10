@@ -14,6 +14,7 @@ pub enum Command {
     ScrollMode,
     Release,
     StatusLine,
+    ViewerMode,
     TeamMember(u8),
     TeamNext,
     TeamPrev,
@@ -141,6 +142,10 @@ impl PrefixMachine {
                                 b's' => {
                                     Self::flush_forward(&mut actions, &mut forwarded);
                                     actions.push(Action::Command(Command::StatusLine));
+                                }
+                                b'v' => {
+                                    Self::flush_forward(&mut actions, &mut forwarded);
+                                    actions.push(Action::Command(Command::ViewerMode));
                                 }
                                 b'r' => {
                                     Self::flush_forward(&mut actions, &mut forwarded);
