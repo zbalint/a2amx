@@ -11,7 +11,11 @@ cd "$(dirname "$0")/.."
 head_sha="$(git rev-parse HEAD)"
 base_sha="$(git rev-parse --verify origin/develop)"
 scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT
+# Raw coverage files that test runs leave in the repository root are never wanted; they slow the
+# merge below and clutter the tree. Remove them before the run and on every exit.
+clean_profraw() { rm -f -- ./*.profraw; }
+clean_profraw
+trap 'rm -rf "$scratch"; clean_profraw' EXIT
 git clone -q . "$scratch"
 git -C "$scratch" update-ref refs/heads/develop "$base_sha"
 git -C "$scratch" checkout -q --detach "$head_sha"
