@@ -260,6 +260,9 @@ pub enum GatewayAction {
         /// Pair the Discord account before starting message delivery.
         #[arg(long)]
         pair: bool,
+        /// Internal pairing step used by `gateway up --pair`.
+        #[arg(long, hide = true, conflicts_with = "pair")]
+        pair_only: bool,
     },
 }
 #[derive(Debug, Subcommand)]

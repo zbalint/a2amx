@@ -30,28 +30,14 @@ pub fn load(home: &std::path::Path) -> anyhow::Result<Loaded> {
 pub async fn run(loaded: Loaded, discord_config: DiscordConfig, mut io: Io) -> anyhow::Result<()> {
     let daemon = Client::connect_gateway(&loaded.link_dir).await?;
     let discord = Discord::new(discord_config);
-    let members = discord.member_count().await?;
-    if members > loaded.config.max_members {
-        bail!(
-            "server has {} members, the limit is {}",
-            members,
-            loaded.config.max_members
-        );
-    }
-
-    let control_category = discord
-        .ensure_category(&loaded.config.control_category)
-        .await
-        .context("ensure control category")?;
-    let control_channel = discord
-        .ensure_text_channel(&control_category, &loaded.config.control_channel)
-        .await
-        .context("ensure control channel")?;
-    let mut watch = discord.watch();
+    let (control_channel, mut watch) = connect_control(&loaded, &discord).await?;
     let paired_author = if let Some(mut pair_io) = io.pair.take() {
-        pair(&loaded, &control_channel, &mut watch, &mut pair_io)
-            .await?
-            .user_id
+        let pairing = pair(&loaded, &control_channel, &mut watch, &mut pair_io).await?;
+        (pair_io.announce)(&format!(
+            "paired with Discord account {}; starting the gateway (Ctrl-C stops it)",
+            pairing.user_id
+        ));
+        pairing.user_id
     } else {
         loaded
             .pairing
@@ -137,6 +123,43 @@ pub async fn run(loaded: Loaded, discord_config: DiscordConfig, mut io: Io) -> a
             Wake::Member => relay.member_check().await,
         }
     }
+}
+
+pub async fn pair_only(
+    loaded: Loaded,
+    discord_config: DiscordConfig,
+    mut io: PairIo,
+) -> anyhow::Result<()> {
+    let _ = Client::connect_gateway(&loaded.link_dir).await?;
+    let discord = Discord::new(discord_config);
+    let (control_channel, mut watch) = connect_control(&loaded, &discord).await?;
+    let pairing = pair(&loaded, &control_channel, &mut watch, &mut io).await?;
+    (io.announce)(&format!(
+        "paired with Discord account {}; starting the gateway in the background",
+        pairing.user_id
+    ));
+    Ok(())
+}
+
+async fn connect_control(loaded: &Loaded, discord: &Discord) -> anyhow::Result<(String, Watch)> {
+    let members = discord.member_count().await?;
+    if members > loaded.config.max_members {
+        bail!(
+            "server has {} members, the limit is {}",
+            members,
+            loaded.config.max_members
+        );
+    }
+    let control_category = discord
+        .ensure_category(&loaded.config.control_category)
+        .await
+        .context("ensure control category")?;
+    let control_channel = discord
+        .ensure_text_channel(&control_category, &loaded.config.control_channel)
+        .await
+        .context("ensure control channel")?;
+    let watch = discord.watch();
+    Ok((control_channel, watch))
 }
 
 struct Relay {
@@ -357,9 +380,5 @@ async fn pair(
         user_id: event.author,
     };
     relay_files::write_pairing(&loaded.home, &pairing)?;
-    (io.announce)(&format!(
-        "paired with Discord account {}; starting the gateway (Ctrl-C stops it)",
-        pairing.user_id
-    ));
     Ok(pairing)
 }

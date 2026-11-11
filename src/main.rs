@@ -202,7 +202,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
             GatewayAction::Up { pair, foreground } => run_gateway_up(home, pair, foreground).await,
             GatewayAction::Stop => return run_gateway_stop(&home).await,
             GatewayAction::Status => return run_gateway_status(&home).await,
-            GatewayAction::Run { pair } => run_gateway(home, pair).await,
+            GatewayAction::Run { pair, pair_only } => run_gateway(home, pair, pair_only).await,
         },
         Command::Daemon { action } => match action {
             DaemonAction::Start {
@@ -374,12 +374,12 @@ async fn run_gateway_stop(home: &Path) -> anyhow::Result<std::process::ExitCode>
     Ok(std::process::ExitCode::SUCCESS)
 }
 
-async fn run_gateway(home: PathBuf, pair: bool) -> anyhow::Result<()> {
+async fn run_gateway(home: PathBuf, pair: bool, pair_only: bool) -> anyhow::Result<()> {
     let loaded = a2amx::relay::load(&home)?;
     let mut discord = DiscordConfig::new(loaded.token.clone(), loaded.config.guild_id.clone());
     discord.api_base = loaded.config.api_base.clone();
     discord.gateway_url = loaded.config.gateway_url.clone();
-    let pair_io = pair.then(|| PairIo {
+    let pair_io = (pair || pair_only).then(|| PairIo {
         announce: Box::new(|line| eprintln!("{line}")),
         confirm: Box::new(|prompt| {
             eprint!("{prompt} ");
@@ -391,6 +391,14 @@ async fn run_gateway(home: PathBuf, pair: bool) -> anyhow::Result<()> {
             matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
         }),
     });
+    if pair_only {
+        return a2amx::relay::pair_only(
+            loaded,
+            discord,
+            pair_io.ok_or_else(|| anyhow!("pair-only mode requires pairing"))?,
+        )
+        .await;
+    }
     let stop = Box::pin(async {
         let mut sigterm =
             match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {

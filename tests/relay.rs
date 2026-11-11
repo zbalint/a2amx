@@ -3,7 +3,7 @@
 mod common;
 
 use a2amx::messaging::RemoteMode;
-use a2amx::relay::{Io, run};
+use a2amx::relay::{Io, pair_only, run};
 use a2amx::relay_files::{self, Loaded};
 use a2amx::wire::{Request, Response};
 use common::eventually;
@@ -236,6 +236,132 @@ async fn pairing_without_record_announces_after_write() {
     task.abort();
     let _ = task.await;
     daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pair_only_pairs_without_sync_or_ready_line() {
+    let (home, daemon) = start_daemon().await;
+    let discord = FakeDiscord::new("123", 2).await;
+    valid_gateway(home.path());
+    let loaded = relay_files::load(home.path()).unwrap();
+    let announcements = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let announcements_for_io = std::sync::Arc::clone(&announcements);
+    let mut task = tokio::spawn(pair_only(
+        loaded,
+        discord.discord_config(),
+        a2amx::relay::PairIo {
+            announce: Box::new(move |line| {
+                announcements_for_io.lock().unwrap().push(line.to_owned());
+            }),
+            confirm: Box::new(|_| true),
+        },
+    ));
+    let code = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if let Some(code) = announced_pairing_code(&announcements) {
+                break code;
+            }
+            if task.is_finished() {
+                let result = (&mut task).await;
+                panic!("pair_only exited before announcement: {result:?}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("pairing announcement timeout");
+    let control = eventually(|| async {
+        discord
+            .channels()
+            .into_iter()
+            .find(|(_, kind, name, _)| *kind == 0 && name == "control")
+            .map(|(id, _, _, _)| id)
+    })
+    .await;
+    discord.push_message(&control, "789", &code).await.unwrap();
+    assert!(settled(task).await.is_ok());
+    let lines = announcements.lock().unwrap().clone();
+    assert!(lines.iter().any(|line| {
+        line == "paired with Discord account 789; starting the gateway in the background"
+    }));
+    assert!(!lines.iter().any(|line| line == "gateway ready"));
+    assert!(!lines.iter().any(|line| {
+        line == "paired with Discord account 789; starting the gateway (Ctrl-C stops it)"
+    }));
+    let record = fs::read_to_string(home.path().join("gateway/pairing.json")).unwrap();
+    let pairing: a2amx::relay_files::Pairing = serde_json::from_str(&record).unwrap();
+    assert_eq!(pairing.user_id, "789");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pair_only_decline_does_not_write_pairing() {
+    let (home, daemon) = start_daemon().await;
+    let discord = FakeDiscord::new("123", 2).await;
+    valid_gateway(home.path());
+    let loaded = relay_files::load(home.path()).unwrap();
+    let announcements = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let announcements_for_io = std::sync::Arc::clone(&announcements);
+    let task = tokio::spawn(pair_only(
+        loaded,
+        discord.discord_config(),
+        a2amx::relay::PairIo {
+            announce: Box::new(move |line| {
+                announcements_for_io.lock().unwrap().push(line.to_owned());
+            }),
+            confirm: Box::new(|_| false),
+        },
+    ));
+    let code = eventually(|| async { announced_pairing_code(&announcements) }).await;
+    let control = eventually(|| async {
+        discord
+            .channels()
+            .into_iter()
+            .find(|(_, kind, name, _)| *kind == 0 && name == "control")
+            .map(|(id, _, _, _)| id)
+    })
+    .await;
+    discord.push_message(&control, "789", &code).await.unwrap();
+    let error = settled(task).await.unwrap_err().to_string();
+    assert_eq!(error, "pairing not confirmed");
+    assert!(!home.path().join("gateway/pairing.json").exists());
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pair_only_refuses_before_pairing_when_daemon_is_stopped() {
+    let (home, daemon) = start_daemon().await;
+    let discord = FakeDiscord::new("123", 2).await;
+    valid_gateway(home.path());
+    let loaded = relay_files::load(home.path()).unwrap();
+    daemon.shutdown().await.unwrap();
+    let addr = home.path().join("link/addr");
+    if addr.exists() {
+        fs::remove_file(&addr).unwrap();
+    }
+    assert!(!addr.exists());
+    let announcements = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let announcements_for_io = std::sync::Arc::clone(&announcements);
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        pair_only(
+            loaded,
+            discord.discord_config(),
+            a2amx::relay::PairIo {
+                announce: Box::new(move |line| {
+                    announcements_for_io.lock().unwrap().push(line.to_owned());
+                }),
+                confirm: Box::new(|_| true),
+            },
+        ),
+    )
+    .await
+    .expect("pair-only daemon check must settle")
+    .unwrap_err()
+    .to_string();
+    assert!(!error.is_empty());
+    assert!(announcements.lock().unwrap().is_empty());
+    assert!(!home.path().join("gateway/pairing.json").exists());
 }
 
 #[tokio::test]

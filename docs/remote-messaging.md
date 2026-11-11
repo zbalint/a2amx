@@ -131,10 +131,10 @@ account; answer `y` or `yes`. A decline ends with `pairing not confirmed`. The c
 
 If a pairing already exists, `--pair` first warns which Discord account and server are currently
 paired, then asks `replace Discord account <old-id> with <new-id>? [y/N]`. Confirming writes the
-new pairing and prints `paired with Discord account <new-id>; starting the gateway`; the command
-keeps running as the gateway until you stop it with Ctrl-C. Moving to a different Discord server
-requires deleting `<state>/gateway/pairing.json` first, because the gateway refuses a pairing whose
-server differs from `config.toml`.
+new pairing, prints `paired with Discord account <new-id>; starting the gateway in the background`,
+and then hands the lock to the background gateway. `up --pair` returns after this hand-over.
+Moving to a different Discord server requires deleting `<state>/gateway/pairing.json` first,
+because the gateway refuses a pairing whose server differs from `config.toml`.
 
 The pairing confirmation is read from standard input; answer `y` or `yes` at the terminal. The
 gateway accepts control and agent-channel messages only from the paired Discord account. After
@@ -165,12 +165,15 @@ confined, and are covered by a valid lease. They appear within `sync_ms` (15 sec
 A category represents a team, and each enabled agent gets one channel in that category.
 
 `a2amx gateway up` starts the confined gateway in the background and prints its pid and log path.
-Use `--foreground` to keep it in this terminal until Ctrl-C. `gateway status` reports whether the
-lock is held, and `gateway stop` performs a graceful background stop. The log is
+Use `--foreground` to keep it in this terminal until Ctrl-C. With `--pair`, the launcher keeps
+the pairing step in the foreground, then hands over to the same background launch; use
+`--pair --foreground` to keep both pairing and message delivery in this terminal. A declined or
+timed-out pairing leaves no gateway running. `gateway status` reports whether the lock is held,
+and `gateway stop` performs a graceful background stop. The log is
 `<state>/gateway/gateway.log`, defaults to level `warn`, and follows `RUST_LOG` when set. There is
 no rotation; delete or truncate it only while the gateway is stopped. One gateway may run per
-state directory. Until spec 3dw, `gateway up --pair` still runs in the foreground. A foreground
-gateway's stop is hard, so one message may be relayed twice after a restart.
+state directory. A foreground gateway's stop is hard, so one message may be relayed twice after a
+restart.
 
 ## Turn it on for agents and start the lease
 
@@ -312,6 +315,7 @@ yet tested with A2AMX.
 | `secure file permissions are too broad` | A token, config, or pairing file has group or other permission bits. | Make the file a regular, owner-only `0600` file; do not replace it with a symlink. |
 | `pairing not confirmed` | The interactive pairing prompt was declined or did not receive `y`/`yes`. | Run `a2amx gateway up --pair` in a terminal and confirm the paired account. |
 | `pairing timed out` | No matching pairing code arrived within 10 minutes. | Run `gateway up --pair` again and post its newly printed code promptly. |
+| `pairing did not complete; the gateway was not started` | Pairing declined, timed out, or the pairing sandbox exited before confirmation. | Retry `a2amx gateway up --pair`; no background gateway was started. |
 | `gateway close 4013: invalid intents` or `gateway close 4014: disallowed intents` | Discord rejected the requested gateway intents. | Enable the guilds, guild messages, and Message Content intents for the bot, then pair/start again. |
 | `the gateway is already running` | Another gateway holds the state-directory lock. | Run `a2amx gateway stop`, then retry. |
 | `the gateway exited during startup` | The relay failed before printing its readiness line. | Read the sanitized startup tail in `<state>/gateway/gateway.log`, fix the cause, and retry. |

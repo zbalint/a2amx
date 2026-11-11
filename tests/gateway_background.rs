@@ -8,8 +8,10 @@ use std::fs::{self, hard_link};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::tempdir;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::process::Command as AsyncCommand;
 
 fn run_gateway(home: &Path, action: &str) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_a2amx"))
@@ -95,6 +97,26 @@ fn stop_signals_verified_nonleader_only_without_killing_runner_group() {
         ])
         .spawn()
         .unwrap();
+    let expected = format!("--home\0{}\0gateway\0run\0", state.to_str().unwrap());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let ready = fs::read(format!("/proc/{}/cmdline", child.id()))
+            .map(|cmdline| {
+                cmdline
+                    .windows(expected.len())
+                    .any(|window| window == expected.as_bytes())
+            })
+            .unwrap_or(false);
+        if ready {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child command line never became verifiable");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     let child_pid = Pid::from_raw(child.id() as i32).unwrap();
     let own_pid = Pid::from_raw(std::process::id() as i32).unwrap();
     assert_eq!(
@@ -237,6 +259,437 @@ async fn prepare_real_gateway(home: &Path, discord: &common::fake_discord::FakeD
         r#"{"guild_id":"123","user_id":"456"}"#,
     );
     a2amx::relay_files::write_token(home, "fake-token").unwrap();
+}
+
+#[tokio::test]
+async fn pair_handover_runs_background_gateway_after_confirmation() {
+    let Some(_bwrap) = bwrap_for_test() else {
+        return;
+    };
+    let (home, daemon) = common::start_daemon().await;
+    let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
+    prepare_real_gateway(home.path(), &discord).await;
+    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+
+    let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
+    command
+        .args(["--home"])
+        .arg(home.path())
+        .args(["gateway", "up", "--pair"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.as_std_mut().process_group(0);
+    let mut child = command.spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stderr = tokio::io::BufReader::new(child.stderr.take().unwrap()).lines();
+    let code = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let line = stderr
+                .next_line()
+                .await
+                .unwrap()
+                .expect("pairing child exited before code");
+            if let Some(code) = line.strip_prefix("post this code in the control channel: ") {
+                break code.to_owned();
+            }
+        }
+    })
+    .await
+    .expect("pairing code timeout");
+    let control = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some((id, _, _, _)) = discord
+                .channels()
+                .into_iter()
+                .find(|(_, kind, name, _)| *kind == 0 && name == "control")
+            {
+                break id;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("control channel timeout");
+    discord.push_message(&control, "789", &code).await.unwrap();
+    let pid: u32 = common::eventually(|| async {
+        fs::read_to_string(home.path().join("gateway.pid"))
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+    })
+    .await;
+    let waiting_status = gateway_command(home.path(), &["gateway", "status"]).await;
+    assert!(waiting_status.status.success());
+    assert!(
+        String::from_utf8_lossy(&waiting_status.stdout).contains(&format!("running (pid {pid})"))
+    );
+    stdin.write_all(b"y\n").await.unwrap();
+    let output = tokio::time::timeout(std::time::Duration::from_secs(20), child.wait_with_output())
+        .await
+        .expect("gateway up timeout")
+        .unwrap();
+    let foreground_stderr = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let mut text = String::new();
+        while let Some(line) = stderr.next_line().await.unwrap() {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text
+    })
+    .await
+    .expect("pairing stderr drain timeout");
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}\nforeground stderr: {foreground_stderr}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("gateway running in the background"));
+    assert!(!foreground_stderr.contains("gateway ready"));
+    let background_pid: u32 = common::eventually(|| async {
+        fs::read_to_string(home.path().join("gateway.pid"))
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+    })
+    .await;
+    assert_eq!(session_id(background_pid), background_pid as i32);
+    assert_ne!(session_id(background_pid), std::process::id() as i32);
+    discord
+        .push_message(&control, "789", "handover connection check")
+        .await
+        .unwrap();
+    assert!(
+        discord
+            .channels()
+            .iter()
+            .any(|(id, kind, name, _)| id == &control && *kind == 0 && name == "control")
+    );
+    let pairing = fs::read_to_string(home.path().join("gateway/pairing.json")).unwrap();
+    assert!(pairing.contains("\"user_id\":\"789\""));
+    let log = fs::read_to_string(home.path().join("gateway/gateway.log")).unwrap();
+    assert!(log.lines().any(|line| line == "gateway ready"));
+    assert!(!log.contains("post this code"));
+    let status = gateway_command(home.path(), &["gateway", "status"]).await;
+    assert!(status.status.success());
+    let stop = gateway_command(home.path(), &["gateway", "stop"]).await;
+    assert!(stop.status.success());
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pair_handover_decline_releases_lock_without_starting_gateway() {
+    let Some(_bwrap) = bwrap_for_test() else {
+        return;
+    };
+    let (home, daemon) = common::start_daemon().await;
+    let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
+    prepare_real_gateway(home.path(), &discord).await;
+    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+
+    let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
+    command
+        .args(["--home"])
+        .arg(home.path())
+        .args(["gateway", "up", "--pair"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.as_std_mut().process_group(0);
+    let mut child = command.spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stderr = tokio::io::BufReader::new(child.stderr.take().unwrap()).lines();
+    let code = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let line = stderr
+                .next_line()
+                .await
+                .unwrap()
+                .expect("pairing child exited before code");
+            if let Some(code) = line.strip_prefix("post this code in the control channel: ") {
+                break code.to_owned();
+            }
+        }
+    })
+    .await
+    .expect("pairing code timeout");
+    let control = common::eventually(|| async {
+        discord
+            .channels()
+            .into_iter()
+            .find(|(_, kind, name, _)| *kind == 0 && name == "control")
+            .map(|(id, _, _, _)| id)
+    })
+    .await;
+    discord.push_message(&control, "789", &code).await.unwrap();
+    stdin.write_all(b"n\n").await.unwrap();
+    let mut stderr_text = String::new();
+    while let Some(line) = stderr.next_line().await.unwrap() {
+        stderr_text.push_str(&line);
+        stderr_text.push('\n');
+    }
+    let output = tokio::time::timeout(std::time::Duration::from_secs(20), child.wait_with_output())
+        .await
+        .expect("gateway up timeout")
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(stderr_text.contains("pairing did not complete"));
+    assert!(!home.path().join("gateway/pairing.json").exists());
+    let status = gateway_command(home.path(), &["gateway", "status"]).await;
+    assert_eq!(status.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&status.stdout).contains("not running"));
+    assert!(gateway_proc::acquire(home.path()).is_ok());
+    let mut retry_command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
+    retry_command
+        .args(["--home"])
+        .arg(home.path())
+        .args(["gateway", "up", "--pair"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    retry_command.as_std_mut().process_group(0);
+    let mut retry = retry_command.spawn().unwrap();
+    let mut retry_stdin = retry.stdin.take().unwrap();
+    let mut retry_stderr = tokio::io::BufReader::new(retry.stderr.take().unwrap()).lines();
+    let retry_code = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let line = retry_stderr
+                .next_line()
+                .await
+                .unwrap()
+                .expect("retry pairing exited before code");
+            if let Some(code) = line.strip_prefix("post this code in the control channel: ") {
+                break code.to_owned();
+            }
+        }
+    })
+    .await
+    .expect("retry pairing did not start");
+    discord
+        .push_message(&control, "789", &retry_code)
+        .await
+        .unwrap();
+    retry_stdin.write_all(b"y\n").await.unwrap();
+    let retry_ready = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        while let Some(line) = retry_stderr.next_line().await.unwrap() {
+            if line.contains("starting the gateway in the background") {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("retry stderr drain timeout");
+    assert!(retry_ready);
+    let retry_status = tokio::time::timeout(std::time::Duration::from_secs(20), retry.wait())
+        .await
+        .expect("retry gateway up timeout")
+        .unwrap();
+    assert!(retry_status.success());
+    assert!(
+        fs::read_to_string(home.path().join("gateway/pairing.json"))
+            .unwrap()
+            .contains("\"user_id\":\"789\"")
+    );
+    let retry_gateway_status = gateway_command(home.path(), &["gateway", "status"]).await;
+    assert!(retry_gateway_status.status.success());
+    let retry_stop = gateway_command(home.path(), &["gateway", "stop"]).await;
+    assert!(retry_stop.status.success());
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pair_step_can_be_stopped_and_refuses_second_pair_launch() {
+    let Some(_bwrap) = bwrap_for_test() else {
+        return;
+    };
+    let (home, daemon) = common::start_daemon().await;
+    let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
+    prepare_real_gateway(home.path(), &discord).await;
+    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+
+    let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
+    command
+        .args(["--home"])
+        .arg(home.path())
+        .args(["gateway", "up", "--pair"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.as_std_mut().process_group(0);
+    let mut child = command.spawn().unwrap();
+    let mut stderr = tokio::io::BufReader::new(child.stderr.take().unwrap()).lines();
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let line = stderr
+                .next_line()
+                .await
+                .unwrap()
+                .expect("pairing child exited before code");
+            if line.starts_with("post this code in the control channel: ") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("pairing code timeout");
+    let pid: u32 = common::eventually(|| async {
+        fs::read_to_string(home.path().join("gateway.pid"))
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+    })
+    .await;
+    let status = gateway_command(home.path(), &["gateway", "status"]).await;
+    assert!(status.status.success());
+    assert!(String::from_utf8_lossy(&status.stdout).contains(&format!("running (pid {pid})")));
+    let duplicate = gateway_command(home.path(), &["gateway", "up", "--pair"]).await;
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already running"));
+    let stop = gateway_command(home.path(), &["gateway", "stop"]).await;
+    assert!(stop.status.success());
+    let output = tokio::time::timeout(std::time::Duration::from_secs(20), child.wait_with_output())
+        .await
+        .expect("stopped pair launcher timeout")
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!home.path().join("gateway/pairing.json").exists());
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn pair_foreground_stays_running_until_stopped() {
+    let Some(_bwrap) = bwrap_for_test() else {
+        return;
+    };
+    let (home, daemon) = common::start_daemon().await;
+    let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
+    prepare_real_gateway(home.path(), &discord).await;
+    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+
+    let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
+    command
+        .args(["--home"])
+        .arg(home.path())
+        .args(["gateway", "up", "--pair", "--foreground"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.as_std_mut().process_group(0);
+    let mut child = command.spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stderr = tokio::io::BufReader::new(child.stderr.take().unwrap()).lines();
+    let code = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let line = stderr
+                .next_line()
+                .await
+                .unwrap()
+                .expect("pairing child exited before code");
+            if let Some(code) = line.strip_prefix("post this code in the control channel: ") {
+                break code.to_owned();
+            }
+        }
+    })
+    .await
+    .expect("pairing code timeout");
+    let control = common::eventually(|| async {
+        discord
+            .channels()
+            .into_iter()
+            .find(|(_, kind, name, _)| *kind == 0 && name == "control")
+            .map(|(id, _, _, _)| id)
+    })
+    .await;
+    discord.push_message(&control, "789", &code).await.unwrap();
+    stdin.write_all(b"y\n").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let status = gateway_command(home.path(), &["gateway", "status"]).await;
+    assert!(status.status.success());
+    let stop = gateway_command(home.path(), &["gateway", "stop"]).await;
+    assert!(stop.status.success());
+    let _output =
+        tokio::time::timeout(std::time::Duration::from_secs(20), child.wait_with_output())
+            .await
+            .expect("foreground pair stop timeout")
+            .unwrap();
+    daemon.shutdown().await.unwrap();
+}
+
+fn pair_only_pids(home: &Path) -> Vec<u32> {
+    let needle = home.to_string_lossy();
+    fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        .filter(|pid| {
+            let Ok(cmdline) = fs::read(format!("/proc/{pid}/cmdline")) else {
+                return false;
+            };
+            cmdline
+                .windows(needle.len())
+                .any(|window| window == needle.as_bytes())
+                && cmdline
+                    .windows("--pair-only".len())
+                    .any(|window| window == b"--pair-only")
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn killing_pair_launcher_does_not_leave_pair_step_running() {
+    let Some(_bwrap) = bwrap_for_test() else {
+        return;
+    };
+    let (home, daemon) = common::start_daemon().await;
+    let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
+    prepare_real_gateway(home.path(), &discord).await;
+    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+
+    let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
+    command
+        .args(["--home"])
+        .arg(home.path())
+        .args(["gateway", "up", "--pair"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.as_std_mut().process_group(0);
+    let mut child = command.spawn().unwrap();
+    let mut stderr = tokio::io::BufReader::new(child.stderr.take().unwrap()).lines();
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let line = stderr
+                .next_line()
+                .await
+                .unwrap()
+                .expect("pairing child exited before code");
+            if line.starts_with("post this code in the control channel: ") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("pairing code timeout");
+    child.kill().await.unwrap();
+    child.wait().await.unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let survivors = loop {
+        let pids = pair_only_pids(home.path());
+        if pids.is_empty() || tokio::time::Instant::now() >= deadline {
+            break pids;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    };
+    for pid in &survivors {
+        let _ = rustix::process::kill_process(
+            Pid::from_raw(*pid as i32).unwrap(),
+            rustix::process::Signal::KILL,
+        );
+    }
+    assert!(
+        survivors.is_empty(),
+        "pair-only processes survived: {survivors:?}"
+    );
+    daemon.shutdown().await.unwrap();
 }
 
 fn session_id(pid: u32) -> i32 {

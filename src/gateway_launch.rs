@@ -98,18 +98,47 @@ pub fn up(home: &Path, pair: bool, foreground: bool) -> Result<()> {
     let resolv_target = resolve_resolv_target(Path::new("/etc/resolv.conf"))?;
     let exe = fs::canonicalize(env::current_exe()?).context("cannot resolve a2amx executable")?;
     let state_text = path_string(&state_dir);
-    let exe_text = path_string(&exe);
     let mut inner = vec![
-        exe_text,
+        path_string(&exe),
         "--home".into(),
-        state_text,
+        state_text.clone(),
         "gateway".into(),
         "run".into(),
     ];
+    let lock = acquire_or_explain(&state_dir)?;
+    if pair && !foreground {
+        inner.push("--pair-only".into());
+        let layout = Layout {
+            bwrap: bwrap.clone(),
+            state_dir: state_dir.clone(),
+            exe: exe.clone(),
+            rust_log: env::var("RUST_LOG").ok(),
+            resolv_target: resolv_target.clone(),
+            die_with_parent: true,
+        };
+        let pair_argv = sandbox_argv(&layout, &inner);
+        run_pair_step(&pair_argv, &state_dir)?;
+        let _ = fs::remove_file(state_dir.join("gateway.pid"));
+        inner.pop();
+        let background = Layout {
+            bwrap,
+            state_dir: state_dir.clone(),
+            exe,
+            rust_log: Some(env::var("RUST_LOG").unwrap_or_else(|_| "warn".into())),
+            resolv_target,
+            die_with_parent: false,
+        };
+        let argv = sandbox_argv(&background, &inner);
+        return start_background(lock, &state_dir, &argv).map_err(|error| {
+            anyhow!(
+                "{error}; the pairing is saved; run a2amx gateway up (without --pair) to start the gateway"
+            )
+        });
+    }
     if pair {
         inner.push("--pair".into());
     }
-    let background = !foreground && !pair;
+    let background = !foreground;
     let layout = Layout {
         bwrap,
         state_dir: state_dir.clone(),
@@ -123,12 +152,35 @@ pub fn up(home: &Path, pair: bool, foreground: bool) -> Result<()> {
         die_with_parent: !background,
     };
     let argv = sandbox_argv(&layout, &inner);
-    let lock = acquire_or_explain(&state_dir)?;
     if foreground || pair {
         exec_gateway(lock, &state_dir, &argv)
     } else {
         start_background(lock, &state_dir, &argv)
     }
+}
+
+fn run_pair_step(argv: &[String], state_dir: &Path) -> Result<()> {
+    let mut child = match Command::new(&argv[0]).args(&argv[1..]).spawn() {
+        Ok(child) => child,
+        Err(error) => bail!("pairing did not complete; the gateway was not started: {error}"),
+    };
+    if let Err(error) = crate::gateway_proc::write_pid(state_dir, child.id()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!("pairing did not complete; the gateway was not started: {error}");
+    }
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = fs::remove_file(state_dir.join("gateway.pid"));
+            bail!("pairing did not complete; the gateway was not started: {error}");
+        }
+    };
+    if !status.success() {
+        let _ = fs::remove_file(state_dir.join("gateway.pid"));
+        bail!("pairing did not complete; the gateway was not started");
+    }
+    Ok(())
 }
 
 fn acquire_or_explain(state_dir: &Path) -> Result<crate::gateway_proc::GatewayLock> {

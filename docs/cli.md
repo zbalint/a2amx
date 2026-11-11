@@ -178,6 +178,8 @@ a2amx new --confine --remote <send|both> -- <command> # mark a confined session 
 `a2amx gateway up` is the supported launcher: the hidden internal relay should not be run directly,
 because direct invocation is unconfined. Remote-enabled sessions must be confined; to reach the
 gateway they must also belong to a named team.
+With `--pair`, pairing stays in the foreground until confirmation and then hands the lock to the
+background gateway; `--pair --foreground` keeps the gateway in this terminal until Ctrl-C.
 
 ## State directory and attachment
 

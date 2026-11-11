@@ -64,3 +64,25 @@ Public interface change: `gateway up --pair` now returns after a confirmed pairi
 | `run_gateway(home, pair)` builds `PairIo` (stderr announce, stdin confirm) and calls `relay::run` | `src/main.rs:377-417`; dispatch at `src/main.rs:205`; `up` already runs on `spawn_blocking` (`src/main.rs:335-338`) | read (consultant) |
 | `Io` and `PairIo` literals in `tests/relay.rs` (8 and 23) would need edits if their fields changed | grep | counted earlier |
 | The lock file is opened close-on-exec, so a child spawned without clearing it does not hold it | `src/gateway_proc.rs:57,67` and `clear_cloexec` in `src/gateway_launch.rs` | read |
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (one pre-lock review) Claude, model not reported; developer openai-codex/gpt-5.6-luna (planning and working, advisor slot not exposed); tester OMP, glm-5.3-flash for planning, working and advisor.
+
+BLOCKED/amend cycles: 0. Fix rounds after the first implementation: 1.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | step 1 ran with the lock held and no pid file, so `status` and `stop` would show a stale pid or ask for a manual stop | spec 2.4: write the step-1 child's pid |
+| draft review | consultant | `pair_only` did not connect to the daemon first, a regression against `run --pair` | spec 2.2: connect first and drop |
+| draft review | consultant | `pair` with a fifth parameter; no test could catch "lock released between the steps" or "step 1 without `--die-with-parent`" | callers announce the success line; tests 2e and 2f replaced the weak mutants |
+| tester pass | tester | step-2 failure after pairing untested (error text), no own-session assertion for the pair-launched gateway, "second `up --pair` starts at once" asserted only up to the prompt | FIX REQUEST m_6640 (own-session, control channel, completed second pairing); the step-2 text stays review-only as the spec says |
+| architect review | architect | `pair_only_refuses_before_pairing_when_daemon_is_stopped` failed 5 of 5 for the architect (15 s timeout) after passing for the developer and tester | test fixed (daemon really gone before the call), ten green runs, mutant still kills it |
+| architect review | architect | `run_pair_step` swallowed the underlying error in its `Err(_)` arms | the cause is appended to the fixed text |
+| tester pass | tester | `stop_signals_verified_nonleader_only_without_killing_runner_group` failed twice (reads /proc before the child's argv is verifiable) | test polls until the command line is verifiable |
+
+Process notes: the developer's follow-up edits, a `cargo fmt --all` and a `Cargo.lock` restore ran while the architect's full suite was running; the suite was stopped and rerun on a settled tree. A new advisory (RUSTSEC-2026-0486, `rustix` 1.1.5, an xattr API this repository does not use) failed `cargo deny`; the architect updated `Cargo.lock` to `rustix` 1.1.6 in its own commit.
+
+Surviving mutant, accepted: the saved-pairing sentence removed from the step-2 failure error (the spec marks step-2 failure review-only).
+
+Architect checks on the final snapshot: `git diff --check`, fmt, clippy `-D warnings`, `cargo deny check`, `scripts/prepush-fast.sh`, full `cargo test --no-fail-fast` (51 suites passed; only the two confined-HOME failures as in 3dt), own mutant (step 2 started with `--pair-only`: killed by two gateway_background tests), Sonar gate.
