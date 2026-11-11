@@ -597,6 +597,20 @@ pub struct TeamMember {
     pub starting: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteLease {
+    None,
+    Active,
+    Ended,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteStatus {
+    pub lease: RemoteLease,
+    pub gateway: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusInfo {
     pub address: String,
@@ -621,6 +635,8 @@ pub struct StatusInfo {
     pub role: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<TeamMember>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteStatus>,
 }
 
 /// Server-to-client stream frame.

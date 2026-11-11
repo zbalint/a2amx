@@ -1,6 +1,6 @@
 use crate::harness::Harness;
 use crate::quota;
-use crate::wire::{Activity, QuotaInfo, StatusInfo, TeamMember};
+use crate::wire::{Activity, QuotaInfo, RemoteLease, RemoteStatus, StatusInfo, TeamMember};
 
 const BAR_FOREGROUND: &str = "\x1b[38;5;252m";
 const BAR_BACKGROUND: &str = "\x1b[38;5;252;48;5;236m";
@@ -246,6 +246,7 @@ pub fn render(
         .filter(|info| info.pending > 0)
         .map(|info| format!(" {} pending ", info.pending));
     let hold_reason = info.and_then(|info| info.hold.as_deref()).map(sanitize);
+    let remote = info.and_then(|info| info.remote).map(remote_spans);
     let mut show_activity = activity.is_some();
     let mut show_quota = quota.is_some();
     let mut show_role = role.is_some();
@@ -257,6 +258,7 @@ pub fn render(
     let mut show_hint = hold_reason
         .as_deref()
         .is_some_and(|reason| hint_allowed(reason, prefix));
+    let mut show_remote = remote.is_some();
 
     loop {
         let left = left_spans(
@@ -278,7 +280,13 @@ pub fn render(
         } else {
             0
         };
-        let total = spans_len(&left) + pending_len + hold.as_deref().map_or(0, char_len);
+        let remote_len = if show_remote {
+            remote.as_ref().map_or(0, |spans| spans_len(spans))
+        } else {
+            0
+        };
+        let total =
+            spans_len(&left) + remote_len + pending_len + hold.as_deref().map_or(0, char_len);
         if total <= width {
             break;
         }
@@ -296,6 +304,8 @@ pub fn render(
             show_pending = false;
         } else if show_hint {
             show_hint = false;
+        } else if show_remote {
+            show_remote = false;
         } else if show_confined {
             show_confined = false;
         } else {
@@ -314,6 +324,11 @@ pub fn render(
         show_team.then_some(team.as_deref()).flatten(),
         show_harness.then_some(harness).flatten(),
     );
+    let remote = if show_remote {
+        remote.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let pending = if show_pending {
         pending.unwrap_or_default()
     } else {
@@ -324,6 +339,7 @@ pub fn render(
         .map(|reason| hold_text(reason, show_hint, prefix))
         .unwrap_or_default();
     let left_len = spans_len(&left);
+    let remote_len = spans_len(&remote);
     let hold_len = char_len(&hold);
     let (left_limit, hold_limit) = if left_len + hold_len > width {
         if hold_len >= width {
@@ -335,8 +351,9 @@ pub fn render(
         (left_len, hold_len)
     };
     let left = render_spans(&left, left_limit);
+    let remote = render_spans(&remote, remote_len);
     let hold = render_span(&Span::styled(ALERT_OPEN, hold, ""), hold_limit);
-    let padding = " ".repeat(width - left_limit - char_len(&pending) - hold_limit);
+    let padding = " ".repeat(width - left_limit - remote_len - char_len(&pending) - hold_limit);
 
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"\x1b7");
@@ -346,6 +363,7 @@ pub fn render(
     bytes.extend_from_slice(format!("\x1b[{rows};1H\x1b[0m{BAR_BACKGROUND}").as_bytes());
     bytes.extend_from_slice(left.as_bytes());
     bytes.extend_from_slice(padding.as_bytes());
+    bytes.extend_from_slice(remote.as_bytes());
     bytes.extend_from_slice(pending.as_bytes());
     bytes.extend_from_slice(hold.as_bytes());
     bytes.extend_from_slice(b"\x1b[0m\x1b8");
@@ -527,6 +545,24 @@ fn activity_color(state: DotState) -> &'static str {
         DotState::Held => "\x1b[38;5;203m",
         DotState::Exited => "\x1b[38;5;244m",
     }
+}
+
+fn remote_cell(remote: &RemoteStatus) -> (&'static str, &'static str) {
+    match (remote.lease, remote.gateway) {
+        (RemoteLease::None, _) => ("remote: no lease", "\x1b[38;5;244m"),
+        (RemoteLease::Active, true) => ("remote on", "\x1b[38;5;78m"),
+        (RemoteLease::Active, false) => ("remote: gateway off", "\x1b[38;5;209m"),
+        (RemoteLease::Ended, _) => ("remote: lease ended", "\x1b[38;5;203m"),
+    }
+}
+
+fn remote_spans(remote: RemoteStatus) -> Vec<Span> {
+    let (text, color) = remote_cell(&remote);
+    vec![
+        Span::styled(color, "●", BAR_FOREGROUND),
+        Span::plain(" "),
+        Span::plain(format!("{text} ")),
+    ]
 }
 
 fn render_spans(spans: &[Span], limit: usize) -> String {

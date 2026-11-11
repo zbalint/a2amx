@@ -143,6 +143,7 @@ fn fake_status(session: &str, team: &TeamScope) -> StatusInfo {
         team: Some(team.clone()),
         role: None,
         members: vec![alpha, beta],
+        remote: None,
     }
 }
 

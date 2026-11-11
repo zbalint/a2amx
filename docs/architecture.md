@@ -381,7 +381,8 @@ Newer clients treat omitted held and starting fields as false; older clients ign
 The client opts in with `Request::Attach.status`; the daemon sends a status frame
 (tag `0x04`) after the initial snapshot and polls once a second, sending only changes.
 Attachments that do not opt in receive no status frames, preserving older clients;
-older daemons ignore the additive request field.
+older daemons ignore the additive request field. The status payload's additive `remote` field
+describes the session's remote lease and gateway-connection state.
 
 An attach request can reserve `top_rows` above the session; a daemon that honors
 them acknowledges with `AttachedTop`. The session grid is rendered with that row

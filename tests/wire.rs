@@ -1185,10 +1185,19 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
         team: None,
         role: None,
         members: vec![],
+        remote: Some(a2amx::wire::RemoteStatus {
+            lease: a2amx::wire::RemoteLease::Active,
+            gateway: true,
+        }),
     };
     let frame = ServerFrame::Status(info);
     let encoded = frame.encode();
     assert_eq!(encoded[0], 0x04);
+    let payload: serde_json::Value = serde_json::from_slice(&encoded[1..]).unwrap();
+    assert_eq!(
+        payload.get("remote").unwrap(),
+        &serde_json::json!({"lease": "active", "gateway": true})
+    );
     assert_eq!(ServerFrame::decode(&encoded).unwrap(), frame);
     let old_payload = [vec![0x04], br#"{"address":"a","pending":0}"#.to_vec()].concat();
     let ServerFrame::Status(old_info) = ServerFrame::decode(&old_payload).unwrap() else {
@@ -1201,6 +1210,7 @@ fn status_frames_and_attach_opt_in_preserve_wire_compatibility() {
     assert_eq!(old_info.activity, None);
     assert!(!old_info.starting);
     assert_eq!(old_info.quota, None);
+    assert_eq!(old_info.remote, None);
     let old_member: TeamMember = serde_json::from_value(
         serde_json::json!({"id":"s0","name":"old","activity":"idle","exited":false}),
     )
@@ -1295,8 +1305,10 @@ fn status_members_default_omit_and_round_trip() {
                 starting: false,
             },
         ],
+        remote: None,
     };
     let encoded = serde_json::to_value(&status).unwrap();
+    assert!(encoded.get("remote").is_none());
     assert_eq!(
         serde_json::from_value::<a2amx::wire::StatusInfo>(encoded).unwrap(),
         status

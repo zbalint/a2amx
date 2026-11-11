@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -35,8 +35,9 @@ use crate::session::{
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, ExplainInfo,
-    GatewayAgent, HoldInfo, HumanOutboundMessage, MessageInfo, QuotaInfo, QuotaWindow, Request,
-    ResetVerdict, Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
+    GatewayAgent, HoldInfo, HumanOutboundMessage, MessageInfo, QuotaInfo, QuotaWindow, RemoteLease,
+    RemoteStatus, Request, ResetVerdict, Response, ServerFrame, SessionSummary, StatusInfo,
+    TeamMember,
 };
 
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
@@ -95,6 +96,7 @@ struct Runtime {
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     presence: Arc<Mutex<messaging::Presence>>,
     leases: Mutex<PresenceLeases>,
+    gateway_connections: AtomicUsize,
     new_session_gate: tokio::sync::Mutex<()>,
     // shortcut: a stopped gateway leaves messages delivering until daemon restart;
     // each stuck message consumes the shared human queue limit, so add a timeout
@@ -230,6 +232,16 @@ enum Role {
     Admin,
     Gateway,
     Session(String),
+}
+
+struct GatewayConnectionGuard<'a> {
+    connections: &'a AtomicUsize,
+}
+
+impl Drop for GatewayConnectionGuard<'_> {
+    fn drop(&mut self) {
+        self.connections.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 fn constant_time_eq(actual: &str, expected: &str) -> bool {
@@ -1549,16 +1561,39 @@ impl Runtime {
         Response::Ok
     }
 
-    fn lease_valid(&self, team: &str, id: &str, now: Instant) -> bool {
-        self.leases
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+    fn lease_state(&self, team: &str, id: &str, now: Instant) -> RemoteLease {
+        let leases = self.leases.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(lease) = leases
             .teams
             .get(team)
             .and_then(|state| state.lease.as_ref())
-            .is_some_and(|lease| {
-                now < lease.expires && lease.members.iter().any(|member| member.0.as_str() == id)
-            })
+        else {
+            return RemoteLease::None;
+        };
+        if !lease.members.iter().any(|member| member.0.as_str() == id) {
+            return RemoteLease::None;
+        }
+        if now < lease.expires {
+            RemoteLease::Active
+        } else {
+            RemoteLease::Ended
+        }
+    }
+
+    fn lease_valid(&self, team: &str, id: &str, now: Instant) -> bool {
+        self.lease_state(team, id, now) == RemoteLease::Active
+    }
+
+    fn remote_status(&self, session: &Session) -> Option<RemoteStatus> {
+        session.remote()?;
+        let now = Instant::now();
+        let lease = session.team().map_or(RemoteLease::None, |team| {
+            self.lease_state(&team.name, &session.id().0, now)
+        });
+        Some(RemoteStatus {
+            lease,
+            gateway: self.gateway_connections.load(Ordering::Relaxed) > 0,
+        })
     }
 
     fn gateway_agents(&self) -> Response {
@@ -2421,6 +2456,7 @@ impl Daemon {
                 config.limits.away_secs,
             ))),
             leases: Mutex::new(PresenceLeases::default()),
+            gateway_connections: AtomicUsize::new(0),
             new_session_gate: tokio::sync::Mutex::new(()),
             human_attempts: Mutex::new(HashMap::new()),
             deliveries: Mutex::new(Vec::new()),
@@ -2716,6 +2752,14 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
     let mut connection = Framed::new(socket);
     let Some(role) = authenticate_hello(&mut connection, &runtime).await? else {
         return Ok(());
+    };
+    let _gateway_guard = if matches!(role, Role::Gateway) {
+        runtime.gateway_connections.fetch_add(1, Ordering::Relaxed);
+        Some(GatewayConnectionGuard {
+            connections: &runtime.gateway_connections,
+        })
+    } else {
+        None
     };
     response(&mut connection, Response::Ok).await?;
     while let Some(bytes) = connection.recv().await? {
@@ -3581,6 +3625,7 @@ async fn attachment_status(
         team: session.team().cloned(),
         role: session.role().map(str::to_owned),
         members,
+        remote: runtime.remote_status(session),
     })
 }
 

@@ -235,6 +235,20 @@ An agent sends to the paired human with the existing message tool:
 send_message(to="human:owner", subject="…", message="…")
 ```
 
+### Remote state in the attach status line
+
+Only remote-enabled sessions show a remote cell in the attach status line:
+
+- `remote: no lease` means the team has not redeemed a lease for this session. Run
+  `a2amx team up --detach` and post the printed code.
+- `remote on` means the lease is active and a gateway process is attached to the daemon.
+- `remote: gateway off` means the lease is active but no gateway process is currently attached.
+  Start one with `a2amx gateway up`.
+- `remote: lease ended` means the lease expired. Run `a2amx team up --detach` again.
+
+“Gateway” here means that the gateway process is attached to the daemon; it does not report
+whether Discord is reachable or whether messages are currently relaying.
+
 ## What the sandbox does
 
 `a2amx gateway up` runs the gateway relay inside bubblewrap. The sandbox shares the host network

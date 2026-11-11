@@ -1,6 +1,6 @@
 use a2amx::harness::Harness;
 use a2amx::status;
-use a2amx::wire::{Activity, QuotaInfo, StatusInfo, TeamMember};
+use a2amx::wire::{Activity, QuotaInfo, RemoteLease, RemoteStatus, StatusInfo, TeamMember};
 
 const PRE: &str = "\x1b7\x1b[23;1H\x1b[0m\x1b[2K\x1b[38;5;240m";
 const BAR: &str = "\x1b[0m\x1b[24;1H\x1b[0m\x1b[38;5;252;48;5;236m";
@@ -20,6 +20,7 @@ fn info(address: &str) -> StatusInfo {
         team: None,
         role: None,
         members: vec![],
+        remote: None,
     }
 }
 fn visible(bytes: &[u8]) -> String {
@@ -42,6 +43,147 @@ fn visible(bytes: &[u8]) -> String {
         }
     }
     String::from_utf8_lossy(&text).into_owned()
+}
+
+#[test]
+fn remote_status_renders_active_gateway_cell() {
+    let status: StatusInfo = serde_json::from_value(serde_json::json!({
+        "address": "agent-plan@host-a",
+        "pending": 0,
+        "remote": {"lease": "active", "gateway": true}
+    }))
+    .expect("remote status payload");
+    let rendered = String::from_utf8(status::render("agent-plan", Some(&status), 2, 80, 24))
+        .expect("utf8 status");
+    assert!(rendered.contains("\x1b[38;5;78m●"));
+    assert!(rendered.contains("remote on "));
+}
+
+#[test]
+fn remote_status_cells_have_locked_text_colors_and_priority() {
+    for (lease, gateway, text, color) in [
+        (
+            RemoteLease::None,
+            false,
+            "remote: no lease",
+            "\x1b[38;5;244m",
+        ),
+        (RemoteLease::Active, true, "remote on", "\x1b[38;5;78m"),
+        (
+            RemoteLease::Active,
+            false,
+            "remote: gateway off",
+            "\x1b[38;5;209m",
+        ),
+        (
+            RemoteLease::Ended,
+            true,
+            "remote: lease ended",
+            "\x1b[38;5;203m",
+        ),
+    ] {
+        let mut status = info("agent-plan@host-a");
+        status.remote = Some(RemoteStatus { lease, gateway });
+        let rendered = status::render("agent-plan", Some(&status), 2, 80, 24);
+        let rendered = String::from_utf8(rendered).expect("utf8 status");
+        assert!(rendered.contains(text), "{text}: {rendered:?}");
+        assert!(rendered.contains(color), "{text}: {rendered:?}");
+    }
+
+    let mut status = info("agent-plan@host-a");
+    status.remote = Some(RemoteStatus {
+        lease: RemoteLease::Active,
+        gateway: true,
+    });
+    status.pending = 1;
+    status.hold = Some("human_draft".into());
+    status.confined = true;
+    let rendered = visible(&status::render("agent-plan", Some(&status), 2, 120, 24));
+    assert!(rendered.find("remote on").unwrap() < rendered.find("1 pending").unwrap());
+    assert!(rendered.find("1 pending").unwrap() < rendered.find("HELD").unwrap());
+    for cols in 2..=120 {
+        let text = visible(&status::render("agent-plan", Some(&status), 2, cols, 24));
+        assert!(
+            text.chars().count() <= usize::from(cols - 1),
+            "status overflows at {cols}: {text:?}"
+        );
+    }
+}
+
+#[test]
+fn remote_status_shrinks_before_confined_after_hint_and_pending() {
+    let mut status = info("agent-plan@host-a");
+    status.remote = Some(RemoteStatus {
+        lease: RemoteLease::Active,
+        gateway: true,
+    });
+    status.pending = 1;
+    status.hold = Some("human_draft".into());
+    status.confined = true;
+    let full = visible(&status::render("agent-plan", Some(&status), 2, 120, 24));
+    assert!(full.contains("remote on"));
+    assert!(full.contains("[confined]"));
+
+    let mut dropped_pending = None;
+    let mut dropped_hint = None;
+    let mut dropped_remote = None;
+    for cols in (2..=120).rev() {
+        let text = visible(&status::render("agent-plan", Some(&status), 2, cols, 24));
+        if dropped_pending.is_none() && !text.contains("pending") {
+            dropped_pending = Some(text.clone());
+        }
+        if dropped_hint.is_none() && !text.contains("· ^B r") && text.contains("remote on") {
+            dropped_hint = Some(text.clone());
+        }
+        if dropped_remote.is_none() && !text.contains("remote on") && text.contains("[confined]") {
+            dropped_remote = Some(text);
+        }
+    }
+    assert!(dropped_pending.is_some());
+    assert!(dropped_hint.is_some());
+    assert!(dropped_remote.is_some());
+}
+#[test]
+fn remote_status_exact_fit_drops_pending_at_width_minus_one() {
+    let mut status = info("a@h");
+    status.remote = Some(RemoteStatus {
+        lease: RemoteLease::Active,
+        gateway: true,
+    });
+    status.pending = 1;
+    status.hold = Some("human_draft".into());
+    status.confined = true;
+
+    let exact = visible(&status::render("a@h", Some(&status), 2, 65, 24));
+    assert!(exact.contains("a@h"));
+    assert!(exact.contains("[confined]"));
+    assert!(exact.contains("remote on"));
+    assert!(exact.contains("1 pending"));
+    assert!(exact.contains("HELD human_draft"));
+    assert!(exact.contains("· ^B r"));
+
+    let minus_one = visible(&status::render("a@h", Some(&status), 2, 64, 24));
+    assert!(minus_one.contains("[confined]"));
+    assert!(minus_one.contains("remote on"));
+    assert!(minus_one.contains("HELD human_draft"));
+    assert!(minus_one.contains("· ^B r"));
+    assert!(!minus_one.contains("1 pending"));
+}
+
+#[test]
+fn remote_status_drops_pending_before_remote_cell() {
+    let mut status = info("a@h");
+    status.remote = Some(RemoteStatus {
+        lease: RemoteLease::Active,
+        gateway: true,
+    });
+    status.pending = 1;
+    status.hold = Some("human_draft".into());
+    status.confined = true;
+
+    let rendered = visible(&status::render("a@h", Some(&status), 2, 64, 24));
+    assert!(rendered.contains("remote on"));
+    assert!(!rendered.contains("1 pending"));
 }
 
 #[test]
