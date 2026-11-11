@@ -55,6 +55,13 @@ Baseline taken at draft time on the unchanged tree: `actionlint .github/workflow
 5. No required test fails on the old code: this change has no Rust test, so there is no red phase.
 6. Flaky: none known for this step.
 
+## Amendment 1 (after the tester pass, 2026-11-11)
+
+Two wording fixes; the implemented diff already follows them and nothing in `ci.yml` changes.
+
+- 2.1 preamble says only the apt install and the final three lines may end the step. Item 3 makes `apt-get update` fatal as well, and the diff does that. Read the preamble as: the apt update and install decide the outcome, together with the final three lines; every diagnostic and best-effort command before them is guarded.
+- Acceptance 3 says `git diff --stat` shows only `.github/workflows/ci.yml`. The commit that accepts the work also adds this spec file, so the criterion is read against the implementation diff before the spec is committed.
+
 ## Review record
 
 Models: architect Claude Sonnet 5.5 (claude-sonnet-5-5); consultant on the claude harness (model not recorded); developer on OMP, working slot openai-codex/gpt-5.6-luna, advisor slot present (model not asserted); no tester pass (a workflow-only change). BLOCKED/amend cycles: 0.
@@ -67,3 +74,6 @@ Models: architect Claude Sonnet 5.5 (claude-sonnet-5-5); consultant on the claud
 | Draft review | consultant | Retries and timeouts do not bound name resolution or total time | Stated as an expectation in 2.1 item 3 |
 | Draft review | consultant | Diagnostics missing (`ip route`, `apt-mirrors.txt`); runner named `ubuntu-24.04` but the job uses `ubuntu-latest`; line anchors off by one | Added, reworded, corrected |
 | Architect, before lock | architect | The spec said `rg bubblewrap docs` finds nothing; it finds the runtime-requirement mentions in `docs/remote-messaging.md` | Claim narrowed to `apt-get` |
+| Tester pass (after the push) | tester, OMP glm-5.3-flash | Spec 2.1 preamble contradicted item 3 (apt update is fatal) | Amendment 1 above |
+| Tester pass (after the push) | tester, OMP glm-5.3-flash | Acceptance 3 did not allow for the spec file landing in the same commit | Amendment 1 above |
+| Architect review (after the push) | architect | The step was pushed without a tester pass, final-review or the Sonar steps; the tester pass and final-review were run afterwards | Late tester pass, this review; recorded as a process miss |
