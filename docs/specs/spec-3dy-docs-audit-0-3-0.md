@@ -103,4 +103,17 @@ Baseline at draft time on the unchanged tree (every `rg` below excludes `docs/sp
 
 ## Review record
 
-Pre-lock review: consultant (claude harness, model not recorded) found 13 problems in the draft (2 false claims, 3 acceptance checks that passed wrongly, wrong anchors and targets); all folded in before lock. The architect fills in the rest in the commit that accepts the work.
+Models: architect Claude Sonnet 5.5 (claude-sonnet-5-5); consultant on the claude harness (model not recorded); developer on OMP, working slot openai-codex/gpt-5.6-luna (advisor slot not exposed); tester on OMP, opencode-go/glm-5.3-flash. BLOCKED/amend cycles: 1.
+
+| Where found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | teams.md readiness claim false: the daemon samples every running session | Spec 2.9 rewritten from `sample_activity` |
+| Draft review | consultant | `default_hides=false` claim wrong: container sockets stay hidden, anchors off | Spec 2.10 rewritten |
+| Draft review | consultant | Acceptance greps passed wrongly (multi-file `rg`; F81 already matches elsewhere) | Per-file loop and positional awk checks |
+| Draft review | consultant | Wrong target (architecture.md:73 is Proposed topology), list_agents `viewer` and top-level `owner`, roadmap flakes sentence, read_secure covers three files, unproven "no text is lost", wording items (13 problems in all) | Folded into the spec before lock |
+| Implementation | developer (BLOCKED m_6707) | Spec 2.12 resolv.conf claim false: `resolve_resolv_target` has no readability check; non-symlink paths pass | Amendment 1 (9185d4a); the draft and the consultant review both missed it |
+| Architect review | architect | Roadmap "Built today" not updated (spec 2.1) | Rework R1 |
+| Architect review | architect | Developer wrote that `/run/dbus` stays hidden with `default_hides=false` (false, contradicts the spec); developer truth table said true | Rework R2 |
+| Architect review | architect | True content dropped without a destination (viewer note, candidate-dependency sentence, 0600-writes sentence, roadmap 0.2.0 IDs) | Rework R3 |
+| Architect review | architect | Unrequested teams.md sentence, hardcoded Ctrl-B in the VIEW overlay text, releasing.md step merged | Rework R4 to R6 |
+| Tester pass | tester | No false sentence found in the reworked diff; four minor uncertainties, none a finding | none needed |

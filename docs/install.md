@@ -22,14 +22,18 @@ cosign verify-blob --bundle a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sigstor
   --certificate-identity "https://github.com/zbalint/a2amx/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/zbalint/a2amx/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
 gh attestation verify a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz --repo zbalint/a2amx
 tar -xzf a2amx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 install -Dm755 a2amx-vX.Y.Z-x86_64-unknown-linux-gnu/a2amx ~/.a2amx/bin/a2amx
 ```
 
 `gh attestation verify` needs a recent GitHub CLI (the `attestation` subcommand is missing from
-older packaged versions, for example 2.46). Without it, the `cosign` check above still verifies the
-signature and the workflow identity. The build-from-source route above is unchanged. Start the installed binary from
+older packaged versions, for example 2.46). Without it, the `cosign` checks above still verify the
+signatures and workflow identity. The build-from-source route above is unchanged. Start the installed
 `~/.a2amx/bin/a2amx`, not from `target/`.
 
 a2amx and its daemon refuse to run as root or under `sudo`; install and run them as an ordinary
@@ -62,7 +66,7 @@ Each build carries its git description (`a2amx --version`), and the running daem
 the same value in `a2amx daemon status`. A `-dirty` suffix marks a build from a modified
 source tree. Status writes a warning to stderr when the daemon was built from a different
 version and recommends a restart; restarting ends all sessions. When a source tarball has
-no git metadata, `build.rs` uses `CARGO_PKG_VERSION` (currently `0.1.2`); only when that
+no git metadata, `build.rs` uses `CARGO_PKG_VERSION`; only when that
 value is absent or empty does it fall back to `0.0.0`. A package-version fallback cannot be
 compared with a git-described daemon version.
 

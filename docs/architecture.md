@@ -70,7 +70,7 @@ logical role, not a requirement for a dedicated physical host.
 | --- | --- | --- |
 | Central daemon | Enrollment, directory, authorization, durable message acceptance, routing, global status | Local PTY handles or interpretation of harness keystrokes |
 | Host supervisor | Local processes, session runtimes, reconnect reconciliation, local delivery journal | Global acceptance while disconnected from the central daemon |
-| Session runtime | PTY lifecycle, screen model, input arbiter, writer, resize, delivery execution | MCP tool parsing or global routing |
+| Session runtime | PTY lifecycle, screen model, input arbiter, writer, resize, delivery execution (today's delivery loop is `src/delivery.rs`; see [Implemented: messaging core](#implemented-messaging-core)) | MCP tool parsing or global routing |
 | Confinement planner | Canonical path guards, bubblewrap preflight/argv, mount plan, notice | PTY lifecycle or harness-specific delivery |
 | Per-agent MCP server | Small tool interface and authenticated session binding | Direct PTY access or human management authority |
 | Prompt-submit hook | Reporting submitted prompts and applying the supervisor's allow or block verdict | Deciding that the model processed a message |
@@ -137,12 +137,15 @@ message_status(id)
 reset_session(to)
 ```
 
-Each `list_agents()` entry includes `address`, `state`, `activity`, `attached`, optional `quota` (`five_hour_left`, `weekly_left`: percent left, 100 = all left; `limit_reached`), always-present
-`harness` (`claude`, `omp`, `codex`, or `generic`), optional
-`team` (the team name only), `you` for the caller's own entry, and optional spawn directory
-`cwd`; `cwd` is not the process's live current directory. Sessions outside the caller's
-private-team visibility are not listed.
-`viewer` is present only when true and only with `attached`; it means the attached client is in read-only viewer mode and does not indicate that the owner is at the keyboard.
+Each `list_agents()` entry includes `address`, `state`, `activity`, `attached`, optional `quota`
+(`five_hour_left`, `weekly_left`: percent left, 100 = all left; `limit_reached`), always-present
+`harness` (`claude`, `omp`, `codex`, or `generic`), optional `team` (the team name only), `you`
+for the caller's own entry, optional spawn directory `cwd` (not the process's live current
+directory), optional `confine` summary, and `viewer` when the attached client is in read-only
+viewer mode; `viewer` is present only when true and only with `attached`, and does not indicate
+that the owner is at the keyboard. Sessions outside the caller's private-team visibility are not
+listed. A remote-enabled caller also gets a top-level `owner` beside `agents`, present only for
+that caller.
 
 The directory returns authorized recipients and their availability. A successful
 send returns a durable message identifier and acceptance status, not a promise of
@@ -196,9 +199,10 @@ and a memory stored because of a peer message should say so. A2AMX cannot enforc
 this, and the sentence in the envelope states only the origin.
 Daemon notifications use a system envelope line stating that they are not from the user and cannot be replied to; they are not agent requests.
 
-Authorization of peers: `--harness claude` appends an operator line to the session's
-system prompt saying that messages in `<a2amx-message>` tags are requests from peer
-agents the user has authorized; `--no-authorize-peers` omits it. Two agents that
+Authorization of peers: `--harness claude` appends an operator line to the session's system
+prompt saying that messages in `<a2amx-message>` tags are requests from peer agents the user has
+authorized; `--harness omp` appends the same line with `--append-system-prompt`, and Codex
+receives it through `developer_instructions`; `--no-authorize-peers` omits it.
 reported on their first real runs said that line was what made them act on a message;
 the envelope sentence alone said only where it came from, and without the line they
 would have asked their user first. The line carries no per-peer or per-task limit, so
@@ -418,11 +422,12 @@ machine; there is no central-versus-host split yet.
   as `A2AMX_TOKEN` with `A2AMX_ADDR` in the child's environment (never argv). A
   connection that presents a session token has only session powers (`list_agents`,
   `send_message`, `message_status` for its own messages, `reset_session` when the
-  target grants `control_from`, and `report_prompt` for the hook); the sender is
-  always that session. The admin token keeps the human's powers and cannot send. A third
-  token, `gateway.token` in the state directory, gives the gateway role: it may only post the human's
-  inbound messages, fetch and report the human-bound ones, and redeem lease codes (`docs/permissions.md`).
-  The human's address is `human:owner`; the daemon sets the sender, never the caller.
+  target grants `control_from`, `report_prompt`, `report_quota`, and `bridge_attach`);
+  the sender is always that session. The admin token keeps the human's powers and cannot
+  send. A third token, `gateway.token` in the state directory, gives the gateway role:
+  it may only post the human's inbound messages, fetch and report the human-bound ones,
+  and redeem lease codes (`docs/permissions.md`). The human's address is `human:owner`;
+  the daemon sets the sender, never the caller.
 - **Remote gateway.** `a2amx gateway up` starts the gateway in the background by default (or keeps
   it attached with `--foreground`). For `up --pair`, `gateway_launch` first starts a confined
   foreground `gateway run --pair-only` step with the inherited terminal, then hands the same lock
@@ -443,11 +448,13 @@ machine; there is no central-versus-host split yet.
   `--host-name`) or `<id>@<host>` when unnamed. Names match `[a-z0-9][a-z0-9-]{0,62}`,
   may not look like a session id (`s12`), and are unique among all sessions still in
   the registry, exited ones included.
-- **Limits.** Subject 200 bytes and body 32 KiB; control characters, the envelope
-  terminator, and the text `<a2amx-message` (an opening envelope tag) are rejected; 50 open
-  messages per recipient; 10 000 stored messages; 20 accepted sends per minute per sender session (in memory only).
-  Errors carry a code: `unknown_recipient`, `recipient_exited`, `too_large`,
-  `queue_full`, `rate_limited`, `invalid_content`, `unknown_message`, `internal`.
+- **Limits.** Subject 200 bytes and body 32 KiB; control characters, the envelope terminator,
+  and the text `<a2amx-message` (an opening envelope tag) are rejected; 50 open messages per
+  recipient; 10 000 stored messages; 20 accepted sends per minute per sender session; human
+  inbound messages are limited to 20 per minute, outbound human traffic to 30 per minute, and
+  human bodies to 8000 bytes. Errors carry a code: `unknown_recipient`, `recipient_exited`,
+  `too_large`, `queue_full`, `rate_limited`, `invalid_content`, `unknown_message`, `internal`,
+  `owner_present`, `not_permitted`.
 - **Delivery.** One task per session delivers its pending messages in acceptance
   order. See [delivery](delivery.md#implemented-pty-delivery) for the transaction and
   the hold reasons. Without a hook delivery ends at "submitted, outcome unknown"
@@ -489,10 +496,11 @@ machine; there is no central-versus-host split yet.
   Team plans reject cycles among activity watches; hand-started mutual watches can loop.
 - **Session reset.** `a2amx reset <id|name>` resolves names before sending
   `Request::Reset`; the daemon types the configured sequence (or `/clear`) through
-  the same bracketed-paste PTY path. `control_from` names authorize session-token
-  callers; the CLI/admin token is always allowed. Reset holds message delivery,
-  rejects drafts and non-ready composers, waits 1.5 seconds plus readiness polling
-  after each Enter, and fails a step after 30 seconds.
+  the same bracketed-paste PTY path. A reset sequence has at most 8 steps; each step
+  starts with `/`, is at most 200 bytes, and has no control characters. `control_from`
+  names authorize session-token callers; the CLI/admin token is always allowed. Reset
+  holds message delivery, rejects drafts and non-ready composers, waits 1.5 seconds plus
+  readiness polling after each Enter, and fails a step after 30 seconds.
   Rejections name the blocking hold or native flag. On OMP, a stale human-draft hold clears
   when the extension reports an idle, empty composer 2 seconds after the last human keystroke.
 - **MCP server.** `src/mcp.rs` owns `a2amx mcp`, a hand-written stdio JSON-RPC server with four
@@ -625,10 +633,12 @@ See [delivery recovery](delivery.md#recovery-and-retry) for side-effect ambiguit
 | Durable messages, receipts, and visible uncertainty | Offline outgoing queues | Exactly-once model processing |
 | Remote launch, attach, switch, detach, resize | Session survival through supervisor crash | Container management and model inference |
 
-Candidates, not pinned dependencies: rmcp, crossterm, and ratatui. Already in use:
-Tokio, serde/serde_json, clap, tracing, rustix, `alacritty_terminal` (including its
-`tty` module for PTYs, so portable-pty is not used), and rusqlite with the bundled
-SQLite. The MCP server is hand-written on serde_json rather than using rmcp. A UI framework is not a terminal emulator.
+Candidates, not pinned dependencies: rmcp, crossterm, and ratatui. The gateway stack is pinned
+to `ureq 3.5.1`, `tokio-tungstenite 0.30.0`, `futures-util 0.3.34`, `rustls 0.23.46`, and
+`webpki-roots 1.0.11`. Already in use: Tokio, serde/serde_json, clap, tracing, rustix,
+`alacritty_terminal` (including its `tty` module for PTYs, so portable-pty is not used), and
+rusqlite with the bundled SQLite. The MCP server is hand-written on serde_json rather than using
+rmcp. A UI framework is not a terminal emulator.
 
 Decision: the terminal emulator is `alacritty_terminal`, kept behind a small
 interface of A2AMX's own so it can be replaced. It is maintained, tracks the modes

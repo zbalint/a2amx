@@ -56,9 +56,9 @@ entries such as `other-team/architect`; both named sessions must list each other
 that pair to the team-level visibility rule, still needs a private team, and does not expose
 the rest of either team. Changing a running session's list changes its scope and is a
 `team-mismatch`; take the team down with `a2amx team down` before the next `team up`.
-Sessions outside a private visibility boundary are omitted from
-`list_agents`/`list` and return `unknown recipient` when addressed by an agent. Team metadata
-is not OS-user or process isolation. The flag form has no team. Each `command` element is one
+Sessions outside a private visibility boundary are omitted from `list_agents` and `a2amx list --as`;
+bare `a2amx list` shows every session.
+Team metadata is not OS-user or process isolation. The flag form has no team. Each `command`
 argument, so use `["claude", "--model",
 "opus"]`, not `["claude --model opus"]`; an executable path containing a space
 is not accepted.
@@ -191,8 +191,7 @@ exits 1 if any reset failed and 0 when every running session reset or was legiti
 skipped.
 
 Resets are sequential and preserve selection order. Each reset step settles for at least
-1.5 seconds, and a step that never becomes ready can take up to the 30-second timeout, so
-a five-session team can take roughly ten to twenty seconds when all sessions are ready.
+1.5 seconds, and a step that never becomes ready can take up to the 30-second timeout.
 The command does not detect whether its caller is one of the selected agents; the state
 directory is the trust boundary. Use `--except` for the session running the command.
 
@@ -204,10 +203,11 @@ running sessions and is blank when the session is missing or conflicts. `running
 only that the name and team scope match, not that the command, cwd, role, or other settings
 are current. A running row's NOTE is the session id, or `<id> (not ready: starting)` while
 the daemon has not yet seen a harness readiness screen since the session started (for example,
-a Claude Code session stopped at a startup dialog). The check runs when the daemon lists
-sessions, so a screen that was ready only between two looks is not remembered. Generic
-sessions have no readiness check and never show the note, and a session that was ready earlier
-and later shows a dialog is not marked. The note is the only readiness signal in this table.
+a Claude Code session stopped at a startup dialog). The daemon samples each running session's
+screen once a second and latches the first ready screen, so a ready screen that lasts less than
+about a second can be missed. Generic sessions have no readiness check and never show the note,
+and a session that was ready earlier and later shows a dialog is not marked. The note is the only
+readiness signal in this table.
 It exits 0 when `team up` would proceed (including missing sessions) and 1
 when `team up` would refuse because of a conflict. A conflict note uses the same remediation
 text as `team up`; status returns that exit code directly without an `a2amx:` error line.

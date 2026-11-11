@@ -119,11 +119,11 @@ repeat it for multiple names. It requires `--confine` and rejects names that are
 closed credential list.
 
 Relative paths are resolved against the session cwd. `--confine-default-hides=false` shows the optional home
-credential locations hidden by default but never removes the mandatory hides: the state
-directory, the runtime directory, `/run/WSL` and `/mnt/wslg`. Claude and OMP harness
-configuration roots are writable and persistent by default; `harness-config` names the
-same capability explicitly. There is no build-path switch. The private `/proc` and PID
-namespace are base options, and descriptor restrictions are a daemon property.
+credential locations and `/run/dbus` visible instead of hidden, but never removes the mandatory hides: the state
+directory, the runtime directory, container sockets without a grant, `/run/WSL` and `/mnt/wslg`. Claude and
+OMP harness configuration roots are writable and persistent by default; `harness-config` names the same
+capability explicitly. There is no build-path switch. The private `/proc` and PID namespace are base options,
+and descriptor restrictions are a daemon property.
 Rootless runtime sockets under `$XDG_RUNTIME_DIR` remain hidden. These flags require
 `--confine`; path lists accept at most 64 entries and each entry is capped at 4096 bytes.
 
@@ -195,6 +195,9 @@ updates the local screen, lets prefix commands open the picker or scroll mode, a
 line clicks on their release. A complete mouse report never displays the viewer notice; an
 ignored key or paste displays it briefly. Switching back with prefix `v` sends the normal resize
 and redraw sequence. Viewer attachment does not count as owner presence.
+
+The attach status line shows a yellow `VIEW` marker when the client is in viewer mode; the overlay says
+`VIEW MODE` and `typing is off, press the prefix key then v`.
 
 The prefix key is Ctrl-B (`--prefix` or `A2AMX_PREFIX` to change it). After the prefix: `d` detach,
 `v` toggle viewer mode, `w` session picker, `[` scroll mode, `s` toggles the status and team lines,

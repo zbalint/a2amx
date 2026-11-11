@@ -15,16 +15,21 @@ on a best-effort basis; there is no response-time guarantee.
 
 ## What is in scope
 
-A2AMX runs a daemon that owns terminal sessions and delivers messages into them, so these
-areas matter most:
+A2AMX runs a daemon that owns terminal sessions, delivers messages into them, and can relay
+messages through a confined Discord gateway, so these areas matter most:
 
-- authentication on the daemon's TCP connections (session tokens and the admin token);
+- authentication on the daemon's TCP connections (session tokens, the admin token, and the
+  gateway token);
 - one session acting as another, or sending as a sender it does not hold the token for;
 - message content that forges or breaks out of the message envelope that a recipient sees;
 - delivery that destroys a human's unfinished composer draft;
-- state files (tokens, address files, database) readable by other users, or tokens
-  appearing in argv, logs, envelopes, or terminal output.
-- a2amx and its daemon refuse to run as root, under `sudo`, or as a root user in a container; there is no override because state-file permissions and agent commands assume an ordinary user.
+- state files (tokens, address files, database) readable by other users, or tokens appearing in
+  argv, logs, envelopes, or terminal output;
+- the gateway's Discord bot token and file, pairing and author checks on Discord messages, lease
+  codes, the `<state>/link/` directory exposed to the gateway sandbox, and the gateway sandbox
+  boundary ([permissions](docs/permissions.md), [remote messaging](docs/remote-messaging.md));
+- a2amx and its daemon refusing to run as root, under `sudo`, or as a root user in a container;
+  there is no override because state-file permissions and agent commands assume an ordinary user.
 
 The design and its stated limits are in [docs/architecture.md](docs/architecture.md).
 In particular, a process that holds a session token can act as that session; the

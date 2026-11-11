@@ -8,9 +8,11 @@ Confinement is a safety net for a trusted but fallible agent, not a security bou
 | --- | --- |
 | Writable | The working directory and its Git directory, a private `/tmp`, and Claude and OMP's own harness config roots read-write and persistent by default. Named grants and explicit `write` entries add the paths they name. |
 | Read-only | The rest of the filesystem; the `~/.cache` root and the tool directories under home such as `~/.cargo` are read-only, not opened, and not hidden, while credential hides inside them still apply; the working directory is writable, `target/` and `node_modules/` included, except the protected launch inputs listed next. Protected launch inputs stay read-only: `~/.a2amx`, existing `PATH` directories inside home, harness control files and directories, and this session's Git `hooks`, `config`, `config.worktree`, `core.hooksPath`, and team file. |
-| Hidden | Credential locations by default; a matching grant or an explicit `unhide` makes an allowed location visible. The state and runtime directories, desktop bus, container sockets, `/run/WSL`, and `/mnt/wslg` are hidden at launch. |
+| Hidden | Credential locations by default; a matching grant or an explicit `unhide` makes an allowed location visible. The state and runtime directories, `/run/dbus`, container sockets, `/run/WSL`, and `/mnt/wslg` are hidden at launch when default hides are enabled. |
 
-`--confine-default-hides=false` makes the optional home credential locations visible instead of hidden, while keeping mandatory hides; see [One command](#one-command). The path-selection limits are in [What confinement does not do](#what-confinement-does-not-do).
+`--confine-default-hides=false` makes the optional home credential locations and `/run/dbus`
+visible instead of hidden; the state and runtime directories, container sockets without a grant,
+`/run/WSL`, and `/mnt/wslg` stay hidden. See [One command](#one-command).
 
 Hide and write are strict by default; you open what you name.
 
@@ -292,7 +294,9 @@ When a tool reports `Read-only file system`, add the directory named in the erro
 
 - It is a safety net, not a security sandbox, container, or VM, and it does not stop a rogue agent or a crafted program; see [Philosophy](philosophy.md#1-a-safety-net-not-a-sandbox). Real isolation is the user's job.
 - Network access is not restricted.
-- Beyond the listed launch-time hides (container sockets, the runtime directory, the desktop bus) and the private `/tmp`, confinement does not isolate the agent from other processes and resources of the same user; the filesystem stays read-only except the writable paths.
+- Beyond the listed launch-time hides (container sockets, the runtime directory, `/run/WSL`,
+  `/mnt/wslg`) and the private `/tmp`, confinement does not isolate the agent from other processes
+  and resources of the same user; the filesystem stays read-only except the writable paths.
 - `a2amx` refuses to run as effective uid 0; that includes launching it with `sudo`, and applies whether confined or not. The maintainers ran `a2amx new --detach --confine -- sh -c 'sudo -n id'` on 2026-11-06; inside the confined session, `sudo` exited 1 with `no new privileges`, so it did not run as root. The probe entered no password and involved no agent.
 - Hooks, MCP server entries, and settings under the harness config root, plus project build files (`Makefile`, package scripts, `.envrc`, and hooks of other repositories), run with your rights outside the sandbox—immediately for a running sibling or on your next run. Review them like any code an agent wrote.
 - The plan refuses a working directory or Git directory inside a default hide and a harness data link that leaves its harness folder, each with the `write` line that opens it. It ignores a `.git` pointer that does not lead to a Git directory (no `HEAD` file or no `objects` directory): the session starts and the pointer is not followed. These are tested limits, not a broader confinement guarantee.
@@ -531,7 +535,7 @@ By default, the system runtime sockets are hidden, including `/run/docker.sock`,
 `/run/libvirt/libvirt-sock`, the LXD and Incus sockets, and the Snap socket. The runtime
 variables `DOCKER_HOST`, `DOCKER_CONTEXT`, `CONTAINER_HOST`, `CONTAINER_CONNECTION`,
 `CONTAINERD_ADDRESS`, `BUILDKIT_HOST`, and `LIBVIRT_DEFAULT_URI` are unset. Consequently,
-`docker ps` fails with `EACCES` on the socket.
+the Docker socket is unavailable until its grant is enabled.
 
 Grant the configured host Docker daemon explicitly:
 

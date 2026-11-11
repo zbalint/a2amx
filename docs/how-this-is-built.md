@@ -27,11 +27,11 @@ session starts empty, so the project writes the context down instead.
 
 - **All code, tests and documentation are written by AI agents.** No human writes or
   hand-edits them. The exceptions are the GitHub-generated initial commit (`.gitignore`,
-  license, a two-line README) and the OpenSSF Scorecard workflow, which the owner added
-  through GitHub from the OpenSSF template. Nearly every commit carries a `Co-Authored-By`
-  trailer naming the committing agent's model. Every commit's author is the owner's git
-  identity, because the agents commit through it, and the trailer names the model that
-  committed. The developer's model, which wrote the code, is not recorded in the commit.
+  license, a two-line README), the OpenSSF Scorecard workflow, and Dependabot update commits
+  merged by maintainers. Nearly every commit carries a `Co-Authored-By` trailer naming the
+  committing agent's model. Agents commit through the owner's git identity, with two exceptions:
+  one Scorecard-workflow commit under another author name and the Dependabot commits. The
+  developer's model, which wrote the code, is not recorded in the commit.
 - **A human sets the direction.** The owner decides what A2AMX should do, how it should work,
   what it should support, and what is released. The rules require the owner's explicit
   approval for any change to `master`; this is a project rule, not branch protection.
@@ -90,15 +90,15 @@ The choices follow two assumptions of the owner's, which the project has not mea
 3. **Independent check.** The tester inspects the diff against the specification and runs
    fresh checks. The architect then reads the real diff, runs the checks again, and only then
    commits.
-4. **Checks.** Nothing blocks a push to `develop` by itself, and the project has no pull-request
-   flow. The architect runs `scripts/prepush-sonar.sh` by hand before pushing: the full test
-   suite under coverage and a SonarQube scan that blocks on a failing quality gate. After the
-   push, CI runs `cargo fmt`, `cargo clippy -D warnings` and `cargo test` on every push, a
-   build on the declared minimum Rust version, secret, dependency and workflow checks, and a
-   SonarQube analysis for `develop` and `master`. Since 2026-10-16 a failing SonarQube quality
-   gate fails the CI run (the scan waits for the gate result). CI runs after the push, so it
-   reports a problem; it does not stop a push. [OpenSSF Scorecard](https://securityscorecards.dev)
-   tracks the repository's supply-chain hygiene.
+4. **Checks.** Nothing blocks a push to `develop` by itself. The project's own pull-request flow
+   is limited to Dependabot update pull requests, which maintainers merge. The architect runs
+   `scripts/prepush-sonar.sh` by hand before pushing: the full test suite under coverage and a
+   SonarQube scan that blocks on a failing quality gate. After the push, CI runs `cargo fmt`,
+   `cargo clippy -D warnings` and `cargo test` on every push, a build on the declared minimum Rust
+   version, secret, dependency and workflow checks, and the SonarQube scan only on `master`,
+   `develop`, and pull requests from the same repository. A failing SonarQube quality gate fails
+   those CI runs. CI runs after the push, so it reports a problem; it does not stop a push.
+   [OpenSSF Scorecard](https://securityscorecards.dev) tracks the repository's supply-chain hygiene.
 5. **Record.** Specifications, amendments, backlog items and commits stay in the repository.
    The reviews themselves (the consultant's and the tester's reports) are in the agents'
    message logs and are not published.

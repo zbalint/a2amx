@@ -160,11 +160,13 @@ the submitted text to the supervisor and obeys the verdict:
   `undeliverable` with detail `unmatchable_submission`; do not retry it.
   Each rejection still counts toward the session's corrupted-submission count, so
   repeated bad messages can still reach the three-in-a-row session backstop.
-  The supervisor keeps the full submitted text, so it restores the human's draft to
-  the composer later, pasted without Enter, once the session is idle.
+  The PTY channel keeps the full submitted text and restores the human's draft to the composer
+  later, pasted without Enter, once the session is idle, under a `human_draft` hold. Channel-enabled
+  Claude uses the native channel instead: this restore does not run and no `human_draft` hold shows;
+  see [backlog I25](backlog.md#known-issues).
 
-The model never sees the corrupted prompt, and no human text is lost. What each hook
-can do, from the harness documentation or source at the time of writing:
+The model never sees the corrupted prompt, and the PTY channel does not lose the human's own text.
+What each hook can do, from the harness documentation or source at the time of writing:
 
 | Harness | Rewrite the prompt | Block the prompt |
 | --- | --- | --- |
@@ -332,12 +334,12 @@ hook exists (Claude Code), a hook-observed human submit clears it too. Detach do
 clear it.
 
 **System exit events.** A watcher declared with `--watch NAME` or the team-file
-`watch` field receives one daemon-sent message when that named peer exits naturally.
-The synthetic sender is `daemon` / `a2amx-daemon@<host>`, and the message enters the
-same queue, delivery, hold, and receipt gates as any other message. Its envelope uses
-the system notification line and cannot be replied to. Queue-full events are dropped
-rather than retried. Sessions ended by daemon control do not generate an event, and
-shutdown aborts observers before killing children.
+`watch` field receives one daemon-sent message when that named peer exits naturally, if the watcher
+can see that peer under the messaging visibility rules. The synthetic sender is `daemon` /
+`a2amx-daemon@<host>`, and the message enters the same queue, delivery, hold, and receipt gates as
+any other message. Its envelope uses the system notification line and cannot be replied to.
+Queue-full events are dropped rather than retried. Sessions ended by daemon control do not generate
+an event, and shutdown aborts observers before killing children.
 
 **Heartbeat digests.** A configured `--heartbeat` or team-file `heartbeat` is a
 daemon-sent message from the same synthetic sender after the receiving session has
@@ -406,7 +408,7 @@ stale or foreign id never blocks typing.
 | --- | --- | --- |
 | Exactly one known envelope | allow | Receipt recorded; the `human_draft` and `unsubmitted_envelope` holds clear; the corrupted-submission count resets |
 | No known envelope | allow | The composer was emptied by a human submit: the `human_draft` and `unsubmitted_envelope` holds clear |
-| A known envelope plus other text, or characters interleaved into it | block | Attempt recorded as `rejected`; the message goes back to `pending` for a new attempt until its second rejection, then becomes `undeliverable` with detail `unmatchable_submission`; the human's own text is restored as a paste without Enter once the session is idle, under a `human_draft` hold; interleaved text is not restored and stays in the transcript |
+| A known envelope plus other text, or characters interleaved into it | block | Attempt recorded as `rejected`; the message goes back to `pending` for a new attempt until its second rejection, then becomes `undeliverable` with detail `unmatchable_submission`; on the PTY channel, the human's own text is restored as a paste without Enter once the session is idle, under a `human_draft` hold; native channel delivery does not run this restore and does not show that hold; interleaved text is not restored and stays in the transcript. |
 
 Three corrupted submissions in a row on one session stop the cycle with the
 `corrupted_submissions` hold, cleared only by an explicit release. A block shows

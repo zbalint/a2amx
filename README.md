@@ -12,7 +12,7 @@
 
 A2AMX hosts Claude Code, OMP, and Codex sessions under PTYs and lets the agents message one another through native harness channels.
 
-**Status:** alpha. The Linux single-machine daemon, terminal sessions, durable messaging, team management, and three native delivery profiles work today; cross-host support and agent-initiated launch are not built.
+**Status:** alpha. The Linux single-machine daemon, terminal sessions, durable messaging, team management, three native delivery profiles, and opt-in remote messaging through Discord work today for Claude Code and OMP in confined sessions; Codex cannot use remote messaging. Viewer mode and owner presence keep remote traffic away while the owner is at the computer. Cross-host support and agent-initiated launch are not built.
 
 > **Not the A2A protocol.** A2AMX is independent of the [Agent2Agent (A2A) protocol](https://github.com/a2aproject/A2A). It is a local terminal multiplexer and message exchange for agent sessions.
 
@@ -62,7 +62,7 @@ The planner agent calls `send_message` to `reviewer`; the reviewer receives it a
 - **Operator controls:** attach, switch, scroll, inspect, reset, and stop sessions from the CLI.
 - **Confinement:** opt-in protection for trusted sessions that keeps accidental writes away from protected paths.
 - **Teams and status:** group sessions with visibility rules, roles, watches, heartbeats, activity transition notices, and quota status.
-- **Remote messaging:** an agent on a long task can message you on Discord, and you can write back; off by default, confined sessions only.
+- **Remote messaging:** an agent on a long task can message you on Discord, and you can write back; off by default, confined sessions only, for Claude Code and OMP. Viewer mode and owner presence keep remote traffic away while you are at the computer.
 
 ## Quick start
 
@@ -91,7 +91,7 @@ Then start the two sessions from [the example above](#example). See [Installatio
 
 ## How this project is built
 
-All code, tests and documentation are written by AI agents; no human writes or hand-edits them (apart from a GitHub-generated initial commit and the OpenSSF Scorecard workflow template). Specifications, implementation, testing and review are done by separate agent roles on different models. Every push is checked in CI by `cargo test`, `clippy` and `rustfmt`, and CI fails when the SonarQube quality gate fails; the architect also runs the same gate locally before pushing, because CI runs after the push and does not stop it. A human sets the project's direction and decides what is released, but does not review every change line by line, and there has been no independent security audit. See [How A2AMX is built](docs/how-this-is-built.md).
+All code, tests and documentation are written by AI agents; no human writes or hand-edits them (apart from a GitHub-generated initial commit, the OpenSSF Scorecard workflow template, and Dependabot update commits merged by maintainers). Specifications, implementation, testing and review are done by separate agent roles on different models. Every push is checked in CI by `cargo test`, `clippy` and `rustfmt`; the SonarQube scan runs on `master`, `develop`, and pull requests from the same repository, and a failing quality gate fails those CI runs. The architect also runs the same gate locally before pushing, because CI runs after the push and does not stop it. A human sets the project's direction and decides what is released, but does not review every change line by line, and there has been no independent security audit. See [How A2AMX is built](docs/how-this-is-built.md).
 
 ## Documentation
 - [Your first team](docs/getting-started.md) — install, create a team, suggest confinement grants, preview, inspect, message, and stop it.

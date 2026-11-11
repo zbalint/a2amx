@@ -26,4 +26,9 @@ How-to for operators giving agents peer-message instructions and avoiding creden
 - A sender's `accepted` means the daemon took the message, not that it was delivered.
   Check `message_status` when the reply matters.
 
+To message the paired human, use the `human:owner` address. A remote-enabled caller gets a
+top-level `owner` field in `list_agents`, showing whether the owner is present or away.
+`owner_present` refuses that message while the owner is at the computer; see
+[Remote messaging](remote-messaging.md).
+
 For harness setup, see [Harnesses](harnesses.md).

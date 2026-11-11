@@ -126,8 +126,9 @@ a2amx gateway up --pair
 creates the `a2amx` control category and `control` channel (or the configured names), prints a
 pairing code, and waits for that code to appear in the control channel. Post the code from the
 Discord account that should be paired. The terminal then asks whether to bind that Discord
-account; answer `y` or `yes`. A decline ends with `pairing not confirmed`. The code expires after
-10 minutes, and a successful pairing is saved in `<state>/gateway/pairing.json` with mode `0600`.
+account; answer `y` or `yes`. A decline ends with `pairing not confirmed`, followed by
+`pairing did not complete; the gateway was not started`. The code expires after 10 minutes,
+and a successful pairing is saved in `<state>/gateway/pairing.json` with owner-only permissions.
 
 If a pairing already exists, `--pair` first warns which Discord account and server are currently
 paired, then asks `replace Discord account <old-id> with <new-id>? [y/N]`. Confirming writes the
@@ -311,7 +312,7 @@ yet tested with A2AMX.
 | `that code is not valid` | The lease code is wrong, expired, already used, or all pending codes were cleared after five wrong attempts. | Run `a2amx team up` at the computer and post its new code. |
 | `send the code that a2amx team up printed` | The control-channel text is not a 12-character lowercase hexadecimal lease code. | Copy the exact code printed by `a2amx team up`. |
 | `a2amx is not reachable right now` | The gateway was connected, but the daemon is currently unreachable. | Check the daemon and `<state>/link/`; the relay retries through `link/` every `reconnect_ms`. |
-| `cannot resolve /etc/resolv.conf; the gateway needs DNS` | The resolver symlink is dangling, unreadable, or points to a non-regular file. | Repair `/etc/resolv.conf` or its target, then run `gateway up` again. |
+| `cannot resolve /etc/resolv.conf; the gateway needs DNS` | The resolver path has another stat error, or it is a symlink whose target cannot be resolved or stat-ed or is not a regular file. A missing or non-symlink path starts without a resolver bind; targets under `/etc` or `/usr` need no extra bind. | Repair the path or target, then run `gateway up` again. |
 | `secure file permissions are too broad` | A token, config, or pairing file has group or other permission bits. | Make the file a regular, owner-only `0600` file; do not replace it with a symlink. |
 | `pairing not confirmed` | The interactive pairing prompt was declined or did not receive `y`/`yes`. | Run `a2amx gateway up --pair` in a terminal and confirm the paired account. |
 | `pairing timed out` | No matching pairing code arrived within 10 minutes. | Run `gateway up --pair` again and post its newly printed code promptly. |
@@ -324,17 +325,19 @@ yet tested with A2AMX.
 
 ## Files
 
-The daemon state directory and its files are owner-only. The gateway token and pairing writes use
-mode `0600`; the daemon's state files and the dedup file use the same mode.
+The gateway reads `discord.token`, `config.toml`, and `pairing.json` only when each is a regular
+file, not a symlink, owned by the current user, with no group or other permission bits, and no
+larger than 64 KiB. This `read_secure` check applies to all three files. The gateway token and
+pairing writes use mode `0600`; the daemon's state files and dedup file use the same mode.
 
 | Path | Owner and mode | Purpose |
 | --- | --- | --- |
 | `<state>/gateway.lock` | Current user, `0600` | Advisory lock for one gateway per state directory; outside the sandbox bind |
 | `<state>/gateway.pid` | Current user, `0600` | Launcher-owned pid target for `gateway stop`; outside the sandbox bind |
 | `<state>/gateway/gateway.log` | Current user, `0600` | Background startup and relay log; opened hardened by the launcher |
-| `<state>/gateway/discord.token` | Current user, `0600` | Discord bot token entered with `gateway token` |
-| `<state>/gateway/config.toml` | Current user, `0600` | Gateway configuration |
-| `<state>/gateway/pairing.json` | Current user, `0600` | Paired Discord server/user IDs |
+| `<state>/gateway/discord.token` | Checked by `read_secure` above | Discord bot token entered with `gateway token` |
+| `<state>/gateway/config.toml` | Checked by `read_secure` above | Gateway configuration |
+| `<state>/gateway/pairing.json` | Checked by `read_secure` above | Paired Discord server/user IDs |
 | `<state>/gateway/seen.json` | Current user, `0600` | Last handled Discord message ID per channel for deduplication |
 | `<state>/link/addr` | Daemon user, `0600` | Daemon address exposed to the gateway |
 | `<state>/link/gateway.token` | Daemon user, `0600` | Gateway-authentication token exposed to the gateway |

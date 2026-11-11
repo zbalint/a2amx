@@ -5,12 +5,13 @@ builds only a Linux x86_64 binary archive; it does not publish crates.io package
 platforms.
 
 ## Cut a release
-1. Approve moving `master` for the release.
+1. The owner approves moving `master` for the release; this is a project convention, not a
+   check enforced by `release.yml`.
 2. Update `Cargo.toml` and add the matching changelog section, then commit those release
    changes. A prerelease tag uses the same version and changelog section as the final release,
    with only the `-rc.N` suffix on the tag.
-3. Push `master`, then wait for CI and the SonarQube quality gate to pass for the release
-   commit.
+3. Push `master`. Wait for CI and the SonarQube quality gate if you want their report;
+   `release.yml` does not enforce either before accepting the tag.
 4. Create and push an annotated tag:
 
    ```sh
@@ -22,7 +23,8 @@ platforms.
    ancestors of `origin/master`. A failed run cannot be repaired by overwriting the tag.
 
 A trial tag such as `v0.1.1-rc.1` publishes a prerelease and is the recommended first test of
-this workflow. Creating a tag and moving `master` require the owner's approval.
+this workflow. Creating a tag and moving `master` require the owner's approval. CI runs after the
+push, so it reports a problem; it does not stop a push.
 
 ## What the workflow does
 

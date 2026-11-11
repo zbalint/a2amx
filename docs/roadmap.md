@@ -18,6 +18,11 @@ through a channel, OMP through an extension, and Codex through a private app-ser
 The Claude prompt-submit hook records receipts and blocks terminal submissions that
 mix a peer envelope with a human draft. Native channels provide their own receipts.
 Names, quota reporting, the attach status line, and team management are implemented.
+Remote messaging lets an agent message its paired human and lets the human answer through
+a Discord gateway. It is opt-in per agent and available to confined Claude Code and OMP
+sessions only; the presence lease, background `gateway up|stop|status` commands, owner
+presence, viewer mode, and the remote cell of the attach status line are implemented.
+See [Remote messaging](remote-messaging.md).
 
 Sessions may opt into bubblewrap confinement with named grants for the tools and
 credentials they may use; global auto mode asks before opening a grant the user has
@@ -30,42 +35,36 @@ See [Architecture](architecture.md#implemented-messaging-core) and
 
 ## Milestones
 
-Milestones are versions, in the order they are planned. They carry no dates. Each item
-gets its own spec before it is built, and an item can still move between milestones or
-be dropped. The IDs refer to rows in the [backlog](backlog.md). While the major version
-is 0, a milestone may change the public interface; the [changelog](../CHANGELOG.md) says
-when one does.
+Milestones are versions. The IDs refer to rows in the [backlog](backlog.md). While the major
+version is 0, a milestone may change the public interface; the [changelog](../CHANGELOG.md)
+says when one does.
 
-### 0.2.0: Reliability and observability
+### 0.2.0: Reliability and observability — Released
 
-Make what exists on one machine dependable and explainable before adding more.
+The release established isolated environment-sensitive tests (I13) and diagnostic output for
+the remaining flaky PTY tests (I7, I14, I18; spec 3cq); the flakes themselves are not fixed yet.
 
-- A stable test suite: tests isolated from the environment of the session that runs them (I13),
-  and a failing flaky PTY test (I7, I14, I18) that prints the screen, the raw bytes and the
-  daemon's view, so its cause can be found (spec 3cq). The flakes themselves are not fixed yet.
+### 0.3.0: Remote human messaging — Released
 
-### 0.3.0: Remote human messaging
+Remote messaging through Discord is built and tested live by the maintainers: pairing, the
+lease code, messages in both directions, the background gateway and the status line. A
+well-formed wrong lease code, an unpaired Discord account, and a daemon outage while the gateway
+runs have not been tested live.
 
-Let an agent on a long task reach its operator while the operator is away from the
-computer, and let the operator answer, or write first, from a phone. The first
-transport is Discord; Telegram may follow. The daemon side, the gateway and the guide are
-built; the live test with a real Discord server is pending.
-
-- A human is a messaging participant with its own message envelope, distinct from
-  agent messages and daemon notifications. An agent addresses the paired human through
-  the existing send tool, and the human reaches chosen agents from the phone.
-- It is off by default. The operator enables it for each agent in the team file or with
-  a command-line option, and only sessions running under confinement can use it.
-- The operator pairs a phone at the computer, and a time-limited presence lease, at
-  most a day, starts when the operator brings a team up. The lease ends when the team
-  goes down or the daemon stops. A message that arrives without a valid lease is
-  rejected.
-- A message from the phone carries less authority than input typed at the computer.
+- A human is a messaging participant with its own message envelope, distinct from agent messages
+  and daemon notifications. An agent addresses the paired human through the existing send tool,
+  and the human reaches chosen agents from the phone.
+- It is off by default. The operator enables it for each agent in the team file or with a
+  command-line option, and only sessions running under confinement can use it.
+- The operator pairs a phone at the computer; `team up` prints a single-use code, and the gateway
+  hands it back to start the lease. The lease lasts at most a day and ends when the team goes
+  down or the daemon stops. A message that arrives without a valid lease is rejected.
+- A message from the phone carries less authority than input typed at the computer. Owner
+  presence and viewer mode keep remote messages away while the owner is at the computer.
 - Remote messaging has its own rate limits, enforced by the daemon.
-- It is a messaging feature only: no terminal output, remote control, attachments or
-  direct messages with agents. Discord text is not end-to-end encrypted, and the
-  documentation says so. The core does not depend on Discord, so another transport
-  can be added later.
+- It is a messaging feature only: no terminal output, remote control, attachments or direct
+  messages with agents. Discord text is not end-to-end encrypted, and the documentation says so.
+  The core does not depend on Discord, so another transport can be added later.
 
 ### 0.4.0: Multiple hosts, messaging and management
 
@@ -110,18 +109,19 @@ Not scheduled; it has no version yet (owner decision, 2026-11-08).
 
 - **Permissions.** Today several separate rules decide who may do what, among them
   admin and session tokens, private-team visibility, per-session `control_from` for
-  resets, `watch` lists, and the peer-authorization line in the session prompt. One
-  design will cover who may see, message, reset, move, manage, and launch which
-  sessions, on one host and across hosts. It is written as an architecture decision before 0.3.0 starts, and each
-  milestone builds the part it needs (F21).
+  resets, `watch` lists, and the peer-authorization line in the session prompt. The first
+  part of the design is in [Permissions](permissions.md): it is a draft, not locked, and
+  0.3.0 was built on its decisions D1 to D10. The remaining design will cover who may see,
+  message, reset, move, manage, and launch which sessions, on one host and across hosts (F21).
 
 ## Engineering track
 
 Work on quality and security that changes no user-visible behavior. It has no version
 and is picked up between milestone items, except where a condition is given.
 
-- A weekly non-blocking broad Semgrep scan (F16, spec 3ct). The blocking gate with the
-  repository's own rules is done (F15, spec 3aq).
+- A weekly non-blocking broad Semgrep scan is done (F16, spec 3ct); the workflow runs on a
+  schedule and by manual dispatch. The blocking gate with the repository's own rules is done
+  (F15, spec 3aq).
 - Fuzzing of wire framing and message parsing with `cargo-fuzz`, after 0.2.0 (owner decision,
   2026-11-05); the property tests for the pure modules already exist (F10).
 - A check of what a malicious dependency's build script could reach in CI, such as the
