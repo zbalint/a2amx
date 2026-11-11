@@ -475,6 +475,8 @@ pub struct SessionSummary {
     /// `None` while running, the exit code once the child exited.
     pub exit_code: Option<i32>,
     pub attached: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub viewer: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -544,6 +546,8 @@ pub struct AgentSummary {
     pub address: String,
     pub state: String,
     pub attached: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub viewer: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     #[serde(default, skip_serializing_if = "is_default")]

@@ -69,3 +69,21 @@ Changing `team reset`'s skip rule for viewers; a viewer marker in the status lin
 ## Amendment 1
 
 Section 5 item 5, the wrapped-update mutant, said the slot update wrapped in `if guard.viewer != viewer` is equivalent. It is not: the guard is assigned just before, so the wrapped update never runs on a real transition and test 1 fails. Item 5 now names two mutants: the slot update alone wrapped (killed by test 1) and the whole `Mode` arm body wrapped (equivalent). Found by the tester and the developer; raised by the tester as BLOCKED, confirmed by the architect against `src/daemon.rs`.
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (one pre-lock review) Claude, model not reported; developer openai-codex/gpt-5.6-luna (planning and working, advisor slot not exposed); tester OMP, model reported as GLM 4.6 (its report and the developer's differ on the shared slot model, so treat the tester's model as unconfirmed).
+
+BLOCKED/amend cycles: 1 (withdrawn by the tester, amended anyway). Fix rounds after the first implementation: 0.
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | consultant | an attach to an exited session returns before the frame loop, so a `Mode` frame can never reach it | claim and test scenario fixed; the test uses a running `cat` session |
+| draft review | consultant | the picker shares `session_value_rows`, so it shows `viewer` too; `tests/mcp.rs:225` asserts the `list_agents` description literal; the struct-literal list was incomplete | section 2.5, 2.6, 2.7 and the scope list |
+| implementation | developer | section 5 item 5 called "slot update wrapped in `if guard.viewer != viewer`" equivalent; it is killed by test 1, because the guard is assigned just before | reported in m_6529; amendment 1 (90034ac) names two mutants, one killed and one equivalent |
+| tester pass | tester | the same wrong equivalence claim, raised as BLOCKED and then withdrawn; also a note that the polling loop uses `tokio::time::sleep` | the amendment; the loop follows the existing loops the spec names, so no change |
+| architect review | architect | none found in the diff; own mutants (session summary reports a viewer for any attach; the default-skip removed from the `AgentSummary` field) were killed by the presence test and two MCP tests | none |
+
+Surviving mutants, accepted: removing the generation filter in the `Mode` arm, and setting the slot flag while the presence lock is held. Neither is observable through a public seam (after a `--force` takeover the old connection ends before it can send `Mode`); the spec calls the generation check defensive.
+
+Architect checks on the final snapshot: `git diff --check`, fmt, clippy `-D warnings`, `cargo deny check`, `scripts/prepush-fast.sh`, full `cargo test --no-fail-fast` (52 suites passed; only the two confined-HOME failures of backlog I24, `tests/gateway_up.rs::sandbox_hides_state_host_and_limits_writes_to_gateway` and `tests/human_inbound.rs::queued_human_message_rechecks_recipient_eligibility_before_delivery`; CI runs unconfined and is the judge). Two `attach_cli` tests (`team_line...` and `status_toggle_reattaches_to_resize_the_session`) failed once each under parallel load in the developer's and the tester's runs and passed alone and in later full runs; they did not fail in the architect's run.

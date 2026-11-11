@@ -2992,6 +2992,7 @@ async fn list_sessions(runtime: &Runtime) -> anyhow::Result<Response> {
                 cols: state.size.cols,
                 rows: state.size.rows,
                 attached: state.attachment.is_some(),
+                viewer: state.attachment.as_ref().is_some_and(|slot| slot.viewer),
                 exit_code: state.exit_code,
                 name: session.name().map(str::to_owned),
                 team: session.team().cloned(),
@@ -3060,6 +3061,7 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
         })
         .map(|session| {
             let activity = session_activity(session);
+            let slot = session.attachment_viewer();
             AgentSummary {
                 address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
                 state: if session.exit_code().is_some() {
@@ -3068,7 +3070,8 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
                     "running"
                 }
                 .into(),
-                attached: session.attached(),
+                attached: slot.is_some(),
+                viewer: slot == Some(true),
                 team: session.team().map(|scope| scope.name.clone()),
                 you: viewer
                     .as_ref()
@@ -3666,6 +3669,7 @@ async fn attach(
                     generation,
                     takeover,
                     closed: completion,
+                    viewer,
                 });
                 state.pending_attachment = None;
                 (bytes, state.exit_code)
@@ -3783,6 +3787,14 @@ async fn attach(
                                 .unwrap_or_else(PoisonError::into_inner)
                                 .mode_changed(Instant::now(), viewer);
                             guard.viewer = viewer;
+                        }
+                        let mut state = session.lock();
+                        if let Some(slot) = state
+                            .attachment
+                            .as_mut()
+                            .filter(|slot| slot.generation == guard.generation)
+                        {
+                            slot.viewer = viewer;
                         }
                     },
                     frame => {

@@ -205,6 +205,7 @@ pub(crate) struct AttachmentSlot {
     pub generation: u64,
     pub takeover: watch::Sender<bool>,
     pub closed: watch::Receiver<bool>,
+    pub viewer: bool,
 }
 
 pub fn observe_activity(
@@ -1182,6 +1183,10 @@ impl Session {
 
     pub fn attached(&self) -> bool {
         self.lock().attachment.is_some()
+    }
+
+    pub fn attachment_viewer(&self) -> Option<bool> {
+        self.lock().attachment.as_ref().map(|slot| slot.viewer)
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, State> {

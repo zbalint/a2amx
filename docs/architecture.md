@@ -142,6 +142,7 @@ Each `list_agents()` entry includes `address`, `state`, `activity`, `attached`, 
 `team` (the team name only), `you` for the caller's own entry, and optional spawn directory
 `cwd`; `cwd` is not the process's live current directory. Sessions outside the caller's
 private-team visibility are not listed.
+`viewer` is present only when true and only with `attached`; it means the attached client is in read-only viewer mode and does not indicate that the owner is at the keyboard.
 
 The directory returns authorized recipients and their availability. A successful
 send returns a durable message identifier and acceptance status, not a promise of

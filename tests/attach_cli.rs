@@ -90,6 +90,7 @@ fn fake_sessions(team: &TeamScope, include_team: bool) -> Vec<SessionSummary> {
         rows: 24,
         exit_code: None,
         attached: false,
+        viewer: false,
         name: Some(name.into()),
         team: include_team.then(|| team.clone()),
         address: address.into(),
@@ -1226,6 +1227,74 @@ async fn claude_new_wires_mcp_and_optional_peer_authorization() -> anyhow::Resul
             first_args[7],
         ]
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_attached_cell_shows_viewer_and_interactive_modes() -> anyhow::Result<()> {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await?;
+    let id = match admin
+        .request(Request::NewSession {
+            argv: vec!["cat".into()],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: Vec::new(),
+            reset: Vec::new(),
+            control_from: Vec::new(),
+            watch: Vec::new(),
+            activity: None,
+            heartbeat: None,
+            name: None,
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Hold),
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await?
+    {
+        a2amx::wire::Response::Created { session } => session,
+        response => anyhow::bail!("session creation failed: {response:?}"),
+    };
+
+    let viewer = Client::connect(dir.path())
+        .await?
+        .attach_viewer(&id, false, 80, 20, 0)
+        .await?;
+    let listed = run_binary(dir.path(), &["list", "--details"], &[])?;
+    anyhow::ensure!(listed.status.success(), "list failed: {:?}", listed);
+    let listing = String::from_utf8(listed.stdout)?;
+    let header = listing
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some("ID"))
+        .context("list header missing")?;
+    let attached = header
+        .split_whitespace()
+        .position(|column| column == "ATTACHED")
+        .context("ATTACHED header missing")?;
+    assert_eq!(common::list_cells(&listing, &id)[attached], "viewer");
+    drop(viewer);
+
+    let interactive = Client::connect(dir.path())
+        .await?
+        .attach(&id, false, 80, 20)
+        .await?;
+    let listed = run_binary(dir.path(), &["list", "--details"], &[])?;
+    anyhow::ensure!(listed.status.success(), "list failed: {:?}", listed);
+    let listing = String::from_utf8(listed.stdout)?;
+    let header = listing
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some("ID"))
+        .context("list header missing")?;
+    let attached = header
+        .split_whitespace()
+        .position(|column| column == "ATTACHED")
+        .context("ATTACHED header missing")?;
+    assert_eq!(common::list_cells(&listing, &id)[attached], "yes");
+    drop(interactive);
+    daemon.shutdown().await?;
     Ok(())
 }
 

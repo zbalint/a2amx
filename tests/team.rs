@@ -459,6 +459,7 @@ fn summary(name: &str, id: &str, exit_code: Option<i32>) -> SessionSummary {
         cols: 80,
         rows: 24,
         attached: false,
+        viewer: false,
         exit_code,
         pending: 0,
         address: String::new(),

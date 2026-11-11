@@ -222,7 +222,7 @@ async fn mcp_initialize_tools_and_message_calls() {
         json!([
             {
                 "name": "list_agents",
-                "description": "List the agent sessions you can message. Sessions outside the caller's visibility are not listed. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages. Each entry's \"team\" is its team name when it has one, and \"you\" marks the caller. \"quota\" gives the percent left in each window (\"five_hour_left\", \"weekly_left\"; 100 means all of it is left, 0 means used up); \"limit_reached\" means the harness reported a usage limit. A remote-enabled session also gets \"owner\", which is \"present\" or \"away\".",
+                "description": "List the agent sessions you can message. Sessions outside the caller's visibility are not listed. \"attached\" means a human client is attached to the session; it does not mean the session is reachable, and a detached session still receives messages. \"viewer\" is true when that client is in read-only viewer mode (it holds the session but does not type, so it does not mean the owner is at the keyboard; the \"owner\" field is the presence signal for remote-enabled sessions). Each entry's \"team\" is its team name when it has one, and \"you\" marks the caller. \"quota\" gives the percent left in each window (\"five_hour_left\", \"weekly_left\"; 100 means all of it is left, 0 means used up); \"limit_reached\" means the harness reported a usage limit. A remote-enabled session also gets \"owner\", which is \"present\" or \"away\".",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},

@@ -10,7 +10,7 @@ use a2amx::messaging::{self, Limits, RemoteMode, code};
 use a2amx::wire::{ClientFrame, Request, Response, ServerFrame};
 use common::{
     create_confined_with_token, gateway, issue_and_redeem, new_session_request,
-    start_confined_daemon_with_limits, team_scope,
+    start_confined_daemon_with_limits, start_daemon, team_scope,
 };
 use std::time::{Duration, Instant};
 
@@ -379,6 +379,83 @@ async fn viewer_attach_does_not_resize_or_accept_input_until_mode_changes() {
     drop(viewer);
     daemon.shutdown().await.unwrap();
 }
+#[tokio::test]
+async fn viewer_attach_is_marked_in_session_and_agent_lists() {
+    let (dir, daemon) = start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = match admin
+        .request(new_session_request(None, &["cat"]))
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("session creation failed: {response:?}"),
+    };
+    let mut viewer = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_viewer(&id, false, 80, 20, 0)
+        .await
+        .unwrap();
+    receive_data(&mut viewer).await;
+
+    async fn flags(admin: &mut Client, id: &str) -> ((bool, bool), (bool, bool)) {
+        let session = match admin.request(Request::List).await.unwrap() {
+            Response::Sessions { sessions } => sessions
+                .into_iter()
+                .find(|session| session.id == id)
+                .unwrap(),
+            response => panic!("list failed: {response:?}"),
+        };
+        let agent = match admin.request(Request::ListAgents).await.unwrap() {
+            Response::Agents { mut agents, .. } => agents.pop().unwrap(),
+            response => panic!("list_agents failed: {response:?}"),
+        };
+        let session = serde_json::to_value(session).unwrap();
+        let agent = serde_json::to_value(agent).unwrap();
+        (
+            (
+                session["attached"].as_bool().unwrap(),
+                session["viewer"].as_bool().unwrap_or(false),
+            ),
+            (
+                agent["attached"].as_bool().unwrap(),
+                agent["viewer"].as_bool().unwrap_or(false),
+            ),
+        )
+    }
+
+    assert_eq!(flags(&mut admin, &id).await, ((true, true), (true, true)));
+    viewer
+        .send(ClientFrame::Mode { viewer: false })
+        .await
+        .unwrap();
+    viewer.send(ClientFrame::Redraw).await.unwrap();
+    receive_data(&mut viewer).await;
+    let false_flags = flags(&mut admin, &id).await;
+    assert_eq!(false_flags, ((true, false), (true, false)));
+
+    viewer
+        .send(ClientFrame::Mode { viewer: true })
+        .await
+        .unwrap();
+    viewer.send(ClientFrame::Redraw).await.unwrap();
+    receive_data(&mut viewer).await;
+    assert_eq!(flags(&mut admin, &id).await, ((true, true), (true, true)));
+
+    drop(viewer);
+    let mut detached = false;
+    for _ in 0..100 {
+        if flags(&mut admin, &id).await == ((false, false), (false, false)) {
+            detached = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(detached, "attachment slot did not clear");
+    daemon.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn force_takeover_replaces_presence_without_double_counting() {
     let limits = Limits {

@@ -461,6 +461,7 @@ fn response_and_session_summary_shapes_remain_unchanged() {
             rows: 24,
             exit_code: None,
             attached: false,
+            viewer: false,
             name: None,
             address: String::new(),
             pending: 0,
@@ -495,6 +496,7 @@ fn session_summary_durations_round_trip_when_present() {
             rows: 24,
             exit_code: None,
             attached: false,
+            viewer: false,
             name: None,
             address: String::new(),
             pending: 0,
@@ -524,6 +526,7 @@ fn session_summary_starting_is_optional_and_round_trips() {
         rows: 24,
         exit_code: None,
         attached: false,
+        viewer: false,
         name: None,
         address: String::new(),
         pending: 0,
@@ -560,6 +563,76 @@ fn session_summary_starting_is_optional_and_round_trips() {
     }))
     .unwrap();
     assert!(!old.starting);
+}
+
+#[test]
+fn viewer_summary_fields_round_trip_and_default_for_old_clients() {
+    let session = SessionSummary {
+        id: "s-viewer".into(),
+        argv: vec!["cat".into()],
+        cols: 80,
+        rows: 24,
+        exit_code: None,
+        attached: true,
+        viewer: true,
+        name: None,
+        address: String::new(),
+        pending: 0,
+        held: false,
+        hold_reason: None,
+        quota: None,
+        harness: Default::default(),
+        confine: None,
+        team: None,
+        cwd: None,
+        activity: None,
+        uptime_secs: None,
+        activity_secs: None,
+        starting: false,
+    };
+    let encoded = serde_json::to_value(&session).unwrap();
+    assert_eq!(encoded["viewer"], true);
+    assert_eq!(
+        serde_json::from_value::<SessionSummary>(encoded).unwrap(),
+        session
+    );
+    let old_session: SessionSummary = serde_json::from_value(serde_json::json!({
+        "id": "s-old",
+        "argv": ["cat"],
+        "cols": 80,
+        "rows": 24,
+        "exit_code": null,
+        "attached": true,
+    }))
+    .unwrap();
+    assert!(!old_session.viewer);
+
+    let agent = AgentSummary {
+        address: "agent-viewer@host-a".into(),
+        state: "running".into(),
+        attached: true,
+        viewer: true,
+        team: None,
+        you: false,
+        quota: None,
+        harness: Default::default(),
+        cwd: None,
+        activity: None,
+        confine: None,
+    };
+    let encoded = serde_json::to_value(&agent).unwrap();
+    assert_eq!(encoded["viewer"], true);
+    assert_eq!(
+        serde_json::from_value::<AgentSummary>(encoded).unwrap(),
+        agent
+    );
+    let old_agent: AgentSummary = serde_json::from_value(serde_json::json!({
+        "address": "agent-old@host-a",
+        "state": "running",
+        "attached": true,
+    }))
+    .unwrap();
+    assert!(!old_agent.viewer);
 }
 
 #[test]
@@ -790,6 +863,7 @@ fn messaging_control_variants_round_trip() {
                 address: "agent-plan@host-a".into(),
                 state: "running".into(),
                 attached: false,
+                viewer: false,
                 team: None,
                 you: false,
                 quota: None,
@@ -828,6 +902,7 @@ fn messaging_control_variants_round_trip() {
             address: "agent-omp@host-a".into(),
             state: "running".into(),
             attached: false,
+            viewer: false,
             team: None,
             you: false,
             quota: None,
@@ -932,6 +1007,7 @@ fn additive_visibility_fields_round_trip() {
             rows: 40,
             exit_code: None,
             attached: false,
+            viewer: false,
             name: Some("agent-review".into()),
             address: "agent-review@host-a".into(),
             pending: 1,

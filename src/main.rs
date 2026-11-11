@@ -3414,7 +3414,9 @@ fn session_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 10]> {
                     None => "running".to_owned(),
                 },
                 session.activity.map_or("-", Activity::as_str).to_owned(),
-                if session.attached {
+                if session.viewer {
+                    "viewer".to_owned()
+                } else if session.attached {
                     "yes".to_owned()
                 } else {
                     "no".to_owned()
