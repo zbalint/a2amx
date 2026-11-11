@@ -45,7 +45,7 @@ above—tokens, another user's state files, or acting as another session—is st
 ## How the project is built
 
 All code, tests and documentation are written by AI coding agents (apart from a
-GitHub-generated initial commit and the OpenSSF Scorecard workflow template) working from reviewed
+GitHub-generated initial commit, the OpenSSF Scorecard workflow template and Dependabot update commits) working from reviewed
 specifications, with separate architect, developer, tester and consultant roles and a human
 owner who sets direction and approves releases. There has been no independent security audit.
 How a change is specified, checked and gated is in

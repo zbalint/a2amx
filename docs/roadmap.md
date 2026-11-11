@@ -42,7 +42,7 @@ says when one does.
 ### 0.2.0: Reliability and observability — Released
 
 The release established isolated environment-sensitive tests (I13) and diagnostic output for
-the remaining flaky PTY tests (I7, I14, I18; spec 3cq); the flakes themselves are not fixed yet.
+the flaky PTY tests (I7, I14, I18; spec 3cq); I14 was fixed by spec 3cx, and the flakes of I7 and I18 are not fixed yet.
 
 ### 0.3.0: Remote human messaging — Released
 

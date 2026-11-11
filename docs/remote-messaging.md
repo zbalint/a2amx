@@ -126,7 +126,7 @@ a2amx gateway up --pair
 creates the `a2amx` control category and `control` channel (or the configured names), prints a
 pairing code, and waits for that code to appear in the control channel. Post the code from the
 Discord account that should be paired. The terminal then asks whether to bind that Discord
-account; answer `y` or `yes`. A decline ends with `pairing not confirmed`, followed by
+account; answer `y` or `yes`. In the default flow a decline ends with `pairing not confirmed`, followed by
 `pairing did not complete; the gateway was not started`. The code expires after 10 minutes,
 and a successful pairing is saved in `<state>/gateway/pairing.json` with owner-only permissions.
 

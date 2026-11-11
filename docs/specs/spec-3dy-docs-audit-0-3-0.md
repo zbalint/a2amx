@@ -116,4 +116,4 @@ Models: architect Claude Sonnet 5.5 (claude-sonnet-5-5); consultant on the claud
 | Architect review | architect | Developer wrote that `/run/dbus` stays hidden with `default_hides=false` (false, contradicts the spec); developer truth table said true | Rework R2 |
 | Architect review | architect | True content dropped without a destination (viewer note, candidate-dependency sentence, 0600-writes sentence, roadmap 0.2.0 IDs) | Rework R3 |
 | Architect review | architect | Unrequested teams.md sentence, hardcoded Ctrl-B in the VIEW overlay text, releasing.md step merged | Rework R4 to R6 |
-| Tester pass | tester | No false sentence found in the reworked diff; four minor uncertainties, none a finding | none needed |
+| Tester pass (addendum, after the push) | tester | Roadmap 0.2.0 sentence misstated I14 (fixed by spec 3cx before the release); SECURITY.md "How the project is built" lacked the Dependabot exception; decline output printed in the default flow only | Follow-up commit: sentence corrected, exception added, "In the default flow" added. The developer's I14 grouping and the spec's not-fixed-yet instruction both missed that I14 was closed |
