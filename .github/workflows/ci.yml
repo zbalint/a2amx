@@ -107,11 +107,28 @@ jobs:
       # The sandbox and user-namespace tests need bubblewrap and unprivileged user namespaces. The
       # ubuntu-24.04 runner has neither (no bwrap, AppArmor restricts user namespaces); probed on
       # that image: bubblewrap 0.9.0 from apt plus this sysctl is enough. The last two commands
-      # fail the step with a clear error if a runner image change breaks that.
+      # fail the step with a clear error if a runner image change breaks that. Spec 3dx handles
+      # the runner outage where it cannot resolve the Ubuntu mirrors while keeping the normal
+      # resolver path.
       - name: Install bubblewrap and allow unprivileged user namespaces
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends bubblewrap
+          resolvectl status | head -n 20 || true
+          ip -o route show default || true
+          cat /etc/apt/apt-mirrors.txt || true
+          if ! getent hosts azure.archive.ubuntu.com >/dev/null || ! getent hosts archive.ubuntu.com >/dev/null; then
+            echo "resolver cannot reach the Ubuntu mirrors; adding public DNS"
+            iface=$(ip -o route show default | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}')
+            if [ -n "$iface" ]; then
+              sudo resolvectl dns "$iface" 1.1.1.1 8.8.8.8 || echo "resolvectl dns failed"
+              sudo resolvectl flush-caches || echo "resolvectl flush-caches failed"
+            else
+              echo "no default-route interface"
+            fi
+            getent hosts azure.archive.ubuntu.com || echo "still unresolved: azure.archive.ubuntu.com"
+            getent hosts archive.ubuntu.com || echo "still unresolved: archive.ubuntu.com"
+          fi
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -qq
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bwrap --version
           unshare -Ur true
