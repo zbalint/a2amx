@@ -20,8 +20,9 @@ messages are accepted regardless of that state.
 
 Remote messaging is off by default, enabled per agent, and available only to confined sessions.
 A human can watch an attached session without claiming owner presence by using viewer mode (`v` after
-the attach prefix). Viewer mode is read-only for the session: terminal input, resize, and release
-frames are suppressed while local picker, scroll, and team-line controls remain available.
+the attach prefix). Viewer mode is read-only for terminal input: input and release frames are
+suppressed, while resize frames keep the session sized to the client's usable terminal. Local picker,
+scroll, and team-line controls remain available.
 A complete mouse report never displays the viewer notice; ignored keys and pastes do.
 A timer can enter viewer mode automatically with the global `--viewer-after SECONDS` option;
 `0` disables the timer.

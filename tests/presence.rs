@@ -486,7 +486,7 @@ async fn interactive_presence_refuses_human_send_then_allows_it_after_grace() {
 }
 
 #[tokio::test]
-async fn viewer_attach_does_not_resize_or_accept_input_until_mode_changes() {
+async fn viewer_attach_keeps_input_read_only_while_sizing_session() {
     let Some((dir, daemon)) = start_confined_daemon_with_limits(Limits::default()).await else {
         return;
     };
@@ -505,6 +505,15 @@ async fn viewer_attach_does_not_resize_or_accept_input_until_mode_changes() {
         .attach_viewer(&id, false, 80, 20, 0)
         .await
         .unwrap();
+    let sessions = match admin.request(Request::List).await.unwrap() {
+        Response::Sessions { sessions } => sessions,
+        response => panic!("list failed: {response:?}"),
+    };
+    let session = sessions
+        .into_iter()
+        .find(|session| session.id == id)
+        .unwrap();
+    assert_eq!((session.cols, session.rows), (80, 20));
     let viewer_agent = match admin.request(Request::ListAgents).await.unwrap() {
         Response::Agents { agents, .. } => {
             assert_eq!(agents.len(), 1);
@@ -514,9 +523,22 @@ async fn viewer_attach_does_not_resize_or_accept_input_until_mode_changes() {
     };
     assert!(viewer_agent.attached);
     viewer
-        .send(ClientFrame::Resize { cols: 80, rows: 20 })
+        .send(ClientFrame::Resize {
+            cols: 100,
+            rows: 30,
+        })
         .await
         .unwrap();
+    receive_data(&mut viewer).await;
+    let sessions = match admin.request(Request::List).await.unwrap() {
+        Response::Sessions { sessions } => sessions,
+        response => panic!("list failed: {response:?}"),
+    };
+    let session = sessions
+        .into_iter()
+        .find(|session| session.id == id)
+        .unwrap();
+    assert_eq!((session.cols, session.rows), (100, 30));
     viewer
         .send(ClientFrame::Scroll(Scroll::LineUp))
         .await
@@ -575,7 +597,7 @@ async fn viewer_attach_does_not_resize_or_accept_input_until_mode_changes() {
         .into_iter()
         .find(|session| session.id == id)
         .unwrap();
-    assert_eq!((session.cols, session.rows), (40, 10));
+    assert_eq!((session.cols, session.rows), (100, 30));
     drop(viewer);
     daemon.shutdown().await.unwrap();
 }

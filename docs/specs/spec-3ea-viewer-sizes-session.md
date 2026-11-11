@@ -69,4 +69,14 @@ Baseline at draft time on the unchanged tree: `cargo test --test presence viewer
 
 ## Review record
 
-(The architect fills it in the commit that accepts the work.)
+Models: architect Claude Sonnet 5.5 (claude-sonnet-5-5); consultant on the claude harness (model not recorded); developer on OMP, working slot openai-codex/gpt-5.6-luna (advisor slot not exposed); tester on OMP, opencode-go/glm-5.3-flash. BLOCKED/amend cycles: 0.
+
+| Where found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The test list missed `viewer_toggle_blocks_input_and_shows_overlay` (it breaks) and listed `viewer_picker_switch_and_status_toggle_keep_viewer_attach` (it does not) | 2.6 rewritten; the toggle test is the SIGWINCH test |
+| Draft review | consultant | Section 1 said spec 3dq's `// shortcut:` comment exists in the code; it was only planned | Reworded |
+| Draft review | consultant | The automatic 300-second switch alone does not leave the session unsized; the example scenario was overstated | Section 1 rewritten |
+| Draft review | consultant | The presence test's `Resize` used the attach size, so it could not show the frame-loop guard was removed; the SIGWINCH side effects (`last_change`, readiness, zero size error) were unstated | Third size 100x30; section 2.7 added |
+| Draft review | consultant | The red-first order covered only the new tests, not the flips | Section 5.1 covers both |
+| Tester pass | tester | Survivor in committed code: removing the `exit_code` guard in `resize_locked` (`src/session.rs:1220`) is not detected by any test | Not in this diff; a tests-only hardening item, not scheduled |
+| Full suite | developer | `gateway_up::sandbox_hides_state_host_and_limits_writes_to_gateway` fails in a confined session | Known I24, unrelated; CI (unconfined) is the judge |

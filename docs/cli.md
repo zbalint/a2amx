@@ -190,11 +190,12 @@ The global `--viewer-after SECONDS` option (or `A2AMX_VIEWER_AFTER`) switches an
 attachment to read-only viewer mode after that many seconds without input from the owner at the computer (keys, paste, mouse, prefix, picker, or scroll input; agent output does not reset it).
 The default is 300 seconds; `0` disables the timer. Viewer mode can also be toggled with the prefix
 key followed by `v`.
-Viewer mode does not send terminal input, resize, or release frames to the session. It still
-updates the local screen, lets prefix commands open the picker or scroll mode, and routes team
-line clicks on their release. A complete mouse report never displays the viewer notice; an
-ignored key or paste displays it briefly. Switching back with prefix `v` sends the normal resize
-and redraw sequence. Viewer attachment does not count as owner presence.
+Viewer mode does not send terminal input or release frames to the session; it still sends resize
+frames so the session stays sized to the client's usable terminal. It still updates the local
+screen, lets prefix commands open the picker or scroll mode, and routes team-line clicks on their
+release. A complete mouse report never displays the viewer notice; an ignored key or paste displays
+it briefly. Switching back with prefix `v` sends the normal resize and redraw sequence. Viewer
+attachment does not count as owner presence.
 
 The attach status line shows a yellow `VIEW` marker when the client is in viewer mode; the overlay says
 `VIEW MODE` and `typing is off, press the prefix key then v`.

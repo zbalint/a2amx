@@ -2258,7 +2258,7 @@ async fn attach_viewer_sends_no_resize_frame() -> anyhow::Result<()> {
     Ok(())
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn viewer_toggle_blocks_input_and_shows_overlay() -> anyhow::Result<()> {
+async fn viewer_toggle_blocks_input_shows_overlay_and_resizes() -> anyhow::Result<()> {
     let (dir, daemon, server) = start_fake_daemon(None).await?;
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
     attached.wait_for_text("ALPHA", WAIT)?;
@@ -2278,16 +2278,22 @@ async fn viewer_toggle_blocks_input_and_shows_overlay() -> anyhow::Result<()> {
     let raw_before_resize = attached.raw_output().len();
     attached.resize(90, 24)?;
     eventually(|| {
+        let frames = daemon.frames();
         let changed = attached.raw_output().len() > raw_before_resize;
-        async move { changed.then_some(()) }
+        let has_resize = frames
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Resize { cols: 90, rows: 20 }));
+        async move { (changed && has_resize).then_some(()) }
     })
     .await;
-    assert!(
-        !daemon
+    assert_eq!(
+        daemon
             .frames()
             .iter()
-            .any(|frame| matches!(frame, ClientFrame::Resize { .. })),
-        "viewer resize sent a daemon frame: {:?}",
+            .filter(|frame| matches!(frame, ClientFrame::Resize { .. }))
+            .count(),
+        1,
+        "viewer resize did not send exactly one daemon frame: {:?}",
         daemon.frames()
     );
     attached.send(b"\x1b[<0;10")?;
@@ -2607,7 +2613,7 @@ async fn viewer_after_zero_and_maximum_never_switch() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn viewer_status_toggle_same_top_rows_redraws_without_resize() -> anyhow::Result<()> {
+async fn viewer_status_toggle_same_top_rows_sends_resize_and_redraws() -> anyhow::Result<()> {
     let (dir, daemon, server) = start_fake_daemon(Some(0)).await?;
     daemon.hide_session_teams();
     let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
@@ -2631,10 +2637,10 @@ async fn viewer_status_toggle_same_top_rows_redraws_without_resize() -> anyhow::
     eventually(|| {
         let raw_changed = attached.raw_output().len() > raw_before_hide;
         let frames = daemon.frames();
-        let no_resize = !frames[frames_before_hide..]
+        let has_resize = frames[frames_before_hide..]
             .iter()
-            .any(|frame| matches!(frame, ClientFrame::Resize { .. }));
-        async move { (raw_changed && no_resize).then_some(()) }
+            .any(|frame| matches!(frame, ClientFrame::Resize { cols: 80, rows: 24 }));
+        async move { (raw_changed && has_resize).then_some(()) }
     })
     .await;
 
@@ -2650,10 +2656,10 @@ async fn viewer_status_toggle_same_top_rows_redraws_without_resize() -> anyhow::
                     .any(|window| window == b"\x1b[1;30;43m VIEW \x1b[0m")
         };
         let frames = daemon.frames();
-        let no_resize = !frames[frames_before_show..]
+        let has_resize = frames[frames_before_show..]
             .iter()
-            .any(|frame| matches!(frame, ClientFrame::Resize { .. }));
-        async move { (has_marker && no_resize).then_some(()) }
+            .any(|frame| matches!(frame, ClientFrame::Resize { cols: 80, rows: 22 }));
+        async move { (has_marker && has_resize).then_some(()) }
     })
     .await;
     assert_eq!(daemon.attach_viewers().len(), 1);
@@ -2725,6 +2731,42 @@ async fn viewer_picker_switch_and_status_toggle_keep_viewer_attach() -> anyhow::
     let _ = server.await;
     Ok(())
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn viewer_switch_sends_corrective_resize_when_team_rows_refused() -> anyhow::Result<()> {
+    let (dir, daemon, server) = start_fake_daemon(Some(0)).await?;
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("ALPHA", WAIT)?;
+    attached.send(&[2, b'v'])?;
+    eventually(|| {
+        let frames = daemon.frames();
+        async move {
+            frames
+                .iter()
+                .any(|frame| matches!(frame, ClientFrame::Mode { viewer: true }))
+                .then_some(())
+        }
+    })
+    .await;
+    let frames_before_switch = daemon.frames().len();
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("a2amx sessions:", WAIT)?;
+    attached.send(b"\x1b[B\r")?;
+    attached.wait_for_text("BETA", WAIT)?;
+    eventually(|| {
+        let frames = daemon.frames();
+        let has_resize = frames[frames_before_switch..]
+            .iter()
+            .any(|frame| matches!(frame, ClientFrame::Resize { cols: 80, rows: 22 }));
+        async move { has_resize.then_some(()) }
+    })
+    .await;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s2]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
 
 async fn assert_viewer_mouse_is_not_forwarded(top_rows: Option<u16>) -> anyhow::Result<()> {
     let (dir, daemon, server) = start_fake_daemon(top_rows).await?;
@@ -2748,7 +2790,17 @@ async fn assert_viewer_mouse_is_not_forwarded(top_rows: Option<u16>) -> anyhow::
         .count();
     if top_rows == Some(0) {
         attached.send(&[2, b's'])?;
+        eventually(|| {
+            let count = daemon
+                .frames()
+                .iter()
+                .filter(|frame| matches!(frame, ClientFrame::Resize { .. }))
+                .count();
+            async move { (count == resize_count + 1).then_some(()) }
+        })
+        .await;
     }
+    let expected_resize_count = resize_count + usize::from(top_rows == Some(0));
 
     let raw_before_mouse = attached.raw_output().to_vec();
     attached.send(b"\x1b[<0;10;5M\x1b[<0;10;5m\x1b[<35;10;5M")?;
@@ -2786,7 +2838,7 @@ async fn assert_viewer_mouse_is_not_forwarded(top_rows: Option<u16>) -> anyhow::
             .iter()
             .filter(|frame| matches!(frame, ClientFrame::Resize { .. }))
             .count(),
-        resize_count,
+        expected_resize_count,
         "viewer status toggle or mouse path resized the daemon: {:?}",
         daemon.frames()
     );

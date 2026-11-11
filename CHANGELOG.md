@@ -5,6 +5,10 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The attach client no longer lets its status and team rows overlap an agent's screen in viewer mode (F87). A viewer attach, a terminal resize and a status-line toggle now size the session to the client's usable rows, as in interactive mode; input and release frames are still not sent in viewer mode. This reverses the 0.3.0 rule that a viewer does not resize the session. The daemon accepts `Resize` frames from a viewer attachment.
+
 ## [0.3.0] - 2026-11-11
 
 ### Added

@@ -2907,6 +2907,14 @@ impl AttachmentState {
             self.mouse_press = None;
             let _ = self.switch_session(self.session.clone()).await?;
         } else if self.viewer.is_viewer() {
+            if let Some(attached) = self.attachment.as_mut() {
+                attached
+                    .send(ClientFrame::Resize {
+                        cols: self.cols,
+                        rows: pty_rows(self.rows, visible, self.top_rows),
+                    })
+                    .await?;
+            }
             self.draw_status()?;
             self.draw_viewer_decorations(Instant::now())?;
         } else if let Some(attached) = self.attachment.as_mut() {
@@ -3079,7 +3087,7 @@ impl AttachmentState {
                 .await?
         };
         let top_rows = attachment.top_rows();
-        if !viewer && requested_top > 0 && top_rows == 0 {
+        if requested_top > 0 && top_rows == 0 {
             attachment
                 .send(ClientFrame::Resize {
                     cols: self.cols,
@@ -3297,16 +3305,17 @@ async fn run_attachment_loop(mut state: AttachmentState) -> anyhow::Result<Attac
                         picker.recompute_offset();
                         picker.render(&state.output)?;
                     }
-                    if state.viewer.is_viewer() {
-                        state.draw_status()?;
-                        state.draw_viewer_decorations(Instant::now())?;
-                    } else if let Some(attached) = state.attachment.as_mut() {
+                    if let Some(attached) = state.attachment.as_mut() {
                         attached
                             .send(ClientFrame::Resize {
                                 cols: new_cols,
                                 rows: pty_rows(new_rows, state.status_visible, state.top_rows),
                             })
                             .await?;
+                    }
+                    if state.viewer.is_viewer() {
+                        state.draw_status()?;
+                        state.draw_viewer_decorations(Instant::now())?;
                     }
                 }
             }

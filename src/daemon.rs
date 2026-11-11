@@ -3702,11 +3702,7 @@ async fn attach(
             Err(anyhow::anyhow!("attachment was taken over"))
         } else {
             state.emulator.set_row_origin(top_rows);
-            let resize = if viewer {
-                Ok(())
-            } else {
-                session.resize_locked(&mut state, size)
-            };
+            let resize = session.resize_locked(&mut state, size);
             resize.map(|()| {
                 let bytes = state.emulator.render_full();
                 state.dirty = false;
@@ -3847,7 +3843,7 @@ async fn attach(
                             let mut state = session.lock();
                             match frame {
                                 ClientFrame::Resize { cols, rows }
-                                    if !guard.viewer && state.exit_code.is_none() =>
+                                    if state.exit_code.is_none() =>
                                     session.resize_locked(&mut state, Size { cols, rows })?,
                                 ClientFrame::Resize { .. } => {},
                                 ClientFrame::Scroll(scroll) => state.emulator.scroll(scroll),
