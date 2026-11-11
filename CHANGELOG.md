@@ -5,6 +5,8 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-11
+
 ### Added
 
 - `a2amx gateway up --pair` hands over to the background after pairing (spec 3dw, F86). It pairs in the foreground (code and confirmation prompt) and, once confirmed, starts the background gateway and returns; a declined or timed-out pairing leaves no gateway running. `up --pair --foreground` keeps everything in the foreground until Ctrl-C. A hidden `gateway run --pair-only` is the internal pairing step. **Breaking:** `up --pair` used to run until Ctrl-C; use `--foreground` for that.
