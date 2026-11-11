@@ -19,6 +19,7 @@ fn sandbox_argv_matches_worked_vector_with_external_resolv_target() {
         exe: PathBuf::from("/opt/a2amx"),
         rust_log: Some("debug".into()),
         resolv_target: Some(PathBuf::from("/mnt/wsl/resolv.conf")),
+        die_with_parent: true,
     };
     let inner = vec![
         "/opt/a2amx".into(),
@@ -106,6 +107,7 @@ fn sandbox_argv_matches_worked_vector_without_external_resolv_target() {
         exe: PathBuf::from("/opt/a2amx"),
         rust_log: None,
         resolv_target: None,
+        die_with_parent: true,
     };
     let inner = vec![
         "/opt/a2amx".into(),
@@ -176,6 +178,38 @@ fn sandbox_argv_matches_worked_vector_without_external_resolv_target() {
         ]
     );
 }
+
+#[test]
+fn sandbox_argv_background_omits_die_with_parent() {
+    let layout = Layout {
+        bwrap: PathBuf::from("/usr/bin/bwrap"),
+        state_dir: PathBuf::from("/home/me/state"),
+        exe: PathBuf::from("/opt/a2amx"),
+        rust_log: None,
+        resolv_target: None,
+        die_with_parent: false,
+    };
+    let argv = sandbox_argv(
+        &layout,
+        &[
+            "/opt/a2amx".into(),
+            "--home".into(),
+            "/home/me/state".into(),
+            "gateway".into(),
+            "run".into(),
+        ],
+    );
+    assert_eq!(
+        &argv[0..5],
+        [
+            "/usr/bin/bwrap",
+            "--unshare-user",
+            "--unshare-ipc",
+            "--unshare-pid",
+            "--tmpfs",
+        ]
+    );
+}
 fn bwrap_for_test() -> Option<PathBuf> {
     let bwrap = match a2amx::confine::resolve_bwrap(None) {
         Ok(path) => path,
@@ -230,6 +264,7 @@ fn shell_layout(home: &Path, bwrap: &Path, rust_log: Option<&str>) -> (Layout, S
             exe,
             rust_log: rust_log.map(str::to_owned),
             resolv_target: None,
+            die_with_parent: true,
         },
         fs::canonicalize("/bin/sh")
             .unwrap()
@@ -389,6 +424,7 @@ for path in sys.argv[1:]:
         exe: python.clone(),
         rust_log: None,
         resolv_target: None,
+        die_with_parent: true,
     };
     let mut inner = vec![
         python.to_string_lossy().into_owned(),
@@ -425,6 +461,7 @@ fn sandbox_clears_environment_except_path_pwd_and_rust_log() {
         exe: env_exe.clone(),
         rust_log: Some("trace".into()),
         resolv_target: None,
+        die_with_parent: true,
     };
     let inner = vec![env_exe.to_string_lossy().into_owned()];
     let output = run_sandbox(
@@ -459,6 +496,7 @@ fn sandbox_keeps_inner_arguments_after_separator() {
         exe: PathBuf::from("/opt/a2amx"),
         rust_log: None,
         resolv_target: None,
+        die_with_parent: true,
     };
     let inner = vec![
         "/opt/a2amx".into(),

@@ -168,8 +168,10 @@ With `both`, the human can write back. It is off by default; setup, lease and sa
 are in [Remote messaging](remote-messaging.md).
 
 ```text
-a2amx gateway token                 # store the Discord bot token without echoing it
-a2amx gateway up [--pair]           # start the confined gateway; --pair binds an account
+a2amx gateway token                         # store the Discord bot token without echoing it
+a2amx gateway up [--pair] [--foreground]   # start the confined gateway
+a2amx gateway stop                          # gracefully stop the background gateway
+a2amx gateway status                        # show whether the gateway is running
 a2amx new --confine --remote <send|both> -- <command> # mark a confined session for remote messaging
 ```
 

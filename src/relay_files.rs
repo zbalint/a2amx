@@ -255,7 +255,7 @@ fn read_secure(path: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> anyhow::Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> anyhow::Result<()> {
     let random = crate::daemon::random_hex::<4>()?;
     let temp = path.with_file_name(format!(
         ".{}.tmp-{random}",

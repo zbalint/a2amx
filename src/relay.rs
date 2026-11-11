@@ -81,6 +81,8 @@ pub async fn run(loaded: Loaded, discord_config: DiscordConfig, mut io: Io) -> a
         tracing::warn!(%error, "initial gateway sync failed");
         relay.mark_broken();
     }
+    // The launcher waits for this exact plain line before reporting a background gateway ready.
+    eprintln!("gateway ready");
 
     let mut sync_tick = time::interval(Duration::from_millis(relay.config.sync_ms));
     let mut idle_tick = time::interval(Duration::from_millis(relay.config.idle_ms));

@@ -199,7 +199,9 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
     let result = match cli.command {
         Command::Gateway { action } => match action {
             GatewayAction::Token => run_gateway_token(&home).await,
-            GatewayAction::Up { pair } => run_gateway_up(home, pair).await,
+            GatewayAction::Up { pair, foreground } => run_gateway_up(home, pair, foreground).await,
+            GatewayAction::Stop => return run_gateway_stop(&home).await,
+            GatewayAction::Status => return run_gateway_status(&home).await,
             GatewayAction::Run { pair } => run_gateway(home, pair).await,
         },
         Command::Daemon { action } => match action {
@@ -330,8 +332,46 @@ fn read_gateway_token_line() -> anyhow::Result<String> {
     Ok(String::from_utf8(bytes)?)
 }
 
-async fn run_gateway_up(home: PathBuf, pair: bool) -> anyhow::Result<()> {
-    a2amx::gateway_launch::up(&home, pair)
+async fn run_gateway_up(home: PathBuf, pair: bool, foreground: bool) -> anyhow::Result<()> {
+    tokio::task::spawn_blocking(move || a2amx::gateway_launch::up(&home, pair, foreground))
+        .await??;
+    Ok(())
+}
+
+async fn run_gateway_status(home: &Path) -> anyhow::Result<std::process::ExitCode> {
+    let state = tokio::task::spawn_blocking({
+        let home = home.to_owned();
+        move || a2amx::gateway_proc::state(&home)
+    })
+    .await??;
+    match state {
+        a2amx::gateway_proc::State::Running { pid } => {
+            let pid = pid.map_or_else(|| "unknown".to_owned(), |pid| pid.to_string());
+            write_stdout(format!("running (pid {pid})\n").into_bytes()).await?;
+            Ok(std::process::ExitCode::SUCCESS)
+        }
+        a2amx::gateway_proc::State::NotRunning => {
+            write_stdout(b"not running\n".to_vec()).await?;
+            Ok(std::process::ExitCode::from(1))
+        }
+    }
+}
+
+async fn run_gateway_stop(home: &Path) -> anyhow::Result<std::process::ExitCode> {
+    let outcome = tokio::task::spawn_blocking({
+        let home = home.to_owned();
+        move || a2amx::gateway_proc::stop(&home)
+    })
+    .await??;
+    match outcome {
+        a2amx::gateway_proc::StopOutcome::Stopped { pid } => {
+            write_stdout(format!("stopped (pid {pid})\n").into_bytes()).await?;
+        }
+        a2amx::gateway_proc::StopOutcome::NotRunning => {
+            write_stdout(b"no gateway running\n".to_vec()).await?;
+        }
+    }
+    Ok(std::process::ExitCode::SUCCESS)
 }
 
 async fn run_gateway(home: PathBuf, pair: bool) -> anyhow::Result<()> {

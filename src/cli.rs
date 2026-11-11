@@ -244,7 +244,14 @@ pub enum GatewayAction {
         /// Pair the Discord account before starting message delivery.
         #[arg(long)]
         pair: bool,
+        /// Run the confined gateway in this terminal until Ctrl-C instead of in the background.
+        #[arg(long)]
+        foreground: bool,
     },
+    /// Stop the background gateway.
+    Stop,
+    /// Show whether the gateway is running.
+    Status,
     /// Read a bot token from standard input and store it securely.
     Token,
     /// Internal: the unconfined relay that `up` starts inside the sandbox.

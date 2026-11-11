@@ -138,3 +138,22 @@ Public interface change: `gateway up` now returns after starting a background pr
 | `FakeDiscord` and `bwrap_for_test` exist and CI sets `A2AMX_REQUIRE_BWRAP=1` | `tests/common/fake_discord.rs:304`, `tests/gateway_up.rs:179-192`, `.github/workflows/ci.yml:125-127` | read |
 | A gateway binary test with `config.toml` pointing at the fake exists | `tests/relay.rs:1478-1530` | read |
 | No test or doc names the foreground-only behaviour as a contract besides docs `remote-messaging.md:144-167,236`, `cli.md:172-176`, `architecture.md:425` | grep `gateway up`/`gateway run` over `tests` and `docs` | grep |
+
+## Review record
+
+Models: architect and spec author Claude Sonnet 5.5; consultant (pre-lock review, two rounds) Claude, model not reported; developer OMP default (model not exposed to the architect; the report names no separate planning or advisor slot); tester OMP, GLM-5.3-flash for planning, working and advisor.
+
+BLOCKED/amend cycles: 0 after lock. Fix rounds after the first implementation: 2 (launcher split, missing tests).
+
+| found at | by | problem | resolution |
+|---|---|---|---|
+| draft review | architect | first probe suggested a `--die-with-parent` sandbox survives its launcher; the probe used a bash `&` job, not the real spawn shape | consultant and architect re-probed from Python; spec amended before lock (`die_with_parent` per mode) |
+| draft review | consultant | log handling, pid file location (outside the sandbox bind), readiness scan from an offset, fifo/symlink hardening of the log open | spec sections 2 and 3 |
+| implementation | developer | skipped the section 7.5 mutation list and the full suite (tool timeout) | tester ran the list, architect ran the full suite |
+| architect review | architect | `gateway_launch::up` was one long function (Sonar complexity risk) | FIX REQUEST m_6567: split into `acquire_or_explain`, `exec_gateway`, `start_background`, `wait_until_ready` |
+| tester pass | tester | tests lacked the 7.1c verified-child-in-own-group case and parts of 7.1g (status after up, session id, control channel, post-stop and restart, `--pair` refusal); mutants "drop the own-group guard" and "drop the lock handle" survived | FIX REQUEST m_6578; developer added the tests and showed both mutants killed |
+| architect review | architect | own mutant (`state` reports Running when the lock is free) killed by three gateway_background tests | none needed |
+
+Surviving mutants, accepted: the ready line printed before the first sync (spec-accepted equivalent: `up` can report ready while the first sync failed, so the relay may be broken; documented), and the lock file opened read-write (no observable difference).
+
+Architect checks on the final snapshot: `git diff --check`, fmt, clippy `-D warnings`, `cargo deny check`, `scripts/prepush-fast.sh`, full `cargo test --no-fail-fast` (51 suites passed; only the two confined-HOME failures: `gateway_up::sandbox_hides_state_host_and_limits_writes_to_gateway` and `human_inbound::queued_human_message_rechecks_recipient_eligibility_before_delivery`, "Read-only file system" creating state under the confined HOME, neither in the diff's scope).

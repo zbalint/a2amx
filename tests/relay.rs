@@ -1551,6 +1551,7 @@ async fn gateway_run_with_trace_logs_leak_no_token() {
     assert!(!text.contains("Authorization"));
     assert!(!text.contains(&hex_lower));
     assert!(!text.contains(&hex_upper), "hex token found in output");
+    assert!(text.lines().any(|line| line == "gateway ready"));
     daemon.shutdown().await.unwrap();
 }
 

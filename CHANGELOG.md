@@ -7,6 +7,7 @@ All notable user-visible changes are listed here. The format follows
 
 ### Added
 
+- The gateway runs in the background (spec 3dt, F84). `a2amx gateway up` starts it detached (still confined) and returns once the log shows `gateway ready`; `gateway up --foreground` keeps the old behaviour, `a2amx gateway stop` ends it and `a2amx gateway status` says whether it runs (exit 0 running, 1 not). The log is `<state>/gateway/gateway.log` (level `warn` unless `RUST_LOG` is set); `gateway.lock` and `gateway.pid` sit in the state directory, and one gateway runs per state directory. `up --pair` stays in the foreground. **Breaking:** `gateway up` now returns instead of running until Ctrl-C; use `--foreground` for the old shape.
 - `a2amx list` and the `list_agents` tool show a viewer attach as a viewer (spec 3du). The ATTACHED column prints `viewer`
   (instead of `yes`) while the attached client is in viewer mode, and each `list_agents` entry carries `viewer: true`
   next to `attached: true`. It says the human holds the session but is not typing, so it does not mean the owner is at

@@ -19,6 +19,7 @@ pub mod discord;
 pub mod emulator;
 pub mod gateway;
 pub mod gateway_launch;
+pub mod gateway_proc;
 pub mod grant;
 pub mod harness;
 pub mod hook;

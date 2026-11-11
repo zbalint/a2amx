@@ -164,9 +164,13 @@ only after the lease has started; synchronization lists only agents that have `r
 confined, and are covered by a valid lease. They appear within `sync_ms` (15 seconds by default).
 A category represents a team, and each enabled agent gets one channel in that category.
 
-`a2amx gateway up` starts the gateway relay inside bubblewrap; the hidden internal `gateway run`
-relay is unconfined if invoked directly and must not be run by hand. Stop the relay with Ctrl-C
-for a clean stop. SIGTERM stops the gateway immediately without a clean close.
+`a2amx gateway up` starts the confined gateway in the background and prints its pid and log path.
+Use `--foreground` to keep it in this terminal until Ctrl-C. `gateway status` reports whether the
+lock is held, and `gateway stop` performs a graceful background stop. The log is
+`<state>/gateway/gateway.log`, defaults to level `warn`, and follows `RUST_LOG` when set. There is
+no rotation; delete or truncate it only while the gateway is stopped. One gateway may run per
+state directory. Until spec 3dw, `gateway up --pair` still runs in the foreground. A foreground
+gateway's stop is hard, so one message may be relayed twice after a restart.
 
 ## Turn it on for agents and start the lease
 
@@ -262,10 +266,12 @@ yet tested with A2AMX.
   a failed periodic count check changes nothing.
 - Abstract Unix sockets and loopback TCP remain reachable from the sandbox because its network is
   shared.
-- The sandbox does not create a new terminal session; on a kernel that still permits `TIOCSTI`, a
-  compromised gateway could push input into the terminal from which it was started. Start it from
-  a terminal whose input you do not mind exposing, or use `setsid`.
-- Ctrl-C stops the relay cleanly, while SIGTERM stops the gateway immediately without a clean close.
+- The foreground sandbox does not create a new terminal session; on a kernel that still permits
+  `TIOCSTI`, a compromised foreground gateway could push input into the terminal from which it was
+  started. Background launches use `setsid`; start a foreground gateway from a terminal whose
+  input you do not mind exposing.
+- A background `gateway stop` is graceful and lets the relay finish its shutdown; stopping a
+  foreground gateway is hard and can leave one message to be relayed twice after restart.
 - If `link/` is deleted and recreated by hand while the gateway is running, its directory mount
   remains the old, stale directory until the gateway restarts. The daemon itself does not remove
   or recreate `link/` while running; a daemon restart rewrites the files inside the existing
@@ -293,6 +299,10 @@ yet tested with A2AMX.
 | `pairing not confirmed` | The interactive pairing prompt was declined or did not receive `y`/`yes`. | Run `a2amx gateway up --pair` in a terminal and confirm the paired account. |
 | `pairing timed out` | No matching pairing code arrived within 10 minutes. | Run `gateway up --pair` again and post its newly printed code promptly. |
 | `gateway close 4013: invalid intents` or `gateway close 4014: disallowed intents` | Discord rejected the requested gateway intents. | Enable the guilds, guild messages, and Message Content intents for the bot, then pair/start again. |
+| `the gateway is already running` | Another gateway holds the state-directory lock. | Run `a2amx gateway stop`, then retry. |
+| `the gateway exited during startup` | The relay failed before printing its readiness line. | Read the sanitized startup tail in `<state>/gateway/gateway.log`, fix the cause, and retry. |
+| `the gateway did not become ready within 10s` | Startup is slow or the log was replaced before readiness. | Check `gateway status` and the log; stop it if needed, then retry. |
+| `the gateway holds the lock but its process N is gone` | The sandbox outer process was killed and its child is orphaned. | Run the printed `kill -TERM -- -N` recovery command, then retry. |
 
 ## Files
 
@@ -301,6 +311,9 @@ mode `0600`; the daemon's state files and the dedup file use the same mode.
 
 | Path | Owner and mode | Purpose |
 | --- | --- | --- |
+| `<state>/gateway.lock` | Current user, `0600` | Advisory lock for one gateway per state directory; outside the sandbox bind |
+| `<state>/gateway.pid` | Current user, `0600` | Launcher-owned pid target for `gateway stop`; outside the sandbox bind |
+| `<state>/gateway/gateway.log` | Current user, `0600` | Background startup and relay log; opened hardened by the launcher |
 | `<state>/gateway/discord.token` | Current user, `0600` | Discord bot token entered with `gateway token` |
 | `<state>/gateway/config.toml` | Current user, `0600` | Gateway configuration |
 | `<state>/gateway/pairing.json` | Current user, `0600` | Paired Discord server/user IDs |
