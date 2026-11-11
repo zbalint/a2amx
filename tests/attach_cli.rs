@@ -1421,10 +1421,19 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
         }
     );
     wait_for_message_state(dir.path(), "m_1", "submitted").await;
+    let (hold_session, _, _) = new_agent(
+        &mut admin,
+        dir.path(),
+        Some("agent-hold"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    assert_eq!(hold_session, "s3");
 
     let accepted = sender
         .request(Request::SendMessage {
-            to: "agent-review@host-a".into(),
+            to: "agent-hold@host-a".into(),
             subject: "Second".into(),
             message: "Another issue.".into(),
         })
@@ -1433,13 +1442,13 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
         accepted,
         Response::Accepted {
             id: "m_2".into(),
-            recipient_hold: None,
+            recipient_hold: Some("deliver_hold".into()),
             recipient_quota: None
         }
     );
     let accepted = sender
         .request(Request::SendMessage {
-            to: "agent-review@host-a".into(),
+            to: "agent-hold@host-a".into(),
             subject: "Trailing ".into(),
             message: "Subjects print as stored.".into(),
         })
@@ -1448,14 +1457,14 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
         accepted,
         Response::Accepted {
             id: "m_3".into(),
-            recipient_hold: None,
+            recipient_hold: Some("deliver_hold".into()),
             recipient_quota: None
         }
     );
     assert_eq!(
         admin
             .request(Request::Kill {
-                session: "s2".into(),
+                session: hold_session,
                 now: true,
             })
             .await?,
@@ -1472,10 +1481,10 @@ async fn messages_cli_prints_submitted_and_undeliverable_rows() -> anyhow::Resul
     ));
     assert!(listing.contains("m_1  agent-plan@host-a  agent-review@host-a  submitted      -                 Parser issue\n"));
     assert!(listing.contains(
-        "m_2  agent-plan@host-a  agent-review@host-a  undeliverable  recipient_exited  Second\n"
+        "m_2  agent-plan@host-a  agent-hold@host-a    undeliverable  recipient_exited  Second\n"
     ));
     assert!(listing.contains(
-        "m_3  agent-plan@host-a  agent-review@host-a  undeliverable  recipient_exited  Trailing \n"
+        "m_3  agent-plan@host-a  agent-hold@host-a    undeliverable  recipient_exited  Trailing \n"
     ));
     Ok(())
 }

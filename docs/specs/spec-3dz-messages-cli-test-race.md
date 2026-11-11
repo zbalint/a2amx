@@ -50,4 +50,11 @@ Baseline at draft time on the unchanged tree: the old test passes when run alone
 
 ## Review record
 
-(The architect fills it in the commit that accepts the work.)
+Models: architect Claude Sonnet 5.5 (claude-sonnet-5-5); consultant on the claude harness (model not recorded); developer on OMP, working slot openai-codex/gpt-5.6-luna (advisor slot not exposed); no tester pass (a small test-only change; the architect reran the green check with the injected sleep and the single test, clippy and fmt). BLOCKED/amend cycles: 0.
+
+| Where found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The red check's 1500 ms sleep is not deterministic: delivery of m_2 starts at the first 1 s interval tick after the cooldown, 1 to 2 s after the submit | Sleep raised to 3000 ms; section 1 states the window |
+| Draft review | consultant | Section 1 said the check reproduces the header mismatch; it proves clock dependence | Reworded |
+| Draft review | consultant | A `break` in the acceptance loop exits 0 on a failed run; the session id choice was left open; wrong citations for `format_table`; literals not given | Loop exits 1, `new_agent` and `s3`, citations fixed, literals written |
+| Implementation | developer | The red run showed a timeout, not the intermediate m_2 state | Accepted; the spec's expected result was a timeout |
