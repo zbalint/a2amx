@@ -1,6 +1,6 @@
 # Remote messaging
 
-> **Status:** The Discord setup steps and the gateway against a real Discord server are not yet tested with A2AMX.
+> **Status:** The maintainers have tested remote messaging live against a real Discord server: pairing, the lease code, messages in both directions, the background gateway and the status line. Not yet tested live: a well-formed wrong lease code, an unpaired Discord account, and a daemon outage while the gateway runs.
 
 Remote messaging lets an agent on a long task message its paired human in Discord. With the
 `both` mode, the human can write back to that agent. It is messaging only: it does not stream
@@ -45,10 +45,10 @@ you and the bot). If the count is above the limit at startup, it exits. A later 
 traffic while the count is too high; the check runs every 60 seconds by default, and a failed
 check changes nothing.
 
-## Set up Discord (not yet tested)
+## Set up Discord
 
-These portal steps are from Discord's documented setup flow and have not been run against the
-live Discord portal for A2AMX:
+These portal steps follow Discord's documented setup flow. Discord changes its portal; if a screen
+differs, follow Discord's own documentation:
 
 1. Create an application and a bot in the Discord developer portal.
 2. Enable the **Message Content** privileged intent for the bot. A2AMX requests intents 1
