@@ -210,6 +210,46 @@ pub fn clear_status(cols: u16, rows: u16) -> Vec<u8> {
     bytes
 }
 
+#[derive(Clone, Copy)]
+struct Shown {
+    activity: bool,
+    quota: bool,
+    role: bool,
+    team: bool,
+    harness: bool,
+    confined: bool,
+    pending: bool,
+    hint: bool,
+    remote: bool,
+}
+
+impl Shown {
+    fn drop_next(&mut self) -> bool {
+        if self.team {
+            self.team = false;
+        } else if self.harness {
+            self.harness = false;
+        } else if self.role {
+            self.role = false;
+        } else if self.quota {
+            self.quota = false;
+        } else if self.activity {
+            self.activity = false;
+        } else if self.pending {
+            self.pending = false;
+        } else if self.hint {
+            self.hint = false;
+        } else if self.remote {
+            self.remote = false;
+        } else if self.confined {
+            self.confined = false;
+        } else {
+            return false;
+        }
+        true
+    }
+}
+
 /// Bytes that draw the status bar on terminal row `rows`, leaving the cursor where it was.
 pub fn render(
     session: &str,
@@ -247,96 +287,77 @@ pub fn render(
         .map(|info| format!(" {} pending ", info.pending));
     let hold_reason = info.and_then(|info| info.hold.as_deref()).map(sanitize);
     let remote = info.and_then(|info| info.remote).map(remote_spans);
-    let mut show_activity = activity.is_some();
-    let mut show_quota = quota.is_some();
-    let mut show_role = role.is_some();
-    let mut show_team = team.is_some();
-    let mut show_harness = harness.is_some();
-    let mut show_confined = info.is_some_and(|info| info.confined);
-    let confine_auto = info.is_some_and(|info| info.confine_auto);
-    let mut show_pending = pending.is_some();
-    let mut show_hint = hold_reason
-        .as_deref()
-        .is_some_and(|reason| hint_allowed(reason, prefix));
-    let mut show_remote = remote.is_some();
-
-    loop {
-        let left = left_spans(
-            &name,
-            show_confined.then_some(confine_auto),
-            show_activity.then_some(activity).flatten(),
-            show_quota
-                .then(|| quota.as_ref().map(|(text, limit)| (text.as_str(), *limit)))
-                .flatten(),
-            show_role.then_some(role.as_deref()).flatten(),
-            show_team.then_some(team.as_deref()).flatten(),
-            show_harness.then_some(harness).flatten(),
-        );
-        let hold = hold_reason
+    let mut shown = Shown {
+        activity: activity.is_some(),
+        quota: quota.is_some(),
+        role: role.is_some(),
+        team: team.is_some(),
+        harness: harness.is_some(),
+        confined: info.is_some_and(|info| info.confined),
+        pending: pending.is_some(),
+        hint: hold_reason
             .as_deref()
-            .map(|reason| hold_text(reason, show_hint, prefix));
-        let pending_len = if show_pending {
-            pending.as_deref().map_or(0, char_len)
-        } else {
-            0
-        };
-        let remote_len = if show_remote {
+            .is_some_and(|reason| hint_allowed(reason, prefix)),
+        remote: remote.is_some(),
+    };
+    let confine_auto = info.is_some_and(|info| info.confine_auto);
+
+    let mut left = left_spans(
+        &name,
+        shown.confined.then_some(confine_auto),
+        shown.activity.then_some(activity).flatten(),
+        shown
+            .quota
+            .then_some(quota.as_ref().map(|(text, limit)| (text.as_str(), *limit)))
+            .flatten(),
+        shown.role.then_some(role.as_deref()).flatten(),
+        shown.team.then_some(team.as_deref()).flatten(),
+        shown.harness.then_some(harness).flatten(),
+    );
+    loop {
+        let remote_len = if shown.remote {
             remote.as_ref().map_or(0, |spans| spans_len(spans))
         } else {
             0
         };
-        let total =
-            spans_len(&left) + remote_len + pending_len + hold.as_deref().map_or(0, char_len);
-        if total <= width {
-            break;
-        }
-        if show_team {
-            show_team = false;
-        } else if show_harness {
-            show_harness = false;
-        } else if show_role {
-            show_role = false;
-        } else if show_quota {
-            show_quota = false;
-        } else if show_activity {
-            show_activity = false;
-        } else if show_pending {
-            show_pending = false;
-        } else if show_hint {
-            show_hint = false;
-        } else if show_remote {
-            show_remote = false;
-        } else if show_confined {
-            show_confined = false;
+        let pending_len = if shown.pending {
+            pending.as_deref().map_or(0, char_len)
         } else {
+            0
+        };
+        let hold_len = hold_reason
+            .as_deref()
+            .map(|reason| char_len(&hold_text(reason, shown.hint, prefix)))
+            .unwrap_or(0);
+        if spans_len(&left) + remote_len + pending_len + hold_len <= width || !shown.drop_next() {
             break;
         }
+        left = left_spans(
+            &name,
+            shown.confined.then_some(confine_auto),
+            shown.activity.then_some(activity).flatten(),
+            shown
+                .quota
+                .then_some(quota.as_ref().map(|(text, limit)| (text.as_str(), *limit)))
+                .flatten(),
+            shown.role.then_some(role.as_deref()).flatten(),
+            shown.team.then_some(team.as_deref()).flatten(),
+            shown.harness.then_some(harness).flatten(),
+        );
     }
-
-    let left = left_spans(
-        &name,
-        show_confined.then_some(confine_auto),
-        show_activity.then_some(activity).flatten(),
-        show_quota
-            .then(|| quota.as_ref().map(|(text, limit)| (text.as_str(), *limit)))
-            .flatten(),
-        show_role.then_some(role.as_deref()).flatten(),
-        show_team.then_some(team.as_deref()).flatten(),
-        show_harness.then_some(harness).flatten(),
-    );
-    let remote = if show_remote {
+    let remote = if shown.remote {
         remote.unwrap_or_default()
     } else {
         Vec::new()
     };
-    let pending = if show_pending {
+    let pending = if shown.pending {
         pending.unwrap_or_default()
     } else {
         String::new()
     };
     let hold = hold_reason
         .as_deref()
-        .map(|reason| hold_text(reason, show_hint, prefix))
+        .map(|reason| hold_text(reason, shown.hint, prefix))
         .unwrap_or_default();
     let left_len = spans_len(&left);
     let remote_len = spans_len(&remote);
