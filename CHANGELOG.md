@@ -8,6 +8,7 @@ All notable user-visible changes are listed here. The format follows
 ### Added
 
 - Codex sessions can run confined (F31). A confined Codex session's app-server and TUI run under bubblewrap like Claude Code and OMP sessions: the working directory, a private `/tmp` and `~/.codex` (read-write, persistent) are writable, and `auth.json` stays visible. The daemon reaches the per-session app-server through a socket directory bound at `/tmp/codex-daemon-<uid>` (read-write for the app-server, read-only for the TUI) and pins the socket entry before it connects, so an agent cannot redirect the daemon. The confinement notice reaches the agent through the app-server's `developer_instructions`. The `harness-config` grant now accepts a Codex session, and remote messaging and `team up` no longer refuse a confined Codex session. This is not a breaking change.
+- Confined Codex sessions can run tool commands (fix for the entry above). Codex's own sandbox re-binds the socket directory's host path, which the confined app-server could not create; the session's Codex directory is now mounted read-only at its own path and the socket lives in its `sock` subdirectory. Not a breaking change.
 
 ## [0.3.1] - 2026-11-12
 

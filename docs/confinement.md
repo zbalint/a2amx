@@ -55,10 +55,15 @@ copyable grants fragment, or add grants explicitly to the team/session table.
 Auto detection covers the marker-based grants listed in [the detection table](#automatic-grant-detection), adds `ssh`, `gh`, or `git-credentials` from supported git remotes, and always adds `cache`; explicit confinement still has no implicit cache grant. Paths relocated by environment variables still need an explicit `write` entry.
 
 Codex confinement also wraps its private app-server in the same bubblewrap profile. Each confined
-Codex session gets a fresh owner-only socket directory under the daemon state directory, mounted
-read-write only into the app-server and read-only into the TUI. The TUI connects through
-`/tmp/codex-daemon-UID/app.sock`; the daemon pins the host socket entry before connecting and
-rejects symlink substitution, non-socket targets, and paths outside that session's socket root.
+Codex session gets a fresh owner-only directory under the daemon state directory. The app-server
+gets that session directory mounted read-only at its own path because Codex's nested sandbox needs
+to re-bind it, and its `sock` subdirectory mounted read-write at
+`/tmp/codex-daemon-UID`; the TUI gets only that socket directory, read-only. The read-only identity
+mount prevents the guest from replacing `sock`. In probes on Codex 0.167.1 its own tool sandbox
+could not connect to the socket, with network access off and on; that is Codex's behavior, not a
+mount property, so do not rely on it as a boundary. The daemon pins the host socket entry before
+connecting and rejects symlink substitution, non-socket targets, and paths outside that session's
+socket root.
 
 ### Team file
 

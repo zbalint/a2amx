@@ -190,3 +190,29 @@ All from the main checkout, as an ordinary user.
 | Codex requires the socket dir to be user-owned 0700 | scratch run with a 0755 dir | probed, `must be a user-owned directory with mode 0700` |
 | Real-bubblewrap tests exist for Codex confinement | `tests/common/mod.rs:52`, `tests/codex.rs:262` | read |
 | No other callers of `Plan::with_codex_dir` or `codex::socket_dir` | `grep -n 'with_codex_dir\|socket_dir' src tests` shows `src/daemon.rs:582`, `src/codex.rs`, `tests/confine.rs:3149`, `tests/codex.rs` | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (`claude-sonnet-5-5`); consultant Claude Opus 5.5
+(`claude-opus-5-5`); developer OMP `openai-codex/gpt-5.6-luna` (planning and working slots; the
+advisor model was not exposed); tester OMP `opencode-go/deepseek-v4.1-flash` (planning and working
+slots; the advisor model was not exposed).
+
+BLOCKED/amend cycles: 0. This spec is itself the fix for a problem found after the push of spec 3ec.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| After the push of 3ec (owner's real-Codex run) | owner, architect (Sonnet 5.5) | Every tool call in a confined Codex session failed: Codex's nested sandbox re-binds the mount source path of `/tmp/codex-daemon-<uid>` (the host path under the hidden state directory) and cannot create it. Spec 3ec's acceptance had no authenticated tool-call check, so no review stage could catch it. | This spec; the owner repeats the login check after the push (§7 item 6). |
+| Draft review | consultant (Opus 5.5) | The first draft bound the session directory read-write at its own path, so the app-server could swap `sock` for a symlink and the TUI's host-side `bwrap` would follow it. | Identity bind made read-only (probed: nested sandbox still runs, `mv`/`ln` in the session directory fail); no `src/session.rs` change. |
+| Draft review | consultant | The hostile-`sock` test could not be built as written (guest fake is a shell script, `tests/common/*` out of scope); mutant (f) could survive without a live listener; mutant (e) was equivalent. | Test redesigned (host-side substitution with a live fake, plus a guest-side test); (e) redefined. |
+| Draft review | consultant | The claim that tool commands cannot reach the socket was attributed to the mounts; the probe's EPERM is most likely Codex's own seccomp. Line anchors and the identity-bind position were loose. | Claim limited to probed behaviour, anchors and position wording fixed. |
+| Architect review | architect, from the tester's information finding | `docs/confinement.md` said the tool sandbox cannot connect "because networking is off"; the tester's probe with network access enabled also failed, so the cause was not established. | Wording changed to what was probed, not to a cause. |
+| Tester pass | tester | Minor: two listings in the guest test script expand the same directory; the stale-link test keeps no outside witness. | Recorded, not fixed: no behaviour impact; the stale-link removal is also covered by the mode and stale assertions. |
+
+Mutants: the developer's a-g and the tester's eleven (a-g plus four of its own) were all killed;
+the architect reran mutant g (identity bind read-write) and it fails the argv test and the
+guest-side test. Developer's full `cargo test` run was unresolved (one `tests/team.rs` failure,
+not reproduced by the tester in two runs); the architect's fresh full run passed.
+
+Open at acceptance: the owner's authenticated real-Codex check (backlog U11), now also covering a
+Codex session started with `--remote both` that messages `human:owner`.

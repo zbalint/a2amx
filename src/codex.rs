@@ -47,8 +47,12 @@ impl Endpoint {
     }
 }
 
-pub(crate) fn socket_dir(state_dir: &Path, session_id: &str) -> PathBuf {
+pub(crate) fn session_dir(state_dir: &Path, session_id: &str) -> PathBuf {
     state_dir.join("codex").join(session_id)
+}
+
+pub(crate) fn socket_dir(state_dir: &Path, session_id: &str) -> PathBuf {
+    session_dir(state_dir, session_id).join(crate::confine::CODEX_SOCKET_SUBDIR)
 }
 
 fn guest_socket() -> String {
@@ -549,7 +553,7 @@ async fn start_confined(
         host_dir: host_dir.clone(),
         guest: format!("unix://{guest}"),
     };
-    let prepare_dir = host_dir.clone();
+    let prepare_dir = session_dir(state_dir, session_id);
     tokio::task::spawn_blocking(move || reset_socket_dir(prepare_dir)).await??;
     let mut command_argv = vec![
         program.to_owned(),
@@ -609,19 +613,21 @@ async fn start_confined(
     }))
 }
 
-fn reset_socket_dir(host_dir: PathBuf) -> anyhow::Result<()> {
+fn reset_socket_dir(session_dir: PathBuf) -> anyhow::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    match std::fs::remove_dir_all(&host_dir) {
+    match std::fs::remove_dir_all(&session_dir) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
             return Err(error.into());
         }
         _ => {}
     }
+    let socket_dir = session_dir.join(crate::confine::CODEX_SOCKET_SUBDIR);
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(&host_dir)?;
-    std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o700))?;
+        .create(&socket_dir)?;
+    std::fs::set_permissions(&session_dir, std::fs::Permissions::from_mode(0o700))?;
+    std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 

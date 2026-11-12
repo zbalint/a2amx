@@ -28,6 +28,21 @@ printf '%s\\n' \"${A2AMX_TOKEN:-unset}\" > \"$ARGS_DIR/$role.token\"
 printf '%s\\n' \"${A2AMX_ROLE:-unset}\" > \"$ARGS_DIR/$role.role\"
 printf '%s\\n' \"$(readlink /proc/self/ns/pid)\" > \"$ARGS_DIR/$role.pidns\"
 if [ \"$role\" = server ]; then
+    if [ -n \"$FAKE_GUEST_MUTATION\" ]; then
+        if [ -z \"$FAKE_SESSION_DIR\" ] || [ ! -d \"$FAKE_SESSION_DIR\" ]; then
+            echo \"invalid-session-dir\" > \"$ARGS_DIR/guest-mutation\"
+        else
+            {
+                echo \"parent:\"
+                find \"${FAKE_SESSION_DIR%/*}\" -mindepth 1 -maxdepth 1 -printf '%f\\n' | sort
+                echo \"codex:\"
+                find \"${FAKE_SESSION_DIR%/*}\" -mindepth 1 -maxdepth 1 -printf '%f\\n' | sort
+                if mv \"$FAKE_SESSION_DIR/sock\" \"$FAKE_SESSION_DIR/sock2\"; then echo \"mv=ok\"; else echo \"mv=fail\"; fi
+                if ln -s /etc \"$FAKE_SESSION_DIR/x\"; then echo \"ln=ok\"; else echo \"ln=fail\"; fi
+                if touch \"$FAKE_SESSION_DIR/y\"; then echo \"touch=ok\"; else echo \"touch=fail\"; fi
+            } > \"$ARGS_DIR/guest-mutation\"
+        fi
+    fi
     target=\"${3#unix://}\"
     if [ -n \"$FAKE_SOCKET\" ]; then
         ln -sf \"$FAKE_SOCKET\" \"$target\"
@@ -308,8 +323,10 @@ async fn confined_codex_uses_private_socket_dir_and_delivers() {
             remote: None,
         }),
     };
-    let socket_dir = state_dir.path().join("codex/s2");
+    let session_dir = state_dir.path().join("codex/s2");
+    let socket_dir = session_dir.join("sock");
     std::fs::create_dir_all(&socket_dir).unwrap();
+    symlink("/tmp", session_dir.join("stale")).unwrap();
     symlink("/tmp", socket_dir.join("stale")).unwrap();
     let created = tokio::spawn(async move { admin.request(request).await.unwrap() });
     let app_link = socket_dir.join("app.sock");
@@ -320,15 +337,18 @@ async fn confined_codex_uses_private_socket_dir_and_delivers() {
             .map(|_| ())
     })
     .await;
+    assert!(std::fs::symlink_metadata(session_dir.join("stale")).is_err());
     assert!(std::fs::symlink_metadata(socket_dir.join("stale")).is_err());
-    assert_eq!(
-        std::fs::symlink_metadata(&socket_dir)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o700
-    );
+    for path in [&session_dir, &socket_dir] {
+        assert_eq!(
+            std::fs::symlink_metadata(path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
     let fake = FakeCodex::bind(&socket_dir.join("fake"));
     fake.set_threads(&[("thread-1", idle())]);
     fake.auto_enter(true);
@@ -639,20 +659,21 @@ async fn confined_codex_rejects_hostile_socket_links() {
                     .ok()?
                     .filter_map(Result::ok)
                     .filter_map(|entry| {
-                        let path = entry.path();
-                        if existing_dirs.contains(&path) {
+                        let session_dir = entry.path();
+                        if existing_dirs.contains(&session_dir) {
                             return None;
                         }
-                        let app_link = path.join("app.sock");
+                        let socket_dir = session_dir.join("sock");
+                        let app_link = socket_dir.join("app.sock");
                         std::fs::symlink_metadata(&app_link)
                             .ok()
                             .filter(|metadata| metadata.file_type().is_symlink())
-                            .map(|_| path)
+                            .map(|_| socket_dir)
                     })
                     .max()
             })
             .await;
-            fake_server = Some(FakeCodex::bind(&socket_dir.join("x".repeat(81))));
+            fake_server = Some(FakeCodex::bind(&socket_dir.join("short")));
             tokio::time::timeout(Duration::from_secs(8), pending)
                 .await
                 .unwrap()
@@ -673,13 +694,180 @@ async fn confined_codex_rejects_hostile_socket_links() {
             assert_eq!(
                 fake_server
                     .as_ref()
-                    .expect("long-name fake listener")
+                    .expect("short fake listener")
                     .connections(),
                 0
             );
         }
     }
     assert!(listener.accept().is_err());
+    drop(daemon);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn confined_codex_rejects_host_substituted_socket_dir() {
+    let Some((state_dir, daemon)) = common::start_confined_daemon().await else {
+        assert!(
+            std::env::var_os("A2AMX_REQUIRE_BWRAP").is_none(),
+            "bubblewrap is required for this test"
+        );
+        return;
+    };
+    let mut admin = Client::connect(state_dir.path()).await.unwrap();
+    let _ = common::new_agent(
+        &mut admin,
+        state_dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let work = tempfile::tempdir().unwrap();
+    let cwd = work.path().join("workspace");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let program = cwd.join("codex");
+    std::fs::write(&program, FAKE_CODEX).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let request = Request::Confine {
+        confine: ConfineRequest::default(),
+        request: Box::new(Request::NewSession {
+            argv: vec![program.to_string_lossy().into_owned()],
+            cols: 40,
+            rows: 10,
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            env: vec![
+                ("ARGS_DIR".into(), cwd.to_string_lossy().into_owned()),
+                ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
+                ("A2AMX_NO_AUTHORIZE_PEERS".into(), "1".into()),
+                ("FAKE_CONFINED".into(), "1".into()),
+            ],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            activity: None,
+            heartbeat: None,
+            name: Some("substitute".into()),
+            harness: Harness::Codex,
+            deliver: None,
+            team: None,
+            role: None,
+            remote: None,
+        }),
+    };
+    std::fs::create_dir_all(state_dir.path().join("codex")).unwrap();
+    let session_dir = state_dir.path().join("codex/s2");
+    let socket_dir = session_dir.join("sock");
+    let pending = tokio::spawn(async move { admin.request(request).await.unwrap() });
+    common::eventually(|| async {
+        std::fs::symlink_metadata(socket_dir.join("app.sock"))
+            .ok()
+            .filter(|metadata| metadata.file_type().is_symlink())
+            .map(|_| ())
+    })
+    .await;
+    let original = session_dir.join("sock-original");
+    std::fs::rename(&socket_dir, &original).unwrap();
+    let substitute = work.path().join("substitute");
+    std::fs::create_dir(&substitute).unwrap();
+    let fake = FakeCodex::bind(&substitute.join("fake"));
+    let guest_fake = format!(
+        "/tmp/codex-daemon-{}/fake",
+        rustix::process::geteuid().as_raw()
+    );
+    symlink(guest_fake, substitute.join("app.sock")).unwrap();
+    symlink(&substitute, &socket_dir).unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(35), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    let Response::Error { message } = response else {
+        panic!("substituted socket directory was accepted: {response:?}");
+    };
+    assert!(message.contains("unexpected socket link"), "{message}");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(fake.connections(), 0);
+    drop(daemon);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn confined_codex_guest_cannot_replace_socket_directory() {
+    let Some((state_dir, daemon)) = common::start_confined_daemon().await else {
+        assert!(
+            std::env::var_os("A2AMX_REQUIRE_BWRAP").is_none(),
+            "bubblewrap is required for this test"
+        );
+        return;
+    };
+    let mut admin = Client::connect(state_dir.path()).await.unwrap();
+    let _ = common::new_agent(
+        &mut admin,
+        state_dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let work = tempfile::tempdir().unwrap();
+    let cwd = work.path().join("workspace");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let program = cwd.join("codex");
+    std::fs::write(&program, FAKE_CODEX).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let session_dir = state_dir.path().join("codex/s2");
+    let socket_dir = session_dir.join("sock");
+    let request = Request::Confine {
+        confine: ConfineRequest::default(),
+        request: Box::new(Request::NewSession {
+            argv: vec![program.to_string_lossy().into_owned()],
+            cols: 40,
+            rows: 10,
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            env: vec![
+                ("ARGS_DIR".into(), cwd.to_string_lossy().into_owned()),
+                ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
+                ("FAKE_CONFINED".into(), "1".into()),
+                ("FAKE_GUEST_MUTATION".into(), "1".into()),
+                (
+                    "FAKE_SESSION_DIR".into(),
+                    session_dir.to_string_lossy().into_owned(),
+                ),
+            ],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            activity: None,
+            heartbeat: None,
+            name: Some("guest-mutation".into()),
+            harness: Harness::Codex,
+            deliver: None,
+            team: None,
+            role: None,
+            remote: None,
+        }),
+    };
+    let created = tokio::spawn(async move { admin.request(request).await.unwrap() });
+    common::eventually(|| async {
+        std::fs::symlink_metadata(socket_dir.join("app.sock"))
+            .ok()
+            .filter(|metadata| metadata.file_type().is_symlink())
+            .map(|_| ())
+    })
+    .await;
+    let fake = FakeCodex::bind(&socket_dir.join("fake"));
+    let response = created.await.unwrap();
+    assert!(matches!(response, Response::Created { .. }), "{response:?}");
+    let mutation = common::eventually(|| async { complete(&cwd.join("guest-mutation")) }).await;
+    assert!(mutation.contains("parent:\ns2\n"));
+    assert!(mutation.contains("codex:\ns2\n"));
+    assert!(mutation.contains("mv=fail"));
+    assert!(mutation.contains("ln=fail"));
+    assert!(mutation.contains("touch=fail"));
+    assert!(
+        std::fs::symlink_metadata(socket_dir.join("app.sock"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert!(fake.connections() >= 1);
     drop(daemon);
 }
 

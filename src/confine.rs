@@ -23,6 +23,8 @@ use crate::harness::Harness;
 use crate::wire::{ConfineInfo, GrantReason};
 
 pub const MAX_LIST_ENTRIES: usize = 64;
+/// Subdirectory that holds a confined Codex app-server's socket.
+pub const CODEX_SOCKET_SUBDIR: &str = "sock";
 pub const MAX_PATH_BYTES: usize = 4096;
 const MAX_ARG_BYTES: usize = 128 * 1024;
 const MAX_ARGV_BYTES: usize = 256 * 1024;
@@ -2094,13 +2096,17 @@ impl Plan {
                 }
             }
         }
+        if app_server && let Some(dir) = &self.codex_dir {
+            wrapped.extend(["--ro-bind".into(), path_key(dir), path_key(dir)]);
+        }
         for path in remounts {
             wrapped.extend(["--remount-ro".into(), path_key(&path)]);
         }
         if let Some(dir) = &self.codex_dir {
+            let socket_dir = dir.join(CODEX_SOCKET_SUBDIR);
             wrapped.extend([
                 if app_server { "--bind" } else { "--ro-bind" }.into(),
-                path_key(dir),
+                path_key(&socket_dir),
                 format!("/tmp/codex-daemon-{}", rustix::process::geteuid().as_raw()),
             ]);
         }

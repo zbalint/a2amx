@@ -579,7 +579,7 @@ impl Runtime {
         if harness == Harness::Codex
             && let Some(plan) = confine_plan.take()
         {
-            confine_plan = Some(plan.with_codex_dir(codex::socket_dir(&self.state_dir, &id.0)));
+            confine_plan = Some(plan.with_codex_dir(codex::session_dir(&self.state_dir, &id.0)));
         }
         if harness == Harness::Codex {
             (argv, codex) = match self

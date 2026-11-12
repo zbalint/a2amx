@@ -3297,14 +3297,19 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
     let server = plan
         .wrap_app_server(vec!["codex".into()])
         .expect("app-server argv");
-    let mount = fixture
+    let session = fixture
         .state
         .join("codex/s1")
         .to_string_lossy()
         .into_owned();
+    let socket = fixture
+        .state
+        .join("codex/s1/sock")
+        .to_string_lossy()
+        .into_owned();
     let target = format!("/tmp/codex-daemon-{}", rustix::process::geteuid().as_raw());
-    let tui = ["--ro-bind", mount.as_str(), target.as_str()];
-    let rw = ["--bind", mount.as_str(), target.as_str()];
+    let tui = ["--ro-bind", socket.as_str(), target.as_str()];
+    let rw = ["--bind", socket.as_str(), target.as_str()];
     assert!(wrapped.windows(3).any(|window| window == tui));
     assert!(server.windows(3).any(|window| window == rw));
     let chdir = wrapped
@@ -3312,6 +3317,30 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
         .position(|value| value == "--chdir")
         .expect("--chdir");
     assert_eq!(&wrapped[chdir - 3..chdir], tui);
+    let server_chdir = server
+        .iter()
+        .position(|value| value == "--chdir")
+        .expect("server --chdir");
+    assert_eq!(&server[server_chdir - 3..server_chdir], rw);
+    let identity = ["--ro-bind", session.as_str(), session.as_str()];
+    let identity_start = server
+        .windows(3)
+        .position(|window| window == identity)
+        .expect("server identity bind");
+    assert!(!wrapped.windows(3).any(|window| window == identity));
+    let first_remount = server
+        .iter()
+        .position(|value| value == "--remount-ro")
+        .expect("first remount");
+    assert!(identity_start < first_remount);
+    let codex_home_path = fixture.home.join(".codex").to_string_lossy().into_owned();
+    let home_bind = server
+        .windows(3)
+        .position(|window| {
+            window[0] == "--bind" && window[1] == codex_home_path && window[2] == codex_home_path
+        })
+        .expect("Codex home bind");
+    assert!(identity_start > home_bind);
     let codex_home = fixture.home.join(".codex");
     assert!(plan.writable.iter().any(|path| path == &codex_home));
     assert!(!plan.hidden_paths().contains(&codex_home.join("auth.json")));
