@@ -5,10 +5,12 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-12
+
 ### Fixed
 
 - The attach client no longer lets its status and team rows overlap an agent's screen in viewer mode (F87). A viewer attach, a terminal resize and a status-line toggle now size the session to the client's usable rows, as in interactive mode; input and release frames are still not sent in viewer mode. This reverses the 0.3.0 rule that a viewer does not resize the session. The daemon accepts `Resize` frames from a viewer attachment.
-- `a2amx mcp` and `a2amx omp-bridge` no longer let an unbounded stdin line or a fast producer grow their memory (I21). A line above 1 MiB is discarded: the MCP server answers it with the JSON-RPC error `-32600` ("request too large") and keeps running, and the OMP bridge exits with the error "bridge input line exceeds 1048576 bytes". The reader holds at most 16 lines and stops reading stdin while the handler is busy.
+- `a2amx mcp` and `a2amx omp-bridge` no longer let an unbounded stdin line or a fast producer grow their memory (I21). A line above 1 MiB is discarded: the MCP server answers it with the JSON-RPC error `-32600` ("request too large") and keeps running, and the OMP bridge exits with the error "bridge input line exceeds 1048576 bytes". The reader keeps at most 16 lines waiting for the handler and stops reading stdin until one is taken.
 
 ## [0.3.0] - 2026-11-11
 
