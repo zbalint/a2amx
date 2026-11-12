@@ -571,6 +571,13 @@ async fn mcp_rejects_oversized_line_and_resumes() {
         let ping = mcp.send(json!({"jsonrpc":"2.0","id":1,"method":"ping"}));
         assert_eq!(ping["id"], 1);
         assert_eq!(ping["result"], json!({}));
+        mcp.close_stdin();
+        let mut trailing = String::new();
+        mcp.stdout
+            .read_to_string(&mut trailing)
+            .expect("read MCP stdout to EOF");
+        assert!(trailing.is_empty());
+        assert_eq!(mcp.child.wait().expect("wait for MCP").code(), Some(0));
     })
     .await
     .expect("oversized MCP line scenario");
@@ -603,6 +610,13 @@ async fn mcp_discards_the_rest_of_an_oversized_line() {
         let ping = mcp.send(json!({"jsonrpc":"2.0","id":1,"method":"ping"}));
         assert_eq!(ping["id"], 1);
         assert_eq!(ping["result"], json!({}));
+        mcp.close_stdin();
+        let mut trailing = String::new();
+        mcp.stdout
+            .read_to_string(&mut trailing)
+            .expect("read MCP stdout to EOF");
+        assert!(trailing.is_empty());
+        assert_eq!(mcp.child.wait().expect("wait for MCP").code(), Some(0));
     })
     .await
     .expect("oversized MCP discard scenario");
@@ -628,6 +642,13 @@ async fn mcp_accepts_a_line_at_the_inclusive_limit() {
         let parse_error = mcp.read();
         assert_eq!(parse_error["error"]["code"], -32700);
         assert_eq!(parse_error["id"], Value::Null);
+        mcp.close_stdin();
+        let mut trailing = String::new();
+        mcp.stdout
+            .read_to_string(&mut trailing)
+            .expect("read MCP stdout to EOF");
+        assert!(trailing.is_empty());
+        assert_eq!(mcp.child.wait().expect("wait for MCP").code(), Some(0));
     })
     .await
     .expect("inclusive MCP limit scenario");
@@ -817,6 +838,22 @@ fn mcp_missing_or_invalid_environment_exits_without_protocol_output() {
 }
 
 #[test]
+fn mcp_reports_a_stdin_read_error_and_exits_nonzero() {
+    let dir = tempfile::tempdir().expect("stdin directory");
+    let stdin = std::fs::File::open(dir.path()).expect("open stdin directory");
+    let output = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .arg("mcp")
+        .env("A2AMX_ADDR", "127.0.0.1:1")
+        .env("A2AMX_TOKEN", "a".repeat(64))
+        .stdin(Stdio::from(stdin))
+        .output()
+        .expect("run mcp");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("reading MCP stdin"));
+}
+
+#[test]
 fn mcp_dead_daemon_is_a_tool_failure_and_stdout_stays_json() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("dead-daemon listener");
     let addr = listener.local_addr().expect("dead-daemon address");
@@ -995,6 +1032,13 @@ async fn mcp_rejects_oversized_send_message_before_daemon_write() {
                 {"address":"agent-plan@host-a","state":"running","activity":"working","attached":false,"harness":"generic","you":true}
             ]})
         );
+        mcp.close_stdin();
+        let mut trailing = String::new();
+        mcp.stdout
+            .read_to_string(&mut trailing)
+            .expect("read MCP stdout to EOF");
+        assert!(trailing.is_empty());
+        assert_eq!(mcp.child.wait().expect("wait for MCP").code(), Some(0));
     })
     .await
     .expect("prewrite boundary scenario");

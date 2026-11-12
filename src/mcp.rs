@@ -113,44 +113,66 @@ pub(crate) enum StdioEvent {
     Error(String),
 }
 
+enum CappedLine {
+    Eof,
+    Line(Vec<u8>),
+    Oversized,
+}
+
+/// Reads one line of at most `MAX_FRAME_LEN` bytes plus its newline. The read stops after
+/// `MAX_FRAME_LEN + 1` bytes, so a line is too long only when that many bytes arrive without a newline;
+/// a final line without a newline that fits is still a `Line`. Leaves the rest of a too long line unread.
+fn read_capped_line<R: BufRead>(reader: &mut R) -> io::Result<CappedLine> {
+    let mut line = Vec::new();
+    let read = reader
+        .by_ref()
+        .take(MAX_FRAME_LEN as u64 + 1)
+        .read_until(b'\n', &mut line)?;
+    if read == 0 {
+        Ok(CappedLine::Eof)
+    } else if read == MAX_FRAME_LEN + 1 && !line.ends_with(b"\n") {
+        Ok(CappedLine::Oversized)
+    } else {
+        Ok(CappedLine::Line(line))
+    }
+}
+
+/// Consumes input through the next `\n` or EOF without keeping it, so a too long line never sits in memory.
+fn discard_through_newline<R: BufRead>(reader: &mut R) -> io::Result<()> {
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(());
+        }
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let length = buffer.len();
+        if let Some(index) = newline {
+            reader.consume(index + 1);
+            return Ok(());
+        }
+        reader.consume(length);
+    }
+}
+
 pub(crate) fn spawn_stdin_reader() -> mpsc::Receiver<StdioEvent> {
     let (sender, receiver) = mpsc::channel(16);
     thread::spawn(move || {
         let stdin = io::stdin();
         let mut lock = stdin.lock();
         loop {
-            let mut line = Vec::new();
-            let result = lock
-                .by_ref()
-                .take(MAX_FRAME_LEN as u64 + 1)
-                .read_until(b'\n', &mut line);
-            match result {
-                Ok(0) => break,
-                Ok(read) if read == MAX_FRAME_LEN + 1 && !line.ends_with(b"\n") => {
+            match read_capped_line(&mut lock) {
+                Ok(CappedLine::Eof) => break,
+                Ok(CappedLine::Line(line)) => {
+                    if sender.blocking_send(StdioEvent::Line(line)).is_err() {
+                        return;
+                    }
+                }
+                Ok(CappedLine::Oversized) => {
                     if sender.blocking_send(StdioEvent::Oversized).is_err() {
                         return;
                     }
-                    loop {
-                        let buffer = match lock.fill_buf() {
-                            Ok(buffer) => buffer,
-                            Err(error) => {
-                                let _ = sender.blocking_send(StdioEvent::Error(error.to_string()));
-                                return;
-                            }
-                        };
-                        if buffer.is_empty() {
-                            break;
-                        }
-                        if let Some(index) = buffer.iter().position(|byte| *byte == b'\n') {
-                            lock.consume(index + 1);
-                            break;
-                        }
-                        let length = buffer.len();
-                        lock.consume(length);
-                    }
-                }
-                Ok(_) => {
-                    if sender.blocking_send(StdioEvent::Line(line)).is_err() {
+                    if let Err(error) = discard_through_newline(&mut lock) {
+                        let _ = sender.blocking_send(StdioEvent::Error(error.to_string()));
                         return;
                     }
                 }
