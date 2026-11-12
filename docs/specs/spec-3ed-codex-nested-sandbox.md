@@ -214,5 +214,9 @@ the architect reran mutant g (identity bind read-write) and it fails the argv te
 guest-side test. Developer's full `cargo test` run was unresolved (one `tests/team.rs` failure,
 not reproduced by the tester in two runs); the architect's fresh full run passed.
 
-Open at acceptance: the owner's authenticated real-Codex check (backlog U11), now also covering a
-Codex session started with `--remote both` that messages `human:owner`.
+After the push: the owner's authenticated real-Codex check (backlog U11) passed on 2026-11-13: the
+confinement notice, a tool call (`echo hi > /tmp/x`), a denied write outside the grants, the hidden
+state directory, message delivery, and remote messaging (`team up` lease code, a message to
+`human:owner`, a reply from Discord). One slip of the architect's instructions: it first told the
+owner to use `a2amx new --remote both`, which never reaches remote messaging (no team, no lease);
+the docs already said so. Recorded as backlog F90 (presence is hard to understand).
