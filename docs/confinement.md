@@ -6,7 +6,7 @@ Confinement is a safety net for a trusted but fallible agent, not a security bou
 
 | Area | Default |
 | --- | --- |
-| Writable | The working directory and its Git directory, a private `/tmp`, and Claude and OMP's own harness config roots read-write and persistent by default. Named grants and explicit `write` entries add the paths they name. |
+| Writable | The working directory and its Git directory, a private `/tmp`, and Claude, OMP, and Codex's own harness config roots read-write and persistent by default. Named grants and explicit `write` entries add the paths they name. |
 | Read-only | The rest of the filesystem; the `~/.cache` root and the tool directories under home such as `~/.cargo` are read-only, not opened, and not hidden, while credential hides inside them still apply; the working directory is writable, `target/` and `node_modules/` included, except the protected launch inputs listed next. Protected launch inputs stay read-only: `~/.a2amx`, existing `PATH` directories inside home, harness control files and directories, and this session's Git `hooks`, `config`, `config.worktree`, `core.hooksPath`, and team file. |
 | Hidden | Credential locations by default; a matching grant or an explicit `unhide` makes an allowed location visible. The state and runtime directories, `/run/dbus`, container sockets, `/run/WSL`, and `/mnt/wslg` are hidden at launch when default hides are enabled. |
 
@@ -49,10 +49,16 @@ a2amx new --confine --confine-grant cargo --confine-grant cache -- omp
 
 When confinement is enabled by `a2amx new --confine` or a team file, no cache grant is
 implicit. `cache` opens `~/.cache`; marker-specific toolchain grants open their literal
-tool directories only when listed. Claude and OMP sessions always open their own harness
+tool directories only when listed. Claude, OMP, and Codex sessions always open their own harness
 config root read-write and persistent by default. Use `a2amx confine suggest` to print a
 copyable grants fragment, or add grants explicitly to the team/session table.
 Auto detection covers the marker-based grants listed in [the detection table](#automatic-grant-detection), adds `ssh`, `gh`, or `git-credentials` from supported git remotes, and always adds `cache`; explicit confinement still has no implicit cache grant. Paths relocated by environment variables still need an explicit `write` entry.
+
+Codex confinement also wraps its private app-server in the same bubblewrap profile. Each confined
+Codex session gets a fresh owner-only socket directory under the daemon state directory, mounted
+read-write only into the app-server and read-only into the TUI. The TUI connects through
+`/tmp/codex-daemon-UID/app.sock`; the daemon pins the host socket entry before connecting and
+rejects symlink substitution, non-socket targets, and paths outside that session's socket root.
 
 ### Team file
 
@@ -210,7 +216,7 @@ that is a symlink is refused or reported unresolved; it is never created through
 
 Grant names are closed and validated before launch; each grant is separate and explicit
 unless added by global auto detection. `harness-config` remains available as a
-session-only explicit grant, while Claude and OMP sessions receive equivalent persistent
+session-only explicit grant, while Claude, OMP, and Codex sessions receive equivalent persistent
 access to their harness root by default.
 
 ### Automatic grant detection
@@ -253,9 +259,9 @@ for that run only and never writes the accepted-grants file. A non-terminal run 
 writes; it reports each new grant as `  not yet accepted: NAME, ...`.
 
 `harness-config` is deliberately broad: the agent can change settings, hooks, instructions and
-programs under `~/.claude` or `~/.omp`, and a running session of that harness—including your own
-unconfined sessions—picks changes up immediately. A hook it adds therefore runs with your full
-rights at once. The directory also holds programs such as `~/.claude/local/claude` and anything
+programs under `~/.claude`, `~/.omp`, or `~/.codex`, and a running
+session of that harness—including your own unconfined sessions—picks changes up immediately and
+has those rights at once. The directory also holds programs such as `~/.claude/local/claude` and anything
 under `~/.omp`; a launched `omp` whose `argv0` lies there is run by the daemon's quota probe
 outside the sandbox within minutes. Symlinked entries such as `hooks`, `agents` and `CLAUDE.md`
 can be replaced for good, which breaks a setup managed elsewhere. If `~/.claude` is itself a
@@ -285,7 +291,7 @@ The classes follow what the table row says comes with the grant:
 
 - **Plain grant:** rows without a credential, token, or account action: `cargo`, `go`, `python`, `node`, `c-cpp`, and `cache`.
 - **Grant with the risk spelled out:** rows that name credentials, a token, an account action, or (for `docker`) access to a container daemon: `docker`, `gh`, `git-credentials`, `ssh`, `java`, `semgrep`, `sonar`, `aws`, `gcloud`, `azure`, `kube`, `terraform`, `npm-token`, `pypi-token`, `cargo-token`, `netrc`, and `huggingface-token`. `docker` is allowed in a team file; otherwise use the team or session scope shown in the table.
-- **Session-only:** exactly the rows whose last column says `No`: `podman`, `containerd`, `crio`, `libvirt`, `lxd`, `snap`, and `harness-config`. `harness-config` is also the default harness root for Claude and OMP, so it is not opt-in for those harnesses.
+- **Session-only:** exactly the rows whose last column says `No`: `podman`, `containerd`, `crio`, `libvirt`, `lxd`, `snap`, and `harness-config`. `harness-config` is also the default harness root for Claude, OMP, and Codex, so it is not opt-in for those harnesses.
 - **Closed:** no grant opens the system or the whole home; `/` is refused (see [Where A2AMX says no](philosophy.md#9-where-a2amx-says-no)). Opening the whole home takes an explicit `write` entry for home or for an allowed ancestor of it (for example `write = ["~"]`), which is the operator's choice.
 
 When a tool reports `Read-only file system`, add the directory named in the error to `write` or grant the matching tool directory in the session's `[session.confine]` table, not `$HOME`, unless opening the whole home is your deliberate choice. `write = ["~"]` makes everything under home writable except the hides and protected launch inputs; the choice belongs to the user. Whatever you open stays writable for the next unconfined run too. The `cargo` grant opens `~/.cargo` while keeping its credentials hidden; `~/.cargo/bin` remains protected when it is on `PATH`. `~/.cargo/env` and `~/.cargo/config.toml` are writable under that grant, and later builds execute the configuration they contain.
@@ -306,7 +312,7 @@ When a tool reports `Read-only file system`, add the directory named in the erro
 `write = ["~"]` is an operator choice, not a sandbox escape hidden behind a default. It leaves these residuals:
 
 1. The Git history inside a writable Git directory is writable, so an agent can rewrite commits.
-2. Harness roots are writable and persistent by default for Claude and OMP, including settings, hooks, plugins and new files. Treat them as trusted program directories; a running unconfined sibling may load changes immediately. Only this session's repository `hooks`/`config` and team file are protected; every other repository's `.git/hooks` and `.git/config`, and every other `a2amx.toml` under a writable home, are writable. Windows drives under `/mnt` are writable if `/mnt` is opened.
+2. Harness roots are writable and persistent by default for Claude, OMP, and Codex, including settings, hooks, plugins and new files. Treat them as trusted program directories; a running unconfined sibling may load changes immediately. Only this session's repository `hooks`/`config` and team file are protected; every other repository's `.git/hooks` and `.git/config`, and every other `a2amx.toml` under a writable home, are writable. Windows drives under `/mnt` are writable if `/mnt` is opened.
 3. Hides are decided when the session starts. A file created later at a hidden path is not hidden.
 4. A writable home lets the agent edit shell startup files and editor configs that the user's next unconfined run executes. Open it knowing that.
 5. A grant opens what its row says and no more. An install directory other than `~/.a2amx` is protected only when it appears as an existing `PATH` directory inside the home.
@@ -319,10 +325,11 @@ what those paths expose but does not change the confinement plan.
 
 ## Harness login and state files
 
-Claude and OMP sessions bind their real harness configuration root read-write and persistent
+Claude, OMP, and Codex sessions bind their real harness configuration root read-write and persistent
 by default, so the harness can renew its token and save settings, hooks, skills and new
-files. This is broad access to programs that sibling unconfined sessions may load
-immediately; use it only for an agent you trust. `/login` and saves to `~/.claude.json`
+files. A session launched with `CODEX_HOME` set elsewhere still receives `~/.codex` read-write;
+`CODEX_HOME` is not honored. This is broad access to programs that sibling unconfined sessions may
+load immediately; use it only for an agent you trust. `/login` and saves to `~/.claude.json`
 from inside a confined session still do not work: their lock and temporary files live in
 your home, which stays read-only. In the default Claude harness session an existing `~/.claude.json` can be edited in place; creating
 a temporary or lock file next to it fails (the maintainers ran an in-place append, a copy to a

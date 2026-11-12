@@ -1274,7 +1274,7 @@ hide = ["./secrets"]
     )
     .expect_err("options without enabled");
     assert!(error.to_string().contains("need enabled = true"));
-    let error = team::parse(
+    let sessions = team::parse(
         r#"
 [[session]]
 name = "worker"
@@ -1283,8 +1283,8 @@ command = ["codex"]
 enabled = true
 "#,
     )
-    .expect_err("codex confinement");
-    assert!(error.to_string().contains("not supported for Codex"));
+    .expect("codex confinement");
+    assert!(sessions[0].confine.is_some());
 }
 #[test]
 fn confined_claude_prompt_file_after_separator_is_ignored() {

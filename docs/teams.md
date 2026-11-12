@@ -147,8 +147,8 @@ only when a real session starts. Dry runs list missing grant directories as skip
 credential grants never create files or directories.
 
 Options on a disabled session need `enabled = true`; team options without any enabled
-value confine nothing. Lists accept at most 64 entries of at most 4096 bytes. Codex
-sessions cannot be confined.
+value confine nothing. Lists accept at most 64 entries of at most 4096 bytes. Codex sessions
+can be confined alongside Claude Code and OMP.
 See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.
 
 A copy to start from is in [a2amx.toml.example](../a2amx.toml.example); your own `a2amx.toml` is gitignored.

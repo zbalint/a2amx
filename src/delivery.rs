@@ -256,7 +256,7 @@ impl Channel for CodexChannel {
         }
         // Connect before the attempt is recorded: a dead server then leaves the message
         // pending instead of ending an attempt that sent nothing.
-        match Rpc::connect(self.link.socket()).await {
+        match Rpc::connect_endpoint(self.link.endpoint()).await {
             Ok(rpc) => Some(CodexTicket {
                 link: &self.link,
                 rpc,

@@ -216,6 +216,7 @@ pub struct Plan {
     unsaved_files: Vec<PathBuf>,
     overlay_notice: Option<String>,
     harness_config: Option<PathBuf>,
+    codex_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1088,16 +1089,6 @@ fn add_harness_data_mounts(
     Ok(())
 }
 
-/// Reject harness profiles whose control plane runs outside the confined PTY.
-pub fn check_harness(harness: Harness) -> Result<()> {
-    if harness == Harness::Codex {
-        bail!(
-            "confinement is not supported for Codex sessions yet: its tools run outside the session process"
-        );
-    }
-    Ok(())
-}
-
 /// Build the complete mount plan using the daemon's current `PATH`.
 pub fn plan(request: &ConfineRequest, harness: Harness, cwd: &Path, host: &Host) -> Result<Plan> {
     plan_with_path(request, harness, cwd, host, std::env::var_os("PATH"))
@@ -1123,7 +1114,7 @@ pub fn plan_with_preflight(
     path_var: Option<OsString>,
     preflight: Vec<Unresolved>,
 ) -> Result<Plan> {
-    check_request_limits(request, harness)?;
+    check_request_limits(request)?;
     crate::grant::validate(&request.grants)?;
     let mut builder = PlanBuilder::new(host, harness)?;
     builder.unresolved.extend(preflight);
@@ -1135,13 +1126,14 @@ pub fn plan_with_preflight(
     builder.bind_workspace(&cwd)?;
     builder.bind_harness_data(request)?;
     let mut effective_grants = request.grants.clone();
-    if matches!(harness, Harness::Claude | Harness::Omp)
+    if matches!(harness, Harness::Claude | Harness::Omp | Harness::Codex)
         && !request.grants.iter().any(|grant| grant == "harness-config")
     {
         let root = match harness {
             Harness::Claude => builder.home.join(".claude"),
             Harness::Omp => builder.home.join(".omp"),
-            Harness::Generic | Harness::Codex => unreachable!(),
+            Harness::Codex => builder.home.join(".codex"),
+            Harness::Generic => unreachable!(),
         };
         let root = canonical_if_exists(&root);
         let operator_root = root.as_ref().is_some_and(|root| {
@@ -1178,7 +1170,7 @@ pub fn plan_with_preflight(
     builder.finish(request, cwd, empty_file, effective_grants)
 }
 
-fn check_request_limits(request: &ConfineRequest, harness: Harness) -> Result<()> {
+fn check_request_limits(request: &ConfineRequest) -> Result<()> {
     check_entry_count(&request.write, "write")?;
     check_entry_count(&request.hide, "hide")?;
     check_entry_count(&request.unhide, "unhide")?;
@@ -1219,7 +1211,7 @@ fn check_request_limits(request: &ConfineRequest, harness: Harness) -> Result<()
         }
         check_absolute_entry("team_file", path)?;
     }
-    check_harness(harness)
+    Ok(())
 }
 
 /// The mount lists while the jobs of `plan` fill them.
@@ -1335,7 +1327,8 @@ impl<'a> PlanBuilder<'a> {
         match self.harness {
             Harness::Claude => Some(self.home.join(".claude")),
             Harness::Omp => Some(self.home.join(".omp")),
-            Harness::Generic | Harness::Codex => None,
+            Harness::Codex => Some(self.home.join(".codex")),
+            Harness::Generic => None,
         }
     }
 
@@ -1410,7 +1403,7 @@ impl<'a> PlanBuilder<'a> {
             return Ok(());
         }
         let Some(root) = self.session_harness_root() else {
-            bail!("confinement grant \"harness-config\" needs a Claude or OMP session")
+            bail!("confinement grant \"harness-config\" needs a Claude, OMP, or Codex session")
         };
         let Some(root) = add_canonical_existing(&root, "harness config", &mut self.skipped) else {
             return Ok(());
@@ -1873,6 +1866,7 @@ impl<'a> PlanBuilder<'a> {
             unsaved_files,
             overlay_notice: None,
             harness_config: self.harness_config,
+            codex_dir: None,
         };
         // Force the expensive argument-size validation while still in the
         // daemon-side preflight path, before a PTY can be created.
@@ -1906,6 +1900,11 @@ fn granted_env(grants: &[String]) -> BTreeSet<&'static str> {
 impl Plan {
     pub fn with_bwrap(mut self, path: PathBuf) -> Self {
         self.bwrap = path;
+        self
+    }
+
+    pub fn with_codex_dir(mut self, path: PathBuf) -> Self {
+        self.codex_dir = Some(path);
         self
     }
 
@@ -2006,6 +2005,14 @@ impl Plan {
 
     /// Produce `bwrap <options> -- <argv>` with deterministic operation order.
     pub fn wrap(&self, argv: Vec<String>) -> Result<Vec<String>> {
+        self.wrap_with_codex_bind(argv, false)
+    }
+
+    pub fn wrap_app_server(&self, argv: Vec<String>) -> Result<Vec<String>> {
+        self.wrap_with_codex_bind(argv, true)
+    }
+
+    fn wrap_with_codex_bind(&self, argv: Vec<String>, app_server: bool) -> Result<Vec<String>> {
         if argv.is_empty() {
             bail!("session command is empty");
         }
@@ -2089,6 +2096,13 @@ impl Plan {
         }
         for path in remounts {
             wrapped.extend(["--remount-ro".into(), path_key(&path)]);
+        }
+        if let Some(dir) = &self.codex_dir {
+            wrapped.extend([
+                if app_server { "--bind" } else { "--ro-bind" }.into(),
+                path_key(dir),
+                format!("/tmp/codex-daemon-{}", rustix::process::geteuid().as_raw()),
+            ]);
         }
         wrapped.extend(["--chdir".into(), path_key(&self.cwd), "--".into()]);
         wrapped.extend(argv);
@@ -2529,9 +2543,7 @@ pub fn launch_argv(
             let wrapped = plan.wrap(argv)?;
             crate::harness::append_system_prompt(wrapped, notice, harness, &plan.cwd)
         }
-        Harness::Codex => bail!(
-            "confinement is not supported for Codex sessions yet: its tools run outside the session process"
-        ),
+        Harness::Codex => plan.wrap(argv),
     }
 }
 
@@ -2570,6 +2582,7 @@ mod tests {
             unsaved_files: Vec::new(),
             overlay_notice: None,
             harness_config: None,
+            codex_dir: None,
         };
         let text = notice(&plan);
         assert!(text.len() <= NOTICE_LIMIT);
@@ -2769,6 +2782,7 @@ mod tests {
             unsaved_files: Vec::new(),
             overlay_notice: None,
             harness_config: None,
+            codex_dir: None,
         }
     }
 

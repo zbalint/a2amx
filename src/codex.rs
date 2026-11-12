@@ -1,11 +1,13 @@
 //! Codex hosting: one private `codex app-server` per session, the TUI attached to it
 //! with `--remote`, and the daemon's native delivery channel built on its protocol.
 
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
+use rustix::fs::{FileType, Mode, OFlags, fstat, openat, readlinkat};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -30,6 +32,31 @@ const ITEMS_PAGE: u32 = 50;
 const WS_KEY: &str = "YTJhbXgtY29kZXgtcHJvYmU=";
 // shortcut: a fixed mask; masking only matters to intermediaries on a local socket.
 const WS_MASK: [u8; 4] = [0x5a, 0xa5, 0x3c, 0xc3];
+#[derive(Clone, Debug)]
+pub(crate) enum Endpoint {
+    Path(PathBuf),
+    Confined { host_dir: PathBuf, guest: String },
+}
+
+impl Endpoint {
+    fn guest_url(&self) -> String {
+        match self {
+            Self::Path(path) => format!("unix://{}", path.to_string_lossy()),
+            Self::Confined { guest, .. } => guest.clone(),
+        }
+    }
+}
+
+pub(crate) fn socket_dir(state_dir: &Path, session_id: &str) -> PathBuf {
+    state_dir.join("codex").join(session_id)
+}
+
+fn guest_socket() -> String {
+    format!(
+        "/tmp/codex-daemon-{}/app.sock",
+        rustix::process::geteuid().as_raw()
+    )
+}
 
 /// A failed protocol call, split by whether the server could have acted on it.
 #[derive(Debug)]
@@ -58,56 +85,122 @@ pub(crate) struct Rpc {
     next_id: u64,
 }
 
+fn pinned_socket(host_dir: &Path, guest: &str) -> anyhow::Result<(OwnedFd, PathBuf)> {
+    let guest_path = guest
+        .strip_prefix("unix://")
+        .ok_or_else(|| anyhow!("unexpected socket link"))?;
+    let (guest_parent, _) = guest_path
+        .rsplit_once('/')
+        .ok_or_else(|| anyhow!("unexpected socket link"))?;
+    let dir = openat(
+        rustix::fs::CWD,
+        host_dir,
+        OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|_| anyhow!("unexpected socket link"))?;
+    let target =
+        readlinkat(&dir, "app.sock", Vec::new()).map_err(|_| anyhow!("unexpected socket link"))?;
+    let target = target
+        .to_str()
+        .map_err(|_| anyhow!("unexpected socket link"))?;
+    let prefix = format!("{guest_parent}/");
+    let name = target
+        .strip_prefix(&prefix)
+        .filter(|name| {
+            !name.is_empty()
+                && name.len() <= 80
+                && *name != "."
+                && *name != ".."
+                && !name.contains('/')
+        })
+        .ok_or_else(|| anyhow!("unexpected socket link"))?;
+    let socket = openat(
+        &dir,
+        name,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|_| anyhow!("unexpected socket link"))?;
+    let stat = fstat(&socket).map_err(|_| anyhow!("unexpected socket link"))?;
+    if !FileType::from_raw_mode(stat.st_mode).is_socket() {
+        bail!("unexpected socket link");
+    }
+    let path = PathBuf::from(format!("/proc/self/fd/{}", socket.as_raw_fd()));
+    Ok((socket, path))
+}
+
 impl Rpc {
     pub(crate) async fn connect(path: &Path) -> anyhow::Result<Self> {
         let attempt = async {
-            // A path beyond SUN_LEN cannot be connected to directly; Codex answers on a
-            // short socket and links the requested path to it, so follow the link.
             let linked = path.to_path_buf();
             let target = tokio::task::spawn_blocking(move || std::fs::canonicalize(&linked))
                 .await?
                 .unwrap_or_else(|_| path.to_path_buf());
-            let mut stream = UnixStream::connect(target).await?;
-            let request = format!(
-                "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {WS_KEY}\r\nSec-WebSocket-Version: 13\r\n\r\n"
-            );
-            stream.write_all(request.as_bytes()).await?;
-            let mut head = Vec::new();
-            let mut byte = [0u8; 1];
-            while !head.ends_with(b"\r\n\r\n") {
-                if head.len() > 8192 {
-                    bail!("oversized WebSocket handshake response");
-                }
-                if stream.read(&mut byte).await? == 0 {
-                    bail!("closed during the WebSocket handshake");
-                }
-                head.push(byte[0]);
-            }
-            let status = head.split(|b| *b == b'\r').next().unwrap_or_default();
-            if !String::from_utf8_lossy(status).contains(" 101 ") {
-                bail!("WebSocket upgrade refused");
-            }
-            let mut rpc = Self {
-                stream,
-                buffer: Vec::new(),
-                next_id: 0,
-            };
-            let info = json!({
-                "clientInfo": {
-                    "name": "a2amx",
-                    "title": "a2amx",
-                    "version": env!("CARGO_PKG_VERSION"),
-                }
-            });
-            rpc.call("initialize", info)
-                .await
-                .map_err(|error| anyhow!("{error}"))?;
-            rpc.send(&json!({"method": "initialized"})).await?;
-            Ok(rpc)
+            Self::finish_handshake(UnixStream::connect(target).await?).await
         };
         tokio::time::timeout(CALL_TIMEOUT, attempt)
             .await
             .context("connecting to the Codex app-server timed out")?
+    }
+
+    pub(crate) async fn connect_endpoint(endpoint: &Endpoint) -> anyhow::Result<Self> {
+        let attempt = async {
+            match endpoint {
+                Endpoint::Path(path) => Self::connect(path).await,
+                Endpoint::Confined { host_dir, guest } => {
+                    let host_dir = host_dir.clone();
+                    let guest = guest.clone();
+                    let (fd, path) =
+                        tokio::task::spawn_blocking(move || pinned_socket(&host_dir, &guest))
+                            .await??;
+                    let _fd = fd;
+                    Self::finish_handshake(UnixStream::connect(path).await?).await
+                }
+            }
+        };
+        tokio::time::timeout(CALL_TIMEOUT, attempt)
+            .await
+            .context("connecting to the Codex app-server timed out")?
+    }
+
+    async fn finish_handshake(mut stream: UnixStream) -> anyhow::Result<Self> {
+        let request = format!(
+            "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {WS_KEY}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await?;
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            if head.len() > 8192 {
+                bail!("oversized WebSocket handshake response");
+            }
+            if stream.read(&mut byte).await? == 0 {
+                bail!("closed during the WebSocket handshake");
+            }
+            head.push(byte[0]);
+        }
+        let status = head.split(|b| *b == b'\r').next().unwrap_or_default();
+        if !String::from_utf8_lossy(status).contains(" 101 ") {
+            bail!("WebSocket upgrade refused");
+        }
+        let mut rpc = Self {
+            stream,
+            buffer: Vec::new(),
+            next_id: 0,
+        };
+        let info = json!({
+            "clientInfo": {
+                "name": "a2amx",
+                "title": "a2amx",
+                "version": env!("CARGO_PKG_VERSION"),
+            }
+        });
+        rpc.call("initialize", info)
+            .await
+            .map_err(|error| anyhow!("{error}"))?;
+        rpc.send(&json!({"method": "initialized"})).await?;
+        Ok(rpc)
     }
 
     pub(crate) async fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
@@ -247,7 +340,7 @@ struct Awaiting {
 
 /// The private app-server of one session and the channel state derived from it.
 pub(crate) struct Link {
-    socket: PathBuf,
+    endpoint: Endpoint,
     child: Mutex<Option<Child>>,
     state: Mutex<LinkState>,
 }
@@ -257,8 +350,8 @@ impl Link {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn socket(&self) -> &Path {
-        &self.socket
+    pub(crate) fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
     }
 
     /// Why a message cannot be sent right now; `None` when one can.
@@ -311,7 +404,12 @@ pub fn executable_error(exe: &Path) -> Option<String> {
 
 /// Config the app-server needs so its threads can message peers. The token reaches the
 /// MCP server through the inherited environment, never argv.
-pub(crate) fn server_config(exe: &Path, authorize_peers: bool, role: Option<&str>) -> Vec<String> {
+pub(crate) fn server_config(
+    exe: &Path,
+    authorize_peers: bool,
+    role: Option<&str>,
+    notice: Option<&str>,
+) -> Vec<String> {
     let mut config = vec![
         format!("mcp_servers.a2amx.command={}", json!(exe.to_string_lossy())),
         "mcp_servers.a2amx.args=[\"mcp\"]".to_owned(),
@@ -327,8 +425,14 @@ pub(crate) fn server_config(exe: &Path, authorize_peers: bool, role: Option<&str
             "mcp_servers.a2amx.tools.{tool}.approval_mode=\"approve\""
         ));
     }
-    if let Some(prompt) = system_prompt(authorize_peers, role) {
+    let prompt = system_prompt(authorize_peers, role).map(|prompt| match notice {
+        Some(notice) => format!("{prompt}\n\n{notice}"),
+        None => prompt,
+    });
+    if let Some(prompt) = prompt {
         config.push(format!("developer_instructions={}", json!(prompt)));
+    } else if let Some(notice) = notice {
+        config.push(format!("developer_instructions={}", json!(notice)));
     }
     config
         .into_iter()
@@ -337,11 +441,8 @@ pub(crate) fn server_config(exe: &Path, authorize_peers: bool, role: Option<&str
 }
 
 /// Points the TUI at the session's app-server.
-pub(crate) fn wire_argv(argv: Vec<String>, socket: &Path) -> Vec<String> {
-    let extras = vec![
-        "--remote".to_owned(),
-        format!("unix://{}", socket.to_string_lossy()),
-    ];
+pub(crate) fn wire_argv(argv: Vec<String>, endpoint: &Endpoint) -> Vec<String> {
+    let extras = vec!["--remote".to_owned(), endpoint.guest_url()];
     crate::harness::insert_extras(argv, extras)
 }
 
@@ -353,52 +454,172 @@ pub(crate) async fn start(
     cwd: Option<&Path>,
     env: &[(String, String)],
     config: Vec<String>,
+    plan: Option<&crate::confine::Plan>,
 ) -> anyhow::Result<Arc<Link>> {
-    let dir = state_dir.join("codex");
-    let socket = dir.join(format!("{session_id}.sock"));
-    let prepare = {
-        let (dir, socket) = (dir.clone(), socket.clone());
-        move || -> anyhow::Result<()> {
-            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    if plan.is_none() {
+        let dir = state_dir.join("codex");
+        let socket = dir.join(format!("{session_id}.sock"));
+        let prepare = {
+            let (dir, socket) = (dir.clone(), socket.clone());
+            move || -> anyhow::Result<()> {
+                use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(&dir)?;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+                match std::fs::remove_file(&socket) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+                    _ => Ok(()),
+                }
+            }
+        };
+        tokio::task::spawn_blocking(prepare).await??;
+        let mut command = Command::new(program);
+        command
+            .arg("app-server")
+            .arg("--listen")
+            .arg(format!("unix://{}", socket.to_string_lossy()))
+            .args(config)
+            .env_clear()
+            .envs(env.iter().map(|(key, value)| (key, value)))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("starting {program} app-server"))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut last = anyhow!("not started");
+        loop {
+            if let Some(status) = child.try_wait()? {
+                bail!("the Codex app-server exited at startup ({status})");
+            }
+            match Rpc::connect(&socket).await {
+                Ok(_) => break,
+                Err(error) => last = error,
+            }
+            if Instant::now() >= deadline {
+                bail!("the Codex app-server did not become ready: {last:#}");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let endpoint = Endpoint::Path(socket);
+        return Ok(Arc::new(Link {
+            endpoint,
+            child: Mutex::new(Some(child)),
+            state: Mutex::new(LinkState {
+                reason: Some("app_server_down"),
+                ..LinkState::default()
+            }),
+        }));
+    }
+    let confined_dir = plan.map(|_| socket_dir(state_dir, session_id));
+    let (endpoint, listen) = match &confined_dir {
+        Some(host_dir) => {
+            let guest = guest_socket();
+            (
+                Endpoint::Confined {
+                    host_dir: host_dir.clone(),
+                    guest: format!("unix://{guest}"),
+                },
+                format!("unix://{guest}"),
+            )
+        }
+        None => {
+            let socket = state_dir.join("codex").join(format!("{session_id}.sock"));
+            (
+                Endpoint::Path(socket.clone()),
+                format!("unix://{}", socket.to_string_lossy()),
+            )
+        }
+    };
+    let prepare_dir = state_dir.join("codex");
+    let prepare_socket = match &endpoint {
+        Endpoint::Path(path) => Some(path.clone()),
+        Endpoint::Confined { .. } => None,
+    };
+    let confined_dir_for_prepare = confined_dir.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        if let Some(socket_dir) = confined_dir_for_prepare {
+            match std::fs::remove_dir_all(&socket_dir) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(error.into());
+                }
+                _ => {}
+            }
             std::fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
-                .create(&dir)?;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-            match std::fs::remove_file(&socket) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
-                _ => Ok(()),
+                .create(&socket_dir)?;
+            std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))?;
+        } else {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&prepare_dir)?;
+            std::fs::set_permissions(&prepare_dir, std::fs::Permissions::from_mode(0o700))?;
+            if let Some(socket) = prepare_socket {
+                match std::fs::remove_file(socket) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(error.into());
+                    }
+                    _ => {}
+                }
             }
         }
+        Ok(())
+    })
+    .await??;
+    let mut command_argv = vec![
+        program.to_owned(),
+        "app-server".to_owned(),
+        "--listen".to_owned(),
+        listen,
+    ];
+    command_argv.extend(config);
+    let command_argv = if let Some(plan) = plan {
+        plan.wrap_app_server(command_argv)?
+    } else {
+        command_argv
     };
-    tokio::task::spawn_blocking(prepare).await??;
-    let mut command = Command::new(program);
-    command
-        .arg("app-server")
-        .arg("--listen")
-        .arg(format!("unix://{}", socket.to_string_lossy()))
-        .args(config)
-        .env_clear()
-        .envs(env.iter().map(|(key, value)| (key, value)))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    // With --remote the TUI's threads start in the app-server's directory, not its own.
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
-    }
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("starting {program} app-server"))?;
-    // The first start after a host reboot is slow (cold caches, Codex's own /tmp state).
+    let command_env = env.to_vec();
+    let command_cwd = cwd.map(Path::to_path_buf);
+    let handle = tokio::runtime::Handle::current();
+    let mut child = crate::session::spawn_on_worker(move || {
+        let _guard = handle.enter();
+        let Some(program) = command_argv.first() else {
+            bail!("Codex app-server command is empty");
+        };
+        let mut command = Command::new(program);
+        command
+            .args(&command_argv[1..])
+            .env_clear()
+            .envs(command_env)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        if let Some(cwd) = command_cwd {
+            command.current_dir(cwd);
+        }
+        command
+            .spawn()
+            .with_context(|| format!("starting {program} app-server"))
+    })
+    .await?;
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last = anyhow!("not started");
     loop {
         if let Some(status) = child.try_wait()? {
-            bail!("the Codex app-server exited at startup ({status})");
+            bail!("the Codex app-server exited at startup ({status}); last error: {last:#}");
         }
-        match Rpc::connect(&socket).await {
+        match Rpc::connect_endpoint(&endpoint).await {
             Ok(_) => break,
             Err(error) => last = error,
         }
@@ -408,7 +629,7 @@ pub(crate) async fn start(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(Arc::new(Link {
-        socket,
+        endpoint,
         child: Mutex::new(Some(child)),
         state: Mutex::new(LinkState {
             reason: Some("app_server_down"),
@@ -521,7 +742,7 @@ pub(crate) async fn run(session: Arc<Session>, link: Arc<Link>, store: Store, bo
         }
         let step = async {
             if rpc.is_none() {
-                rpc = Some(Rpc::connect(&link.socket).await?);
+                rpc = Some(Rpc::connect_endpoint(link.endpoint()).await?);
             }
             let Some(connection) = rpc.as_mut() else {
                 return Ok(());

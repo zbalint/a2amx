@@ -1110,12 +1110,6 @@ fn validate_sessions(sessions: &[TeamSession]) -> anyhow::Result<()> {
 fn validate_session_confine_options(session: &TeamSession) -> anyhow::Result<()> {
     if session.confine.is_some() {
         let harness = Harness::infer(&session.command);
-        if harness == Harness::Codex {
-            bail!(
-                "session {}: confinement is not supported for Codex sessions yet: its tools run outside the session process",
-                session.name
-            );
-        }
         if harness == Harness::Claude
             && session
                 .command

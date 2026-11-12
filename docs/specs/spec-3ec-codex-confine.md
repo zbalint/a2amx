@@ -235,4 +235,33 @@ may fail in a confined session (backlog I24); record, do not chase.
 
 ## Review record
 
-Pending.
+Models: architect Claude Sonnet 5.5 (`claude-sonnet-5-5`); consultant Claude Opus 5.5
+(`claude-opus-5-5`); developer OMP `openai-codex/gpt-5.6-luna` (planning and working slots; the
+advisor model was not exposed); tester OMP `opencode-go/deepseek-v4.1-flash` (planning and working
+slots; the advisor model was not exposed).
+
+BLOCKED/amend cycles: 0. The developer reported one BLOCKED (item f, the plan-before-start
+mutation evidence); it was settled by a fix request, with no spec change.
+
+Open at acceptance: the authenticated real-Codex scenario of §6 item 4 (a model reply, a tool call
+under Codex's nested sandbox, outside-grant write denial, delivery of a real message). The tester
+ran the no-login part on an isolated daemon (the real TUI connects through the read-only socket
+directory mount, the app-server listens on the bind-mounted path, stale entries are removed at
+restart); the owner runs the login part later.
+
+| Found in | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft | Architect (Sonnet 5.5) | The owner's decision "use a short socket path to avoid the symlink" rested on a false premise: Codex 0.167.1 always creates the real socket under `/tmp/codex-daemon-<uid>/<hash>` and links the requested path to it, for any length | Probed, reported to the owner; replaced by the per-session bind of the socket directory |
+| Draft review | Consultant (Opus 5.5) | Findings H1 to M6, including H1: a hostile `app.sock` link let an agent steer the daemon's connect to a path outside its directory (verified by probe) | Spec amended before lock: pinned entry through `O_NOFOLLOW`, `S_ISSOCK` and `/proc/self/fd`, exact-prefix target, 80-byte bound |
+| Implementation | Developer (gpt-5.6-luna) | The exact-prefix check survived mutation: a link with a wrong prefix and the real socket name was not rejected by any test | Architect fix request; hostile-link test with a `/tmp/elsewhere/<name>` target added |
+| Implementation | Developer (gpt-5.6-luna) | No test showed that a refused plan leaves no app-server started (§6 item 3 f) | Architect fix request; `confined_codex_plan_failure_does_not_start_app_server` added and shown to fail on the reordered mutant |
+| Tester pass | Tester (deepseek-v4.1-flash) | The `CODEX_HOME` sentence was missing from `docs/confinement.md` (§2.1, §2.4) | Sentence added |
+| Tester pass | Tester (deepseek-v4.1-flash) | F31 was still in the open table of `docs/backlog.md`; §2.4 moves it to Closed | Row moved |
+| Tester pass | Tester (deepseek-v4.1-flash) | No test pinned the argv of a Codex plan without `codex_dir` (§6 item 2 contract test) | Test added |
+| Tester pass | Tester (deepseek-v4.1-flash) | Mutants survived: the 80-byte name bound, and the notice-alone branch of `server_config` | Tests added and shown to kill both |
+| Tester pass | Tester (deepseek-v4.1-flash) | The recorded `cwd` of the app-server and the TUI, and `auth.json` staying visible, were not asserted; the launch-argv test name claimed more than it checked | Assertions added; the test renamed and made exact |
+| Tester pass | Tester (deepseek-v4.1-flash) | `check_harness` was a no-op with a stale comment | Removed with its call |
+| Tester pass | Tester (deepseek-v4.1-flash) | `docs/permissions.md` lost the 2026-11-08 owner rationale of condition 4 | Restored; only condition 5 changed |
+| Tester pass | Tester (deepseek-v4.1-flash) | Claimed that the unconfined startup error text changed | False: the tester withdrew it after the architect and tester re-read `src/codex.rs:500`; no change |
+| Architect review | Architect (Sonnet 5.5) | Spec claim false: the confined Codex tests are "serial, like the existing ignored confinement tests". They are parallel-safe (isolated daemons, port 0) and not ignored | The tests stay parallel; this record corrects the claim |
+| Architect review | Architect (Sonnet 5.5) | The mode of the per-session socket directory (`0o700`) survived mutation to `0o777` | Fix request; literal `0o700` assertion added. The `DirBuilder.mode` call alone is an equivalent mutant, since `set_permissions` repairs it |

@@ -56,12 +56,12 @@ kernel, the network, and the operator's user account with the host: files are re
 written as you. It does not share the process list; that list is private. Anyone who
 needs that isolation uses a container or a VM.
 
-`--confine` is an opt-in bubblewrap confinement of the PTY child. Generic, Claude,
-and OMP sessions may be confined; Codex is refused because its app-server tools run
-outside the PTY process. `--confine` keeps harness data directories read-only except for
-the documented data allow-list. Claude and OMP sessions instead bind their own harness
-configuration root read-write and persistent by default; the rest of the plan hides the
-daemon state and runtime directory. The plan always unsets
+`--confine` is an opt-in bubblewrap confinement of the PTY child and the Codex app-server. Generic,
+Claude, OMP, and Codex sessions may be confined. Codex gets a per-session app-server socket
+directory; its TUI sees the socket through a short, session-local path. `--confine` keeps harness
+data directories read-only except for the documented data allow-list. Claude, OMP, and Codex
+sessions instead bind their own harness configuration roots read-write and persistent by default;
+the rest of the plan hides the daemon state and runtime directory. The plan always unsets
 `DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`, `GPG_AGENT_INFO`, `WSL_INTEROP`, `DISPLAY`,
 and `WAYLAND_DISPLAY`. `DOCKER_HOST`, `DOCKER_CONTEXT`, `CONTAINER_HOST`,
 `CONTAINER_CONNECTION`, `CONTAINERD_ADDRESS`, `BUILDKIT_HOST`, and
@@ -76,11 +76,11 @@ The credential environment list is separate from harness logins: Bedrock's AWS v
 Vertex's `GOOGLE_APPLICATION_CREDENTIALS` are not touched, because Claude Code and OMP run as
 the confined child. See [Credential environment variables](confinement.md#credential-environment-variables).
 
-The Claude and OMP confined launch notices are appended to an existing system prompt.
-Claude refuses `--append-system-prompt-file`; OMP refuses an existing file used as the
-append-prompt value. Generic sessions receive no notice. A socket created after launch
-outside every launch-time hide is intentionally visible, so start container daemons
-before the confined session when their host socket must be restricted.
+The Claude and OMP confined launch notices are appended to an existing system prompt. Codex receives
+the notice through `developer_instructions` in its app-server configuration. Generic sessions
+receive no notice. A socket created after launch outside every launch-time hide is intentionally
+visible; start container daemons before the confined session when their host socket must be
+restricted.
 
 Confined Generic commands receive Ctrl-C as they would when unconfined: the sandbox
 wrapper ignores SIGINT and the command gets the default disposition back. Claude and

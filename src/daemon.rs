@@ -544,11 +544,6 @@ impl Runtime {
                 message: "remote messaging needs a confined session".into(),
             });
         }
-        if confine_request.is_some() && harness == Harness::Codex {
-            return Ok(Response::Error {
-                message: "confinement is not supported for Codex sessions yet: its tools run outside the session process".into(),
-            });
-        }
         if confine_request.is_some() && cwd.is_none() {
             return Ok(Response::Error {
                 message: "confinement requires an explicit cwd".into(),
@@ -574,22 +569,27 @@ impl Runtime {
                 .iter()
                 .any(|(key, value)| key == harness::CHANNEL_ENV && value == "1");
         env.retain(|(key, _)| key != harness::CHANNEL_ENV);
-        if harness == Harness::Codex {
-            (argv, codex) = match self
-                .prepare_codex(&id, argv, cwd.as_deref(), &mut env)
-                .await?
-            {
-                Ok(prepared) => (prepared.0, Some(prepared.1)),
-                Err(message) => return Ok(Response::Error { message }),
-            };
-        }
-        let confine_plan = match self
+        let mut confine_plan = match self
             .plan_confinement(confine_request, harness, cwd.as_deref())
             .await?
         {
             Ok(plan) => plan,
             Err(message) => return Ok(Response::Error { message }),
         };
+        if harness == Harness::Codex
+            && let Some(plan) = confine_plan.take()
+        {
+            confine_plan = Some(plan.with_codex_dir(codex::socket_dir(&self.state_dir, &id.0)));
+        }
+        if harness == Harness::Codex {
+            (argv, codex) = match self
+                .prepare_codex(&id, argv, cwd.as_deref(), &mut env, confine_plan.as_ref())
+                .await?
+            {
+                Ok(prepared) => (prepared.0, Some(prepared.1)),
+                Err(message) => return Ok(Response::Error { message }),
+            };
+        }
         let session_spec = SessionSpec {
             argv,
             cwd: cwd.map(PathBuf::from),
@@ -746,6 +746,7 @@ impl Runtime {
         mut argv: Vec<String>,
         cwd: Option<&str>,
         env: &mut Vec<(String, String)>,
+        plan: Option<&confine::Plan>,
     ) -> anyhow::Result<Result<(Vec<String>, Arc<codex::Link>), String>> {
         // shortcut: the client signals --no-authorize-peers and the role through
         // the request environment; a wire field is deferred until a third
@@ -768,20 +769,27 @@ impl Runtime {
         {
             return Ok(Err(message));
         }
+        let notice = plan.map(confine::notice);
         let started = codex::start(
             &argv[0],
             &self.state_dir,
             &id.0,
             cwd.map(Path::new),
             env,
-            codex::server_config(&self.exe, authorize, codex_role.as_deref()),
+            codex::server_config(
+                &self.exe,
+                authorize,
+                codex_role.as_deref(),
+                notice.as_deref(),
+            ),
+            plan,
         )
         .await;
         let link = match started {
             Ok(link) => link,
             Err(error) => return Ok(Err(format!("{error:#}"))),
         };
-        argv = codex::wire_argv(argv, link.socket());
+        argv = codex::wire_argv(argv, link.endpoint());
         Ok(Ok((argv, link)))
     }
 

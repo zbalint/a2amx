@@ -33,11 +33,10 @@ const RESET_POLL: Duration = Duration::from_millis(100);
 const RESET_TIMEOUT: Duration = Duration::from_secs(30);
 const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(10);
 const CLAUDE_EXIT_KEY_GAP: Duration = Duration::from_millis(300);
-type SpawnTask = Box<dyn FnOnce() -> anyhow::Result<Session> + Send + 'static>;
+type SpawnTask = Box<dyn FnOnce() + Send + 'static>;
 
 struct SpawnJob {
     task: SpawnTask,
-    reply: oneshot::Sender<anyhow::Result<Session>>,
 }
 
 static SPAWN_JOBS: LazyLock<Result<std_mpsc::Sender<SpawnJob>, String>> = LazyLock::new(|| {
@@ -53,9 +52,7 @@ static SPAWN_JOBS: LazyLock<Result<std_mpsc::Sender<SpawnJob>, String>> = LazyLo
 
 fn spawn_worker(receiver: std_mpsc::Receiver<SpawnJob>) {
     while let Ok(job) = receiver.recv() {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.task))
-            .unwrap_or_else(|_| Err(anyhow::anyhow!("confined spawn worker task panicked")));
-        let _ = job.reply.send(result);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.task));
     }
 }
 
@@ -63,6 +60,28 @@ fn confined_spawn_sender() -> anyhow::Result<&'static std_mpsc::Sender<SpawnJob>
     SPAWN_JOBS
         .as_ref()
         .map_err(|error| anyhow::anyhow!("cannot start confined spawn worker: {error}"))
+}
+
+pub(crate) async fn spawn_on_worker<T, F>(task: F) -> anyhow::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+{
+    let (reply, result) = oneshot::channel();
+    confined_spawn_sender()?
+        .send(SpawnJob {
+            task: Box::new(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task))
+                    .unwrap_or_else(|_| {
+                        Err(anyhow::anyhow!("confined spawn worker task panicked"))
+                    });
+                let _ = reply.send(result);
+            }),
+        })
+        .map_err(|_| anyhow::anyhow!("confined spawn worker stopped"))?;
+    result
+        .await
+        .context("confined spawn worker dropped its reply")?
 }
 
 pub struct SessionSpec {
@@ -371,16 +390,7 @@ pub(crate) fn mark_inherited_fds_cloexec() -> anyhow::Result<()> {
 
 impl Session {
     pub(crate) async fn spawn_confined(id: SessionId, spec: SessionSpec) -> anyhow::Result<Self> {
-        let (reply, result) = oneshot::channel();
-        confined_spawn_sender()?
-            .send(SpawnJob {
-                task: Box::new(move || Self::spawn(id, spec)),
-                reply,
-            })
-            .map_err(|_| anyhow::anyhow!("confined spawn worker stopped"))?;
-        result
-            .await
-            .context("confined spawn worker dropped its reply")?
+        spawn_on_worker(move || Self::spawn(id, spec)).await
     }
 
     pub fn spawn(id: SessionId, spec: SessionSpec) -> anyhow::Result<Self> {

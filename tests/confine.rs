@@ -3008,16 +3008,20 @@ fn container_socket_hides_are_bound_and_can_be_disabled() {
 }
 
 #[test]
-fn codex_is_refused_and_write_guards_are_reciprocal() {
+fn codex_is_accepted_and_write_guards_are_reciprocal() {
     let fixture = Fixture::new();
+    std::fs::create_dir_all(fixture.home.join(".codex")).expect("Codex home");
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Codex,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("Codex confinement");
     assert!(
-        confine::plan(
-            &ConfineRequest::default(),
-            Harness::Codex,
-            &fixture.cwd,
-            &fixture.host()
-        )
-        .is_err()
+        plan.writable
+            .iter()
+            .any(|path| path == &fixture.home.join(".codex"))
     );
     assert!(
         confine::check_write_allowed(&fixture.state, &fixture.home, &fixture.state, false).is_err()
@@ -3125,6 +3129,216 @@ fn codex_is_refused_and_write_guards_are_reciprocal() {
                 .is_err()
         );
     }
+}
+#[test]
+fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(fixture.home.join(".codex")).expect("Codex home");
+    std::fs::write(fixture.home.join(".codex/auth.json"), "{}").expect("Codex auth");
+    let plan = confine::plan(
+        &ConfineRequest {
+            write: vec!["/tmp".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Codex,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("Codex plan")
+    .with_bwrap(PathBuf::from("bwrap"))
+    .with_codex_dir(fixture.state.join("codex/s1"));
+    let without_codex_dir = confine::plan(
+        &ConfineRequest {
+            write: vec!["/tmp".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Codex,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("Codex plan without socket dir")
+    .with_bwrap(PathBuf::from("bwrap"));
+    let legacy_wrapped = without_codex_dir
+        .wrap(vec!["codex".into()])
+        .expect("legacy TUI argv");
+    let state = fixture.state.to_string_lossy().into_owned();
+    let runtime = fixture.runtime.to_string_lossy().into_owned();
+    let home = fixture.home.to_string_lossy().into_owned();
+    let cwd = fixture.cwd.to_string_lossy().into_owned();
+    let empty = fixture
+        .state
+        .join("confine-empty")
+        .to_string_lossy()
+        .into_owned();
+    let mut expected = vec![
+        "bwrap".into(),
+        "--die-with-parent".into(),
+        "--unshare-user".into(),
+        "--unshare-ipc".into(),
+        "--unshare-pid".into(),
+        "--ro-bind".into(),
+        "/".into(),
+        "/".into(),
+        "--dev".into(),
+        "/dev".into(),
+        "--proc".into(),
+        "/proc".into(),
+        "--size".into(),
+        "1073741824".into(),
+        "--tmpfs".into(),
+        "/tmp".into(),
+    ];
+    for name in [
+        "DBUS_SESSION_BUS_ADDRESS",
+        "SSH_AUTH_SOCK",
+        "GPG_AGENT_INFO",
+        "WSL_INTEROP",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "CONTAINER_HOST",
+        "CONTAINER_CONNECTION",
+        "CONTAINERD_ADDRESS",
+        "BUILDKIT_HOST",
+        "LIBVIRT_DEFAULT_URI",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITLAB_TOKEN",
+        "GITLAB_PRIVATE_TOKEN",
+        "CI_JOB_TOKEN",
+        "BITBUCKET_TOKEN",
+        "NPM_TOKEN",
+        "NODE_AUTH_TOKEN",
+        "PYPI_TOKEN",
+        "TWINE_PASSWORD",
+        "CARGO_REGISTRY_TOKEN",
+        "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+        "AZURE_CLIENT_SECRET",
+        "ARM_CLIENT_SECRET",
+        "VAULT_TOKEN",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "SONAR_TOKEN",
+        "SENTRY_AUTH_TOKEN",
+        "DIGITALOCEAN_ACCESS_TOKEN",
+        "HCLOUD_TOKEN",
+        "CLOUDFLARE_API_TOKEN",
+        "NETLIFY_AUTH_TOKEN",
+        "VERCEL_TOKEN",
+        "FLY_API_TOKEN",
+        "HEROKU_API_KEY",
+        "PGPASSWORD",
+        "MYSQL_PWD",
+    ] {
+        expected.extend(["--unsetenv".into(), name.into()]);
+    }
+    expected.extend([
+        "--bind".into(),
+        "/tmp".into(),
+        "/tmp".into(),
+        "--tmpfs".into(),
+        "/mnt/wslg".into(),
+        "--tmpfs".into(),
+        "/run/WSL".into(),
+        "--tmpfs".into(),
+        "/run/dbus".into(),
+        "--ro-bind".into(),
+        empty.clone(),
+        "/run/docker.sock".into(),
+        "--ro-bind".into(),
+        empty.clone(),
+        "/run/snapd-snap.socket".into(),
+        "--ro-bind".into(),
+        empty.clone(),
+        "/run/snapd.socket".into(),
+        "--ro-bind".into(),
+        empty.clone(),
+        "/run/containerd/containerd.sock".into(),
+        "--ro-bind".into(),
+        empty.clone(),
+        "/run/containerd/containerd.sock.ttrpc".into(),
+        "--tmpfs".into(),
+        runtime.clone(),
+        "--tmpfs".into(),
+        state.clone(),
+        "--bind".into(),
+        cwd.clone(),
+        cwd.clone(),
+        "--tmpfs".into(),
+        format!("{home}/.aws"),
+        "--tmpfs".into(),
+        format!("{home}/.ssh"),
+        "--bind".into(),
+        format!("{home}/.codex"),
+        format!("{home}/.codex"),
+        "--remount-ro".into(),
+        "/mnt/wslg".into(),
+        "--remount-ro".into(),
+        "/run/WSL".into(),
+        "--remount-ro".into(),
+        "/run/dbus".into(),
+        "--remount-ro".into(),
+        runtime,
+        "--remount-ro".into(),
+        state,
+        "--remount-ro".into(),
+        format!("{home}/.aws"),
+        "--remount-ro".into(),
+        format!("{home}/.ssh"),
+        "--chdir".into(),
+        cwd,
+        "--".into(),
+        "codex".into(),
+    ]);
+    assert_eq!(legacy_wrapped, expected);
+    let wrapped = plan.wrap(vec!["codex".into()]).expect("TUI argv");
+    let server = plan
+        .wrap_app_server(vec!["codex".into()])
+        .expect("app-server argv");
+    let mount = fixture
+        .state
+        .join("codex/s1")
+        .to_string_lossy()
+        .into_owned();
+    let target = format!("/tmp/codex-daemon-{}", rustix::process::geteuid().as_raw());
+    let tui = ["--ro-bind", mount.as_str(), target.as_str()];
+    let rw = ["--bind", mount.as_str(), target.as_str()];
+    assert!(wrapped.windows(3).any(|window| window == tui));
+    assert!(server.windows(3).any(|window| window == rw));
+    let chdir = wrapped
+        .iter()
+        .position(|value| value == "--chdir")
+        .expect("--chdir");
+    assert_eq!(&wrapped[chdir - 3..chdir], tui);
+    let codex_home = fixture.home.join(".codex");
+    assert!(plan.writable.iter().any(|path| path == &codex_home));
+    assert!(!plan.hidden_paths().contains(&codex_home.join("auth.json")));
+}
+
+#[test]
+fn codex_launch_argv_matches_plan_wrap() {
+    let fixture = Fixture::new();
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Codex,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("Codex plan")
+    .with_bwrap(PathBuf::from("bwrap"));
+    let argv = confine::launch_argv(
+        &plan,
+        "confinement notice",
+        vec!["codex".into(), "--remote".into()],
+        Harness::Codex,
+    )
+    .expect("Codex launch argv");
+    let expected = plan
+        .wrap(vec!["codex".into(), "--remote".into()])
+        .expect("expected wrapped Codex argv");
+    assert_eq!(argv, expected);
 }
 
 #[test]
@@ -6315,7 +6529,7 @@ fn harness_config_grant_refuses_generic_hide_and_unhide() {
     };
     assert_eq!(
         error.to_string(),
-        "confinement grant \"harness-config\" needs a Claude or OMP session"
+        "confinement grant \"harness-config\" needs a Claude, OMP, or Codex session"
     );
 
     let claude = Fixture::new();

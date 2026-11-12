@@ -12,7 +12,7 @@
 
 A2AMX hosts Claude Code, OMP, and Codex sessions under PTYs and lets the agents message one another through native harness channels.
 
-**Status:** alpha. The Linux single-machine daemon, terminal sessions, durable messaging, team management, three native delivery profiles, and opt-in remote messaging through Discord work today for Claude Code and OMP in confined sessions; Codex cannot use remote messaging. Viewer mode and owner presence keep remote traffic away while the owner is at the computer. Cross-host support and agent-initiated launch are not built.
+**Status:** alpha. The Linux single-machine daemon, terminal sessions, durable messaging, team management, three native delivery profiles, and opt-in remote messaging through Discord work today for Claude Code, OMP, and Codex in confined sessions. Viewer mode and owner presence keep remote traffic away while the owner is at the computer. Cross-host support and agent-initiated launch are not built.
 
 > **Not the A2A protocol.** A2AMX is independent of the [Agent2Agent (A2A) protocol](https://github.com/a2aproject/A2A). It is a local terminal multiplexer and message exchange for agent sessions.
 
@@ -62,7 +62,7 @@ The planner agent calls `send_message` to `reviewer`; the reviewer receives it a
 - **Operator controls:** attach, switch, scroll, inspect, reset, and stop sessions from the CLI.
 - **Confinement:** opt-in protection for trusted sessions that keeps accidental writes away from protected paths.
 - **Teams and status:** group sessions with visibility rules, roles, watches, heartbeats, activity transition notices, and quota status.
-- **Remote messaging:** an agent on a long task can message you on Discord, and you can write back; off by default, confined sessions only, for Claude Code and OMP. Viewer mode and owner presence keep remote traffic away while you are at the computer.
+- **Remote messaging:** an agent on a long task can message you on Discord, and you can write back; off by default, confined sessions only, for Claude Code, OMP, and Codex. Viewer mode and owner presence keep remote traffic away while you are at the computer.
 
 ## Quick start
 

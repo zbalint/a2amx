@@ -33,8 +33,8 @@ change the default branch, use production, handle secrets, or delete data.
 
 - Linux with `bwrap` (bubblewrap) available. `a2amx gateway up` refuses to start the gateway
   without it and launches the relay confined.
-- A running A2AMX daemon and sessions started under confinement. Codex sessions cannot be
-  confined, so Codex agents cannot use remote messaging.
+- A running A2AMX daemon and sessions started under confinement. Codex sessions may be confined,
+  so Codex agents can use remote messaging.
 - A Discord account and a private server you own. Keep the server without an invite link and
   keep the bot as the only other member.
 - In the server's `@everyone` role, remove Create Invite, Mention @everyone, and other defaults

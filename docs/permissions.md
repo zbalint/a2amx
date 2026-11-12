@@ -70,7 +70,7 @@ hold:
 4. it runs confined (owner decision, 2026-11-08: a message that arrives over the network could
    be forged, and a confined agent that acts on one can reach less. Confinement is a safety
    net, not a sandbox, so this limits the damage and does not rule it out);
-5. its harness is not Codex while confining Codex is unbuilt (F31).
+5. its harness is Claude Code, OMP, or Codex (all three can run confined; F31);
 
 A team file can come from a repository, so the file alone grants nothing: the lease does (D4).
 
