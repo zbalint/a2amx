@@ -233,6 +233,57 @@ may fail in a confined session (backlog I24); record, do not chase.
    is still alive after 60 s idle and gone after the session exits.
 5. `git status --short` shows only the files in §0 scope.
 
+## Amendment 1: split `codex::start` (Sonar gate)
+
+**Why.** The Sonar scan of commit 85c5ba3 (scratch branch `develop-prepush`, measured against
+`origin/develop`) fails the gate on `new_code_smells_severity` (20, limit 14): one
+`rust:S3776` issue, `codex::start` at `src/codex.rs:450`, cognitive complexity 43 (limit 30).
+Cause: the unconfined path stays inline and returns early, and the code after it still carries
+`None` and `Endpoint::Path` arms that can no longer run, so one function holds two start-up paths
+and a dead third.
+
+**Target shape** (decided after the consultant's design read; behaviour unchanged):
+
+- `start(program, state_dir, session_id, cwd, env, config, plan)` keeps its signature and only
+  dispatches: `None` goes to `start_unconfined`, `Some(plan)` to `start_confined`.
+- `start_unconfined(program, state_dir, session_id, cwd, env, config)`: move the unconfined block
+  of `start` at HEAD (85c5ba3, `src/codex.rs:460-519`) unchanged, except: drop the `return`, and
+  restore the two a0393ca comments 85c5ba3 dropped ("With --remote the TUI's threads start in the
+  app-server's directory, not its own." above `if let Some(cwd)`; "The first start after a host
+  reboot is slow (cold caches, Codex's own /tmp state)." above the deadline). The result equals
+  a0393ca's unconfined path except the `Link` field, now `endpoint: Endpoint::Path(socket)`. Same
+  argv, preparation, readiness loop and error texts (no `last error` suffix).
+- `start_confined(program, state_dir, session_id, cwd, env, config, plan: &crate::confine::Plan)`:
+  `plan` is not an `Option`, so the `if let Some(plan)` around `wrap_app_server` goes. Order stays:
+  build `Endpoint::Confined` for `socket_dir(state_dir, session_id)`, `reset_socket_dir`, wrap the
+  argv with `plan.wrap_app_server`, spawn through `crate::session::spawn_on_worker`, run the
+  confined readiness loop (its error text keeps the `last error` suffix), return the `Link`. The
+  closure given to `spawn_on_worker` stays `'static + Send`: owned argv `Vec`, `env.to_vec()`,
+  `cwd.map(Path::to_path_buf)`, `Handle::current()` captured outside and `handle.enter()`'d inside
+  (without the guard tokio's `Command::spawn` panics on the worker thread). Do not borrow `program`,
+  `env` or `cwd` into it. Seven parameters are allowed (clippy and S107 fire at eight).
+- `reset_socket_dir(host_dir: PathBuf) -> anyhow::Result<()>`: the body of HEAD `:550-560` only:
+  `remove_dir_all` (a missing directory is fine, other errors fail) without following links, then
+  `DirBuilder` recursive mode `0o700`, then `set_permissions` `0o700`. Called inside
+  `spawn_blocking`. `prepare_dir`, `prepare_socket` and `confined_dir_for_prepare` go.
+- Delete the three arms that can no longer run: the `None` arm of the confined endpoint match, the
+  `Endpoint::Path` arm of the prepare match, and the `Option` around `plan`. `Endpoint::Path` stays
+  for the unconfined `Link`.
+- No bool or option flag selects between the two readiness loops; their texts differ on purpose.
+  The two `Link` constructors may share `fn new_link(endpoint: Endpoint, child: Child) -> Arc<Link>`
+  if Sonar flags the duplication; otherwise leave them.
+
+**Scope.** `src/codex.rs` only (tests need no change; if one must change, stop and report). Out of
+scope: any other refactor, the `Rpc`/`Endpoint` types, `src/confine.rs`.
+
+**Acceptance.** (1) `cargo test --test codex --test confine --test team`, `cargo clippy
+--all-targets -- -D warnings`, `cargo fmt --check` pass, and the full `cargo test` fails only the
+two documented I24 tests. (2) The mutants of §6 item 3 b, c, d, f and the mode, length and notice
+mutants are still killed by the same named tests (rerun two of them: the 80-byte bound and the
+`0o777` pair). (3) The architect reads the diff: `start_unconfined` equals the a0393ca code except the `Link` field, and
+no function exceeds a hand-counted cognitive complexity of 30. (4) The judge is the Sonar scan of
+the new HEAD (`scripts/prepush-sonar.sh`): the gate passes and no `rust:S3776` issue remains.
+
 ## Review record
 
 Models: architect Claude Sonnet 5.5 (`claude-sonnet-5-5`); consultant Claude Opus 5.5
