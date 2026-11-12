@@ -456,138 +456,109 @@ pub(crate) async fn start(
     config: Vec<String>,
     plan: Option<&crate::confine::Plan>,
 ) -> anyhow::Result<Arc<Link>> {
-    if plan.is_none() {
-        let dir = state_dir.join("codex");
-        let socket = dir.join(format!("{session_id}.sock"));
-        let prepare = {
-            let (dir, socket) = (dir.clone(), socket.clone());
-            move || -> anyhow::Result<()> {
-                use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-                std::fs::DirBuilder::new()
-                    .recursive(true)
-                    .mode(0o700)
-                    .create(&dir)?;
-                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-                match std::fs::remove_file(&socket) {
-                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
-                    _ => Ok(()),
-                }
-            }
-        };
-        tokio::task::spawn_blocking(prepare).await??;
-        let mut command = Command::new(program);
-        command
-            .arg("app-server")
-            .arg("--listen")
-            .arg(format!("unix://{}", socket.to_string_lossy()))
-            .args(config)
-            .env_clear()
-            .envs(env.iter().map(|(key, value)| (key, value)))
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-        if let Some(cwd) = cwd {
-            command.current_dir(cwd);
-        }
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("starting {program} app-server"))?;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let mut last = anyhow!("not started");
-        loop {
-            if let Some(status) = child.try_wait()? {
-                bail!("the Codex app-server exited at startup ({status})");
-            }
-            match Rpc::connect(&socket).await {
-                Ok(_) => break,
-                Err(error) => last = error,
-            }
-            if Instant::now() >= deadline {
-                bail!("the Codex app-server did not become ready: {last:#}");
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        let endpoint = Endpoint::Path(socket);
-        return Ok(Arc::new(Link {
-            endpoint,
-            child: Mutex::new(Some(child)),
-            state: Mutex::new(LinkState {
-                reason: Some("app_server_down"),
-                ..LinkState::default()
-            }),
-        }));
+    match plan {
+        Some(plan) => start_confined(program, state_dir, session_id, cwd, env, config, plan).await,
+        None => start_unconfined(program, state_dir, session_id, cwd, env, config).await,
     }
-    let confined_dir = plan.map(|_| socket_dir(state_dir, session_id));
-    let (endpoint, listen) = match &confined_dir {
-        Some(host_dir) => {
-            let guest = guest_socket();
-            (
-                Endpoint::Confined {
-                    host_dir: host_dir.clone(),
-                    guest: format!("unix://{guest}"),
-                },
-                format!("unix://{guest}"),
-            )
-        }
-        None => {
-            let socket = state_dir.join("codex").join(format!("{session_id}.sock"));
-            (
-                Endpoint::Path(socket.clone()),
-                format!("unix://{}", socket.to_string_lossy()),
-            )
-        }
-    };
-    let prepare_dir = state_dir.join("codex");
-    let prepare_socket = match &endpoint {
-        Endpoint::Path(path) => Some(path.clone()),
-        Endpoint::Confined { .. } => None,
-    };
-    let confined_dir_for_prepare = confined_dir.clone();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        if let Some(socket_dir) = confined_dir_for_prepare {
-            match std::fs::remove_dir_all(&socket_dir) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(error.into());
-                }
-                _ => {}
-            }
+}
+
+async fn start_unconfined(
+    program: &str,
+    state_dir: &Path,
+    session_id: &str,
+    cwd: Option<&Path>,
+    env: &[(String, String)],
+    config: Vec<String>,
+) -> anyhow::Result<Arc<Link>> {
+    let dir = state_dir.join("codex");
+    let socket = dir.join(format!("{session_id}.sock"));
+    let prepare = {
+        let (dir, socket) = (dir.clone(), socket.clone());
+        move || -> anyhow::Result<()> {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
             std::fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
-                .create(&socket_dir)?;
-            std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))?;
-        } else {
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&prepare_dir)?;
-            std::fs::set_permissions(&prepare_dir, std::fs::Permissions::from_mode(0o700))?;
-            if let Some(socket) = prepare_socket {
-                match std::fs::remove_file(socket) {
-                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                        return Err(error.into());
-                    }
-                    _ => {}
-                }
+                .create(&dir)?;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+            match std::fs::remove_file(&socket) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+                _ => Ok(()),
             }
         }
-        Ok(())
-    })
-    .await??;
+    };
+    tokio::task::spawn_blocking(prepare).await??;
+    let mut command = Command::new(program);
+    command
+        .arg("app-server")
+        .arg("--listen")
+        .arg(format!("unix://{}", socket.to_string_lossy()))
+        .args(config)
+        .env_clear()
+        .envs(env.iter().map(|(key, value)| (key, value)))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    // With --remote the TUI's threads start in the app-server's directory, not its own.
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("starting {program} app-server"))?;
+    // The first start after a host reboot is slow (cold caches, Codex's own /tmp state).
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last = anyhow!("not started");
+    loop {
+        if let Some(status) = child.try_wait()? {
+            bail!("the Codex app-server exited at startup ({status})");
+        }
+        match Rpc::connect(&socket).await {
+            Ok(_) => break,
+            Err(error) => last = error,
+        }
+        if Instant::now() >= deadline {
+            bail!("the Codex app-server did not become ready: {last:#}");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let endpoint = Endpoint::Path(socket);
+    Ok(Arc::new(Link {
+        endpoint,
+        child: Mutex::new(Some(child)),
+        state: Mutex::new(LinkState {
+            reason: Some("app_server_down"),
+            ..LinkState::default()
+        }),
+    }))
+}
+
+async fn start_confined(
+    program: &str,
+    state_dir: &Path,
+    session_id: &str,
+    cwd: Option<&Path>,
+    env: &[(String, String)],
+    config: Vec<String>,
+    plan: &crate::confine::Plan,
+) -> anyhow::Result<Arc<Link>> {
+    let host_dir = socket_dir(state_dir, session_id);
+    let guest = guest_socket();
+    let endpoint = Endpoint::Confined {
+        host_dir: host_dir.clone(),
+        guest: format!("unix://{guest}"),
+    };
+    let prepare_dir = host_dir.clone();
+    tokio::task::spawn_blocking(move || reset_socket_dir(prepare_dir)).await??;
     let mut command_argv = vec![
         program.to_owned(),
         "app-server".to_owned(),
         "--listen".to_owned(),
-        listen,
+        format!("unix://{guest}"),
     ];
     command_argv.extend(config);
-    let command_argv = if let Some(plan) = plan {
-        plan.wrap_app_server(command_argv)?
-    } else {
-        command_argv
-    };
+    let command_argv = plan.wrap_app_server(command_argv)?;
     let command_env = env.to_vec();
     let command_cwd = cwd.map(Path::to_path_buf);
     let handle = tokio::runtime::Handle::current();
@@ -636,6 +607,22 @@ pub(crate) async fn start(
             ..LinkState::default()
         }),
     }))
+}
+
+fn reset_socket_dir(host_dir: PathBuf) -> anyhow::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    match std::fs::remove_dir_all(&host_dir) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(error.into());
+        }
+        _ => {}
+    }
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&host_dir)?;
+    std::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
 }
 
 struct Observed {

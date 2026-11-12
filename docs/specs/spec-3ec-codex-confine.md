@@ -291,7 +291,7 @@ Models: architect Claude Sonnet 5.5 (`claude-sonnet-5-5`); consultant Claude Opu
 advisor model was not exposed); tester OMP `opencode-go/deepseek-v4.1-flash` (planning and working
 slots; the advisor model was not exposed).
 
-BLOCKED/amend cycles: 0. The developer reported one BLOCKED (item f, the plan-before-start
+BLOCKED/amend cycles: 0 BLOCKED; 1 amendment (Amendment 1, the Sonar gate). The developer reported one BLOCKED (item f, the plan-before-start
 mutation evidence); it was settled by a fix request, with no spec change.
 
 Open at acceptance: the authenticated real-Codex scenario of §6 item 4 (a model reply, a tool call
@@ -315,4 +315,5 @@ restart); the owner runs the login part later.
 | Tester pass | Tester (deepseek-v4.1-flash) | `docs/permissions.md` lost the 2026-11-08 owner rationale of condition 4 | Restored; only condition 5 changed |
 | Tester pass | Tester (deepseek-v4.1-flash) | Claimed that the unconfined startup error text changed | False: the tester withdrew it after the architect and tester re-read `src/codex.rs:500`; no change |
 | Architect review | Architect (Sonnet 5.5) | Spec claim false: the confined Codex tests are "serial, like the existing ignored confinement tests". They are parallel-safe (isolated daemons, port 0) and not ignored | The tests stay parallel; this record corrects the claim |
+| After first commit (Sonar gate) | Architect (Sonnet 5.5), Sonar | `codex::start` reached cognitive complexity 43 (limit 30): the unconfined path stayed inline with an early return and left dead `None` and `Endpoint::Path` arms and an `Option` plan; the gate failed on `new_code_smells_severity` (20, limit 14). Developer and architect review had not seen the dead arms | Amendment 1, consultant design read (Opus 5.5) found its "identical to a0393ca" wording false (renamed `Link` field, two dropped comments); amended; `start` split into `start`, `start_unconfined`, `start_confined`, `reset_socket_dir` |
 | Architect review | Architect (Sonnet 5.5) | The mode of the per-session socket directory (`0o700`) survived mutation to `0o777` | Fix request; literal `0o700` assertion added. The `DirBuilder.mode` call alone is an equivalent mutant, since `set_permissions` repairs it |
