@@ -146,6 +146,71 @@ cargo fmt --check
 | `tests/claude_channel.rs` runs `a2amx mcp --channel` through the changed loop | `tests/claude_channel.rs:174-240` | read (consultant) |
 | Baseline: `cargo test --test mcp --test bridge` passes before the change | run at base 777fa96, 2026-11-12 | ran |
 
+## Amendment 1: the pre-push Sonar gate failed on 62863af
+
+`scripts/prepush-sonar.sh` on the committed 3eb diff (62863af, not pushed) gave a failing gate on the scratch
+analysis: `new_coverage` 68.4 against 80, and `new_code_smells_severity` 20 against 14 from one issue,
+`rust:S3776` on `spawn_stdin_reader` (`src/mcp.rs:116`, cognitive complexity 33, 30 allowed). The coverage
+miss is not missing tests: the new MCP process tests end with the child killed by `McpProcess::drop`, and an
+instrumented child that is killed writes no coverage profile (backlog I15), so the lines they exercise count as
+uncovered. Section 2.3's single loop also nests too deeply.
+
+Scope is unchanged (`src/mcp.rs`, `src/bridge.rs`, `tests/mcp.rs`, `tests/bridge.rs`). Behaviour, the
+`StdioEvent` enum, `spawn_stdin_reader`'s signature and every existing test name stay as they are; one test is
+added (A1.2b).
+
+A1.1 `src/mcp.rs`: split the thread body along the two decisions it makes. Target shape (private items):
+
+```rust
+enum CappedLine { Eof, Line(Vec<u8>), Oversized }
+
+/// One `read_until(b'\n')` on `reader.by_ref().take(MAX_FRAME_LEN as u64 + 1)`, classified by section 2.3's
+/// three outcomes, word for word as the committed guard: a read of 0 bytes is `Eof`; a read of exactly
+/// `MAX_FRAME_LEN + 1` bytes whose last byte is not `\n` is `Oversized`; every other result is `Line`. Not
+/// "no newline means Oversized" (it breaks a final unterminated line within the limit) and not
+/// "`line.len() > MAX_FRAME_LEN`" (it breaks the inclusive limit). Never discards. Keep `by_ref()`.
+fn read_capped_line<R: BufRead>(reader: &mut R) -> io::Result<CappedLine>;
+
+/// Consumes input through the next `\n` or EOF without keeping it (`fill_buf` / `consume`). Read the
+/// newline index and the buffer length out of the `fill_buf` slice before calling `consume`.
+fn discard_through_newline<R: BufRead>(reader: &mut R) -> io::Result<()>;
+```
+
+The reader thread loops: `read_capped_line`; `Eof` ends the loop, then sends `StdioEvent::Eof`; `Line` is
+sent as `StdioEvent::Line`; `Oversized` sends `StdioEvent::Oversized`, then calls `discard_through_newline`, and
+an `Err` from either helper sends `StdioEvent::Error(error.to_string())` and ends the thread. A failed
+`blocking_send` ends the thread as in section 2.2. One responsibility each: framing a line within the limit,
+and skipping the rest of one. No parameter bag, no out-parameter. The helpers take `BufRead` so the thread
+passes its `StdinLock` unchanged.
+
+A1.2 `tests/mcp.rs`, `tests/bridge.rs`: every new test that starts a child ends it cleanly so its profile is
+written: after its last assertion it closes stdin (`close_stdin`) and waits for the exit status (0 for
+`a2amx mcp`), as `mcp_reports_an_oversized_line_terminated_by_eof` and `mcp_accepts_an_unterminated_ping_at_eof`
+already do. This applies to `mcp_rejects_oversized_line_and_resumes`, `mcp_discards_the_rest_of_an_oversized_line`,
+`mcp_accepts_a_line_at_the_inclusive_limit` and `mcp_rejects_oversized_send_message_before_daemon_write`; the
+bridge test already ends with the bridge exiting by itself and needs no change. The order is the one the two
+existing clean-exit tests use: `close_stdin`, read stdout to EOF, then `child.wait()` equal to `Some(0)`. Only
+these four tests change; the other MCP tests that end with the child killed stay as they are. No assertion is
+removed or loosened.
+
+A1.2b `tests/mcp.rs`, one new test, `mcp_reports_a_stdin_read_error_and_exits_nonzero`: start
+`a2amx mcp` with its stdin opened from a directory (`Stdio::from(File::open(<temp dir>))`, a
+`tempfile::tempdir()`, the usual `A2AMX_ADDR` and `A2AMX_TOKEN`); reading a directory fails with `EISDIR`. Assert
+exit status 1 and that stderr contains `reading MCP stdin`. Probed by the architect with the installed binary:
+stderr `a2amx: reading MCP stdin: Is a directory (os error 21)`, exit 1. It passes on the old code (a contract
+test: the reader's error path is not changed by the refactor); it covers the reader's read-error send and
+`run`'s `Error` arm, so the new-code coverage clears the gate with margin (the consultant's estimate: about
+82%, against 76% with A1.2 alone).
+
+A1.3 Acceptance, after implementation: the commands of section 6 pass (fresh); the mutants of section 6 are killed
+by the same tests as before (the tester reruns the ledger); the architect reruns `scripts/prepush-sonar.sh` and
+reads a passing gate. Not covered and not meant to be: the discard read-error send, the failed `blocking_send`
+exits (a pipe cannot produce the first, and the second needs the receiver dropped mid-read) and `run`'s write
+error on the `Oversized` answer; the gate counts them. The reader's own read-error send and `run`'s `Error`
+arm are covered by A1.2b.
+
+Out of scope: any change to limits, messages or behaviour; the bridge source; new tests for those three paths.
+
 ## Review record
 
 Models: architect Claude Sonnet 5.5 (claude-sonnet-5-5); consultant on the claude harness (model not recorded); developer on OMP, working slot openai-codex/gpt-5.6-luna (advisor slot not exposed); tester on OMP, opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0. The first tester session was restarted by the owner in the middle of its mutation pass (an OMP harness configuration problem) and left one mutant in `src/mcp.rs`; the architect restored it by hand and a second tester session redid the pass.
