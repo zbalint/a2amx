@@ -145,3 +145,19 @@ cargo fmt --check
 | The old bridge already rejects a complete oversized line after reading it, so only a newline-free flood is new | `src/bridge.rs:170-176`, `:195-199` | read (consultant and architect) |
 | `tests/claude_channel.rs` runs `a2amx mcp --channel` through the changed loop | `tests/claude_channel.rs:174-240` | read (consultant) |
 | Baseline: `cargo test --test mcp --test bridge` passes before the change | run at base 777fa96, 2026-11-12 | ran |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (claude-sonnet-5-5); consultant on the claude harness (model not recorded); developer on OMP, working slot openai-codex/gpt-5.6-luna (advisor slot not exposed); tester on OMP, opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0. The first tester session was restarted by the owner in the middle of its mutation pass (an OMP harness configuration problem) and left one mutant in `src/mcp.rs`; the architect restored it by hand and a second tester session redid the pass.
+
+| Where found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The read rule (`take(MAX + 2)`, "no newline means too long") let a line of `MAX + 1` bytes with its newline through as a normal line, so the main test could not pass | Rule changed to `take(MAX + 1)`: a newline means a line, `MAX + 1` bytes without one means oversized |
+| Draft review | consultant | The bridge test was not red on the old code: the old bridge already rejects a complete oversized line (`src/bridge.rs:170-199`) | The test sends no newline and asserts the new message |
+| Draft review | consultant | The discard test sent too few bytes to reach the discard loop; the exact-limit test was labelled red although it passes on old code; mutants did not name a killing test; the EOF and discard I/O error cases were unspecified | Sizes stated, contract test named, each mutant paired with its test, EOF case and test 4 added |
+| Draft review | consultant | `tests/claude_channel.rs` runs the changed loop and was not named | Added to the contract tests |
+| Developer, review | architect | The spec did not list `mcp_prewrite_failure_does_not_claim_an_unknown_outcome`, which the new cap makes unreachable (its 2 MiB line is now refused at stdin); the developer rewrote it to the oversized-line contract | Accepted; the lost pre-write coverage is backlog I26 (developer measured that a line at the limit is 70 bytes under the daemon frame) |
+| Tester pass | tester | Survivor in the diff: dropping the delivery of a final unterminated line within the limit passed every test | Test `mcp_accepts_an_unterminated_ping_at_eof` added |
+| Tester pass | tester | Survivor: the discard loop's read error is not tested | Accepted: a pipe cannot produce it, and a seam is not worth it |
+| Architect review | architect | Three own mutants (discard keeps the newline, wrong error code, half limit) all killed | None needed |
+| Full suite | developer, architect | `gateway_up::sandbox_hides_state_host_and_limits_writes_to_gateway` fails in a confined session (also `human_inbound::queued_human_message_rechecks_recipient_eligibility_before_delivery` in the architect's session, not the developer's) | Known I24, unrelated; CI (unconfined) is the judge |

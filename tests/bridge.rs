@@ -11,7 +11,7 @@ use std::time::Duration;
 use a2amx::client::{BridgeLink, Client};
 use a2amx::daemon::Daemon;
 use a2amx::harness::{Deliver, Harness};
-use a2amx::wire::{BridgeDown, BridgeUp, MessageInfo, Request, Response};
+use a2amx::wire::{BridgeDown, BridgeUp, MAX_FRAME_LEN, MessageInfo, Request, Response};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -223,6 +223,12 @@ impl BridgeProcess {
         stdin.flush().unwrap();
     }
 
+    fn send_raw(&mut self, bytes: &[u8]) {
+        let stdin = self.stdin.as_mut().unwrap();
+        stdin.write_all(bytes).unwrap();
+        stdin.flush().unwrap();
+    }
+
     async fn read(&self) -> Value {
         common::eventually(|| async {
             match self.lines.try_recv() {
@@ -265,6 +271,32 @@ impl Drop for BridgeProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bridge_exits_when_an_oversized_line_has_no_newline() {
+    let case = Case::start().await;
+    let mut process = BridgeProcess::spawn(&case);
+    process.ready().await;
+    process.send_raw(&vec![b'x'; MAX_FRAME_LEN + 1]);
+
+    let status = tokio::time::timeout(Duration::from_secs(2), process.exit())
+        .await
+        .expect("bridge should exit after oversized input");
+    assert!(!status.success());
+
+    let mut stderr = String::new();
+    process
+        .child
+        .stderr
+        .take()
+        .expect("bridge stderr")
+        .read_to_string(&mut stderr)
+        .expect("read bridge stderr");
+    assert!(
+        stderr.contains("bridge input line exceeds 1048576 bytes"),
+        "stderr: {stderr}"
+    );
 }
 
 fn tool_result(response: Value) -> Value {

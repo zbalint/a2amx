@@ -10,12 +10,12 @@ use std::thread::{self, JoinHandle};
 
 use a2amx::client::Client;
 use a2amx::harness::{Deliver, Harness};
-use a2amx::wire::{MessageInfo, Request, Response, encode_frame};
+use a2amx::wire::{MAX_FRAME_LEN, MessageInfo, Request, Response, encode_frame};
 use serde_json::{Value, json};
 
 struct McpProcess {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
 }
 
@@ -80,7 +80,7 @@ impl McpProcess {
         let stdout = BufReader::new(child.stdout.take().expect("mcp stdout"));
         Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout,
         }
     }
@@ -91,8 +91,19 @@ impl McpProcess {
     }
 
     fn send_raw(&mut self, line: &str) {
-        writeln!(self.stdin, "{line}").expect("write mcp request");
-        self.stdin.flush().expect("flush mcp request");
+        let stdin = self.stdin.as_mut().expect("mcp stdin open");
+        writeln!(stdin, "{line}").expect("write mcp request");
+        stdin.flush().expect("flush mcp request");
+    }
+
+    fn send_bytes(&mut self, bytes: &[u8]) {
+        let stdin = self.stdin.as_mut().expect("mcp stdin open");
+        stdin.write_all(bytes).expect("write mcp bytes");
+        stdin.flush().expect("flush mcp bytes");
+    }
+
+    fn close_stdin(&mut self) {
+        self.stdin.take();
     }
 
     fn read(&mut self) -> Value {
@@ -536,6 +547,156 @@ fn mcp_status_serializes_optional_visibility_fields_as_null() {
 }
 
 #[tokio::test]
+async fn mcp_rejects_oversized_line_and_resumes() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.expect("admin client");
+    let (_id, token, addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        None,
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    tokio::task::spawn_blocking(move || {
+        let mut mcp = McpProcess::spawn(addr, &token);
+        let mut line = vec![b'x'; MAX_FRAME_LEN + 1];
+        line.push(b'\n');
+        mcp.send_bytes(&line);
+        let oversized = mcp.read();
+        assert_eq!(oversized["error"]["code"], -32600);
+        assert_eq!(oversized["id"], Value::Null);
+        assert_eq!(oversized["error"]["message"], "request too large");
+
+        let ping = mcp.send(json!({"jsonrpc":"2.0","id":1,"method":"ping"}));
+        assert_eq!(ping["id"], 1);
+        assert_eq!(ping["result"], json!({}));
+    })
+    .await
+    .expect("oversized MCP line scenario");
+}
+
+#[tokio::test]
+async fn mcp_discards_the_rest_of_an_oversized_line() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.expect("admin client");
+    let (_id, token, addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        None,
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    tokio::task::spawn_blocking(move || {
+        let mut mcp = McpProcess::spawn(addr, &token);
+        let line = vec![b'x'; 2 * MAX_FRAME_LEN];
+        for chunk in line.chunks(300_000) {
+            mcp.send_bytes(chunk);
+        }
+        mcp.send_bytes(b"\n");
+        let oversized = mcp.read();
+        assert_eq!(oversized["error"]["code"], -32600);
+        assert_eq!(oversized["id"], Value::Null);
+        assert_eq!(oversized["error"]["message"], "request too large");
+
+        let ping = mcp.send(json!({"jsonrpc":"2.0","id":1,"method":"ping"}));
+        assert_eq!(ping["id"], 1);
+        assert_eq!(ping["result"], json!({}));
+    })
+    .await
+    .expect("oversized MCP discard scenario");
+}
+
+#[tokio::test]
+async fn mcp_accepts_a_line_at_the_inclusive_limit() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.expect("admin client");
+    let (_id, token, addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        None,
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    tokio::task::spawn_blocking(move || {
+        let mut mcp = McpProcess::spawn(addr, &token);
+        let mut line = vec![b'x'; MAX_FRAME_LEN];
+        line.push(b'\n');
+        mcp.send_bytes(&line);
+        let parse_error = mcp.read();
+        assert_eq!(parse_error["error"]["code"], -32700);
+        assert_eq!(parse_error["id"], Value::Null);
+    })
+    .await
+    .expect("inclusive MCP limit scenario");
+}
+
+#[tokio::test]
+async fn mcp_reports_an_oversized_line_terminated_by_eof() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.expect("admin client");
+    let (_id, token, addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        None,
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    tokio::task::spawn_blocking(move || {
+        let mut mcp = McpProcess::spawn(addr, &token);
+        mcp.send_bytes(&vec![b'x'; MAX_FRAME_LEN + 1]);
+        mcp.close_stdin();
+        let oversized = mcp.read();
+        assert_eq!(oversized["error"]["code"], -32600);
+        assert_eq!(oversized["id"], Value::Null);
+        assert_eq!(oversized["error"]["message"], "request too large");
+
+        let mut trailing = String::new();
+        mcp.stdout
+            .read_to_string(&mut trailing)
+            .expect("read MCP stdout to EOF");
+        assert!(trailing.is_empty());
+        assert_eq!(mcp.child.wait().expect("wait for MCP").code(), Some(0));
+    })
+    .await
+    .expect("oversized MCP EOF scenario");
+}
+
+#[tokio::test]
+async fn mcp_accepts_an_unterminated_ping_at_eof() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.expect("admin client");
+    let (_id, token, addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        None,
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    tokio::task::spawn_blocking(move || {
+        let mut mcp = McpProcess::spawn(addr, &token);
+        mcp.send_bytes(br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#);
+        mcp.close_stdin();
+        let ping = mcp.read();
+        assert_eq!(ping["id"], 1);
+        assert_eq!(ping["result"], json!({}));
+
+        let mut trailing = String::new();
+        mcp.stdout
+            .read_to_string(&mut trailing)
+            .expect("read MCP stdout to EOF");
+        assert!(trailing.is_empty());
+        assert_eq!(mcp.child.wait().expect("wait for MCP").code(), Some(0));
+    })
+    .await
+    .expect("unterminated MCP ping scenario");
+}
+
+#[tokio::test]
 async fn mcp_protocol_errors_notifications_and_argument_validation() {
     let (dir, _daemon) = common::start_daemon().await;
     let mut admin = Client::connect(dir.path()).await.expect("admin client");
@@ -562,10 +723,7 @@ async fn mcp_protocol_errors_notifications_and_argument_validation() {
             assert_eq!(blank_error["error"]["code"], -32700);
             assert_eq!(blank_error["id"], Value::Null);
         }
-        mcp.stdin
-            .write_all(b"\xff\n")
-            .expect("malformed UTF-8 line");
-        mcp.stdin.flush().expect("flush malformed line");
+        mcp.send_bytes(b"\xff\n");
         let encoding_error = mcp.read();
         assert_eq!(encoding_error["error"]["code"], -32700);
         assert_eq!(encoding_error["id"], Value::Null);
@@ -805,7 +963,7 @@ fn mcp_send_never_retries_after_transport_loss() {
 }
 
 #[tokio::test]
-async fn mcp_prewrite_failure_does_not_claim_an_unknown_outcome() {
+async fn mcp_rejects_oversized_send_message_before_daemon_write() {
     let (dir, _daemon) = common::start_daemon().await;
     let mut admin = Client::connect(dir.path()).await.expect("admin");
     let (_, token, addr) = common::new_agent(
@@ -824,7 +982,9 @@ async fn mcp_prewrite_failure_does_not_claim_an_unknown_outcome() {
                 "to":"a".repeat(2 * 1024 * 1024),"subject":"Subject","message":"Body"
             }}
         }));
-        assert_eq!(failed_tool_result(&response)["code"], "internal");
+        assert_eq!(response["error"]["code"], -32600);
+        assert_eq!(response["id"], Value::Null);
+        assert_eq!(response["error"]["message"], "request too large");
         let response = mcp.send(json!({
             "jsonrpc":"2.0","id":2,"method":"tools/call",
             "params":{"name":"list_agents","arguments":{}}

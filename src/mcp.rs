@@ -4,7 +4,7 @@
 //! feature: a reader thread owns stdin, while protocol handling remains async so
 //! daemon requests do not block the runtime.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::net::SocketAddr;
 use std::thread;
 
@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::channel::{self, Delivery};
 use crate::client::Client;
-use crate::wire::{Request, Response};
+use crate::wire::{MAX_FRAME_LEN, Request, Response};
 
 const ENV_ERROR: &str = "A2AMX_ADDR and A2AMX_TOKEN must be set";
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -58,8 +58,18 @@ pub async fn run(channel: bool) -> Result<()> {
                             }));
                         }
                     }
+                    Some(StdioEvent::Oversized) => {
+                        if let Err(error) =
+                            write_response(error_response(Value::Null, -32600, "request too large"))
+                                .await
+                        {
+                            break Err(error);
+                        }
+                    }
                     Some(StdioEvent::Eof) | None => break Ok(()),
-                    Some(StdioEvent::Error(message)) => break Err(anyhow::anyhow!("reading MCP stdin: {message}")),
+                    Some(StdioEvent::Error(message)) => {
+                        break Err(anyhow::anyhow!("reading MCP stdin: {message}"));
+                    }
                 }
             }
             delivery = received.recv(), if channel => {
@@ -98,31 +108,59 @@ pub(crate) fn configuration() -> Result<(SocketAddr, String)> {
 
 pub(crate) enum StdioEvent {
     Line(Vec<u8>),
+    Oversized,
     Eof,
     Error(String),
 }
 
-pub(crate) fn spawn_stdin_reader() -> mpsc::UnboundedReceiver<StdioEvent> {
-    let (sender, receiver) = mpsc::unbounded_channel();
+pub(crate) fn spawn_stdin_reader() -> mpsc::Receiver<StdioEvent> {
+    let (sender, receiver) = mpsc::channel(16);
     thread::spawn(move || {
         let stdin = io::stdin();
         let mut lock = stdin.lock();
         loop {
             let mut line = Vec::new();
-            match lock.read_until(b'\n', &mut line) {
+            let result = lock
+                .by_ref()
+                .take(MAX_FRAME_LEN as u64 + 1)
+                .read_until(b'\n', &mut line);
+            match result {
                 Ok(0) => break,
+                Ok(read) if read == MAX_FRAME_LEN + 1 && !line.ends_with(b"\n") => {
+                    if sender.blocking_send(StdioEvent::Oversized).is_err() {
+                        return;
+                    }
+                    loop {
+                        let buffer = match lock.fill_buf() {
+                            Ok(buffer) => buffer,
+                            Err(error) => {
+                                let _ = sender.blocking_send(StdioEvent::Error(error.to_string()));
+                                return;
+                            }
+                        };
+                        if buffer.is_empty() {
+                            break;
+                        }
+                        if let Some(index) = buffer.iter().position(|byte| *byte == b'\n') {
+                            lock.consume(index + 1);
+                            break;
+                        }
+                        let length = buffer.len();
+                        lock.consume(length);
+                    }
+                }
                 Ok(_) => {
-                    if sender.send(StdioEvent::Line(line)).is_err() {
+                    if sender.blocking_send(StdioEvent::Line(line)).is_err() {
                         return;
                     }
                 }
                 Err(error) => {
-                    let _ = sender.send(StdioEvent::Error(error.to_string()));
+                    let _ = sender.blocking_send(StdioEvent::Error(error.to_string()));
                     return;
                 }
             }
         }
-        let _ = sender.send(StdioEvent::Eof);
+        let _ = sender.blocking_send(StdioEvent::Eof);
     });
     receiver
 }

@@ -88,6 +88,11 @@ async fn relay(
                             }
                         }
                     }
+                    Some(StdioEvent::Oversized) => {
+                        break Err(anyhow!(
+                            "bridge input line exceeds {MAX_FRAME_LEN} bytes"
+                        ));
+                    }
                     Some(StdioEvent::Eof) | None => break Ok(()),
                     Some(StdioEvent::Error(message)) => {
                         break Err(anyhow!("reading bridge stdin: {message}"));
