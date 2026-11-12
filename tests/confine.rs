@@ -3234,16 +3234,17 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
     ] {
         expected.extend(["--unsetenv".into(), name.into()]);
     }
+    expected.extend(["--bind".into(), "/tmp".into(), "/tmp".into()]);
+    // These hides exist only on hosts that have the path (WSL, a desktop bus), like the plan.
+    let host_paths: Vec<String> = ["/mnt/wslg", "/run/WSL", "/run/dbus"]
+        .into_iter()
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    for path in &host_paths {
+        expected.extend(["--tmpfs".into(), path.clone()]);
+    }
     expected.extend([
-        "--bind".into(),
-        "/tmp".into(),
-        "/tmp".into(),
-        "--tmpfs".into(),
-        "/mnt/wslg".into(),
-        "--tmpfs".into(),
-        "/run/WSL".into(),
-        "--tmpfs".into(),
-        "/run/dbus".into(),
         "--ro-bind".into(),
         empty.clone(),
         "/run/docker.sock".into(),
@@ -3273,12 +3274,11 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
         "--bind".into(),
         format!("{home}/.codex"),
         format!("{home}/.codex"),
-        "--remount-ro".into(),
-        "/mnt/wslg".into(),
-        "--remount-ro".into(),
-        "/run/WSL".into(),
-        "--remount-ro".into(),
-        "/run/dbus".into(),
+    ]);
+    for path in &host_paths {
+        expected.extend(["--remount-ro".into(), path.clone()]);
+    }
+    expected.extend([
         "--remount-ro".into(),
         runtime,
         "--remount-ro".into(),
