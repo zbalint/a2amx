@@ -23,6 +23,7 @@ pub mod gateway_proc;
 pub mod grant;
 pub mod harness;
 pub mod hook;
+pub mod layout;
 pub mod mcp;
 pub mod messaging;
 pub mod mouse;

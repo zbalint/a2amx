@@ -102,10 +102,10 @@ enum Job {
 }
 
 impl Store {
-    pub(crate) async fn open(state_dir: PathBuf, limits: Limits) -> Result<Self> {
+    pub(crate) async fn open(layout: &crate::layout::Layout, limits: Limits) -> Result<Self> {
         let (sender, receiver) = std::sync::mpsc::channel();
         let (ready_sender, ready_receiver) = oneshot::channel();
-        let database = state_dir.join("messages.db");
+        let database = layout.messages_db();
         let thread_database = database.clone();
         let thread = thread::Builder::new()
             .name("a2amx-store".to_owned())

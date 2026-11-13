@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, bail};
 use rustix::fs::OFlags;
@@ -20,9 +20,7 @@ const DEFAULT_GATEWAY_URL: &str = "wss://gateway.discord.gg";
 
 #[derive(Debug, Clone)]
 pub struct Loaded {
-    pub home: PathBuf,
-    pub gateway_dir: PathBuf,
-    pub link_dir: PathBuf,
+    pub layout: crate::layout::Layout,
     pub token: String,
     pub config: GatewayConfig,
     pub pairing: Option<Pairing>,
@@ -96,13 +94,8 @@ fn default_gateway_url() -> String {
 }
 
 pub fn load(home: &Path) -> anyhow::Result<Loaded> {
-    let gateway_dir = home.join("gateway");
-    crate::daemon::ensure_state_dir(&gateway_dir).with_context(|| {
-        format!(
-            "cannot create gateway state directory {}",
-            gateway_dir.display()
-        )
-    })?;
+    let layout = crate::layout::Layout::new(home.to_owned());
+    let gateway_dir = layout.gateway_state_dir();
     let metadata = fs::symlink_metadata(&gateway_dir)
         .with_context(|| format!("cannot inspect {}", gateway_dir.display()))?;
     if !metadata.file_type().is_dir() {
@@ -111,9 +104,8 @@ pub fn load(home: &Path) -> anyhow::Result<Loaded> {
             gateway_dir.display()
         );
     }
-
-    let token_path = gateway_dir.join("discord.token");
-    let config_path = gateway_dir.join("config.toml");
+    let token_path = layout.discord_token();
+    let config_path = layout.gateway_config();
     let token = read_secure(&token_path)?;
     let token = String::from_utf8(token)
         .with_context(|| format!("{} is not UTF-8", token_path.display()))?
@@ -130,7 +122,7 @@ pub fn load(home: &Path) -> anyhow::Result<Loaded> {
     })?;
     validate_config(&config)?;
 
-    let pairing_path = gateway_dir.join("pairing.json");
+    let pairing_path = layout.pairing();
     let pairing = match fs::symlink_metadata(&pairing_path) {
         Ok(_) => {
             let bytes = read_secure(&pairing_path)?;
@@ -146,10 +138,9 @@ pub fn load(home: &Path) -> anyhow::Result<Loaded> {
         }
     };
 
+    let layout = crate::layout::Layout::new(home.to_owned());
     Ok(Loaded {
-        home: home.to_owned(),
-        gateway_dir,
-        link_dir: home.join("link"),
+        layout,
         token,
         config,
         pairing,
@@ -160,19 +151,17 @@ pub fn write_token(home: &Path, token: &str) -> anyhow::Result<()> {
     if token.is_empty() {
         bail!("gateway token is empty");
     }
-    let gateway_dir = home.join("gateway");
-    crate::daemon::ensure_state_dir(&gateway_dir)?;
-    atomic_write(&gateway_dir.join("discord.token"), token.as_bytes(), 0o600)
+    let layout = crate::layout::Layout::new(home.to_owned());
+    atomic_write(&layout.discord_token(), token.as_bytes(), 0o600)
 }
 
 pub fn write_pairing(home: &Path, pairing: &Pairing) -> anyhow::Result<()> {
     if !valid_id(&pairing.guild_id) || !valid_id(&pairing.user_id) {
         bail!("pairing ids must be digit strings");
     }
-    let gateway_dir = home.join("gateway");
-    crate::daemon::ensure_state_dir(&gateway_dir)?;
+    let layout = crate::layout::Layout::new(home.to_owned());
     let payload = serde_json::to_vec(pairing)?;
-    atomic_write(&gateway_dir.join("pairing.json"), &payload, 0o600)
+    atomic_write(&layout.pairing(), &payload, 0o600)
 }
 
 fn validate_config(config: &GatewayConfig) -> anyhow::Result<()> {

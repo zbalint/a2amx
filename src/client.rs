@@ -1,5 +1,5 @@
 //! Client API used by the human CLI. Reads the daemon address and admin token from
-//! the state dir; errors with a hint when no daemon is running.
+//! the a2amx directory; errors with a hint when no daemon is running.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -43,18 +43,27 @@ pub struct Client {
 pub(crate) struct PreparedRequest(Vec<u8>);
 
 impl Client {
-    pub async fn connect(state_dir: &Path) -> anyhow::Result<Self> {
-        Self::connect_with(state_dir, "admin.token").await
+    pub async fn connect(root: &Path) -> anyhow::Result<Self> {
+        let layout = crate::layout::Layout::new(root.to_owned());
+        Self::connect_layout(&layout, false).await
     }
 
-    pub async fn connect_gateway(state_dir: &Path) -> anyhow::Result<Self> {
-        Self::connect_with(state_dir, "gateway.token").await
+    pub async fn connect_gateway(layout: &crate::layout::Layout) -> anyhow::Result<Self> {
+        Self::connect_layout(layout, true).await
     }
 
-    async fn connect_with(state_dir: &Path, token_file: &'static str) -> anyhow::Result<Self> {
-        let path = state_dir.to_owned();
+    async fn connect_layout(layout: &crate::layout::Layout, gateway: bool) -> anyhow::Result<Self> {
+        let (addr_path, token_path, token_file) = if gateway {
+            (
+                layout.link_addr(),
+                layout.link_gateway_token(),
+                "gateway.token",
+            )
+        } else {
+            (layout.addr(), layout.admin_token(), "admin.token")
+        };
         let (addr, token) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let addresses = match std::fs::read_to_string(path.join("addr")) {
+            let addresses = match std::fs::read_to_string(&addr_path) {
                 Ok(value) => value,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!(UNREACHABLE),
                 Err(error) => return Err(error.into()),
@@ -64,7 +73,6 @@ impl Client {
                 .next()
                 .context("daemon addr file is empty")?
                 .parse()?;
-            let token_path = path.join(token_file);
             let token = std::fs::read_to_string(&token_path)
                 .with_context(|| format!("cannot read the daemon {token_file} file"))?;
             Ok((addr, token))

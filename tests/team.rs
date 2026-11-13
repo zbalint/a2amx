@@ -282,7 +282,7 @@ fn global_guard_characterizes_system_reason() {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains(": the daemon state directory or a system directory;"),
+            error.contains(": the a2amx directory or a system directory;"),
             "{error}"
         );
     }
@@ -543,7 +543,7 @@ async fn global_team_file_is_used_with_local_precedence_and_guard() {
     std::fs::create_dir(&project).unwrap();
     let user_home = tempfile::tempdir().unwrap();
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         "[[session]]\nname = 'architect'\ncommand = ['cat']",
     )
     .unwrap();
@@ -585,7 +585,7 @@ fn global_team_file_missing_error_names_both_paths() {
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.contains("a2amx.toml"));
-    assert!(error.contains("team.toml"));
+    assert!(error.contains("config/team.toml"));
     assert!(!error.contains("start it"));
 }
 
@@ -596,7 +596,7 @@ async fn global_team_relative_cwd_uses_invoking_directory() {
     let project = project_root.path().join("proj");
     std::fs::create_dir(&project).unwrap();
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         "[[session]]\nname = 'developer'\ncommand = ['sh', '-c', 'sleep 30']\ncwd = '.'",
     )
     .unwrap();
@@ -643,7 +643,7 @@ async fn explicit_team_file_bypasses_global_fallback_and_guard() {
     let (state, _daemon) = common::start_daemon().await;
     let user_home = tempfile::tempdir().unwrap();
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         "[[session]]\nname = 'global'\ncommand = ['cat']",
     )
     .unwrap();
@@ -1483,7 +1483,7 @@ command = ["sh", "-c", "sleep 30"]
         String::from_utf8_lossy(&up.stderr)
     );
     std::fs::write(
-        dir.path().join("team.toml"),
+        dir.path().join("config/team.toml"),
         r#"
 [[session]]
 name = "running"
@@ -1496,7 +1496,11 @@ command = ["cat"]
     .unwrap();
     let before = run_binary(dir.path(), &["list"]).unwrap().stdout;
 
-    let status = run_binary(dir.path(), &["team", "status", "--file", "team.toml"]).unwrap();
+    let status = run_binary(
+        dir.path(),
+        &["team", "status", "--file", "config/team.toml"],
+    )
+    .unwrap();
     assert!(
         status.status.success(),
         "{}",
@@ -1526,7 +1530,7 @@ async fn status_keeps_generic_running_note_as_the_session_id() {
         String::from_utf8_lossy(&plain.stderr)
     );
     std::fs::write(
-        dir.path().join("team.toml"),
+        dir.path().join("config/team.toml"),
         r#"
 [[session]]
 name = "plain"
@@ -1535,7 +1539,11 @@ command = ["cat"]
     )
     .unwrap();
 
-    let status = run_binary(dir.path(), &["team", "status", "--file", "team.toml"]).unwrap();
+    let status = run_binary(
+        dir.path(),
+        &["team", "status", "--file", "config/team.toml"],
+    )
+    .unwrap();
     assert!(status.status.success());
     assert_eq!(
         String::from_utf8(status.stdout).unwrap(),
@@ -1568,7 +1576,7 @@ async fn status_marks_a_running_claude_session_that_is_not_ready() {
         String::from_utf8_lossy(&worker.stderr)
     );
     std::fs::write(
-        dir.path().join("team.toml"),
+        dir.path().join("config/team.toml"),
         r#"
 [[session]]
 name = "worker"
@@ -1577,7 +1585,11 @@ command = ["claude"]
     )
     .unwrap();
 
-    let status = run_binary(dir.path(), &["team", "status", "--file", "team.toml"]).unwrap();
+    let status = run_binary(
+        dir.path(),
+        &["team", "status", "--file", "config/team.toml"],
+    )
+    .unwrap();
     assert!(status.status.success());
     assert_eq!(
         String::from_utf8(status.stdout).unwrap(),
@@ -1620,7 +1632,7 @@ async fn status_leaves_a_ready_claude_session_unmarked() {
         String::from_utf8_lossy(&started.stderr)
     );
     std::fs::write(
-        dir.path().join("team.toml"),
+        dir.path().join("config/team.toml"),
         "[[session]]\nname = \"ready\"\ncommand = [\"claude\"]\n",
     )
     .unwrap();
@@ -1628,7 +1640,11 @@ async fn status_leaves_a_ready_claude_session_unmarked() {
     // The fixture draws Claude's ready screen after it starts; each status request samples
     // the screen, so the first rows may still say "starting".
     let rows = common::eventually(|| async {
-        let status = run_binary(dir.path(), &["team", "status", "--file", "team.toml"]).unwrap();
+        let status = run_binary(
+            dir.path(),
+            &["team", "status", "--file", "config/team.toml"],
+        )
+        .unwrap();
         let rows = String::from_utf8(status.stdout).unwrap();
         (!rows.contains("not ready")).then_some(rows)
     })
@@ -1772,11 +1788,13 @@ async fn dry_run_expands_home_relative_confine_paths() {
     let user_home = tempfile::tempdir().unwrap();
     let runtime_dir = tempfile::tempdir().unwrap();
     let tool_cache = user_home.path().join(".tool-cache");
+    let root_tool_cache = state.path().join(".tool-cache");
     let tool_hide = user_home.path().join(".tool-hide");
     let ssh = user_home.path().join(".ssh");
     std::fs::create_dir(&tool_cache).unwrap();
-    std::fs::create_dir(&tool_hide).unwrap();
+    std::fs::create_dir(&root_tool_cache).unwrap();
     std::fs::create_dir(&ssh).unwrap();
+    std::fs::create_dir(&tool_hide).unwrap();
     std::fs::write(
         project.path().join("dry-tilde.toml"),
         r#"
@@ -1810,6 +1828,7 @@ async fn dry_run_expands_home_relative_confine_paths() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let writable = std::fs::canonicalize(&tool_cache).unwrap();
+    let root_writable = std::fs::canonicalize(&root_tool_cache).unwrap();
     let hidden = std::fs::canonicalize(&tool_hide).unwrap();
     let unhidden = std::fs::canonicalize(&ssh).unwrap();
     let missing = user_home.path().join(".missing-tool");
@@ -1818,6 +1837,7 @@ async fn dry_run_expands_home_relative_confine_paths() {
     assert!(!stdout.contains(&format!("  hidden: {}\n", unhidden.display())));
     assert!(stdout.contains(&format!("  writable: {}\n", writable.display())));
     assert!(stdout.contains(&format!("  hidden: {}\n", hidden.display())));
+    assert!(!stdout.contains(&format!("  writable: {}\n", root_writable.display())));
     assert!(!stdout.contains("/~/"));
     assert!(!stdout.contains("~/"));
     assert!(!stdout.contains(&format!("  writable: {}\n", missing.display())));
@@ -1874,7 +1894,7 @@ async fn dry_run_reports_auto_grants_and_skipped_tool_directories() {
     let runtime_dir = tempfile::tempdir().unwrap();
     std::fs::write(project.path().join("Cargo.toml"), "").unwrap();
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         r#"
 [confine]
 enabled = true
@@ -2159,10 +2179,10 @@ async fn status_notes_messages_lost_in_a_daemon_restart_only_for_wanted_names() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn up_starts_in_order_and_skips_running_sessions_without_attachment() {
     let (dir, _daemon) = common::start_daemon().await;
-    std::fs::write(dir.path().join("team.toml"), LIVE_TEAM).unwrap();
+    std::fs::write(dir.path().join("config/team.toml"), LIVE_TEAM).unwrap();
     let first = run_binary(
         dir.path(),
-        &["team", "up", "--detach", "--file", "team.toml"],
+        &["team", "up", "--detach", "--file", "config/team.toml"],
     )
     .unwrap();
     assert!(
@@ -2192,7 +2212,7 @@ async fn up_starts_in_order_and_skips_running_sessions_without_attachment() {
             assert!(matches!(bytes.last(), Some(b's' | b'm' | b'h')));
         }
     }
-    let second = run_binary(dir.path(), &["team", "up", "--file", "team.toml"]).unwrap();
+    let second = run_binary(dir.path(), &["team", "up", "--file", "config/team.toml"]).unwrap();
     assert!(second.status.success());
     assert_eq!(
         second.stdout,
@@ -2205,11 +2225,11 @@ async fn up_starts_in_order_and_skips_running_sessions_without_attachment() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn down_kills_only_named_team_sessions_and_reports_missing_names() {
     let (dir, _daemon) = common::start_daemon().await;
-    std::fs::write(dir.path().join("team.toml"), LIVE_TEAM).unwrap();
+    std::fs::write(dir.path().join("config/team.toml"), LIVE_TEAM).unwrap();
     assert!(
         run_binary(
             dir.path(),
-            &["team", "up", "--detach", "--file", "team.toml"]
+            &["team", "up", "--detach", "--file", "config/team.toml"]
         )
         .unwrap()
         .status
@@ -2224,14 +2244,14 @@ async fn down_kills_only_named_team_sessions_and_reports_missing_names() {
         .status
         .success()
     );
-    let down = run_binary(dir.path(), &["team", "down", "--file", "team.toml"]).unwrap();
+    let down = run_binary(dir.path(), &["team", "down", "--file", "config/team.toml"]).unwrap();
     assert!(
         down.status.success(),
         "{}",
         String::from_utf8_lossy(&down.stderr)
     );
     assert_eq!(down.stdout, b"killed architect s1\nkilled developer s2\n");
-    let repeated = run_binary(dir.path(), &["team", "down", "--file", "team.toml"]).unwrap();
+    let repeated = run_binary(dir.path(), &["team", "down", "--file", "config/team.toml"]).unwrap();
     assert!(repeated.status.success());
     assert_eq!(
         repeated.stdout,
@@ -2253,13 +2273,13 @@ async fn down_kills_only_named_team_sessions_and_reports_missing_names() {
 async fn prefixed_team_down_uses_full_names_and_hints_only_for_explicit_missing_names() {
     let (dir, _daemon) = common::start_daemon().await;
     std::fs::write(
-        dir.path().join("team.toml"),
+        dir.path().join("config/team.toml"),
         format!("team = \"pfx\"\n{LIVE_TEAM}"),
     )
     .unwrap();
     let up = run_binary(
         dir.path(),
-        &["team", "up", "--detach", "--file", "team.toml"],
+        &["team", "up", "--detach", "--file", "config/team.toml"],
     )
     .unwrap();
     assert!(
@@ -2281,7 +2301,7 @@ async fn prefixed_team_down_uses_full_names_and_hints_only_for_explicit_missing_
         named.stderr,
         b"hint: names given to team down are full session names (with any team prefix); see a2amx list\n"
     );
-    let down = run_binary(dir.path(), &["team", "down", "--file", "team.toml"]).unwrap();
+    let down = run_binary(dir.path(), &["team", "down", "--file", "config/team.toml"]).unwrap();
     assert!(
         down.status.success(),
         "{}",
@@ -2292,7 +2312,7 @@ async fn prefixed_team_down_uses_full_names_and_hints_only_for_explicit_missing_
         b"killed pfx-architect s1\nkilled pfx-developer s2\n"
     );
     assert!(down.stderr.is_empty());
-    let repeated = run_binary(dir.path(), &["team", "down", "--file", "team.toml"]).unwrap();
+    let repeated = run_binary(dir.path(), &["team", "down", "--file", "config/team.toml"]).unwrap();
     assert!(repeated.status.success());
     assert_eq!(
         repeated.stdout,
@@ -2482,7 +2502,7 @@ async fn terminal_attach_honors_file_selection_flag_first_and_detach_override() 
 {
     let (dir, _daemon) = common::start_daemon().await;
     std::fs::write(
-        dir.path().join("team.toml"),
+        dir.path().join("config/team.toml"),
         r#"
 [[session]]
 name = "architect"
@@ -2502,7 +2522,11 @@ attach = true
         args
     };
     let wait = Duration::from_secs(10);
-    let team_file = dir.path().join("team.toml").to_string_lossy().into_owned();
+    let team_file = dir
+        .path()
+        .join("config/team.toml")
+        .to_string_lossy()
+        .into_owned();
     let mut selected = PtyHarness::spawn(&args(&["team", "up", "--file", &team_file]), dir.path())?;
     selected.wait_for_text("developer-ready", wait)?;
     assert!(!selected.screen_text().contains("architect-ready"));

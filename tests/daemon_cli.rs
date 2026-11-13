@@ -107,7 +107,7 @@ fn background_start_detaches_and_logs() {
     assert!(started.elapsed() < Duration::from_secs(10));
     assert!(stdout(&output).starts_with("listening on 127.0.0.1:"));
     assert!(run(&home, &["list"]).status.success());
-    let mode = std::fs::metadata(home.join("daemon.log"))
+    let mode = std::fs::metadata(home.join("log/daemon.log"))
         .expect("daemon.log exists")
         .permissions()
         .mode();
@@ -210,7 +210,7 @@ fn background_reports_a_startup_failure() {
     assert!(!output.status.success());
     let message = stderr(&output);
     assert!(
-        message.contains("state path is not a directory")
+        message.contains("a2amx path is not a directory")
             || message.contains("daemon exited during startup"),
         "stderr: {message}"
     );
@@ -554,7 +554,8 @@ fn team_reset_file_resets_sessions_in_file_order() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_reset_composer(dir.path());
-    let file = dir.path().join("team.toml");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    let file = home.join("config/team.toml");
     std::fs::write(
         &file,
         format!(
@@ -610,7 +611,8 @@ fn team_reset_reports_missing_and_exited_before_resetting_ready() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_reset_composer(dir.path());
-    let file = dir.path().join("team.toml");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    let file = home.join("config/team.toml");
     std::fs::write(
         &file,
         format!(
@@ -676,7 +678,8 @@ fn team_reset_continues_after_a_not_ready_session_and_fails() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_reset_composer(dir.path());
-    let file = dir.path().join("team.toml");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    let file = home.join("config/team.toml");
     std::fs::write(
         &file,
         format!(
@@ -730,7 +733,8 @@ fn team_reset_except_leaves_the_named_session_untouched() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_reset_composer(dir.path());
-    let file = dir.path().join("team.toml");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    let file = home.join("config/team.toml");
     std::fs::write(
         &file,
         format!(
@@ -794,7 +798,8 @@ fn team_reset_requires_yes_for_nonterminal_invocation() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     let fixture = fake_reset_composer(dir.path());
-    let file = dir.path().join("team.toml");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    let file = home.join("config/team.toml");
     std::fs::write(
         &file,
         format!(
@@ -879,7 +884,8 @@ fn team_reset_accepts_explicit_names_and_rejects_file_name_mix() {
         "reset alpha s1: 1 step\nreset beta s2: 1 step\n"
     );
 
-    let file = dir.path().join("team.toml");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    let file = home.join("config/team.toml");
     std::fs::write(
         &file,
         "[[session]]\nname = \"alpha\"\ncommand = [\"cat\"]\n",
@@ -1296,7 +1302,7 @@ fn daemon_status_reports_address_and_session_counts() {
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
     assert!(run(&home, &["daemon", "start"]).status.success());
-    let address = std::fs::read_to_string(home.join("addr"))
+    let address = std::fs::read_to_string(home.join("run/addr"))
         .unwrap()
         .lines()
         .next()
@@ -1477,7 +1483,7 @@ while True:
     }
 
     fn log(&self) -> String {
-        std::fs::read_to_string(self.home.join("daemon.log")).unwrap()
+        std::fs::read_to_string(self.home.join("log/daemon.log")).unwrap()
     }
 }
 
@@ -1895,7 +1901,8 @@ fn team_up_forwards_watch_entries() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    let team = dir.path().join("team.toml");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    let team = home.join("config/team.toml");
     std::fs::write(
         &team,
         r#"

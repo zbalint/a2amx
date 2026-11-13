@@ -76,12 +76,12 @@ fn read_accepted_grants(path: &Path) -> anyhow::Result<BTreeSet<String>> {
 }
 
 async fn load_accepted_grants(home: &Path) -> anyhow::Result<BTreeSet<String>> {
-    let path = home.join("auto-grants");
+    let path = a2amx::layout::Layout::new(home.to_owned()).auto_grants();
     tokio::task::spawn_blocking(move || read_accepted_grants(&path)).await?
 }
 
 async fn save_accepted_grants(home: &Path, accepted: &BTreeSet<String>) -> anyhow::Result<()> {
-    let path = home.join("auto-grants");
+    let path = a2amx::layout::Layout::new(home.to_owned()).auto_grants();
     let content = a2amx::grant::render_accepted(accepted);
     tokio::task::spawn_blocking(move || a2amx::omp::write_if_changed(&path, content.as_bytes()))
         .await??;
@@ -273,24 +273,17 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
 }
 
 fn resolve_home(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
-    if let Some(home) = explicit {
-        return Ok(home);
-    }
-    if let Some(home) = std::env::var_os("A2AMX_HOME") {
-        return Ok(PathBuf::from(home));
-    }
-    if let Some(base) = std::env::var_os("XDG_STATE_HOME") {
-        return Ok(PathBuf::from(base).join("a2amx"));
-    }
-    if let Some(base) = std::env::var_os("HOME") {
-        return Ok(PathBuf::from(base).join(".local/state/a2amx"));
-    }
-    Err(anyhow!("cannot determine the a2amx state directory"))
+    Ok(
+        a2amx::layout::Layout::resolve(explicit, std::env::var_os("HOME").map(PathBuf::from))?
+            .root()
+            .to_owned(),
+    )
 }
 
 const MAX_GATEWAY_TOKEN_BYTES: usize = 64 * 1024;
 
 async fn run_gateway_token(home: &Path) -> anyhow::Result<()> {
+    a2amx::layout::Layout::new(home.to_owned()).ensure()?;
     let token = tokio::task::spawn_blocking(read_gateway_token).await??;
     relay_files::write_token(home, &token)
 }
@@ -440,7 +433,7 @@ async fn run_daemon(
         listen
     };
     let daemon = Daemon::start(DaemonConfig {
-        state_dir: home,
+        root: home,
         listen,
         host_name,
         limits: a2amx::messaging::Limits {
@@ -477,12 +470,12 @@ async fn run_daemon_background(
             running.lines().next().unwrap_or("unknown address")
         ));
     }
-    let log_path = home.join("daemon.log");
+    let log_path = a2amx::layout::Layout::new(home.clone()).daemon_log();
     let (log, exe) = {
         let home = home.clone();
         let log_path = log_path.clone();
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            daemon::ensure_state_dir(&home)?;
+            a2amx::layout::Layout::new(home.clone()).ensure()?;
             let log = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -547,7 +540,7 @@ async fn run_daemon_background(
 }
 
 async fn read_addrs(home: &Path) -> anyhow::Result<String> {
-    let path = home.join("addr");
+    let path = a2amx::layout::Layout::new(home.to_owned()).addr();
     Ok(tokio::task::spawn_blocking(move || std::fs::read_to_string(path)).await??)
 }
 
@@ -905,9 +898,9 @@ async fn wired_command(
         }
         Harness::Omp if !install_omp => Ok(command),
         Harness::Omp => {
-            let install_home = home.to_owned();
+            let install_layout = a2amx::layout::Layout::new(home.to_owned());
             let installed =
-                tokio::task::spawn_blocking(move || a2amx::omp::install(&install_home)).await??;
+                tokio::task::spawn_blocking(move || a2amx::omp::install(&install_layout)).await??;
             Ok(a2amx::harness::wire_omp_argv(
                 command,
                 &installed.extension,
@@ -1207,7 +1200,7 @@ async fn resolve_team_file(home: &Path, file: Option<PathBuf>) -> anyhow::Result
                 ));
             }
         }
-        let global = state_home.join("team.toml");
+        let global = a2amx::layout::Layout::new(state_home.clone()).team_file();
         match std::fs::metadata(&global) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1493,9 +1486,8 @@ async fn dry_run_start(
         let request = resolved_confine_request(request, &resolved_cwd, origin.file)?;
         let host = a2amx::confine::Host {
             home: host_home,
-            state_dir: home.to_owned(),
+            layout: a2amx::layout::Layout::new(home.to_owned()),
             runtime_dir,
-            empty_file: home.join("confine-empty"),
         };
         let preflight = a2amx::confine::ensure_grant_dirs(&request, harness, &host, false);
         Some(
@@ -1569,9 +1561,8 @@ fn validate_team_session(
     let harness = Harness::infer(&session.command);
     let host = a2amx::confine::Host {
         home: host_home,
-        state_dir: home.to_owned(),
+        layout: a2amx::layout::Layout::new(home.to_owned()),
         runtime_dir,
-        empty_file: home.join("confine-empty"),
     };
     let preflight = a2amx::confine::ensure_grant_dirs(&request, harness, &host, false);
     a2amx::confine::plan_with_preflight(

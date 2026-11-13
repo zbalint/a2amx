@@ -184,15 +184,13 @@ pub fn check_entry_syntax(option: &str, entry: &str) -> Result<()> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Host {
     pub home: PathBuf,
-    pub state_dir: PathBuf,
+    pub layout: crate::layout::Layout,
     pub runtime_dir: PathBuf,
-    pub empty_file: PathBuf,
 }
 
 pub struct Plan {
     bwrap: PathBuf,
-    empty_file: PathBuf,
-    state_dir: PathBuf,
+    layout: crate::layout::Layout,
     pub cwd: PathBuf,
     pub harness: Harness,
     pub writable: Vec<PathBuf>,
@@ -292,12 +290,12 @@ fn check_absolute_entry(option: &str, entry: &str) -> Result<()> {
 pub fn check_write_allowed(
     path: &Path,
     home: &Path,
-    state_dir: &Path,
+    root: &Path,
     explicit: bool,
 ) -> Result<PathBuf> {
     let path = canonical_existing(path, "writable path")?;
     let home = canonical_existing(home, "home")?;
-    let state_dir = canonical_existing(state_dir, "state directory")?;
+    let root = canonical_existing(root, "a2amx directory")?;
     if path == Path::new("/") {
         bail!("writable path / is not allowed");
     }
@@ -305,13 +303,13 @@ pub fn check_write_allowed(
         bail!("writable path $HOME is not allowed");
     }
     let state_overlap = if explicit {
-        is_within(&path, &state_dir)
+        is_within(&path, &root)
     } else {
-        paths_overlap(&path, &state_dir)
+        paths_overlap(&path, &root)
     };
     if state_overlap {
         bail!(
-            "writable path {} overlaps the state directory",
+            "writable path {} overlaps the a2amx directory",
             path.display()
         );
     }
@@ -351,20 +349,20 @@ fn check_write_runtime_allowed(path: &Path, runtime_dir: &Path, explicit: bool) 
 /// Canonicalize and validate a path that may become visible read-only.
 pub fn check_unhide_allowed(
     path: &Path,
-    state_dir: &Path,
+    root: &Path,
     runtime_dir: &Path,
     home: &Path,
 ) -> Result<PathBuf> {
     let path = canonical_existing(path, "unhide path")?;
-    let state_dir = canonical_existing(state_dir, "state directory")?;
+    let root = canonical_existing(root, "a2amx directory")?;
     let runtime_dir = canonical_existing(runtime_dir, "runtime directory")?;
     let home = canonical_existing(home, "home")?;
     if path == home || is_within(&home, &path) {
         bail!("unhide path {} is home or contains home", path.display());
     }
-    if paths_overlap(&path, &state_dir) {
+    if paths_overlap(&path, &root) {
         bail!(
-            "unhide path {} overlaps the state directory",
+            "unhide path {} overlaps the a2amx directory",
             path.display()
         );
     }
@@ -596,7 +594,7 @@ fn unsaved_harness_files(data_files: &[PathBuf], overlay_parents: &[PathBuf]) ->
 fn validate_harness_data_paths(
     harness: Harness,
     home: &Path,
-    state_dir: &Path,
+    root: &Path,
     runtime_dir: &Path,
     data_dirs: &[PathBuf],
     data_files: &[PathBuf],
@@ -650,7 +648,7 @@ fn validate_harness_data_paths(
                 }
             }
         }
-        check_write_allowed(&target, home, state_dir, explicit)?;
+        check_write_allowed(&target, home, root, explicit)?;
         check_write_runtime_allowed(&target, runtime_dir, explicit)?;
     }
     Ok(())
@@ -684,7 +682,7 @@ pub fn ensure_data_dirs(harness: Harness, home: &Path) -> Result<()> {
 }
 struct GrantDirScope {
     home: PathBuf,
-    state_dir: PathBuf,
+    root: PathBuf,
     runtime_dir: PathBuf,
     hidden: Vec<PathBuf>,
 }
@@ -695,7 +693,7 @@ fn grant_dir_scope(
     host: &Host,
 ) -> Option<GrantDirScope> {
     let home = fs::canonicalize(&host.home).ok()?;
-    let state_dir = fs::canonicalize(&host.state_dir).ok()?;
+    let root = fs::canonicalize(host.layout.root()).ok()?;
     let runtime_dir = fs::canonicalize(&host.runtime_dir).ok()?;
     let mut hidden = if request.no_default_hides {
         Vec::new()
@@ -718,7 +716,7 @@ fn grant_dir_scope(
     hidden.retain(|path| !unhidden.iter().any(|unhidden| unhidden == path));
     Some(GrantDirScope {
         home,
-        state_dir,
+        root,
         runtime_dir,
         hidden,
     })
@@ -727,7 +725,7 @@ fn grant_dir_scope(
 fn grant_dir_problem(source: &Path, scope: &GrantDirScope) -> Option<String> {
     if source.exists() {
         if let Ok(canonical) = fs::canonicalize(source)
-            && (paths_overlap(&canonical, &scope.state_dir)
+            && (paths_overlap(&canonical, &scope.root)
                 || paths_overlap(&canonical, &scope.runtime_dir)
                 || scope
                     .hidden
@@ -751,10 +749,10 @@ fn grant_dir_problem(source: &Path, scope: &GrantDirScope) -> Option<String> {
         return Some("ancestor cannot be canonicalized".into());
     };
     if !is_within(&ancestor, &scope.home)
-        || paths_overlap(&ancestor, &scope.state_dir)
+        || paths_overlap(&ancestor, &scope.root)
         || paths_overlap(&ancestor, &scope.runtime_dir)
         || (ancestor != scope.home
-            && check_write_allowed(&ancestor, &scope.home, &scope.state_dir, false).is_err())
+            && check_write_allowed(&ancestor, &scope.home, &scope.root, false).is_err())
         || scope
             .hidden
             .iter()
@@ -973,27 +971,19 @@ pub fn git_common_dir(cwd: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
     }
 }
 
-fn plan_empty_file(host: &Host, state_dir: &Path) -> Result<PathBuf> {
-    let candidate_name = host
-        .empty_file
-        .file_name()
-        .ok_or_else(|| anyhow!("empty file path has no file name"))?;
-    if candidate_name != "confine-empty" {
-        bail!("empty file must be named confine-empty");
-    }
-    let parent = host
-        .empty_file
+fn plan_empty_file(layout: &crate::layout::Layout) -> Result<PathBuf> {
+    let candidate = layout.confine_empty();
+    let parent = candidate
         .parent()
         .ok_or_else(|| anyhow!("empty file path has no parent"))?;
     let parent = canonical_existing(parent, "empty file directory")?;
-    if parent != state_dir {
-        bail!("empty file must be inside the state directory");
+    if parent != canonical_existing(&layout.run_dir(), "a2amx run directory")? {
+        bail!("empty file must be inside the a2amx run directory");
     }
-    let candidate = parent.join(candidate_name);
     if candidate.exists() {
         let path = canonical_existing(&candidate, "empty file")?;
-        if !is_within(&path, state_dir) || fs::metadata(&path)?.len() != 0 {
-            bail!("confinement empty file must be an empty state file");
+        if !is_within(&path, &layout.run_dir()) || fs::metadata(&path)?.len() != 0 {
+            bail!("confinement empty file must be an empty run file");
         }
         Ok(path)
     } else {
@@ -1029,7 +1019,7 @@ fn add_validated_write(
     let Some(path) = add_canonical_existing(path, "write", skipped) else {
         return Ok(None);
     };
-    let path = check_write_allowed(&path, &host.home, &host.state_dir, explicit)?;
+    let path = check_write_allowed(&path, &host.home, host.layout.root(), explicit)?;
     check_write_runtime_allowed(&path, &host.runtime_dir, explicit)?;
     add_unique(writable, path.clone());
     Ok(Some(path))
@@ -1124,7 +1114,7 @@ pub fn plan_with_preflight(
     if !cwd.is_dir() {
         bail!("cwd is not a directory: {}", cwd.display());
     }
-    let empty_file = plan_empty_file(host, &builder.state_dir)?;
+    plan_empty_file(&builder.layout)?;
     builder.bind_workspace(&cwd)?;
     builder.bind_harness_data(request)?;
     let mut effective_grants = request.grants.clone();
@@ -1161,7 +1151,7 @@ pub fn plan_with_preflight(
     }
     builder.bind_harness_config(&effective_grants)?;
     builder.bind_operator_writes(request, path_var.as_deref())?;
-    builder.hide_mandatory();
+    builder.hide_mandatory()?;
     builder.hide_defaults(request);
     builder.hide_containers(&request.grants);
     builder.apply_grant_unhides(&request.grants, request.no_default_hides)?;
@@ -1169,7 +1159,7 @@ pub fn plan_with_preflight(
     builder.release_operator_writes()?;
     builder.apply_operator_hides(request)?;
     builder.protect_system_paths(path_var.as_deref());
-    builder.finish(request, cwd, empty_file, effective_grants)
+    builder.finish(request, cwd, effective_grants)
 }
 
 fn check_request_limits(request: &ConfineRequest) -> Result<()> {
@@ -1221,7 +1211,6 @@ struct PlanBuilder<'a> {
     host: &'a Host,
     harness: Harness,
     home: PathBuf,
-    state_dir: PathBuf,
     runtime_dir: PathBuf,
     writable: Vec<PathBuf>,
     readonly: Vec<PathBuf>,
@@ -1235,6 +1224,7 @@ struct PlanBuilder<'a> {
     container_hidden: Vec<PathBuf>,
     container_sockets: Vec<(PathBuf, &'static str)>,
     grant_unhides: Vec<(PathBuf, &'static str)>,
+    layout: crate::layout::Layout,
     harness_config: Option<PathBuf>,
 }
 
@@ -1307,7 +1297,10 @@ impl<'a> PlanBuilder<'a> {
             host,
             harness,
             home: canonical_existing(&host.home, "home")?,
-            state_dir: canonical_existing(&host.state_dir, "state directory")?,
+            layout: crate::layout::Layout::new(canonical_existing(
+                host.layout.root(),
+                "a2amx root",
+            )?),
             runtime_dir: canonical_existing(&host.runtime_dir, "runtime directory")?,
             writable: Vec::new(),
             readonly: Vec::new(),
@@ -1379,7 +1372,7 @@ impl<'a> PlanBuilder<'a> {
         validate_harness_data_paths(
             self.harness,
             &self.home,
-            &self.state_dir,
+            self.layout.root(),
             &self.runtime_dir,
             &data_dirs,
             &data_files,
@@ -1487,6 +1480,11 @@ impl<'a> PlanBuilder<'a> {
     }
 
     fn protect_system_paths(&mut self, path_var: Option<&OsStr>) {
+        if let Some(path) = canonical_if_exists(self.layout.root())
+            && self.writable.iter().any(|write| is_within(&path, write))
+        {
+            add_unique(&mut self.readonly, path);
+        }
         if let Some(path) = canonical_if_exists(&self.home.join(".a2amx"))
             && is_within(&path, &self.home)
             && self.writable.iter().any(|write| is_within(&path, write))
@@ -1510,8 +1508,13 @@ impl<'a> PlanBuilder<'a> {
         }
     }
 
-    fn hide_mandatory(&mut self) {
-        for path in [self.runtime_dir.clone(), self.state_dir.clone()] {
+    fn hide_mandatory(&mut self) -> Result<()> {
+        for path in [
+            canonical_existing(&self.runtime_dir, "runtime directory")?,
+            canonical_existing(&self.layout.state_dir(), "state directory")?,
+            canonical_existing(&self.layout.run_dir(), "run directory")?,
+            canonical_existing(&self.layout.secrets_dir(), "secrets directory")?,
+        ] {
             add_unique(&mut self.mandatory_hidden, path);
         }
         for path in MANDATORY_ROOTS {
@@ -1524,6 +1527,7 @@ impl<'a> PlanBuilder<'a> {
         for path in &self.mandatory_hidden {
             add_unique(&mut self.hidden, path.clone());
         }
+        Ok(())
     }
 
     fn default_hide_sources(&self) -> Vec<PathBuf> {
@@ -1547,7 +1551,7 @@ impl<'a> PlanBuilder<'a> {
     }
 
     fn check_grant_path_writable(&self, grant: &str, entry: &str, path: &Path) -> Result<PathBuf> {
-        let path = check_write_allowed(path, &self.home, &self.state_dir, false)?;
+        let path = check_write_allowed(path, &self.home, self.layout.root(), false)?;
         check_write_runtime_allowed(&path, &self.runtime_dir, false)?;
         if let Some(root) = canonical_if_exists(&self.home.join(".a2amx"))
             && is_within(&path, &root)
@@ -1723,7 +1727,7 @@ impl<'a> PlanBuilder<'a> {
     fn unhide(&mut self, path: &str) -> Result<()> {
         let source = user_path(path, &self.home);
         if let Some(path) = self.resolve_operator_path("unhide", &source) {
-            check_unhide_allowed(&path, &self.state_dir, &self.runtime_dir, &self.home)?;
+            check_unhide_allowed(&path, self.layout.root(), &self.runtime_dir, &self.home)?;
             self.check_container_socket(&path, "unhide")?;
             self.hidden.retain(|existing| existing != &path);
             self.default_hidden.retain(|existing| existing != &path);
@@ -1772,7 +1776,6 @@ impl<'a> PlanBuilder<'a> {
         mut self,
         request: &ConfineRequest,
         cwd: PathBuf,
-        empty_file: PathBuf,
         mut effective_grants: Vec<String>,
     ) -> Result<Plan> {
         self.readonly
@@ -1841,8 +1844,7 @@ impl<'a> PlanBuilder<'a> {
         keep_env.sort();
         let plan = Plan {
             bwrap: PathBuf::from("bwrap"),
-            empty_file,
-            state_dir: self.state_dir.clone(),
+            layout: self.layout,
             cwd,
             harness: self.harness,
             writable: self.writable,
@@ -1900,6 +1902,10 @@ fn granted_env(grants: &[String]) -> BTreeSet<&'static str> {
 }
 
 impl Plan {
+    pub fn layout(&self) -> &crate::layout::Layout {
+        &self.layout
+    }
+
     pub fn with_bwrap(mut self, path: PathBuf) -> Self {
         self.bwrap = path;
         self
@@ -1951,7 +1957,7 @@ impl Plan {
             mounts.insert(path.clone(), MountKind::ReadOnlyTry);
         }
         if self.harness == Harness::Omp {
-            let omp = self.state_dir.join("omp");
+            let omp = self.layout.omp_dir();
             if omp.exists() {
                 mounts.insert(omp, MountKind::ReadOnly);
             }
@@ -2086,7 +2092,7 @@ impl Plan {
                 MountKind::Empty => {
                     wrapped.extend([
                         "--ro-bind".into(),
-                        path_key(&self.empty_file),
+                        path_key(&self.layout.confine_empty()),
                         path_key(&mount.path),
                     ]);
                 }
@@ -2313,9 +2319,8 @@ pub fn preflight_env(env: &Path) -> Result<()> {
 }
 
 /// Create the host-side empty regular file used for hidden files.
-pub fn ensure_empty_file(state_dir: &Path) -> Result<PathBuf> {
-    fs::create_dir_all(state_dir)?;
-    let path = state_dir.join("confine-empty");
+pub fn ensure_empty_file(layout: &crate::layout::Layout) -> Result<PathBuf> {
+    let path = layout.confine_empty();
     if !path.exists() {
         OpenOptions::new()
             .write(true)
@@ -2561,8 +2566,7 @@ mod tests {
     fn closing_notice_is_always_present() {
         let plan = Plan {
             bwrap: PathBuf::from("bwrap"),
-            empty_file: PathBuf::from("/dev/null"),
-            state_dir: PathBuf::from("/state"),
+            layout: crate::layout::Layout::new(PathBuf::from("/state")),
             cwd: PathBuf::from("/workspace"),
             harness: Harness::Generic,
             writable: (0..100).map(|n| PathBuf::from(format!("/w/{n}"))).collect(),
@@ -2758,8 +2762,7 @@ mod tests {
     fn dry_run_plan() -> Plan {
         Plan {
             bwrap: PathBuf::from("bwrap"),
-            empty_file: PathBuf::from("/dev/null"),
-            state_dir: PathBuf::from("/state"),
+            layout: crate::layout::Layout::new(PathBuf::from("/state")),
             cwd: PathBuf::from("/plan-cwd"),
             harness: Harness::Generic,
             writable: vec![PathBuf::from("/resolved-cwd"), PathBuf::from("/other")],

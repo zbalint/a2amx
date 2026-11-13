@@ -8,9 +8,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use rustix::process::{Pid, Signal};
 
-const LOCK_FILE: &str = "gateway.lock";
-const PID_FILE: &str = "gateway.pid";
-pub const LOG_FILE: &str = "gateway.log";
 pub const READY_LINE: &str = "gateway ready";
 pub const READY_WAIT: Duration = Duration::from_secs(10);
 pub const STOP_WAIT: Duration = Duration::from_secs(5);
@@ -46,11 +43,14 @@ impl GatewayLock {
     }
 }
 
+fn layout_for(home: &Path) -> crate::layout::Layout {
+    crate::layout::Layout::new(home.to_owned())
+}
+
 pub fn acquire(home: &Path) -> std::result::Result<GatewayLock, LockError> {
-    if let Err(error) = crate::daemon::ensure_state_dir(home) {
-        return Err(LockError::Other(error));
-    }
-    let path = home.join(LOCK_FILE);
+    let layout = layout_for(home);
+    layout.ensure().map_err(LockError::Other)?;
+    let path = layout.gateway_lock();
     match OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -77,12 +77,16 @@ pub fn acquire(home: &Path) -> std::result::Result<GatewayLock, LockError> {
 }
 
 pub fn write_pid(home: &Path, pid: u32) -> Result<()> {
-    crate::relay_files::atomic_write(&home.join(PID_FILE), format!("{pid}\n").as_bytes(), 0o600)
+    crate::relay_files::atomic_write(
+        &layout_for(home).gateway_pid(),
+        format!("{pid}\n").as_bytes(),
+        0o600,
+    )
 }
 
 fn read_pid(home: &Path) -> Option<u32> {
     let mut bytes = Vec::new();
-    File::open(home.join(PID_FILE))
+    File::open(layout_for(home).gateway_pid())
         .ok()?
         .take(33)
         .read_to_end(&mut bytes)
@@ -94,9 +98,8 @@ fn read_pid(home: &Path) -> Option<u32> {
     (!text.is_empty()).then(|| text.parse().ok()).flatten()
 }
 
-pub fn open_log(gateway_dir: &Path) -> Result<(File, u64)> {
-    fs::create_dir_all(gateway_dir)?;
-    let path = gateway_dir.join(LOG_FILE);
+pub fn open_log(home: &Path) -> Result<(File, u64)> {
+    let path = layout_for(home).gateway_log();
     let file = OpenOptions::new()
         .read(true)
         .append(true)
@@ -167,7 +170,7 @@ pub enum State {
 }
 
 pub fn state(home: &Path) -> Result<State> {
-    let path = home.join(LOCK_FILE);
+    let path = layout_for(home).gateway_lock();
     let file = match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -207,7 +210,7 @@ pub fn stop(home: &Path) -> Result<StopOutcome> {
             file.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
             if bytes.len() > 64 * 1024 {
                 bail!(
-                    "refusing to signal pid {pid}: it is not the gateway for this state directory"
+                    "refusing to signal pid {pid}: it is not the gateway for this a2amx directory"
                 );
             }
             bytes
@@ -218,7 +221,7 @@ pub fn stop(home: &Path) -> Result<StopOutcome> {
             )
         }
         Err(_) => {
-            bail!("refusing to signal pid {pid}: it is not the gateway for this state directory")
+            bail!("refusing to signal pid {pid}: it is not the gateway for this a2amx directory")
         }
     };
     let args = command_line
@@ -237,7 +240,7 @@ pub fn stop(home: &Path) -> Result<StopOutcome> {
         .any(|window| window == expected);
     if !verified {
         // shortcut: this command-line match guards stale pid files; it is not process authentication.
-        bail!("refusing to signal pid {pid}: it is not the gateway for this state directory");
+        bail!("refusing to signal pid {pid}: it is not the gateway for this a2amx directory");
     }
     let target =
         Pid::from_raw(pid as i32).ok_or_else(|| anyhow::anyhow!("invalid process id {pid}"))?;
@@ -258,7 +261,7 @@ pub fn stop(home: &Path) -> Result<StopOutcome> {
     let deadline = Instant::now() + STOP_WAIT;
     loop {
         if matches!(state(home)?, State::NotRunning) {
-            let _ = fs::remove_file(home.join(PID_FILE));
+            let _ = fs::remove_file(layout_for(home).gateway_pid());
             return Ok(StopOutcome::Stopped { pid });
         }
         if Instant::now() >= deadline {

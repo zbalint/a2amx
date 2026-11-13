@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -52,8 +52,8 @@ const OMP_USAGE_MAX_OUTPUT: usize = 1024 * 1024;
 // shortcut: output-free tool calls over the quiet window read as idle; use a per-session or
 // harness-specific working marker if that misleads in practice.
 pub struct DaemonConfig {
-    /// State directory (`A2AMX_HOME` or `--home`).
-    pub state_dir: PathBuf,
+    /// a2amx directory (`A2AMX_HOME` or `--home`).
+    pub root: PathBuf,
     /// Listen addresses; loopback by default. Port 0 lets the OS choose.
     pub listen: Vec<SocketAddr>,
     pub host_name: Option<String>,
@@ -73,7 +73,7 @@ pub struct Daemon {
     purge: Option<JoinHandle<()>>,
     omp_usage: Option<JoinHandle<()>>,
     presence: Option<JoinHandle<()>>,
-    state_dir: PathBuf,
+    layout: crate::layout::Layout,
     lock: Option<File>,
 }
 
@@ -87,7 +87,7 @@ struct Runtime {
     boot: String,
     limits: Limits,
     address: String,
-    state_dir: PathBuf,
+    layout: crate::layout::Layout,
     bwrap_path: OsString,
     env_path: PathBuf,
     exe: PathBuf,
@@ -413,7 +413,7 @@ impl Runtime {
             return Ok(Err("confinement requires an explicit cwd".into()));
         };
         let cwd = PathBuf::from(cwd);
-        let state_dir = self.state_dir.clone();
+        let layout = self.layout.clone();
         let bwrap_path = self.bwrap_path.clone();
         let env_path = self.env_path.clone();
         let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Plan> {
@@ -428,14 +428,12 @@ impl Runtime {
             let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
                 .map(PathBuf::from)
                 .ok_or_else(|| anyhow::anyhow!("XDG_RUNTIME_DIR is not set"))?;
-            let empty_file = state_dir.join("confine-empty");
+            confine::ensure_empty_file(&layout)?;
             let host = Host {
+                layout: layout.clone(),
                 home: home.clone(),
-                state_dir: state_dir.clone(),
                 runtime_dir,
-                empty_file,
             };
-            confine::ensure_empty_file(&state_dir)?;
             confine::ensure_data_dirs(harness, &home)?;
             confine::ensure_data_files(harness, &home)?;
             let preflight = confine::ensure_grant_dirs(&confine_request, harness, &host, true);
@@ -579,7 +577,7 @@ impl Runtime {
         if harness == Harness::Codex
             && let Some(plan) = confine_plan.take()
         {
-            confine_plan = Some(plan.with_codex_dir(codex::session_dir(&self.state_dir, &id.0)));
+            confine_plan = Some(plan.with_codex_dir(codex::session_dir(&self.layout, &id.0)));
         }
         if harness == Harness::Codex {
             (argv, codex) = match self
@@ -772,7 +770,7 @@ impl Runtime {
         let notice = plan.map(confine::notice);
         let started = codex::start(
             &argv[0],
-            &self.state_dir,
+            &self.layout,
             &id.0,
             cwd.map(Path::new),
             env,
@@ -2281,42 +2279,9 @@ pub fn current_exe() -> std::io::Result<PathBuf> {
     Ok(exe)
 }
 
-/// Create the state directory (and missing parents) owner-only.
-pub fn ensure_state_dir(path: &Path) -> anyhow::Result<()> {
-    let mut missing = Vec::new();
-    let mut ancestor = path;
-    loop {
-        match std::fs::metadata(ancestor) {
-            Ok(metadata) if metadata.is_dir() => break,
-            Ok(_) => return Err(anyhow::anyhow!("state path is not a directory")),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-        missing.push(ancestor.to_owned());
-        ancestor = ancestor
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-    }
-    for directory in missing.iter().rev() {
-        match std::fs::DirBuilder::new().mode(0o700).create(directory) {
-            Ok(()) => {}
-            Err(error)
-                if error.kind() == std::io::ErrorKind::AlreadyExists && directory.is_dir() => {}
-            Err(error) => return Err(error.into()),
-        }
-        // A restrictive umask must not prevent creation of the next child.
-        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
-    }
-    if missing.is_empty() {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
-}
-
 impl Daemon {
     /// Bind every listen address, write the chosen addresses to a file in the
-    /// state dir, write the admin token file (mode 0600), and start serving.
+    /// a2amx directory, write the admin token file (mode 0600), and start serving.
     pub async fn start(config: DaemonConfig) -> anyhow::Result<Self> {
         mark_inherited_fds_cloexec()?;
         let exe = tokio::task::spawn_blocking(current_exe).await??;
@@ -2329,20 +2294,20 @@ impl Daemon {
             .env_path
             .clone()
             .unwrap_or_else(|| PathBuf::from(confine::ENV_PATH));
-        let path = config.state_dir.clone();
+        let layout = crate::layout::Layout::new(config.root.clone());
+        layout.ensure()?;
+        let lock_path = layout.daemon_lock();
         let lock = tokio::task::spawn_blocking(move || -> anyhow::Result<File> {
-            ensure_state_dir(&path)?;
-            confine::ensure_empty_file(&path)?;
             let lock = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .truncate(false)
                 .mode(0o600)
-                .open(path.join("daemon.lock"))?;
+                .open(lock_path)?;
             rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
                 .map_err(|_| {
-                    anyhow::anyhow!("another a2amx daemon is running for this state dir")
+                    anyhow::anyhow!("another a2amx daemon is running for this a2amx directory")
                 })?;
             Ok(lock)
         })
@@ -2362,17 +2327,16 @@ impl Daemon {
                 Ok((token, gateway_token, host, random_hex::<8>()?))
             })
             .await??;
-        let store = Store::open(config.state_dir.clone(), config.limits).await?;
+        let layout = crate::layout::Layout::new(config.root.clone());
+        let store = Store::open(&layout, config.limits).await?;
         // Written only after the steps that can fail without binding, so an early
         // startup error never leaves a token for a daemon that is not running.
-        let gateway_path = config.state_dir.join("gateway.token");
-        let link_dir = config.state_dir.join("link");
-        let link_gateway_path = link_dir.join("gateway.token");
-        let token_path = config.state_dir.join("admin.token");
+        let gateway_path = layout.gateway_token();
+        let link_gateway_path = layout.link_gateway_token();
+        let token_path = layout.admin_token();
         let gateway_text = gateway_token.clone();
         let token_text = token.clone();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            ensure_state_dir(&link_dir)?;
             write_state_file(&gateway_path, gateway_text.as_bytes())?;
             if let Err(error) = write_state_file(&link_gateway_path, gateway_text.as_bytes()) {
                 return match remove_state_files(&[&gateway_path, &link_gateway_path]) {
@@ -2404,9 +2368,9 @@ impl Daemon {
             let listener = match TcpListener::bind(address).await {
                 Ok(listener) => listener,
                 Err(error) => {
-                    let admin_path = config.state_dir.join("admin.token");
-                    let gateway_path = config.state_dir.join("gateway.token");
-                    let link_gateway_path = config.state_dir.join("link/gateway.token");
+                    let admin_path = layout.admin_token();
+                    let gateway_path = layout.gateway_token();
+                    let link_gateway_path = layout.link_gateway_token();
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                         remove_state_files(&[&admin_path, &gateway_path, &link_gateway_path])
                     })
@@ -2417,18 +2381,16 @@ impl Daemon {
             addrs.push(listener.local_addr()?);
             bound.push(listener);
         }
-        let path = config.state_dir.clone();
-        let link_path = path.join("link");
+        let path = layout.addr();
+        let link_path = layout.link_addr();
         let addresses = addrs
             .iter()
             .map(|addr| format!("{addr}\n"))
             .collect::<String>();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            write_state_file(&path.join("addr"), addresses.as_bytes())?;
-            if let Err(error) = write_state_file(&link_path.join("addr"), addresses.as_bytes()) {
-                if let Err(cleanup) =
-                    remove_state_files(&[&path.join("addr"), &link_path.join("addr")])
-                {
+            write_state_file(&path, addresses.as_bytes())?;
+            if let Err(error) = write_state_file(&link_path, addresses.as_bytes()) {
+                if let Err(cleanup) = remove_state_files(&[&path, &link_path]) {
                     return Err(anyhow::anyhow!(
                         "{error}; failed to remove daemon addresses after link write failure: {cleanup}"
                     ));
@@ -2451,7 +2413,7 @@ impl Daemon {
             boot,
             limits: config.limits,
             address: addrs[0].to_string(),
-            state_dir: config.state_dir.clone(),
+            layout: layout.clone(),
             bwrap_path,
             env_path,
             exe,
@@ -2557,7 +2519,7 @@ impl Daemon {
             purge: Some(purge),
             omp_usage: Some(omp_usage),
             presence: Some(presence),
-            state_dir: config.state_dir,
+            layout,
             lock: Some(lock),
         })
     }
@@ -2647,8 +2609,8 @@ impl Daemon {
         if let Err(error) = self.runtime.store.close().await {
             failure.get_or_insert(error);
         }
-        let addr = self.state_dir.join("addr");
-        let link_addr = self.state_dir.join("link/addr");
+        let addr = self.layout.addr();
+        let link_addr = self.layout.link_addr();
         let lock = self.lock.take();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             remove_state_files(&[&addr, &link_addr])?;

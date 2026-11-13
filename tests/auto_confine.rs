@@ -48,7 +48,7 @@ fn run_binary_without_home(
 
 fn global_auto_file(state: &Path) {
     std::fs::write(
-        state.join("team.toml"),
+        state.join("config/team.toml"),
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n",
     )
     .unwrap();
@@ -348,10 +348,10 @@ async fn dry_run_reports_unaccepted_grants_and_respects_seeded_file() {
         stdout.contains("  not yet accepted: cargo, cache\n"),
         "{stdout}"
     );
-    assert!(!state.path().join("auto-grants").exists());
+    assert!(!state.path().join("state/auto-grants").exists());
 
     std::fs::write(
-        state.path().join("auto-grants"),
+        state.path().join("state/auto-grants"),
         "unknown\n cache \n\ncargo\n",
     )
     .expect("seed accepted grants");
@@ -369,7 +369,7 @@ async fn dry_run_reports_unaccepted_grants_and_respects_seeded_file() {
         "{}",
         String::from_utf8_lossy(&seeded.stdout)
     );
-    std::fs::write(state.path().join("auto-grants"), "x".repeat(4097))
+    std::fs::write(state.path().join("state/auto-grants"), "x".repeat(4097))
         .expect("oversized accepted grants");
     let oversized = run_binary(
         state.path(),
@@ -382,7 +382,7 @@ async fn dry_run_reports_unaccepted_grants_and_respects_seeded_file() {
     assert!(!oversized.status.success());
     assert!(
         String::from_utf8_lossy(&oversized.stderr)
-            .contains(&state.path().join("auto-grants").display().to_string())
+            .contains(&state.path().join("state/auto-grants").display().to_string())
     );
 }
 
@@ -438,7 +438,7 @@ async fn refusal_blocks_auto_start_and_yes_is_one_run_only() {
         !refused_stderr.contains("auto confinement for session"),
         "{refused_stderr}"
     );
-    assert!(!state.path().join("auto-grants").exists());
+    assert!(!state.path().join("state/auto-grants").exists());
     let listed = run_binary(
         state.path(),
         project.path(),
@@ -452,7 +452,7 @@ async fn refusal_blocks_auto_start_and_yes_is_one_run_only() {
         "{}",
         String::from_utf8_lossy(&listed.stdout)
     );
-    std::fs::write(state.path().join("auto-grants"), "unknown\n").expect("unknown grant");
+    std::fs::write(state.path().join("state/auto-grants"), "unknown\n").expect("unknown grant");
 
     let accepted_once = run_binary(
         state.path(),
@@ -475,7 +475,8 @@ async fn refusal_blocks_auto_start_and_yes_is_one_run_only() {
         "{yes_stderr}"
     );
     assert_eq!(
-        std::fs::read_to_string(state.path().join("auto-grants")).expect("read unknown grant"),
+        std::fs::read_to_string(state.path().join("state/auto-grants"))
+            .expect("read unknown grant"),
         "unknown\n"
     );
 }
@@ -493,7 +494,7 @@ async fn pty_yes_persists_accepted_grants_with_private_mode() -> anyhow::Result<
     let runtime = tempfile::tempdir()?;
     let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         format!(
             "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n",
             project.path().to_string_lossy()
@@ -533,7 +534,7 @@ async fn pty_yes_persists_accepted_grants_with_private_mode() -> anyhow::Result<
         "{}",
         String::from_utf8_lossy(&listed.stdout)
     );
-    let accepted = state.path().join("auto-grants");
+    let accepted = state.path().join("state/auto-grants");
     assert_eq!(std::fs::read_to_string(&accepted)?, "cache\ncargo\n");
     assert_eq!(
         std::fs::metadata(accepted)?.permissions().mode() & 0o777,
@@ -557,7 +558,7 @@ async fn pty_no_and_eof_refuse_without_starting_or_writing() -> anyhow::Result<(
         let runtime = tempfile::tempdir()?;
         let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
         std::fs::write(
-            state.path().join("team.toml"),
+            state.path().join("config/team.toml"),
             format!(
                 "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n",
                 project.path().to_string_lossy()
@@ -585,7 +586,7 @@ async fn pty_no_and_eof_refuse_without_starting_or_writing() -> anyhow::Result<(
         )?;
         pty.send(input)?;
         assert_ne!(pty.wait_exit(Duration::from_secs(10))?, 0);
-        assert!(!state.path().join("auto-grants").exists());
+        assert!(!state.path().join("state/auto-grants").exists());
         let listed = run_binary(
             state.path(),
             project.path(),
@@ -619,7 +620,7 @@ async fn pty_deduplicates_auto_consent_across_sessions() -> anyhow::Result<()> {
     let runtime = tempfile::tempdir()?;
     let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         format!(
             "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker-a\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n[[session]]\nname = \"worker-b\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n",
             first.path().to_string_lossy(),
@@ -654,7 +655,7 @@ async fn pty_deduplicates_auto_consent_across_sessions() -> anyhow::Result<()> {
     pty.send(b"y\n")?;
     assert_eq!(pty.wait_exit(Duration::from_secs(10))?, 0);
     assert_eq!(
-        std::fs::read_to_string(state.path().join("auto-grants"))?,
+        std::fs::read_to_string(state.path().join("state/auto-grants"))?,
         "cache\n"
     );
     Ok(())
@@ -673,10 +674,10 @@ async fn pty_subtracts_seeded_auto_grants_from_consent() -> anyhow::Result<()> {
     let user_home = tempfile::tempdir()?;
     let runtime = tempfile::tempdir()?;
     let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
-    std::fs::write(state.path().join("auto-grants"), "cache\n")?;
+    std::fs::write(state.path().join("state/auto-grants"), "cache\n")?;
     std::fs::write(cargo.path().join("Cargo.toml"), "")?;
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         format!(
             "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"plain\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n[[session]]\nname = \"cargo\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n",
             plain.path().to_string_lossy(),
@@ -716,7 +717,7 @@ async fn pty_subtracts_seeded_auto_grants_from_consent() -> anyhow::Result<()> {
     pty.send(b"y\n")?;
     assert_eq!(pty.wait_exit(Duration::from_secs(10))?, 0);
     assert_eq!(
-        std::fs::read_to_string(state.path().join("auto-grants"))?,
+        std::fs::read_to_string(state.path().join("state/auto-grants"))?,
         "cache\ncargo\n"
     );
     Ok(())
@@ -729,7 +730,7 @@ async fn auto_merge_preserves_explicit_grant_and_reports_added_reasons() {
     let user_home = tempfile::tempdir().expect("user home");
     let runtime = tempfile::tempdir().expect("runtime");
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n[session.confine]\ngrants = [\"cargo\"]\n",
     )
     .expect("global team file");
@@ -854,7 +855,7 @@ async fn auto_mode_stays_true_when_auto_adds_nothing() {
     // The session already names every grant auto would add here (cache only: no
     // markers, no git remote), so auto runs and adds nothing; `auto` stays true.
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\n[session.confine]\ngrants = [\"cache\"]\n",
     )
     .expect("global team file");
@@ -1470,7 +1471,7 @@ async fn global_without_auto_has_no_automatic_grants() {
     let user_home = tempfile::tempdir().expect("user home");
     let runtime = tempfile::tempdir().expect("runtime");
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         "[confine]\nenabled = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n",
     )
     .expect("global team file");
@@ -1518,7 +1519,7 @@ async fn real_up_reuses_auto_grants_and_running_session_is_not_rescanned() {
     let user_home = tempfile::tempdir().expect("user home");
     let runtime = tempfile::tempdir().expect("runtime");
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\n",
     )
     .expect("global team file");

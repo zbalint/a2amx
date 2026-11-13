@@ -26,7 +26,7 @@ messages through a confined Discord gateway, so these areas matter most:
 - state files (tokens, address files, database) readable by other users, or tokens appearing in
   argv, logs, envelopes, or terminal output;
 - the gateway's Discord bot token and file, pairing and author checks on Discord messages, lease
-  codes, the `<state>/link/` directory exposed to the gateway sandbox, and the gateway sandbox
+  codes, the `<root>/run/link/` directory exposed to the gateway sandbox, and the gateway sandbox
   boundary ([permissions](docs/permissions.md), [remote messaging](docs/remote-messaging.md));
 - a2amx and its daemon refusing to run as root, under `sudo`, or as a root user in a container;
   there is no override because state-file permissions and agent commands assume an ordinary user.

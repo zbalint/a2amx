@@ -5,6 +5,10 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** everything a2amx keeps now lives under one root directory, `~/.a2amx` (or `A2AMX_HOME`, or `--home`), in the subdirectories `bin/`, `config/`, `state/`, `run/` and `log/`. The daemon's files moved from `~/.local/state/a2amx`: the team file is `config/team.toml`, the gateway's files are `config/gateway.toml`, `config/secrets/discord.token`, `state/gateway/pairing.json` and `state/gateway/seen.json`, the message database is `state/messages.db`, the address and token files are in `run/`, and the logs are in `log/`. `XDG_STATE_HOME` and `A2AMX_INSTALL_DIR` are no longer read: `A2AMX_HOME` moves the whole tree, the binary included. A confined session sees `bin/`, `config/` (without `secrets/`) and `log/` read-only; `state/`, `run/` and `config/secrets/` are hidden. Existing data under the old directory is not moved yet; the migration comes with a later change, and nothing is released before it.
+
 ### Added
 
 - Codex sessions can run confined (F31). A confined Codex session's app-server and TUI run under bubblewrap like Claude Code and OMP sessions: the working directory, a private `/tmp` and `~/.codex` (read-write, persistent) are writable, and `auth.json` stays visible. The daemon reaches the per-session app-server through a socket directory bound at `/tmp/codex-daemon-<uid>` (read-write for the app-server, read-only for the TUI) and pins the socket entry before it connects, so an agent cannot redirect the daemon. The confinement notice reaches the agent through the app-server's `developer_instructions`. The `harness-config` grant now accepts a Codex session, and remote messaging and `team up` no longer refuse a confined Codex session. This is not a breaking change.

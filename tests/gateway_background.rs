@@ -23,6 +23,16 @@ fn run_gateway(home: &Path, action: &str) -> std::process::Output {
 }
 
 #[test]
+fn gateway_root_named_gateway_uses_its_own_run_lock() {
+    let parent = tempdir().unwrap();
+    let root = parent.path().join("gateway");
+    fs::create_dir(&root).unwrap();
+    let _lock = gateway_proc::acquire(&root).unwrap();
+    assert!(root.join("run/gateway.lock").is_file());
+    assert!(!parent.path().join("run/gateway.lock").exists());
+}
+
+#[test]
 fn status_without_gateway_reports_not_running() {
     let home = tempdir().unwrap();
     let output = run_gateway(home.path(), "status");
@@ -74,7 +84,7 @@ fn stop_rejects_unrelated_pid_and_missing_or_dead_process() {
     assert!(error.contains("process 4294967295 is gone"));
     assert!(error.contains("kill -TERM -- -4294967295"));
 
-    fs::remove_file(home.path().join("gateway.pid")).unwrap();
+    fs::remove_file(home.path().join("run/gateway.pid")).unwrap();
     let error = gateway_proc::stop(home.path()).unwrap_err().to_string();
     assert!(error.contains("missing or unreadable"));
     drop(lock);
@@ -137,22 +147,22 @@ fn stop_signals_verified_nonleader_only_without_killing_runner_group() {
 #[test]
 fn log_open_is_hardened_and_progress_uses_retained_inode() {
     let home = tempdir().unwrap();
-    let gateway = home.path().join("gateway");
-    fs::create_dir(&gateway).unwrap();
-    let token = gateway.join("discord.token");
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    layout.ensure().unwrap();
+    let token = layout.discord_token();
     fs::write(&token, b"secret\n").unwrap();
     fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
-    let log_path = gateway.join("gateway.log");
+    let log_path = layout.gateway_log();
 
     symlink("discord.token", &log_path).unwrap();
-    assert!(gateway_proc::open_log(&gateway).is_err());
+    assert!(gateway_proc::open_log(home.path()).is_err());
     fs::remove_file(&log_path).unwrap();
     hard_link(&token, &log_path).unwrap();
-    assert!(gateway_proc::open_log(&gateway).is_err());
+    assert!(gateway_proc::open_log(home.path()).is_err());
     assert_eq!(fs::read(&token).unwrap(), b"secret\n");
     fs::remove_file(&log_path).unwrap();
 
-    let (log, offset) = gateway_proc::open_log(&gateway).unwrap();
+    let (log, offset) = gateway_proc::open_log(home.path()).unwrap();
     assert_eq!(offset, 0);
     use std::io::Write;
     (&log).write_all(b"old\n").unwrap();
@@ -164,10 +174,10 @@ fn log_open_is_hardened_and_progress_uses_retained_inode() {
     drop(log);
     fs::remove_file(&log_path).unwrap();
 
-    let fifo = gateway.join("gateway.log");
+    let fifo = layout.gateway_log();
     let status = Command::new("mkfifo").arg(&fifo).status().unwrap();
     assert!(status.success());
-    assert!(gateway_proc::open_log(&gateway).is_err());
+    assert!(gateway_proc::open_log(home.path()).is_err());
     assert!(fs::symlink_metadata(fifo).unwrap().file_type().is_fifo());
 }
 
@@ -194,10 +204,10 @@ fn sanitize_tail_is_bounded_and_neutralizes_controls() {
 #[test]
 fn progress_scans_only_new_exact_ready_lines() {
     let home = tempdir().unwrap();
-    let gateway = home.path().join("gateway");
-    fs::create_dir(&gateway).unwrap();
-    fs::write(gateway.join("gateway.log"), b"gateway ready\n").unwrap();
-    let (log, offset) = gateway_proc::open_log(&gateway).unwrap();
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    layout.ensure().unwrap();
+    fs::write(layout.gateway_log(), b"gateway ready\n").unwrap();
+    let (log, offset) = gateway_proc::open_log(home.path()).unwrap();
     assert!(!gateway_proc::log_progress(&log, offset).unwrap().ready);
     use std::io::Write;
     (&log).write_all(b"not gateway ready\n").unwrap();
@@ -243,21 +253,17 @@ async fn gateway_command(home: &Path, args: &[&str]) -> std::process::Output {
 }
 
 async fn prepare_real_gateway(home: &Path, discord: &common::fake_discord::FakeDiscord) {
-    let gateway = home.join("gateway");
-    fs::create_dir_all(&gateway).unwrap();
-    fs::set_permissions(&gateway, fs::Permissions::from_mode(0o700)).unwrap();
-    write_file(&gateway.join("discord.token"), "fake-token\n");
+    let layout = a2amx::layout::Layout::new(home.to_owned());
+    layout.ensure().unwrap();
+    write_file(&layout.discord_token(), "fake-token\n");
     write_file(
-        &gateway.join("config.toml"),
+        &layout.gateway_config(),
         &format!(
             "guild_id = \"123\"\napi_base = \"{}\"\ngateway_url = \"{}\"\n",
             discord.api_base, discord.gateway_url
         ),
     );
-    write_file(
-        &gateway.join("pairing.json"),
-        r#"{"guild_id":"123","user_id":"456"}"#,
-    );
+    write_file(&layout.pairing(), r#"{"guild_id":"123","user_id":"456"}"#);
     a2amx::relay_files::write_token(home, "fake-token").unwrap();
 }
 
@@ -269,7 +275,7 @@ async fn pair_handover_runs_background_gateway_after_confirmation() {
     let (home, daemon) = common::start_daemon().await;
     let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
     prepare_real_gateway(home.path(), &discord).await;
-    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+    fs::remove_file(home.path().join("state/gateway/pairing.json")).unwrap();
 
     let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
     command
@@ -313,7 +319,7 @@ async fn pair_handover_runs_background_gateway_after_confirmation() {
     .expect("control channel timeout");
     discord.push_message(&control, "789", &code).await.unwrap();
     let pid: u32 = common::eventually(|| async {
-        fs::read_to_string(home.path().join("gateway.pid"))
+        fs::read_to_string(home.path().join("run/gateway.pid"))
             .ok()
             .and_then(|text| text.trim().parse().ok())
     })
@@ -347,7 +353,7 @@ async fn pair_handover_runs_background_gateway_after_confirmation() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("gateway running in the background"));
     assert!(!foreground_stderr.contains("gateway ready"));
     let background_pid: u32 = common::eventually(|| async {
-        fs::read_to_string(home.path().join("gateway.pid"))
+        fs::read_to_string(home.path().join("run/gateway.pid"))
             .ok()
             .and_then(|text| text.trim().parse().ok())
     })
@@ -364,9 +370,9 @@ async fn pair_handover_runs_background_gateway_after_confirmation() {
             .iter()
             .any(|(id, kind, name, _)| id == &control && *kind == 0 && name == "control")
     );
-    let pairing = fs::read_to_string(home.path().join("gateway/pairing.json")).unwrap();
+    let pairing = fs::read_to_string(home.path().join("state/gateway/pairing.json")).unwrap();
     assert!(pairing.contains("\"user_id\":\"789\""));
-    let log = fs::read_to_string(home.path().join("gateway/gateway.log")).unwrap();
+    let log = fs::read_to_string(home.path().join("log/gateway.log")).unwrap();
     assert!(log.lines().any(|line| line == "gateway ready"));
     assert!(!log.contains("post this code"));
     let status = gateway_command(home.path(), &["gateway", "status"]).await;
@@ -384,7 +390,7 @@ async fn pair_handover_decline_releases_lock_without_starting_gateway() {
     let (home, daemon) = common::start_daemon().await;
     let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
     prepare_real_gateway(home.path(), &discord).await;
-    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+    fs::remove_file(home.path().join("state/gateway/pairing.json")).unwrap();
 
     let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
     command
@@ -433,7 +439,7 @@ async fn pair_handover_decline_releases_lock_without_starting_gateway() {
         .unwrap();
     assert!(!output.status.success());
     assert!(stderr_text.contains("pairing did not complete"));
-    assert!(!home.path().join("gateway/pairing.json").exists());
+    assert!(!home.path().join("state/gateway/pairing.json").exists());
     let status = gateway_command(home.path(), &["gateway", "status"]).await;
     assert_eq!(status.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&status.stdout).contains("not running"));
@@ -486,7 +492,7 @@ async fn pair_handover_decline_releases_lock_without_starting_gateway() {
         .unwrap();
     assert!(retry_status.success());
     assert!(
-        fs::read_to_string(home.path().join("gateway/pairing.json"))
+        fs::read_to_string(home.path().join("state/gateway/pairing.json"))
             .unwrap()
             .contains("\"user_id\":\"789\"")
     );
@@ -505,7 +511,7 @@ async fn pair_step_can_be_stopped_and_refuses_second_pair_launch() {
     let (home, daemon) = common::start_daemon().await;
     let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
     prepare_real_gateway(home.path(), &discord).await;
-    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+    fs::remove_file(home.path().join("state/gateway/pairing.json")).unwrap();
 
     let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
     command
@@ -533,7 +539,7 @@ async fn pair_step_can_be_stopped_and_refuses_second_pair_launch() {
     .await
     .expect("pairing code timeout");
     let pid: u32 = common::eventually(|| async {
-        fs::read_to_string(home.path().join("gateway.pid"))
+        fs::read_to_string(home.path().join("run/gateway.pid"))
             .ok()
             .and_then(|text| text.trim().parse().ok())
     })
@@ -551,7 +557,7 @@ async fn pair_step_can_be_stopped_and_refuses_second_pair_launch() {
         .expect("stopped pair launcher timeout")
         .unwrap();
     assert!(!output.status.success());
-    assert!(!home.path().join("gateway/pairing.json").exists());
+    assert!(!home.path().join("state/gateway/pairing.json").exists());
     daemon.shutdown().await.unwrap();
 }
 
@@ -563,7 +569,7 @@ async fn pair_foreground_stays_running_until_stopped() {
     let (home, daemon) = common::start_daemon().await;
     let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
     prepare_real_gateway(home.path(), &discord).await;
-    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+    fs::remove_file(home.path().join("state/gateway/pairing.json")).unwrap();
 
     let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
     command
@@ -642,7 +648,7 @@ async fn killing_pair_launcher_does_not_leave_pair_step_running() {
     let (home, daemon) = common::start_daemon().await;
     let discord = common::fake_discord::FakeDiscord::new("123", 2).await;
     prepare_real_gateway(home.path(), &discord).await;
-    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+    fs::remove_file(home.path().join("state/gateway/pairing.json")).unwrap();
 
     let mut command = AsyncCommand::new(env!("CARGO_BIN_EXE_a2amx"));
     command
@@ -718,7 +724,7 @@ async fn background_gateway_lifecycle_survives_launcher_and_stops_by_group() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("gateway running in the background"));
-    let pid: u32 = fs::read_to_string(home.path().join("gateway.pid"))
+    let pid: u32 = fs::read_to_string(home.path().join("run/gateway.pid"))
         .unwrap()
         .trim()
         .parse()
@@ -774,9 +780,9 @@ async fn background_gateway_lifecycle_survives_launcher_and_stops_by_group() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert!(!Path::new(&format!("/proc/{pid}")).exists());
-    assert!(!home.path().join("gateway.pid").exists());
+    assert!(!home.path().join("run/gateway.pid").exists());
     assert_eq!(
-        fs::metadata(home.path().join("gateway/gateway.log"))
+        fs::metadata(home.path().join("log/gateway.log"))
             .unwrap()
             .permissions()
             .mode()
@@ -805,19 +811,14 @@ async fn background_gateway_failed_start_is_bounded_and_releases_lock() {
         return;
     };
     let (home, daemon) = common::start_daemon().await;
-    let gateway = home.path().join("gateway");
-    fs::create_dir_all(&gateway).unwrap();
-    fs::set_permissions(&gateway, fs::Permissions::from_mode(0o700)).unwrap();
-    write_file(&gateway.join("discord.token"), "fake-token\n");
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    layout.ensure().unwrap();
+    write_file(&layout.discord_token(), "fake-token\n");
     write_file(
-        &gateway.join("config.toml"),
+        &layout.gateway_config(),
         "guild_id = \"123\"\napi_base = \"http://127.0.0.1:1\"\ngateway_url = \"ws://127.0.0.1:1\"\n",
     );
-    write_file(
-        &gateway.join("pairing.json"),
-        r#"{"guild_id":"123","user_id":"456"}"#,
-    );
-    a2amx::relay_files::write_token(home.path(), "fake-token").unwrap();
+    write_file(&layout.pairing(), r#"{"guild_id":"123","user_id":"456"}"#);
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         gateway_command(home.path(), &["gateway", "up"]),

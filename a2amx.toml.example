@@ -44,7 +44,7 @@ control_from = ["architect"]
 
 # --- confinement example ---
 # # A local file lists grants explicitly; auto = true is only valid in the
-# # global <state home>/team.toml file. `a2amx confine suggest` prints a
+# # global <root>/config/team.toml file. `a2amx confine suggest` prints a
 # # copyable grants line for this local table.
 # [confine]
 # enabled = true

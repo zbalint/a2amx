@@ -111,7 +111,7 @@ pinned in `rust-toolchain.toml` is not updated by Dependabot; change it on purpo
   a time.
 - Expected values come from literals or worked examples, never recomputed with the
   logic under test.
-- Integration tests start a real daemon in a temp state dir on port 0
+- Integration tests start a real daemon in a temp a2amx root directory on port 0
   (`tests/common`); no shared ports, no fixed paths.
 
 ## Review record
@@ -152,7 +152,7 @@ specs showing it found nothing.
 | `discord` | The Discord side of the gateway: REST calls (channels, messages), the gateway websocket connection and its reconnect rules; names no a2amx policy |
 | `gateway` | The chat-independent core of the remote messaging gateway: author check, channel mapping, dedup file, fixed reply lines, message splitting |
 | `relay` | The `a2amx gateway run` loop: pairing, channel sync from the daemon, relay of inbound and outbound messages, member-count pause, reconnect to the daemon; uses `gateway` and `discord` |
-| `relay_files` | The gateway's files under `<home>/gateway/` (config, Discord token, pairing): secure reads and atomic writes |
+| `relay_files` | The gateway's files (`config/gateway.toml`, `config/secrets/discord.token`, `state/gateway/pairing.json`): secure reads and atomic writes; it creates no directory |
 | `gateway_proc` | The background gateway's lock (`gateway.lock`), pid file, hardened log open and readiness scan, and `gateway stop` / `status` (verified signalling) |
 | `gateway_launch` | The `a2amx gateway up` launch: pre-checks (config, token, link files, `bwrap` preflight), the sandbox argument vector (`sandbox_argv`, pure over a `Layout`) and the confined re-exec of `gateway run` |
 | `harness` | Harness profiles, command wiring, readiness, and peer authorization |
@@ -166,6 +166,7 @@ specs showing it found nothing.
 | `quota` | Harness quota extraction from screen, conversation state, and `omp usage` command output |
 | `status` | Attach status-line formatting and status frames |
 | `statusline` | The `a2amx statusline` command that Claude Code runs as its status line: it reports quota to the daemon and prints the short quota line |
+| `layout` | The a2amx root directory (`~/.a2amx`, `A2AMX_HOME` or `--home`) and every path below it: `bin/ config/ state/ run/ log/`; the only place that names them and the only code that creates directories under the root (`Layout::ensure`) |
 | `store` | SQLite message and delivery-attempt persistence |
 | `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
 | `cli` | Command-line shape |

@@ -23,9 +23,8 @@ pub fn overlay() -> &'static str {
 }
 
 /// Writes both files under `<home>/omp`; call from a blocking thread.
-pub fn install(home: &Path) -> anyhow::Result<Installed> {
-    let home = std::path::absolute(home)?;
-    let dir = home.join("omp");
+pub fn install(layout: &crate::layout::Layout) -> anyhow::Result<Installed> {
+    let dir = layout.omp_dir();
     fs::create_dir_all(&dir)?;
     fs::set_permissions(&dir, Permissions::from_mode(0o700))?;
     let installed = Installed {

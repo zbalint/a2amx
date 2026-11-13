@@ -578,7 +578,7 @@ the first.
 ### Launch and extension
 
 `a2amx new --harness omp` atomically installs
-`<state dir>/omp/extension-<crate version>.ts` and `<state dir>/omp/overlay.yml`,
+`<root>/run/omp/extension-<crate version>.ts` and `<root>/run/omp/overlay.yml`,
 rewriting either when its content differs. The directory is 0700 and both files
 are 0600, repaired even when their content is unchanged. Launch adds `-e` with
 the extension path, `--config` with the overlay path, and the combined operator

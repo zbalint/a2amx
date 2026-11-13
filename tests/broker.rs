@@ -133,7 +133,7 @@ fn accepted(response: Response, id: &str, recipient_hold: Option<&str>) {
 
 fn assert_secure_database(dir: &Path) {
     assert_eq!(
-        std::fs::metadata(dir.join("messages.db"))
+        std::fs::metadata(dir.join("state/messages.db"))
             .unwrap()
             .permissions()
             .mode()
@@ -206,7 +206,7 @@ async fn wait_status(
 #[tokio::test]
 async fn session_tokens_roles_permissions_and_child_identity() {
     let (dir, daemon) = common::start_daemon().await;
-    let admin_token = std::fs::read_to_string(dir.path().join("admin.token"))
+    let admin_token = std::fs::read_to_string(dir.path().join("run/admin.token"))
         .unwrap()
         .trim()
         .to_owned();
@@ -2539,12 +2539,12 @@ async fn abrupt_binary_restart_recovers_pending_as_daemon_restarted() {
     let dir = tempfile::tempdir().unwrap();
     let mut child = DaemonChild::start(dir.path(), None);
     let address = common::eventually(|| async {
-        std::fs::read_to_string(dir.path().join("addr"))
+        std::fs::read_to_string(dir.path().join("run/addr"))
             .ok()
             .and_then(|text| text.lines().next()?.parse::<SocketAddr>().ok())
     })
     .await;
-    let admin_token = std::fs::read_to_string(dir.path().join("admin.token"))
+    let admin_token = std::fs::read_to_string(dir.path().join("run/admin.token"))
         .unwrap()
         .trim()
         .to_owned();
@@ -2603,8 +2603,8 @@ async fn storage_failure_returns_internal_without_acceptance_or_content_leak() {
         Deliver::Hold,
     )
     .await;
-    let wal = dir.path().join("messages.db-wal");
-    let original = dir.path().join("messages.db-wal.original");
+    let wal = dir.path().join("state/messages.db-wal");
+    let original = dir.path().join("state/messages.db-wal.original");
     std::fs::rename(&wal, &original).unwrap();
     std::os::unix::fs::symlink("messages.db-wal", &wal).unwrap();
     let response = send(
@@ -2642,7 +2642,8 @@ async fn storage_failure_returns_internal_without_acceptance_or_content_leak() {
 #[tokio::test]
 async fn migrates_v1_database_and_preserves_submitted_evidence() {
     let dir = tempfile::tempdir().unwrap();
-    let database = rusqlite::Connection::open(dir.path().join("messages.db")).unwrap();
+    std::fs::create_dir_all(dir.path().join("state")).unwrap();
+    let database = rusqlite::Connection::open(dir.path().join("state/messages.db")).unwrap();
     database
         .execute_batch(
             "CREATE TABLE messages (
@@ -2702,7 +2703,7 @@ async fn migrates_v1_database_and_preserves_submitted_evidence() {
     assert_eq!(messages[0].evidence.as_deref(), Some("write_complete"));
 
     daemon.shutdown().await.unwrap();
-    let database = rusqlite::Connection::open(dir.path().join("messages.db")).unwrap();
+    let database = rusqlite::Connection::open(dir.path().join("state/messages.db")).unwrap();
     let version: i64 = database
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
@@ -2712,14 +2713,14 @@ async fn migrates_v1_database_and_preserves_submitted_evidence() {
 #[tokio::test]
 async fn daemon_refuses_a_future_database_schema() {
     let dir = tempfile::tempdir().unwrap();
-    // The database is a startup input fixture, not an assertion side channel.
-    let database = rusqlite::Connection::open(dir.path().join("messages.db")).unwrap();
+    std::fs::create_dir_all(dir.path().join("state")).unwrap();
+    let database = rusqlite::Connection::open(dir.path().join("state/messages.db")).unwrap();
     database.pragma_update(None, "user_version", 3).unwrap();
     drop(database);
     let bwrap_dir = dir.path().join("bwrap-path");
     std::fs::create_dir_all(&bwrap_dir).unwrap();
     let error = a2amx::daemon::Daemon::start(a2amx::daemon::DaemonConfig {
-        state_dir: dir.path().to_owned(),
+        root: dir.path().to_owned(),
         listen: vec!["127.0.0.1:0".parse().unwrap()],
         host_name: Some("host-a".into()),
         limits: Limits::default(),
@@ -2734,7 +2735,7 @@ async fn daemon_refuses_a_future_database_schema() {
         "unsupported messages.db schema version 3"
     );
     assert!(
-        !dir.path().join("admin.token").exists(),
+        !dir.path().join("run/admin.token").exists(),
         "a failed start must not leave a token behind"
     );
 }
@@ -2751,7 +2752,7 @@ async fn retention_includes_the_exact_nonzero_expiry_boundary() {
             .args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-o"])
             .arg(&library).arg(fixture).arg("-ldl").output().unwrap();
         assert!(compiled.status.success(), "clock fixture compiler: {}", String::from_utf8_lossy(&compiled.stderr));
-        let database = rusqlite::Connection::open(path.join("messages.db")).unwrap();
+        let database = rusqlite::Connection::open(path.join("state/messages.db")).unwrap();
         // Persisted startup input only. At fixed now=2000000000 and the default
         // 604800-second TTL: m_1 is exactly expired, m_2 has one second left,
         // m_4 is strictly expired, and recovery gives m_3 a fresh updated_at.

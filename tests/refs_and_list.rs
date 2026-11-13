@@ -432,7 +432,7 @@ async fn list_reports_explicit_omp_and_generated_generic_harnesses() -> anyhow::
 async fn list_renders_and_filters_team_scope() -> anyhow::Result<()> {
     let (dir, _daemon) = common::start_daemon().await;
     std::fs::write(
-        dir.path().join("team.toml"),
+        dir.path().join("config/team.toml"),
         r#"team = "demo"
 [[session]]
 name = "worker"
@@ -441,7 +441,7 @@ command = ["sh", "-c", "sleep 30"]
     )?;
     let started = run_binary(
         dir.path(),
-        &["team", "up", "--detach", "--file", "team.toml"],
+        &["team", "up", "--detach", "--file", "config/team.toml"],
     )?;
     assert!(
         started.status.success(),

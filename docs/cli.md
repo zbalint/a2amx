@@ -156,7 +156,7 @@ for example `already running agent-plan s1 (confine manual)`.
 
 When global automatic detection finds a grant not yet accepted, `a2amx team up` asks
 before starting. Pass `a2amx team up --yes` to accept those grants for that run without
-writing `<state home>/auto-grants`; use a terminal to answer and save acceptance for
+writing `<root>/state/auto-grants`; use a terminal to answer and save acceptance for
 future projects.
 
 See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.
@@ -183,8 +183,7 @@ background gateway; `--pair --foreground` keeps the gateway in this terminal unt
 
 ## State directory and attachment
 
-The state directory is `--home`, then `A2AMX_HOME`, then `$XDG_STATE_HOME/a2amx`,
-then `$HOME/.local/state/a2amx`.
+The a2amx home directory is `--home`, then `A2AMX_HOME`, then `$HOME/.a2amx`.
 
 The global `--viewer-after SECONDS` option (or `A2AMX_VIEWER_AFTER`) switches an interactive
 attachment to read-only viewer mode after that many seconds without input from the owner at the computer (keys, paste, mouse, prefix, picker, or scroll input; agent output does not reset it).

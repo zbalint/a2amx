@@ -3,7 +3,7 @@ set -eu
 
 repo_root=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
-dest="${A2AMX_INSTALL_DIR:-$HOME/.a2amx}"
+dest="${A2AMX_HOME:-$HOME/.a2amx}"
 mkdir -p "$dest/bin"
 cargo build --release --locked
 

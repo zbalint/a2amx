@@ -10,7 +10,7 @@ use crate::prefix::parse_prefix;
 #[derive(Debug, Parser)]
 #[command(name = "a2amx", version = crate::VERSION)]
 pub struct Cli {
-    /// State directory. Defaults to A2AMX_HOME, XDG_STATE_HOME, or $HOME.
+    /// a2amx directory. Defaults to A2AMX_HOME, else $HOME/.a2amx.
     #[arg(long, global = true, env = "A2AMX_HOME")]
     pub home: Option<PathBuf>,
 
@@ -269,13 +269,13 @@ pub enum GatewayAction {
 pub enum TeamAction {
     /// Show the desired team's session states without changing anything.
     Status {
-        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the state directory).
+        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory).
         #[arg(long)]
         file: Option<PathBuf>,
     },
     /// Start the sessions that are not running.
     Up {
-        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the state directory). Cannot be combined with NAME=EXECUTABLE items.
+        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). Cannot be combined with NAME=EXECUTABLE items.
         #[arg(long, conflicts_with = "items")]
         file: Option<PathBuf>,
         /// Do not attach to any session.
@@ -292,7 +292,7 @@ pub enum TeamAction {
     },
     /// Kill the team's sessions, running or exited.
     Down {
-        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the state directory). Cannot be combined with NAME=EXECUTABLE items.
+        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). Cannot be combined with NAME=EXECUTABLE items.
         #[arg(long, conflicts_with = "names")]
         file: Option<PathBuf>,
         /// Session names (default: every name in the team file).
@@ -304,7 +304,7 @@ pub enum TeamAction {
 
     /// Reset the team's sessions (clear their conversations).
     Reset {
-        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the state directory). Cannot be combined with session names.
+        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). Cannot be combined with session names.
         #[arg(long, conflicts_with = "names")]
         file: Option<PathBuf>,
         /// Session names (default: every name in the team file).

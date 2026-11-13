@@ -268,7 +268,7 @@ section is the summary.
   as the daemon (no persistence across restarts). Each session is one PTY, its
   child, and an `Emulator` (the only user of `alacritty_terminal`'s terminal types).
 - `a2amx daemon start` re-executes the binary in its own session with output appended
-  to `<state dir>/daemon.log`, and waits until it answers. `a2amx daemon stop` sends
+  to `<root>/log/daemon.log`, and waits until it answers. `a2amx daemon stop` sends
   the admin-only `Shutdown` request; the daemon answers, then shuts down as it does
   on SIGTERM. Before the existing HUP/three-second/KILL fallback, the default kill,
   team-down, and daemon-stop paths take the reset gate and type Ctrl-D for a ready
@@ -299,7 +299,7 @@ section is the summary.
   environment, with `TERM` and `COLORTERM` last. `DESKTOP_STARTUP_ID` and
   `XDG_ACTIVATION_TOKEN` are always removed by the pinned library.
 - Local IPC is TCP (default `127.0.0.1:0`; the bound addresses are written to
-  `addr`), authenticated by an `admin.token` file. The state directory is 0700 and
+  `addr`), authenticated by an `admin.token` file. The a2amx directory is 0700 and
   its files 0600. Framing is a `u32` big-endian length plus payload, with JSON on the
   control channel and tagged binary frames on attach streams.
 - The build-time git description is exposed by `a2amx --version`; admin-only `Request::Version`
@@ -340,7 +340,7 @@ earlier starts intact. Launches reuse `new`'s harness wiring; down targets only 
 A session may omit `name` when it has a valid `role`; parsing uses that role as its name, while an explicit name wins.
 
 When no `--file` is supplied, these commands resolve `a2amx.toml` in the
-invoking directory first, then `<state home>/team.toml`. The global file derives
+invoking directory first, then `<root>/config/team.toml`. The global file derives
 its team name from the canonical invoking directory and resolves relative
 session `cwd` values there; it must not contain a `team` key. Before parsing,
 the client rejects roots, home and user-data directories, hidden home
@@ -355,6 +355,48 @@ and redacted argv without creating sessions or installing the OMP extension. Bot
 commands use a separate best-effort messages query to note retained messages lost in a
 daemon restart; the note never changes the command result.
 
+### Directory layout
+
+The resolved a2amx root is `<root>` (`--home`, then `A2AMX_HOME`, then `$HOME/.a2amx`):
+
+| Method | Path |
+| --- | --- |
+| `root()` | `<root>` |
+| `config_dir()` | `<root>/config` |
+| `secrets_dir()` | `<root>/config/secrets` |
+| `state_dir()` | `<root>/state` |
+| `gateway_state_dir()` | `<root>/state/gateway` |
+| `run_dir()` | `<root>/run` |
+| `link_dir()` | `<root>/run/link` |
+| `codex_dir()` | `<root>/run/codex` |
+| `codex_session_dir(id)` | `<root>/run/codex/<id>` |
+| `omp_dir()` | `<root>/run/omp` |
+| `log_dir()` | `<root>/log` |
+
+| Method | Path |
+| --- | --- |
+| `addr()` | `<root>/run/addr` |
+| `admin_token()` | `<root>/run/admin.token` |
+| `gateway_token()` | `<root>/run/gateway.token` |
+| `daemon_lock()` | `<root>/run/daemon.lock` |
+| `gateway_lock()` | `<root>/run/gateway.lock` |
+| `gateway_pid()` | `<root>/run/gateway.pid` |
+| `link_addr()` | `<root>/run/link/addr` |
+| `link_gateway_token()` | `<root>/run/link/gateway.token` |
+| `confine_empty()` | `<root>/run/confine-empty` |
+| `messages_db()` | `<root>/state/messages.db` |
+| `auto_grants()` | `<root>/state/auto-grants` |
+| `pairing()` | `<root>/state/gateway/pairing.json` |
+| `seen()` | `<root>/state/gateway/seen.json` |
+| `team_file()` | `<root>/config/team.toml` |
+| `gateway_config()` | `<root>/config/gateway.toml` |
+| `discord_token()` | `<root>/config/secrets/discord.token` |
+| `daemon_log()` | `<root>/log/daemon.log` |
+| `gateway_log()` | `<root>/log/gateway.log` |
+
+Confined sessions may read `bin/`, `config/`, and `log/`, but those trees are mounted read-only.
+The `state/`, `run/`, and `config/secrets/` trees are hidden from confined sessions.
+
 ### PTY confinement
 
 `Request::Confine` wraps exactly one `NewSession` request. The daemon resolves and
@@ -366,7 +408,7 @@ and records missing operator paths for dry-run output. A late-created socket out
 launch-time hides remains visible; start container daemons before a confined session
 when their host sockets must be hidden.
 
-The `grant` module owns the table of named grants and the consent text, while the `suggest` module detects grants from project markers and git remotes. Under global `auto`, `team up` asks before opening a grant the user has not accepted. Accepted names are kept one per line in the `auto-grants` file in the state directory and apply to later starts from that global team file.
+The `grant` module owns the table of named grants and the consent text, while the `suggest` module detects grants from project markers and git remotes. Under global `auto`, `team up` asks before opening a grant the user has not accepted. Accepted names are kept one per line in `<root>/state/auto-grants` and apply to later starts from that global team file.
 
 ### Status line
 
@@ -407,7 +449,7 @@ section is the summary. One daemon acts as both broker and host supervisor on on
 machine; there is no central-versus-host split yet.
 
 - **Durable acceptance.** `send_message` succeeds only after the message is committed
-  to SQLite (`messages.db` in the state dir: WAL, `synchronous=FULL`, 0600 with its
+  to SQLite (`<root>/state/messages.db`: WAL, `synchronous=FULL`, 0600 with its
   `-wal` and `-shm` files). All SQLite work runs on one dedicated thread that owns the
   connection. Tables `messages` and `attempts` carry a `PRAGMA user_version`
   migration (current version 2; version 2 added `attempts.receipt_at`, and a version 1
@@ -424,7 +466,7 @@ machine; there is no central-versus-host split yet.
   `send_message`, `message_status` for its own messages, `reset_session` when the
   target grants `control_from`, `report_prompt`, `report_quota`, and `bridge_attach`);
   the sender is always that session. The admin token keeps the human's powers and cannot
-  send. A third token, `gateway.token` in the state directory, gives the gateway role:
+  send. A third token, `gateway.token` in `<root>/run/gateway.token`, gives the gateway role:
   it may only post the human's inbound messages, fetch and report the human-bound ones,
   and redeem lease codes (`docs/permissions.md`). The human's address is `human:owner`;
   the daemon sets the sender, never the caller.
@@ -434,14 +476,15 @@ machine; there is no central-versus-host split yet.
   to the normal background `gateway run`; the hidden `--pair-only` mode exits after confirmation.
   The launcher re-executes the relay inside a bubblewrap sandbox it builds itself
   (`gateway_launch`): an empty root with `/usr`, `/etc` and the executable read-only, the
-  `<home>/gateway/` directory writable, the daemon's `<home>/link/` directory (`addr` and
+  `<root>/state/gateway/` directory writable, the daemon's `<root>/run/link/` directory (`addr` and
   `gateway.token` only) read-only, a cleared environment, and no fallback when `bwrap` is missing.
-  The launcher keeps `<home>/gateway.lock` and `<home>/gateway.pid` outside the sandbox bind; it
-  opens `<home>/gateway/gateway.log` as a hardened regular owner-only file and passes that
+  The launcher keeps `<root>/run/gateway.lock` and `<root>/run/gateway.pid` outside the sandbox bind; it
+  opens `<root>/log/gateway.log` as a hardened regular owner-only file and passes that
   descriptor into the sandbox so path replacement cannot redirect startup reads. The daemon never
   exposes `admin.token` there. The relay (`gateway run`) relays between the daemon and Discord: the
   `relay` module drives the `gateway` core (author check, channel mapping, message splitting) and
-  the `discord` client, with its config, Discord token and pairing under `<home>/gateway/`
+  `discord` client, with config under `<root>/config/gateway.toml`, the Discord token under
+  `<root>/config/secrets/discord.token`, and pairing under `<root>/state/gateway/`
   (`relay_files`). It talks to the daemon only with `gateway.token`, replies to the paired Discord
   account only, and pauses when the server has more members than `max_members`.
 - **Addresses.** A session is `<name>@<host>` (`a2amx new --name`, daemon

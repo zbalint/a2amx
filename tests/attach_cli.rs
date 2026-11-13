@@ -226,8 +226,9 @@ async fn start_fake_daemon(
     let dir = tempfile::tempdir()?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
-    std::fs::write(dir.path().join("addr"), format!("{address}\n"))?;
-    std::fs::write(dir.path().join("admin.token"), "fake-token\n")?;
+    std::fs::create_dir_all(dir.path().join("run"))?;
+    std::fs::write(dir.path().join("run/addr"), format!("{address}\n"))?;
+    std::fs::write(dir.path().join("run/admin.token"), "fake-token\n")?;
     let daemon = FakeDaemon::with_top_rows(fake_team(), forced_top_rows);
     let server = tokio::spawn(run_fake_daemon(listener, daemon.clone()));
     Ok((dir, daemon, server))
@@ -912,7 +913,7 @@ async fn home_precedence_and_nonterminal_new_use_default_size() -> anyhow::Resul
     let bwrap_dir = second_dir.path().join("bwrap-path");
     std::fs::create_dir_all(&bwrap_dir)?;
     let _second_daemon = a2amx::daemon::Daemon::start(a2amx::daemon::DaemonConfig {
-        state_dir: second_dir.path().to_path_buf(),
+        root: second_dir.path().to_path_buf(),
         listen: vec!["127.0.0.1:0".parse()?],
         host_name: None,
         limits: a2amx::messaging::Limits::default(),
@@ -1720,7 +1721,7 @@ gate.recv(1)
         let socket = tokio::net::TcpSocket::new_v4()?;
         socket.set_recv_buffer_size(16384)?;
         let mut attachment = socket.connect(daemon.addrs()[0]).await?;
-        let token = std::fs::read_to_string(dir.path().join("admin.token"))?;
+        let token = std::fs::read_to_string(dir.path().join("run/admin.token"))?;
         for (request, expected) in [
             (Request::Hello { token }, Response::Ok),
             (
@@ -1794,10 +1795,10 @@ async fn picker_groups_sessions_into_team_sections() -> anyhow::Result<()> {
     assert_eq!(code, 0);
     assert!(created.contains("s1"));
     std::fs::write(
-        dir.path().join("team.toml"),
+        dir.path().join("config/team.toml"),
         "team = \"demo\"\n[[session]]\nname = \"worker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\n",
     )?;
-    let team_file = dir.path().join("team.toml");
+    let team_file = dir.path().join("config/team.toml");
     let team_file = team_file.to_string_lossy().into_owned();
     let started = run_binary(
         dir.path(),
@@ -2173,8 +2174,9 @@ async fn status_toggle_reattaches_to_resize_the_session() -> anyhow::Result<()> 
     let dir = tempfile::tempdir()?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
-    std::fs::write(dir.path().join("addr"), format!("{address}\n"))?;
-    std::fs::write(dir.path().join("admin.token"), "fake-token\n")?;
+    std::fs::create_dir_all(dir.path().join("run"))?;
+    std::fs::write(dir.path().join("run/addr"), format!("{address}\n"))?;
+    std::fs::write(dir.path().join("run/admin.token"), "fake-token\n")?;
     let daemon = FakeDaemon::new(fake_team());
     let server = tokio::spawn(run_fake_daemon(listener, daemon.clone()));
 
@@ -2195,8 +2197,9 @@ async fn switch_waits_for_old_attachment_eof_with_delayed_fake_daemon() -> anyho
     let dir = tempfile::tempdir()?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
-    std::fs::write(dir.path().join("addr"), format!("{address}\n"))?;
-    std::fs::write(dir.path().join("admin.token"), "fake-token\n")?;
+    std::fs::create_dir_all(dir.path().join("run"))?;
+    std::fs::write(dir.path().join("run/addr"), format!("{address}\n"))?;
+    std::fs::write(dir.path().join("run/admin.token"), "fake-token\n")?;
     let daemon = FakeDaemon::new(fake_team());
     let server = tokio::spawn(run_fake_daemon(listener, daemon.clone()));
 

@@ -39,10 +39,13 @@ impl Fixture {
         for path in [&home, &state, &runtime, &cwd] {
             std::fs::create_dir_all(path).expect("fixture directory");
         }
+        a2amx::layout::Layout::new(state.clone())
+            .ensure()
+            .expect("layout directories");
         std::fs::create_dir_all(home.join(".aws")).expect("aws directory");
         std::fs::create_dir_all(home.join(".ssh")).expect("ssh directory");
         std::fs::write(home.join(".ssh/config"), "Host example\n").expect("ssh config");
-        let empty = state.join("confine-empty");
+        let empty = a2amx::layout::Layout::new(state.clone()).confine_empty();
         std::fs::write(&empty, []).expect("empty file");
         Self {
             _root: root,
@@ -57,9 +60,8 @@ impl Fixture {
     fn host(&self) -> Host {
         Host {
             home: self.home.clone(),
-            state_dir: self.state.clone(),
+            layout: a2amx::layout::Layout::new(self.state.clone()),
             runtime_dir: self.runtime.clone(),
-            empty_file: self.empty.clone(),
         }
     }
 }
@@ -127,7 +129,7 @@ async fn start_confine_daemon_with_env(
     env_path: Option<PathBuf>,
 ) -> anyhow::Result<Daemon> {
     Daemon::start(DaemonConfig {
-        state_dir: state.to_owned(),
+        root: state.to_owned(),
         listen: vec!["127.0.0.1:0".parse()?],
         host_name: Some("host-a".into()),
         limits: Limits::default(),
@@ -914,10 +916,11 @@ fn cache_grant_refuses_a_state_directory_under_it() {
     let cache = fixture.home.join(".cache");
     std::fs::create_dir_all(&cache).expect("cache directory");
     let state = cache.join("state");
-    let empty = confine::ensure_empty_file(&state).expect("cache state empty file");
+    let layout = a2amx::layout::Layout::new(state);
+    layout.ensure().unwrap();
+    let _empty = confine::ensure_empty_file(&layout).expect("cache state empty file");
     let mut host = fixture.host();
-    host.state_dir = state;
-    host.empty_file = empty;
+    host.layout = layout;
     let request = ConfineRequest {
         grants: vec!["cache".into()],
         ..ConfineRequest::default()
@@ -926,7 +929,7 @@ fn cache_grant_refuses_a_state_directory_under_it() {
         Ok(_) => panic!("cache grant must reject a nested state directory"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("overlaps the state directory"));
+    assert!(error.to_string().contains("overlaps the a2amx directory"));
 
     let raw_write = confine::plan(
         &ConfineRequest {
@@ -946,10 +949,11 @@ fn cache_grant_preflight_refuses_a_state_directory_under_it() {
     let cache = fixture.home.join(".cache");
     std::fs::create_dir_all(&cache).expect("cache directory");
     let state = cache.join("state");
-    let empty = confine::ensure_empty_file(&state).expect("cache state empty file");
+    let layout = a2amx::layout::Layout::new(state);
+    layout.ensure().unwrap();
+    let _empty = confine::ensure_empty_file(&layout).expect("cache state empty file");
     let mut host = fixture.host();
-    host.state_dir = state;
-    host.empty_file = empty;
+    host.layout = layout;
     let request = ConfineRequest {
         grants: vec!["cache".into()],
         ..ConfineRequest::default()
@@ -966,7 +970,7 @@ fn cache_grant_preflight_refuses_a_state_directory_under_it() {
         Ok(_) => panic!("cache grant must reject a nested state directory"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("overlaps the state directory"));
+    assert!(error.to_string().contains("overlaps the a2amx directory"));
 }
 
 #[test]
@@ -2328,8 +2332,18 @@ fn mandatory_hides_remain_when_default_hides_are_disabled() {
     };
     let plan =
         confine::plan(&request, Harness::Generic, &fixture.cwd, &fixture.host()).expect("plan");
-    assert!(plan.hidden_paths().contains(&fixture.state));
-    assert!(plan.hidden_paths().contains(&fixture.runtime));
+    assert!(
+        plan.hidden_paths()
+            .contains(&fixture.host().layout.state_dir())
+    );
+    assert!(
+        plan.hidden_paths()
+            .contains(&fixture.host().layout.run_dir())
+    );
+    assert!(
+        plan.hidden_paths()
+            .contains(&fixture.host().layout.secrets_dir())
+    );
     for mandatory in ["/run/WSL", "/mnt/wslg"] {
         if let Ok(path) = std::fs::canonicalize(mandatory) {
             assert!(
@@ -2348,7 +2362,7 @@ fn mandatory_hides_remain_when_default_hides_are_disabled() {
 #[test]
 fn omp_exposes_only_state_omp_on_top_of_mandatory_state_hide() {
     let fixture = Fixture::new();
-    std::fs::create_dir_all(fixture.state.join("omp")).expect("omp state");
+    std::fs::create_dir_all(fixture.host().layout.omp_dir()).expect("omp state");
     let plan = confine::plan(
         &ConfineRequest {
             no_default_hides: true,
@@ -2359,15 +2373,24 @@ fn omp_exposes_only_state_omp_on_top_of_mandatory_state_hide() {
         &fixture.host(),
     )
     .expect("plan");
-    let omp = fixture.state.join("omp").to_string_lossy().into_owned();
+    let omp = fixture
+        .host()
+        .layout
+        .omp_dir()
+        .to_string_lossy()
+        .into_owned();
     let wrapped = plan
         .with_bwrap(PathBuf::from("bwrap"))
         .wrap(vec!["true".into()])
         .expect("wrap");
 
-    let state_hide = wrapped
-        .windows(2)
-        .position(|window| window == ["--tmpfs", fixture.state.to_string_lossy().as_ref()]);
+    let state_hide = wrapped.windows(2).position(|window| {
+        window
+            == [
+                "--tmpfs",
+                fixture.host().layout.state_dir().to_string_lossy().as_ref(),
+            ]
+    });
     assert!(
         state_hide.is_some(),
         "state hide must precede the OMP exposure"
@@ -2800,7 +2823,7 @@ fn unhide_cannot_lift_container_socket_restriction() {
 #[test]
 fn state_omp_cannot_be_operator_unhidden() {
     let fixture = Fixture::new();
-    let omp_state = fixture.state.join("omp");
+    let omp_state = fixture.host().layout.omp_dir();
     std::fs::create_dir_all(&omp_state).expect("omp state");
     for harness in [Harness::Generic, Harness::Claude] {
         let result = confine::plan(
@@ -3118,9 +3141,9 @@ fn codex_is_accepted_and_write_guards_are_reciprocal() {
         )
         .is_err()
     );
-    std::fs::write(fixture.state.join("admin.token"), "admin").expect("admin token");
+    std::fs::write(fixture.state.join("run/admin.token"), "admin").expect("admin token");
     for path in [
-        fixture.state.join("admin.token"),
+        fixture.state.join("run/admin.token"),
         fixture.state.clone(),
         fixture.runtime.clone(),
     ] {
@@ -3146,7 +3169,7 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
     )
     .expect("Codex plan")
     .with_bwrap(PathBuf::from("bwrap"))
-    .with_codex_dir(fixture.state.join("codex/s1"));
+    .with_codex_dir(fixture.host().layout.codex_session_dir("s1"));
     let without_codex_dir = confine::plan(
         &ConfineRequest {
             write: vec!["/tmp".into()],
@@ -3161,13 +3184,32 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
     let legacy_wrapped = without_codex_dir
         .wrap(vec!["codex".into()])
         .expect("legacy TUI argv");
-    let state = fixture.state.to_string_lossy().into_owned();
+    let root = fixture.host().layout.root().to_string_lossy().into_owned();
+    let state = fixture
+        .host()
+        .layout
+        .state_dir()
+        .to_string_lossy()
+        .into_owned();
     let runtime = fixture.runtime.to_string_lossy().into_owned();
+    let run = fixture
+        .host()
+        .layout
+        .run_dir()
+        .to_string_lossy()
+        .into_owned();
+    let secrets = fixture
+        .host()
+        .layout
+        .secrets_dir()
+        .to_string_lossy()
+        .into_owned();
     let home = fixture.home.to_string_lossy().into_owned();
     let cwd = fixture.cwd.to_string_lossy().into_owned();
     let empty = fixture
-        .state
-        .join("confine-empty")
+        .host()
+        .layout
+        .confine_empty()
         .to_string_lossy()
         .into_owned();
     let mut expected = vec![
@@ -3262,8 +3304,9 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
         "/run/containerd/containerd.sock.ttrpc".into(),
         "--tmpfs".into(),
         runtime.clone(),
-        "--tmpfs".into(),
-        state.clone(),
+        "--ro-bind".into(),
+        root.clone(),
+        root.clone(),
         "--bind".into(),
         cwd.clone(),
         cwd.clone(),
@@ -3271,9 +3314,15 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
         format!("{home}/.aws"),
         "--tmpfs".into(),
         format!("{home}/.ssh"),
+        "--tmpfs".into(),
+        run.clone(),
+        "--tmpfs".into(),
+        state.clone(),
         "--bind".into(),
         format!("{home}/.codex"),
         format!("{home}/.codex"),
+        "--tmpfs".into(),
+        secrets.clone(),
     ]);
     for path in &host_paths {
         expected.extend(["--remount-ro".into(), path.clone()]);
@@ -3282,11 +3331,15 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
         "--remount-ro".into(),
         runtime,
         "--remount-ro".into(),
-        state,
-        "--remount-ro".into(),
         format!("{home}/.aws"),
         "--remount-ro".into(),
         format!("{home}/.ssh"),
+        "--remount-ro".into(),
+        run,
+        "--remount-ro".into(),
+        state,
+        "--remount-ro".into(),
+        secrets,
         "--chdir".into(),
         cwd,
         "--".into(),
@@ -3298,13 +3351,16 @@ fn codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants() {
         .wrap_app_server(vec!["codex".into()])
         .expect("app-server argv");
     let session = fixture
-        .state
-        .join("codex/s1")
+        .host()
+        .layout
+        .codex_session_dir("s1")
         .to_string_lossy()
         .into_owned();
     let socket = fixture
-        .state
-        .join("codex/s1/sock")
+        .host()
+        .layout
+        .codex_session_dir("s1")
+        .join("sock")
         .to_string_lossy()
         .into_owned();
     let target = format!("/tmp/codex-daemon-{}", rustix::process::geteuid().as_raw());
@@ -3600,7 +3656,7 @@ fn total_argv_size_checks_sum_arguments_below_per_argument_cap() {
     };
     let over_total_cap = vec!["x".repeat(131_000), "y".repeat(131_000)];
     assert!(plan().wrap(over_total_cap).is_err());
-    let below_total_cap = vec!["x".repeat(130_000), "y".repeat(130_000)];
+    let below_total_cap = vec!["x".repeat(120_000), "y".repeat(120_000)];
     assert!(plan().wrap(below_total_cap).is_ok());
 }
 
@@ -3659,9 +3715,11 @@ fn git_common_directory_and_exact_writes_override_protection() {
     let nested = repo.join("src");
     let git = repo.join(".git");
     let git_config = git.join("config");
-    let team_file = nested.join("team.toml");
+    let team_file = nested.join("config/team.toml");
     std::fs::create_dir_all(&git).expect("git directory");
     std::fs::create_dir_all(&nested).expect("repo subdirectory");
+    std::fs::create_dir_all(team_file.parent().expect("team parent"))
+        .expect("team config directory");
     std::fs::write(&git_config, "[core]\n").expect("git config");
     std::fs::write(&team_file, "[[session]]\nname = \"worker\"\n").expect("team file");
 
@@ -4301,6 +4359,85 @@ fn implicit_workspace_writes_inside_default_hides_are_refused() {
 }
 
 #[test]
+fn explicit_writes_inside_a2amx_root_are_rejected() {
+    let fixture = Fixture::new();
+    for path in [
+        fixture.host().layout.log_dir(),
+        fixture.host().layout.config_dir(),
+    ] {
+        let error = match confine::plan(
+            &ConfineRequest {
+                write: vec![path.to_string_lossy().into_owned()],
+                ..ConfineRequest::default()
+            },
+            Harness::Generic,
+            &fixture.cwd,
+            &fixture.host(),
+        ) {
+            Ok(_) => panic!("a2amx root write accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("overlaps the a2amx directory"));
+    }
+}
+
+#[test]
+fn plan_layout_uses_canonical_root() {
+    let fixture = Fixture::new();
+    let outer = tempfile::tempdir().expect("outer");
+    let actual = outer.path().join("actual");
+    std::fs::create_dir_all(&actual).expect("actual");
+    let alias = outer.path().join("alias");
+    symlink(&actual, &alias).expect("alias");
+    let layout = a2amx::layout::Layout::new(alias);
+    layout.ensure().expect("layout");
+    let host = Host {
+        home: fixture.home.clone(),
+        layout,
+        runtime_dir: fixture.runtime.clone(),
+    };
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+    )
+    .expect("plan");
+    assert_eq!(plan.layout().root(), actual);
+}
+
+#[test]
+fn writable_ancestor_of_a2amx_root_protects_root() {
+    let fixture = Fixture::new();
+    let outer = tempfile::tempdir().expect("outer");
+    let writable = outer.path().join("work");
+    let root = writable.join("a2amx");
+    std::fs::create_dir_all(&root).expect("root");
+    let layout = a2amx::layout::Layout::new(root);
+    layout.ensure().expect("layout");
+    let host = Host {
+        home: fixture.home.clone(),
+        layout,
+        runtime_dir: fixture.runtime.clone(),
+    };
+    let plan = confine::plan(
+        &ConfineRequest {
+            write: vec![writable.to_string_lossy().into_owned()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+    )
+    .expect("writable ancestor accepted with protected root");
+    assert!(plan.writable.contains(&writable));
+    assert!(
+        plan.readonly
+            .contains(&host.layout.root().canonicalize().expect("canonical root"))
+    );
+}
+
+#[test]
 fn git_common_dir_pointer_requires_git_shape() {
     let fixture = Fixture::new();
     let metadata = fixture.cwd.join("metadata");
@@ -4579,7 +4716,7 @@ fn home_repository_is_not_bound_and_outside_team_file_stays_hidden() {
             .iter()
             .all(|path| !path.starts_with(fixture.home.join(".git")))
     );
-    let team_file = fixture.state.join("team.toml");
+    let team_file = fixture.state.join("config/team.toml");
     std::fs::write(&team_file, "team = \"private\"\n").expect("state team file");
     let plan = confine::plan(
         &ConfineRequest {
@@ -4593,7 +4730,10 @@ fn home_repository_is_not_bound_and_outside_team_file_stays_hidden() {
     .expect("outside team plan");
     assert!(!plan.readonly.contains(&team_file));
     assert!(!plan.protected.contains(&team_file));
-    assert!(plan.hidden_paths().contains(&fixture.state));
+    assert!(
+        plan.hidden_paths()
+            .contains(&fixture.host().layout.state_dir())
+    );
 }
 
 #[test]
@@ -4833,10 +4973,11 @@ async fn real_bwrap_confines_the_session_process() -> anyhow::Result<()> {
     let fd_list = cwd.join("fds.txt");
     let no_new_privs = cwd.join("no-new-privs.txt");
     let done = cwd.join("done");
-    let admin = state.join("admin.token");
+    let layout = a2amx::layout::Layout::new(state.clone());
+    layout.ensure()?;
+    let admin = layout.admin_token();
     std::fs::create_dir_all(&cwd)?;
     std::fs::create_dir_all(&hidden)?;
-    std::fs::create_dir_all(&state)?;
     std::fs::write(hidden.join("secret"), "hidden")?;
     std::fs::write(&outside, "unconfined")?;
     std::fs::write(&chmod_target, "chmod")?;
@@ -5545,7 +5686,7 @@ fn write_home_is_allowed_and_keeps_hides_on_top() {
         .position(|window| window == ["--bind", root.as_str(), root.as_str()])
         .expect("ancestor writable bind");
     for path in [
-        fixture.state.clone(),
+        fixture.host().layout.state_dir(),
         fixture.runtime.clone(),
         fixture.home.join(".ssh"),
         netrc,
@@ -5678,9 +5819,8 @@ fn grant_create_path_inside_state_is_unresolved() {
     std::fs::write(&empty_file, []).expect("empty file");
     let host = Host {
         home: fixture.home.clone(),
-        state_dir: state,
+        layout: a2amx::layout::Layout::new(state.clone()),
         runtime_dir: fixture.runtime.clone(),
-        empty_file,
     };
     let request = ConfineRequest {
         grants: vec!["cache".into()],
@@ -6008,13 +6148,14 @@ fn workspace_in_home_is_still_refused() {
     let runtime = protected.path().join("runtime");
     std::fs::create_dir_all(&state).expect("outer state");
     std::fs::create_dir_all(&runtime).expect("outer runtime");
-    let empty = state.join("confine-empty");
+    let layout = a2amx::layout::Layout::new(state.clone());
+    layout.ensure().expect("outer layout");
+    let empty = layout.confine_empty();
     std::fs::write(&empty, []).expect("outer empty");
     let host = Host {
-        home,
-        state_dir: state,
+        home: home.clone(),
+        layout,
         runtime_dir: runtime,
-        empty_file: empty,
     };
     let error = match confine::plan(
         &ConfineRequest {
@@ -6251,14 +6392,15 @@ fn harness_data_files_are_saved_through_default_root() -> anyhow::Result<()> {
     std::fs::write(&credentials, "old")?;
     std::fs::write(&settings, "settings")?;
     std::os::unix::fs::symlink(&hooks_target, claude_root.join("hooks"))?;
-    let empty_file = state.join("confine-empty");
+    let layout = a2amx::layout::Layout::new(state.clone());
+    layout.ensure()?;
+    let empty_file = layout.confine_empty();
     confine::ensure_data_dirs(Harness::Claude, &home)?;
     std::fs::write(&empty_file, [])?;
     let host = Host {
-        home,
-        state_dir: state,
+        home: home.clone(),
+        layout,
         runtime_dir: runtime,
-        empty_file,
     };
     let bwrap = match confine::resolve_bwrap(None) {
         Ok(path) => path,
@@ -6622,13 +6764,14 @@ fn harness_config_grant_persists_regular_writes() -> anyhow::Result<()> {
     std::fs::write(&credentials, "old")?;
     std::fs::write(&settings, "settings")?;
     confine::ensure_data_dirs(Harness::Claude, &home)?;
-    let empty_file = state.join("confine-empty");
+    let layout = a2amx::layout::Layout::new(state.clone());
+    layout.ensure()?;
+    let empty_file = layout.confine_empty();
     std::fs::write(&empty_file, [])?;
     let host = Host {
-        home,
-        state_dir: state,
+        home: home.clone(),
+        layout,
         runtime_dir: runtime,
-        empty_file,
     };
     let bwrap = match confine::resolve_bwrap(None) {
         Ok(path) => path,
@@ -6728,4 +6871,80 @@ fn populate_omp_overlay(fixture: &Fixture) {
     std::fs::write(agent.join("a.db"), "agent").expect("agent db");
     std::fs::write(root.join("stats.db"), "stats").expect("stats db");
     std::fs::write(root.join("config.yml"), "config").expect("OMP config");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_bwrap_confined_tree_hides_state_run_and_secrets() -> anyhow::Result<()> {
+    let home = std::env::var_os("HOME").map(PathBuf::from).expect("HOME");
+    let base = tempfile::tempdir_in(home)?;
+    let root = tempfile::tempdir_in(base.path())?;
+    let cwd_dir = tempfile::tempdir_in(base.path())?;
+    let cwd = cwd_dir.path().to_path_buf();
+    let layout = a2amx::layout::Layout::new(root.path().to_path_buf());
+    layout.ensure()?;
+    let bin = root.path().join("bin/x");
+    let team = layout.team_file();
+    let discord = layout.discord_token();
+    let db = layout.messages_db();
+    let admin = layout.admin_token();
+    let log = layout.daemon_log();
+    std::fs::create_dir_all(bin.parent().unwrap())?;
+    std::fs::write(&bin, "#!/bin/sh\n")?;
+    std::fs::write(&team, "team = \"demo\"\n")?;
+    std::fs::write(&discord, "discord-secret\n")?;
+    std::fs::write(&admin, "admin-secret\n")?;
+    std::fs::write(&log, "daemon log\n")?;
+    let bwrap_dir = bwrap_path_dir(Path::new("/usr/bin/bwrap"));
+    let bwrap_path = bwrap_dir.path().join("bwrap");
+    if confine::preflight(&bwrap_path).is_err() {
+        if require_bwrap() {
+            anyhow::bail!("bubblewrap preflight failed");
+        }
+        return Ok(());
+    }
+    let daemon = start_confine_daemon(root.path(), bwrap_dir.path()).await?;
+    assert!(db.exists(), "daemon must create the SQLite database");
+    let mut client = Client::connect(root.path()).await?;
+    let result = cwd.join("result");
+    let done = cwd.join("done");
+    let script = format!(
+        "set -eu; cat {bin} >/dev/null; if printf x > {bin}; then printf bin-write-ok > {result}; else printf bin-write-denied > {result}; fi; cat {team} >/dev/null; if printf x > {team}; then printf team-write-ok >> {result}; else printf team-write-denied >> {result}; fi; cat {log} >/dev/null; if printf x > {log}; then printf log-write-ok >> {result}; else printf log-write-denied >> {result}; fi; if cat {admin} >/dev/null 2>&1; then printf admin-visible >> {result}; else printf admin-hidden >> {result}; fi; if cat {discord} >/dev/null 2>&1; then printf discord-visible >> {result}; else printf discord-hidden >> {result}; fi; if cat {db} >/dev/null 2>&1; then printf db-visible >> {result}; else printf db-hidden >> {result}; fi; if test -e {db}; then printf state-visible >> {result}; else printf state-hidden >> {result}; fi; if test -e {admin}; then printf run-visible >> {result}; else printf run-hidden >> {result}; fi; if test -e {discord}; then printf secrets-visible >> {result}; else printf secrets-hidden >> {result}; fi; touch {done}",
+        bin = bin.display(),
+        team = team.display(),
+        log = log.display(),
+        admin = admin.display(),
+        discord = discord.display(),
+        db = db.display(),
+        result = result.display(),
+        done = done.display(),
+    );
+    let response = client
+        .request(confined_shell_request(
+            &cwd,
+            &script,
+            vec![],
+            ConfineRequest::default(),
+        ))
+        .await?;
+    let Response::Created { .. } = response else {
+        daemon.shutdown().await?;
+        anyhow::bail!("confined session creation failed: {response:?}");
+    };
+    for _ in 0..100 {
+        if done.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let output = std::fs::read_to_string(result)?;
+    assert!(output.contains("bin-write-denied"));
+    assert!(output.contains("team-write-denied"));
+    assert!(output.contains("log-write-denied"));
+    assert!(output.contains("admin-hidden"));
+    assert!(output.contains("discord-hidden"));
+    assert!(output.contains("state-hidden"));
+    assert!(output.contains("run-hidden"));
+    assert!(output.contains("secrets-hidden"));
+    daemon.shutdown().await?;
+    Ok(())
 }

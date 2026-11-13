@@ -307,10 +307,10 @@ pub fn team_name_for(cwd: &std::path::Path) -> anyhow::Result<String> {
 pub fn check_global_allowed(
     cwd: &std::path::Path,
     user_home: Option<&std::path::Path>,
-    state_home: &std::path::Path,
+    root: &std::path::Path,
 ) -> anyhow::Result<()> {
     let reason = home_reason(cwd, user_home)
-        .or_else(|| system_reason(cwd, state_home))
+        .or_else(|| system_reason(cwd, root))
         .or_else(|| container_reason(cwd));
     if let Some(reason) = reason {
         bail!(
@@ -357,7 +357,7 @@ fn home_reason(cwd: &std::path::Path, user_home: Option<&std::path::Path>) -> Op
     None
 }
 
-fn system_reason(cwd: &std::path::Path, state_home: &std::path::Path) -> Option<&'static str> {
+fn system_reason(cwd: &std::path::Path, root: &std::path::Path) -> Option<&'static str> {
     let components: Vec<_> = cwd.components().collect();
     let mnt = components.get(1).is_some_and(|component| {
         component
@@ -371,7 +371,7 @@ fn system_reason(cwd: &std::path::Path, state_home: &std::path::Path) -> Option<
             name.eq_ignore_ascii_case("wsl") || name.eq_ignore_ascii_case("wslg")
         });
     let system = [
-        state_home,
+        root,
         std::path::Path::new("/bin"),
         std::path::Path::new("/boot"),
         std::path::Path::new("/dev"),
@@ -401,7 +401,7 @@ fn system_reason(cwd: &std::path::Path, state_home: &std::path::Path) -> Option<
         std::path::Path::new("/mnt/wslg"),
     ];
     if wsl_system || system.iter().any(|prefix| cwd.starts_with(prefix)) {
-        return Some("the daemon state directory or a system directory");
+        return Some("the a2amx directory or a system directory");
     }
     if components.len() >= 3 && is_mnt_drive(&components) {
         let windows = [
@@ -418,7 +418,7 @@ fn system_reason(cwd: &std::path::Path, state_home: &std::path::Path) -> Option<
                     .eq_ignore_ascii_case(name)
             })
         {
-            return Some("the daemon state directory or a system directory");
+            return Some("the a2amx directory or a system directory");
         }
     }
     None

@@ -11,20 +11,20 @@ use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
 
 const BWRAP_REQUIRED: &str = "bubblewrap is required to run the gateway; it never runs unconfined";
 const DAEMON_REQUIRED: &str =
-    "the a2amx daemon is not running in this state directory; start it first";
+    "the a2amx daemon is not running in this a2amx directory; start it first";
 const RESOLV_REQUIRED: &str = "cannot resolve /etc/resolv.conf; the gateway needs DNS";
 
 #[derive(Debug, Clone)]
-pub struct Layout {
+pub struct LaunchPlan {
     pub bwrap: PathBuf,
-    pub state_dir: PathBuf,
+    pub layout: crate::layout::Layout,
     pub exe: PathBuf,
     pub rust_log: Option<String>,
     pub resolv_target: Option<PathBuf>,
     pub die_with_parent: bool,
 }
 
-pub fn sandbox_argv(layout: &Layout, inner: &[String]) -> Vec<String> {
+pub fn sandbox_argv(layout: &LaunchPlan, inner: &[String]) -> Vec<String> {
     let mut argv = vec![path_string(&layout.bwrap)];
     if layout.die_with_parent {
         argv.push("--die-with-parent".into());
@@ -56,17 +56,27 @@ pub fn sandbox_argv(layout: &Layout, inner: &[String]) -> Vec<String> {
     ]);
     let exe = path_string(&layout.exe);
     push_bind(&mut argv, "--ro-bind", Path::new(&exe), Path::new(&exe));
-    let link = layout.state_dir.join("link");
-    let gateway = layout.state_dir.join("gateway");
+    let link = layout.layout.link_dir();
+    let gateway = layout.layout.gateway_state_dir();
+    let gateway_config = layout.layout.gateway_config();
+    let discord_token = layout.layout.discord_token();
     let link = path_string(&link);
     let gateway = path_string(&gateway);
+    let gateway_config = path_string(&gateway_config);
+    let discord_token = path_string(&discord_token);
     argv.extend([
         "--ro-bind".into(),
         link.clone(),
         link,
+        "--ro-bind".into(),
+        gateway_config.clone(),
+        gateway_config,
+        "--ro-bind".into(),
+        discord_token.clone(),
+        discord_token,
         "--bind".into(),
         gateway.clone(),
-        gateway,
+        gateway.clone(),
         "--remount-ro".into(),
         "/".into(),
         "--clearenv".into(),
@@ -77,27 +87,25 @@ pub fn sandbox_argv(layout: &Layout, inner: &[String]) -> Vec<String> {
     if let Some(value) = &layout.rust_log {
         argv.extend(["--setenv".into(), "RUST_LOG".into(), value.clone()]);
     }
-    argv.extend([
-        "--chdir".into(),
-        path_string(&layout.state_dir.join("gateway")),
-        "--".into(),
-    ]);
+    argv.extend(["--chdir".into(), gateway.clone(), "--".into()]);
     argv.extend_from_slice(inner);
     argv
 }
 
 pub fn up(home: &Path, pair: bool, foreground: bool) -> Result<()> {
+    crate::layout::Layout::new(home.to_owned()).ensure()?;
     let loaded = crate::relay_files::load(home)?;
     if !pair && loaded.pairing.is_none() {
         bail!("not paired; run with --pair");
     }
-    let state_dir = fs::canonicalize(home).context("cannot resolve state directory")?;
-    check_link_files(&state_dir)?;
+    let root = fs::canonicalize(home).context("cannot resolve the a2amx directory")?;
+    let layout = crate::layout::Layout::new(root.clone());
+    check_link_files(&layout)?;
     let bwrap = crate::confine::resolve_bwrap(None).map_err(|_| anyhow!(BWRAP_REQUIRED))?;
     crate::confine::preflight(&bwrap).map_err(|_| anyhow!(BWRAP_REQUIRED))?;
     let resolv_target = resolve_resolv_target(Path::new("/etc/resolv.conf"))?;
     let exe = fs::canonicalize(env::current_exe()?).context("cannot resolve a2amx executable")?;
-    let state_text = path_string(&state_dir);
+    let state_text = path_string(&root);
     let mut inner = vec![
         path_string(&exe),
         "--home".into(),
@@ -105,31 +113,31 @@ pub fn up(home: &Path, pair: bool, foreground: bool) -> Result<()> {
         "gateway".into(),
         "run".into(),
     ];
-    let lock = acquire_or_explain(&state_dir)?;
+    let lock = acquire_or_explain(&root)?;
     if pair && !foreground {
         inner.push("--pair-only".into());
-        let layout = Layout {
+        let layout = LaunchPlan {
             bwrap: bwrap.clone(),
-            state_dir: state_dir.clone(),
+            layout: crate::layout::Layout::new(root.clone()),
             exe: exe.clone(),
             rust_log: env::var("RUST_LOG").ok(),
             resolv_target: resolv_target.clone(),
             die_with_parent: true,
         };
         let pair_argv = sandbox_argv(&layout, &inner);
-        run_pair_step(&pair_argv, &state_dir)?;
-        let _ = fs::remove_file(state_dir.join("gateway.pid"));
+        run_pair_step(&pair_argv, &root)?;
+        let _ = fs::remove_file(layout.layout.gateway_pid());
         inner.pop();
-        let background = Layout {
+        let background = LaunchPlan {
             bwrap,
-            state_dir: state_dir.clone(),
+            layout: crate::layout::Layout::new(root.clone()),
             exe,
             rust_log: Some(env::var("RUST_LOG").unwrap_or_else(|_| "warn".into())),
             resolv_target,
             die_with_parent: false,
         };
         let argv = sandbox_argv(&background, &inner);
-        return start_background(lock, &state_dir, &argv).map_err(|error| {
+        return start_background(lock, &root, &argv).map_err(|error| {
             anyhow!(
                 "{error}; the pairing is saved; run a2amx gateway up (without --pair) to start the gateway"
             )
@@ -139,9 +147,9 @@ pub fn up(home: &Path, pair: bool, foreground: bool) -> Result<()> {
         inner.push("--pair".into());
     }
     let background = !foreground;
-    let layout = Layout {
+    let layout = LaunchPlan {
         bwrap,
-        state_dir: state_dir.clone(),
+        layout: crate::layout::Layout::new(root.clone()),
         exe,
         rust_log: if background {
             Some(env::var("RUST_LOG").unwrap_or_else(|_| "warn".into()))
@@ -153,18 +161,18 @@ pub fn up(home: &Path, pair: bool, foreground: bool) -> Result<()> {
     };
     let argv = sandbox_argv(&layout, &inner);
     if foreground || pair {
-        exec_gateway(lock, &state_dir, &argv)
+        exec_gateway(lock, &root, &argv)
     } else {
-        start_background(lock, &state_dir, &argv)
+        start_background(lock, &root, &argv)
     }
 }
 
-fn run_pair_step(argv: &[String], state_dir: &Path) -> Result<()> {
+fn run_pair_step(argv: &[String], root: &Path) -> Result<()> {
     let mut child = match Command::new(&argv[0]).args(&argv[1..]).spawn() {
         Ok(child) => child,
         Err(error) => bail!("pairing did not complete; the gateway was not started: {error}"),
     };
-    if let Err(error) = crate::gateway_proc::write_pid(state_dir, child.id()) {
+    if let Err(error) = crate::gateway_proc::write_pid(root, child.id()) {
         let _ = child.kill();
         let _ = child.wait();
         bail!("pairing did not complete; the gateway was not started: {error}");
@@ -172,22 +180,22 @@ fn run_pair_step(argv: &[String], state_dir: &Path) -> Result<()> {
     let status = match child.wait() {
         Ok(status) => status,
         Err(error) => {
-            let _ = fs::remove_file(state_dir.join("gateway.pid"));
+            let _ = fs::remove_file(crate::layout::Layout::new(root.to_owned()).gateway_pid());
             bail!("pairing did not complete; the gateway was not started: {error}");
         }
     };
     if !status.success() {
-        let _ = fs::remove_file(state_dir.join("gateway.pid"));
+        let _ = fs::remove_file(crate::layout::Layout::new(root.to_owned()).gateway_pid());
         bail!("pairing did not complete; the gateway was not started");
     }
     Ok(())
 }
 
-fn acquire_or_explain(state_dir: &Path) -> Result<crate::gateway_proc::GatewayLock> {
-    match crate::gateway_proc::acquire(state_dir) {
+fn acquire_or_explain(root: &Path) -> Result<crate::gateway_proc::GatewayLock> {
+    match crate::gateway_proc::acquire(root) {
         Ok(lock) => Ok(lock),
         Err(crate::gateway_proc::LockError::Held) => {
-            let suffix = match crate::gateway_proc::state(state_dir)? {
+            let suffix = match crate::gateway_proc::state(root)? {
                 crate::gateway_proc::State::Running { pid: Some(pid) } => format!(" (pid {pid})"),
                 _ => String::new(),
             };
@@ -199,22 +207,22 @@ fn acquire_or_explain(state_dir: &Path) -> Result<crate::gateway_proc::GatewayLo
 
 fn exec_gateway(
     lock: crate::gateway_proc::GatewayLock,
-    state_dir: &Path,
+    root: &Path,
     argv: &[String],
 ) -> Result<()> {
     clear_cloexec(lock.as_fd())?;
-    crate::gateway_proc::write_pid(state_dir, std::process::id())?;
+    crate::gateway_proc::write_pid(root, std::process::id())?;
     let error = Command::new(&argv[0]).args(&argv[1..]).exec();
     Err(error.into())
 }
 
 fn start_background(
     lock: crate::gateway_proc::GatewayLock,
-    state_dir: &Path,
+    root: &Path,
     argv: &[String],
 ) -> Result<()> {
-    let gateway_dir = state_dir.join("gateway");
-    let (log, offset) = crate::gateway_proc::open_log(&gateway_dir)?;
+    let layout = crate::layout::Layout::new(root.to_owned());
+    let (log, offset) = crate::gateway_proc::open_log(root)?;
     clear_cloexec(lock.as_fd())?;
     let stdout = log.try_clone()?;
     let stderr = log.try_clone()?;
@@ -234,11 +242,11 @@ fn start_background(
     }
     let mut child = command.spawn().context("cannot start the gateway")?;
     let pid = child.id();
-    crate::gateway_proc::write_pid(state_dir, pid)?;
-    wait_until_ready(&mut child, &log, offset, state_dir)?;
+    crate::gateway_proc::write_pid(root, pid)?;
+    wait_until_ready(&mut child, &log, offset, root)?;
     println!(
         "gateway running in the background (pid {pid}); log: {}; stop it with: a2amx gateway stop",
-        gateway_dir.join(crate::gateway_proc::LOG_FILE).display()
+        layout.gateway_log().display()
     );
     drop(lock);
     Ok(())
@@ -248,16 +256,14 @@ fn wait_until_ready(
     child: &mut std::process::Child,
     log: &std::fs::File,
     offset: u64,
-    state_dir: &Path,
+    root: &Path,
 ) -> Result<()> {
-    let log_path = state_dir
-        .join("gateway")
-        .join(crate::gateway_proc::LOG_FILE);
+    let log_path = crate::layout::Layout::new(root.to_owned()).gateway_log();
     let deadline = Instant::now() + crate::gateway_proc::READY_WAIT;
     loop {
         if let Some(status) = child.try_wait()? {
             let progress = crate::gateway_proc::log_progress(log, offset)?;
-            let _ = fs::remove_file(state_dir.join("gateway.pid"));
+            let _ = fs::remove_file(crate::layout::Layout::new(root.to_owned()).gateway_pid());
             bail!(
                 "the gateway exited during startup ({status}); log: {}\n{}",
                 log_path.display(),
@@ -285,15 +291,9 @@ fn clear_cloexec(fd: std::os::fd::BorrowedFd<'_>) -> Result<()> {
     Ok(())
 }
 
-fn check_link_files(state_dir: &Path) -> Result<()> {
-    let link_dir = state_dir.join("link");
-    let directory = fs::symlink_metadata(&link_dir).map_err(|_| anyhow!(DAEMON_REQUIRED))?;
-    if !directory.file_type().is_dir() {
-        bail!(DAEMON_REQUIRED);
-    }
-    for name in ["addr", "gateway.token"] {
-        let metadata =
-            fs::symlink_metadata(link_dir.join(name)).map_err(|_| anyhow!(DAEMON_REQUIRED))?;
+fn check_link_files(layout: &crate::layout::Layout) -> Result<()> {
+    for path in [layout.link_addr(), layout.link_gateway_token()] {
+        let metadata = fs::symlink_metadata(&path).map_err(|_| anyhow!(DAEMON_REQUIRED))?;
         if !metadata.file_type().is_file() {
             bail!(DAEMON_REQUIRED);
         }

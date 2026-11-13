@@ -11,6 +11,10 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
+fn team_file(workspace: &Path) -> std::path::PathBuf {
+    std::fs::create_dir_all(workspace.join("config")).unwrap();
+    workspace.join("config/team.toml")
+}
 fn team_up_pty_args(home: &Path, team_file: &Path, detach: bool) -> Vec<String> {
     let mut args = vec![
         "--home".to_owned(),
@@ -92,7 +96,7 @@ fn run_binary(home: &Path, cwd: &Path, user_home: &Path, runtime: &Path, args: &
 }
 
 async fn gateway(dir: &Path, address: std::net::SocketAddr) -> Client {
-    let token = std::fs::read_to_string(dir.join("gateway.token")).expect("gateway token");
+    let token = std::fs::read_to_string(dir.join("run/gateway.token")).expect("gateway token");
     Client::connect_addr(address, token.trim())
         .await
         .expect("gateway connection")
@@ -105,7 +109,7 @@ async fn team_up_validates_remote_before_start_and_carries_it_to_the_session() {
     let user_home = tempfile::tempdir().unwrap();
     let runtime = tempfile::tempdir().unwrap();
     std::fs::write(
-        workspace.path().join("team.toml"),
+        team_file(workspace.path()),
         r#"
         [[session]]
         name = "plain"
@@ -122,7 +126,7 @@ async fn team_up_validates_remote_before_start_and_carries_it_to_the_session() {
         workspace.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--detach", "--file", "team.toml"],
+        &["team", "up", "--detach", "--file", "config/team.toml"],
     );
     assert!(!refused.status.success());
     assert!(
@@ -146,7 +150,7 @@ async fn team_up_validates_remote_before_start_and_carries_it_to_the_session() {
     };
     std::os::unix::fs::symlink(bwrap, dir.path().join("bwrap-path/bwrap")).unwrap();
     std::fs::write(
-        workspace.path().join("team.toml"),
+        team_file(workspace.path()),
         r#"
         team = "team-a"
         [[session]]
@@ -171,7 +175,7 @@ async fn team_up_validates_remote_before_start_and_carries_it_to_the_session() {
         workspace.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--detach", "--file", "team.toml"],
+        &["team", "up", "--detach", "--file", "config/team.toml"],
     );
     assert!(
         started.status.success(),
@@ -233,7 +237,7 @@ async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
     let runtime = tempfile::tempdir().unwrap();
 
     std::fs::write(
-        workspace.path().join("team.toml"),
+        team_file(workspace.path()),
         r#"
         team = "quiet"
         [[session]]
@@ -247,7 +251,7 @@ async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
         workspace.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--detach", "--file", "team.toml"],
+        &["team", "up", "--detach", "--file", "config/team.toml"],
     );
     assert!(plain.status.success());
     let plain_output = format!(
@@ -258,7 +262,7 @@ async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
     assert!(!plain_output.contains("remote messaging"));
 
     std::fs::write(
-        workspace.path().join("team.toml"),
+        team_file(workspace.path()),
         r#"
         team = "dry-run"
         [[session]]
@@ -275,7 +279,7 @@ async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
         workspace.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--dry-run", "--file", "team.toml"],
+        &["team", "up", "--dry-run", "--file", "config/team.toml"],
     );
     assert!(dry.status.success());
     let dry_output = format!(
@@ -286,7 +290,7 @@ async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
     assert!(!dry_output.contains("post this code in the control channel"));
 
     std::fs::write(
-        workspace.path().join("team.toml"),
+        team_file(workspace.path()),
         r#"
         [[session]]
         name = "unscoped-remote"
@@ -302,7 +306,7 @@ async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
         workspace.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--detach", "--file", "team.toml"],
+        &["team", "up", "--detach", "--file", "config/team.toml"],
     );
     assert!(unscoped.status.success());
     assert!(
@@ -320,7 +324,7 @@ async fn team_up_remote_waits_before_attaching() -> anyhow::Result<()> {
     let workspace = tempfile::tempdir()?;
     let user_home = tempfile::tempdir()?;
     let runtime = tempfile::tempdir()?;
-    let team_file = workspace.path().join("team.toml");
+    let team_file = team_file(workspace.path());
     std::fs::write(
         &team_file,
         r#"
@@ -367,7 +371,7 @@ async fn team_up_remote_without_team_name_still_waits_before_attaching() -> anyh
     let workspace = tempfile::tempdir()?;
     let user_home = tempfile::tempdir()?;
     let runtime = tempfile::tempdir()?;
-    let team_file = workspace.path().join("team.toml");
+    let team_file = team_file(workspace.path());
     std::fs::write(
         &team_file,
         r#"
@@ -413,7 +417,7 @@ async fn team_up_remote_detach_does_not_wait_for_enter() -> anyhow::Result<()> {
     let workspace = tempfile::tempdir()?;
     let user_home = tempfile::tempdir()?;
     let runtime = tempfile::tempdir()?;
-    let team_file = workspace.path().join("team.toml");
+    let team_file = team_file(workspace.path());
     std::fs::write(
         &team_file,
         r#"

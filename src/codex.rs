@@ -47,12 +47,12 @@ impl Endpoint {
     }
 }
 
-pub(crate) fn session_dir(state_dir: &Path, session_id: &str) -> PathBuf {
-    state_dir.join("codex").join(session_id)
+pub(crate) fn session_dir(layout: &crate::layout::Layout, session_id: &str) -> PathBuf {
+    layout.codex_session_dir(session_id)
 }
 
-pub(crate) fn socket_dir(state_dir: &Path, session_id: &str) -> PathBuf {
-    session_dir(state_dir, session_id).join(crate::confine::CODEX_SOCKET_SUBDIR)
+pub(crate) fn socket_dir(layout: &crate::layout::Layout, session_id: &str) -> PathBuf {
+    session_dir(layout, session_id).join(crate::confine::CODEX_SOCKET_SUBDIR)
 }
 
 fn guest_socket() -> String {
@@ -453,7 +453,7 @@ pub(crate) fn wire_argv(argv: Vec<String>, endpoint: &Endpoint) -> Vec<String> {
 /// Starts the session's app-server and waits until it accepts connections.
 pub(crate) async fn start(
     program: &str,
-    state_dir: &Path,
+    layout: &crate::layout::Layout,
     session_id: &str,
     cwd: Option<&Path>,
     env: &[(String, String)],
@@ -461,20 +461,20 @@ pub(crate) async fn start(
     plan: Option<&crate::confine::Plan>,
 ) -> anyhow::Result<Arc<Link>> {
     match plan {
-        Some(plan) => start_confined(program, state_dir, session_id, cwd, env, config, plan).await,
-        None => start_unconfined(program, state_dir, session_id, cwd, env, config).await,
+        Some(plan) => start_confined(program, layout, session_id, cwd, env, config, plan).await,
+        None => start_unconfined(program, layout, session_id, cwd, env, config).await,
     }
 }
 
 async fn start_unconfined(
     program: &str,
-    state_dir: &Path,
+    layout: &crate::layout::Layout,
     session_id: &str,
     cwd: Option<&Path>,
     env: &[(String, String)],
     config: Vec<String>,
 ) -> anyhow::Result<Arc<Link>> {
-    let dir = state_dir.join("codex");
+    let dir = layout.codex_dir();
     let socket = dir.join(format!("{session_id}.sock"));
     let prepare = {
         let (dir, socket) = (dir.clone(), socket.clone());
@@ -540,20 +540,20 @@ async fn start_unconfined(
 
 async fn start_confined(
     program: &str,
-    state_dir: &Path,
+    layout: &crate::layout::Layout,
     session_id: &str,
     cwd: Option<&Path>,
     env: &[(String, String)],
     config: Vec<String>,
     plan: &crate::confine::Plan,
 ) -> anyhow::Result<Arc<Link>> {
-    let host_dir = socket_dir(state_dir, session_id);
+    let host_dir = socket_dir(layout, session_id);
     let guest = guest_socket();
     let endpoint = Endpoint::Confined {
         host_dir: host_dir.clone(),
         guest: format!("unix://{guest}"),
     };
-    let prepare_dir = session_dir(state_dir, session_id);
+    let prepare_dir = session_dir(layout, session_id);
     tokio::task::spawn_blocking(move || reset_socket_dir(prepare_dir)).await??;
     let mut command_argv = vec![
         program.to_owned(),

@@ -224,7 +224,7 @@ async fn session_tokens_cannot_confine_and_admin_confine_rejects_invalid_targets
     std::fs::create_dir_all(&bwrap_dir).unwrap();
     symlink(real_bwrap, bwrap_dir.join("bwrap")).unwrap();
     let daemon = Daemon::start(DaemonConfig {
-        state_dir: dir.path().to_path_buf(),
+        root: dir.path().to_path_buf(),
         listen: vec!["127.0.0.1:0".parse().unwrap()],
         host_name: Some("host-a".into()),
         limits: Limits::default(),
@@ -354,7 +354,7 @@ async fn attach_top_rows_acknowledges_and_resets_origin() {
     let (dir, daemon) = common::start_daemon().await;
     let mut client = Client::connect(dir.path()).await.unwrap();
     let id = create(&mut client, &["cat"], vec![]).await;
-    let token = std::fs::read_to_string(dir.path().join("admin.token")).unwrap();
+    let token = std::fs::read_to_string(dir.path().join("run/admin.token")).unwrap();
     for top_rows in [Some(9), Some(8), Some(1), Some(0), None] {
         let mut socket = TcpStream::connect(daemon.addrs()[0]).await.unwrap();
         socket
@@ -410,7 +410,7 @@ async fn resize_and_redraw_preserve_top_rows_origin() {
     let (dir, daemon) = common::start_daemon().await;
     let mut client = Client::connect(dir.path()).await.unwrap();
     let id = create(&mut client, &["cat"], vec![]).await;
-    let token = std::fs::read_to_string(dir.path().join("admin.token")).unwrap();
+    let token = std::fs::read_to_string(dir.path().join("run/admin.token")).unwrap();
     let mut socket = TcpStream::connect(daemon.addrs()[0]).await.unwrap();
     socket
         .write_all(&encode_frame(&serde_json::to_vec(&Request::Hello { token }).unwrap()).unwrap())
@@ -1431,9 +1431,9 @@ async fn state_is_owner_only_and_exclusively_locked() {
     let (dir, daemon) = common::start_daemon().await;
     assert_eq!(
         std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
-        0o700
+        0o755
     );
-    for file in ["admin.token", "addr"] {
+    for file in ["run/admin.token", "run/addr"] {
         assert_eq!(
             std::fs::metadata(dir.path().join(file))
                 .unwrap()
@@ -1443,18 +1443,15 @@ async fn state_is_owner_only_and_exclusively_locked() {
             0o600
         );
     }
-    for file in ["gateway.token", "addr"] {
+    for file in ["run/gateway.token", "run/addr"] {
+        let path = dir.path().join(file);
         assert_eq!(
-            std::fs::metadata(dir.path().join("link").join(file))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
     }
     let second = Daemon::start(DaemonConfig {
-        state_dir: dir.path().to_owned(),
+        root: dir.path().to_owned(),
         listen: vec!["127.0.0.1:0".parse().unwrap()],
         host_name: None,
         limits: a2amx::messaging::Limits::default(),
@@ -1464,17 +1461,42 @@ async fn state_is_owner_only_and_exclusively_locked() {
     .await;
     assert_eq!(
         second.err().unwrap().to_string(),
-        "another a2amx daemon is running for this state dir"
+        "another a2amx daemon is running for this a2amx directory"
     );
     daemon.shutdown().await.unwrap();
-    assert!(!dir.path().join("addr").exists());
-    assert!(!dir.path().join("link/addr").exists());
+    assert!(!dir.path().join("run/addr").exists());
+    assert!(!dir.path().join("run/link/addr").exists());
+}
+
+#[tokio::test]
+async fn fresh_daemon_tree_uses_layout_paths() {
+    let (dir, daemon) = common::start_daemon().await;
+    let root_entries = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = ["config", "log", "run", "state"]
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(expected.is_subset(&root_entries));
+    for file in [
+        "run/addr",
+        "run/admin.token",
+        "run/daemon.lock",
+        "run/link/addr",
+        "run/link/gateway.token",
+        "state/messages.db",
+    ] {
+        assert!(dir.path().join(file).is_file(), "missing {file}");
+    }
+    daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn admin_version_request_reports_the_build_version() {
     let (dir, daemon) = common::start_daemon().await;
-    let token = std::fs::read_to_string(dir.path().join("admin.token")).unwrap();
+    let token = std::fs::read_to_string(dir.path().join("run/admin.token")).unwrap();
     let mut socket = TcpStream::connect(daemon.addrs()[0]).await.unwrap();
     socket
         .write_all(&encode_frame(&serde_json::to_vec(&Request::Hello { token }).unwrap()).unwrap())
@@ -1496,7 +1518,7 @@ async fn admin_version_request_reports_the_build_version() {
 #[tokio::test]
 async fn malformed_control_request_is_recoverable_on_an_authenticated_socket() {
     let (dir, daemon) = common::start_daemon().await;
-    let token = std::fs::read_to_string(dir.path().join("admin.token")).unwrap();
+    let token = std::fs::read_to_string(dir.path().join("run/admin.token")).unwrap();
     let mut socket = TcpStream::connect(daemon.addrs()[0]).await.unwrap();
     socket
         .write_all(&encode_frame(&serde_json::to_vec(&Request::Hello { token }).unwrap()).unwrap())
@@ -1962,7 +1984,7 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
     let bwrap_dir = home.join("bwrap-path");
     assert!(
         Daemon::start(DaemonConfig {
-            state_dir: home.clone(),
+            root: home.clone(),
             listen: vec!["127.0.0.1:0".parse().unwrap(), address],
             host_name: None,
             limits: a2amx::messaging::Limits::default(),
@@ -1973,9 +1995,9 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
         .is_err()
     );
     assert!(!home.join("addr").exists());
-    assert!(!home.join("admin.token").exists());
-    assert!(!home.join("gateway.token").exists());
-    assert!(!home.join("link/gateway.token").exists());
+    assert!(!home.join("run/admin.token").exists());
+    assert!(!home.join("run/gateway.token").exists());
+    assert!(!home.join("run/link/gateway.token").exists());
     for path in [home.clone(), temp.path().join("parent")] {
         assert_eq!(
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
@@ -1984,7 +2006,7 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
     }
     std::fs::create_dir_all(&bwrap_dir).unwrap();
     let daemon = Daemon::start(DaemonConfig {
-        state_dir: home,
+        root: home,
         listen: vec!["127.0.0.1:0".parse().unwrap()],
         host_name: None,
         limits: a2amx::messaging::Limits::default(),
@@ -2134,7 +2156,7 @@ async fn malformed_stream_frame_disconnects_without_killing_the_session() {
     let (dir, daemon) = common::start_daemon().await;
     let mut client = Client::connect(dir.path()).await.unwrap();
     let id = create(&mut client, &["cat"], vec![]).await;
-    let token = std::fs::read_to_string(dir.path().join("admin.token")).unwrap();
+    let token = std::fs::read_to_string(dir.path().join("run/admin.token")).unwrap();
     let mut socket = TcpStream::connect(daemon.addrs()[0]).await.unwrap();
     socket
         .write_all(&encode_frame(&serde_json::to_vec(&Request::Hello { token }).unwrap()).unwrap())
@@ -2267,7 +2289,7 @@ fn newly_created_parents_are_private_even_with_a_restrictive_umask() {
         let bwrap_dir = path.join("bwrap-path");
         let daemon = runtime
             .block_on(Daemon::start(DaemonConfig {
-                state_dir: path.clone(),
+                root: path.clone(),
                 listen: vec!["127.0.0.1:0".parse().unwrap()],
                 host_name: None,
                 limits: a2amx::messaging::Limits::default(),
@@ -2282,7 +2304,7 @@ fn newly_created_parents_are_private_even_with_a_restrictive_umask() {
                 0o700
             );
         }
-        for file in ["admin.token", "addr"] {
+        for file in ["run/admin.token", "run/addr"] {
             assert_eq!(
                 std::fs::metadata(path.join(file))
                     .unwrap()

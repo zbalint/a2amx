@@ -185,7 +185,7 @@ async fn show_reports_auto_reasons_and_explicit_grants() {
     )
     .expect("git config");
     std::fs::write(
-        state.path().join("team.toml"),
+        state.path().join("config/team.toml"),
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\n[session.confine]\ngrants = [\"cargo\"]\n",
     )
     .expect("team file");

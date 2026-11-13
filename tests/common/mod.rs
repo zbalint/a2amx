@@ -55,7 +55,7 @@ pub async fn start_confined_daemon_with_limits(limits: Limits) -> Option<(TempDi
     std::fs::create_dir_all(&bwrap_dir).expect("bwrap directory");
     symlink(real_bwrap, bwrap_dir.join("bwrap")).expect("bwrap symlink");
     let daemon = Daemon::start(DaemonConfig {
-        state_dir: dir.path().to_path_buf(),
+        root: dir.path().to_path_buf(),
         listen: vec!["127.0.0.1:0".parse().expect("loopback address")],
         host_name: Some("host-a".into()),
         limits,
@@ -168,7 +168,7 @@ pub async fn create_confined(
 }
 
 pub async fn gateway(dir: &Path, address: SocketAddr) -> Client {
-    let token = std::fs::read_to_string(dir.join("gateway.token")).expect("gateway token");
+    let token = std::fs::read_to_string(dir.join("run/gateway.token")).expect("gateway token");
     Client::connect_addr(address, token.trim())
         .await
         .expect("gateway connection")
@@ -350,7 +350,7 @@ pub async fn start_daemon_in(dir: &Path, host_name: Option<&str>, limits: Limits
     std::fs::create_dir_all(&bwrap_dir).expect("bwrap path directory");
     loop {
         let started = Daemon::start(DaemonConfig {
-            state_dir: dir.to_path_buf(),
+            root: dir.to_path_buf(),
             listen: vec!["127.0.0.1:0".parse().expect("loopback address")],
             host_name: host_name.map(str::to_owned),
             limits,

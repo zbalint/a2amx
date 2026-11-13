@@ -70,9 +70,8 @@ other authors, other servers, and direct messages.
 
 ## Configure the gateway
 
-The state directory is selected in this order: `--home`, `A2AMX_HOME`,
-`$XDG_STATE_HOME/a2amx`, then `$HOME/.local/state/a2amx`. The examples below use `<state>` for
-that directory.
+The a2amx root directory is selected in this order: `--home`, `A2AMX_HOME`, then `$HOME/.a2amx`.
+The examples below use `<root>` for that directory.
 
 First store the Discord bot token. Type or paste the token and press Enter. The command prints
 nothing; when standard input is a terminal, A2AMX disables echo while reading it:
@@ -81,14 +80,14 @@ nothing; when standard input is a terminal, A2AMX disables echo while reading it
 a2amx gateway token
 ```
 
-It stores the value as `<state>/gateway/discord.token` with mode `0600`.
-Create `<state>/gateway/config.toml` yourself. The gateway state directory is created by the
-token command. Replace `<state>` with the directory selected above; when invoking A2AMX with an
+It stores the value as `<root>/config/secrets/discord.token` with mode `0600`.
+Create `<root>/config/gateway.toml` yourself. The gateway state tree under `<root>/state/gateway/` is created by the
+token command. Replace `<root>` with the directory selected above; when invoking A2AMX with an
 explicit `--home`, use that same directory:
 
 ```sh
-install -d -m 700 "<state>/gateway"
-install -m 600 /dev/null "<state>/gateway/config.toml"
+install -d -m 700 "<root>/config/secrets"
+install -m 600 /dev/null "<root>/config/gateway.toml"
 ```
 
 Put the server ID and, optionally, names and timing overrides in the file:
@@ -129,13 +128,13 @@ pairing code, and waits for that code to appear in the control channel. Post the
 Discord account that should be paired. The terminal then asks whether to bind that Discord
 account; answer `y` or `yes`. In the default flow a decline ends with `pairing not confirmed`, followed by
 `pairing did not complete; the gateway was not started`. The code expires after 10 minutes,
-and a successful pairing is saved in `<state>/gateway/pairing.json` with owner-only permissions.
+and a successful pairing is saved in `<root>/state/gateway/pairing.json` with owner-only permissions.
 
 If a pairing already exists, `--pair` first warns which Discord account and server are currently
 paired, then asks `replace Discord account <old-id> with <new-id>? [y/N]`. Confirming writes the
 new pairing, prints `paired with Discord account <new-id>; starting the gateway in the background`,
 and then hands the lock to the background gateway. `up --pair` returns after this hand-over.
-Moving to a different Discord server requires deleting `<state>/gateway/pairing.json` first,
+Moving to a different Discord server requires deleting `<root>/state/gateway/pairing.json` first,
 because the gateway refuses a pairing whose server differs from `config.toml`.
 
 The pairing confirmation is read from standard input; answer `y` or `yes` at the terminal. The
@@ -148,17 +147,17 @@ a2amx gateway up
 
 ## Start the gateway
 
-The daemon must be running before `gateway up`. `up` checks that `<state>/link/addr` and
-`<state>/link/gateway.token` exist as regular files. If either is missing, it reports:
+The daemon must be running before `gateway up`. `up` checks that `<root>/run/link/addr` and
+`<root>/run/link/gateway.token` exist as regular files. If either is missing, it reports:
 
 ```text
-the a2amx daemon is not running in this state directory; start it first
+the a2amx daemon is not running in this a2amx directory; start it first
 ```
 
 Those files can be stale after a daemon crash. The relay's first daemon connection is not retried,
 so a stale address causes the relay to exit with a connection error at startup. Once the first
 connection succeeds, a later daemon outage leaves the relay running: it answers the paired
-account with `a2amx is not reachable right now` and reconnects through `<state>/link/` every
+account with `a2amx is not reachable right now` and reconnects through `<root>/run/link/` every
 `reconnect_ms`.
 
 The control category and channel appear at startup. Team categories and agent channels appear
@@ -172,9 +171,8 @@ the pairing step in the foreground, then hands over to the same background launc
 `--pair --foreground` to keep both pairing and message delivery in this terminal. A declined or
 timed-out pairing leaves no gateway running. `gateway status` reports whether the lock is held,
 and `gateway stop` performs a graceful background stop. The log is
-`<state>/gateway/gateway.log`, defaults to level `warn`, and follows `RUST_LOG` when set. There is
-no rotation; delete or truncate it only while the gateway is stopped. One gateway may run per
-state directory. A foreground gateway's stop is hard, so one message may be relayed twice after a
+`<root>/log/gateway.log`, defaults to level `warn`, and follows `RUST_LOG` when set. There is
+no rotation; one gateway per a2amx root directory. A foreground gateway's stop is hard, so one message may be relayed twice after a
 restart.
 
 ## Turn it on for agents and start the lease
@@ -262,9 +260,9 @@ traffic.
 
 | The gateway can see | The gateway cannot see |
 | --- | --- |
-| Read and write `<state>/gateway/` (including its bot token, config, pairing and dedup state) | `<state>/admin.token` |
-| Read `<state>/link/` (the daemon address and gateway token) | The rest of the state directory |
-| A 1 GiB temporary `/tmp` | The home directory, `/var`, `/opt`, and the rest of `/run` |
+| Read and write `<root>/config/gateway.toml`, `<root>/config/secrets/discord.token`, and `<root>/state/gateway/` | `<root>/run/admin.token` |
+| Read `<root>/run/link/` (the daemon address and gateway token) | The rest of the a2amx directory |
+| A 1 GiB temporary `/tmp` | The a2amx directory, `/var`, `/opt`, and the rest of `/run` |
 | Read-only `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`, and its own executable | Other users' files |
 | The file targeted by `/etc/resolv.conf` when that target is outside `/etc` and `/usr` | A host-wide process view; `/proc` is its own PID namespace |
 | A minimal `/dev` and its own processes | Environment variables other than the configured `PATH` and optional `RUST_LOG` (bubblewrap also supplies `PWD` for the gateway working directory) |
@@ -307,12 +305,12 @@ yet tested with A2AMX.
 | Message | Cause | Fix |
 | --- | --- | --- |
 | `bubblewrap is required to run the gateway; it never runs unconfined` | Bubblewrap is missing or its preflight failed. | Install a working `bwrap` and make it available on the daemon/gateway launch `PATH`; there is no unconfined fallback. |
-| `the a2amx daemon is not running in this state directory; start it first` | `<state>/link/` or one of its required regular files is missing. | Start the daemon for this state directory, then run `gateway up` again. |
+| `the a2amx daemon is not running in this a2amx directory; start it first` | `<root>/run/link/` or one of its required regular files is missing. | Start the daemon for this a2amx home, then run `gateway up` again. |
 | `not paired; run with --pair` | No `pairing.json` exists. If it exists but is malformed, insecure, or mismatched, its own error names the bad file. | Run `a2amx gateway up --pair` interactively and redeem a pairing code. |
 | `server has N members, the limit is M` | The approximate Discord member count is above `max_members`; at startup the relay exits. | Remove extra members or raise `max_members` deliberately, then restart the gateway. During a later check, wait for the count to fall; the relay pauses while it is above the limit. |
 | `that code is not valid` | The lease code is wrong, expired, already used, or all pending codes were cleared after five wrong attempts. | Run `a2amx team up` at the computer and post its new code. |
 | `send the code that a2amx team up printed` | The control-channel text is not a 12-character lowercase hexadecimal lease code. | Copy the exact code printed by `a2amx team up`. |
-| `a2amx is not reachable right now` | The gateway was connected, but the daemon is currently unreachable. | Check the daemon and `<state>/link/`; the relay retries through `link/` every `reconnect_ms`. |
+| `a2amx is not reachable right now` | The gateway was connected, but the daemon is currently unreachable. | Check the daemon and `<root>/run/link/`; the relay retries through `link/` every `reconnect_ms`. |
 | `cannot resolve /etc/resolv.conf; the gateway needs DNS` | The resolver path has another stat error, or it is a symlink whose target cannot be resolved or stat-ed or is not a regular file. A missing or non-symlink path starts without a resolver bind; targets under `/etc` or `/usr` need no extra bind. | Repair the path or target, then run `gateway up` again. |
 | `secure file permissions are too broad` | A token, config, or pairing file has group or other permission bits. | Make the file a regular, owner-only `0600` file; do not replace it with a symlink. |
 | `pairing not confirmed` | The interactive pairing prompt was declined or did not receive `y`/`yes`. | Run `a2amx gateway up --pair` in a terminal and confirm the paired account. |
@@ -320,7 +318,7 @@ yet tested with A2AMX.
 | `pairing did not complete; the gateway was not started` | Pairing declined, timed out, or the pairing sandbox exited before confirmation. | Retry `a2amx gateway up --pair`; no background gateway was started. |
 | `gateway close 4013: invalid intents` or `gateway close 4014: disallowed intents` | Discord rejected the requested gateway intents. | Enable the guilds, guild messages, and Message Content intents for the bot, then pair/start again. |
 | `the gateway is already running` | Another gateway holds the state-directory lock. | Run `a2amx gateway stop`, then retry. |
-| `the gateway exited during startup` | The relay failed before printing its readiness line. | Read the sanitized startup tail in `<state>/gateway/gateway.log`, fix the cause, and retry. |
+| `the gateway exited during startup` | The relay failed before printing its readiness line. | Read the sanitized startup tail in `<root>/log/gateway.log`, fix the cause, and retry. |
 | `the gateway did not become ready within 10s` | Startup is slow or the log was replaced before readiness. | Check `gateway status` and the log; stop it if needed, then retry. |
 | `the gateway holds the lock but its process N is gone` | The sandbox outer process was killed and its child is orphaned. | Run the printed `kill -TERM -- -N` recovery command, then retry. |
 
@@ -333,17 +331,17 @@ pairing writes use mode `0600`; the daemon's state files and dedup file use the 
 
 | Path | Owner and mode | Purpose |
 | --- | --- | --- |
-| `<state>/gateway.lock` | Current user, `0600` | Advisory lock for one gateway per state directory; outside the sandbox bind |
-| `<state>/gateway.pid` | Current user, `0600` | Launcher-owned pid target for `gateway stop`; outside the sandbox bind |
-| `<state>/gateway/gateway.log` | Current user, `0600` | Background startup and relay log; opened hardened by the launcher |
-| `<state>/gateway/discord.token` | Checked by `read_secure` above | Discord bot token entered with `gateway token` |
-| `<state>/gateway/config.toml` | Checked by `read_secure` above | Gateway configuration |
-| `<state>/gateway/pairing.json` | Checked by `read_secure` above | Paired Discord server/user IDs |
-| `<state>/gateway/seen.json` | Current user, `0600` | Last handled Discord message ID per channel for deduplication |
-| `<state>/link/addr` | Daemon user, `0600` | Daemon address exposed to the gateway |
-| `<state>/link/gateway.token` | Daemon user, `0600` | Gateway-authentication token exposed to the gateway |
-| `<state>/gateway.token` | Daemon user, `0600` | Daemon-side copy of the gateway-authentication token |
-| `<state>/addr` | Daemon user, `0600` | Daemon address for local clients |
+| `<root>/run/gateway.lock` | Current user, `0600` | Advisory lock for one gateway per a2amx directory; outside the sandbox bind |
+| `<root>/run/gateway.pid` | Current user, `0600` | Launcher-owned pid target for `gateway stop`; outside the sandbox bind |
+| `<root>/log/gateway.log` | Current user, `0600` | Background startup and relay log; opened hardened by the launcher |
+| `<root>/config/secrets/discord.token` | Checked by `read_secure` above | Discord bot token entered with `gateway token` |
+| `<root>/config/gateway.toml` | Checked by `read_secure` above | Gateway configuration |
+| `<root>/state/gateway/pairing.json` | Checked by `read_secure` above | Paired Discord server/user IDs |
+| `<root>/state/gateway/seen.json` | Current user, `0600` | Last handled Discord message ID per channel for deduplication |
+| `<root>/run/link/addr` | Daemon user, `0600` | Daemon address exposed to the gateway |
+| `<root>/run/link/gateway.token` | Daemon user, `0600` | Gateway-authentication token exposed to the gateway |
+| `<root>/run/gateway.token` | Daemon user, `0600` | Daemon-side copy of the gateway-authentication token |
+| `<root>/run/addr` | Daemon user, `0600` | Daemon address for local clients |
 
 Do not share `admin.token`, `gateway.token`, `link/gateway.token`, or the Discord bot token. The
 sandbox is designed to expose only the gateway-specific files listed above.

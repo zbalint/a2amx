@@ -53,8 +53,8 @@ needed; otherwise, open the harness directory with `write`. See
 
 Build and test from the repository with `cargo build` and `cargo test`. Install a release
 copy with `scripts/install.sh`, then run the daemon from `~/.a2amx/bin/a2amx` and point
-your `amx` alias or launcher at that installed binary. `A2AMX_INSTALL_DIR` overrides the
-install directory; the state directory remains separate.
+your `amx` alias or launcher at that installed binary. `A2AMX_HOME` overrides the
+installation directory.
 
 Never run the daemon from `target/`: development builds replace that executable and can
 break the MCP command of a later Codex session. Install freely; the atomic install leaves

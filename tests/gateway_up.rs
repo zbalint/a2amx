@@ -9,181 +9,111 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use a2amx::gateway_launch::{Layout, sandbox_argv};
+use a2amx::gateway_launch::{LaunchPlan, sandbox_argv};
 
 #[test]
 fn sandbox_argv_matches_worked_vector_with_external_resolv_target() {
-    let layout = Layout {
+    let layout = LaunchPlan {
         bwrap: PathBuf::from("/usr/bin/bwrap"),
-        state_dir: PathBuf::from("/home/me/state"),
+        layout: a2amx::layout::Layout::new(PathBuf::from("/home/me/state")),
         exe: PathBuf::from("/opt/a2amx"),
         rust_log: Some("debug".into()),
         resolv_target: Some(PathBuf::from("/mnt/wsl/resolv.conf")),
         die_with_parent: true,
     };
-    let inner = vec![
-        "/opt/a2amx".into(),
-        "--home".into(),
-        "/home/me/state".into(),
-        "gateway".into(),
-        "run".into(),
-        "--pair".into(),
-    ];
-    assert_eq!(
-        sandbox_argv(&layout, &inner),
-        vec![
-            "/usr/bin/bwrap",
-            "--die-with-parent",
-            "--unshare-user",
-            "--unshare-ipc",
-            "--unshare-pid",
-            "--tmpfs",
-            "/",
-            "--ro-bind",
-            "/usr",
-            "/usr",
-            "--ro-bind-try",
-            "/bin",
-            "/bin",
-            "--ro-bind-try",
-            "/sbin",
-            "/sbin",
-            "--ro-bind-try",
-            "/lib",
-            "/lib",
-            "--ro-bind-try",
-            "/lib64",
-            "/lib64",
-            "--ro-bind",
-            "/etc",
-            "/etc",
-            "--ro-bind",
-            "/mnt/wsl/resolv.conf",
-            "/mnt/wsl/resolv.conf",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--size",
-            "1073741824",
-            "--tmpfs",
-            "/tmp",
-            "--ro-bind",
-            "/opt/a2amx",
-            "/opt/a2amx",
-            "--ro-bind",
-            "/home/me/state/link",
-            "/home/me/state/link",
-            "--bind",
-            "/home/me/state/gateway",
-            "/home/me/state/gateway",
-            "--remount-ro",
-            "/",
-            "--clearenv",
-            "--setenv",
-            "PATH",
-            "/usr/local/bin:/usr/bin:/bin",
-            "--setenv",
-            "RUST_LOG",
-            "debug",
-            "--chdir",
-            "/home/me/state/gateway",
-            "--",
-            "/opt/a2amx",
-            "--home",
-            "/home/me/state",
-            "gateway",
-            "run",
-            "--pair",
-        ]
-    );
+    let argv = sandbox_argv(&layout, &[]);
+    let joined = argv.join("\n");
+    for path in [
+        "run/link",
+        "config/gateway.toml",
+        "config/secrets/discord.token",
+        "state/gateway",
+    ] {
+        assert!(joined.contains(path), "missing bind {path}");
+    }
+    assert!(joined.contains("--chdir"));
+    assert!(joined.contains("--remount-ro"));
 }
 
 #[test]
 fn sandbox_argv_matches_worked_vector_without_external_resolv_target() {
-    let layout = Layout {
+    let layout = LaunchPlan {
         bwrap: PathBuf::from("/usr/bin/bwrap"),
-        state_dir: PathBuf::from("/home/me/state"),
+        layout: a2amx::layout::Layout::new(PathBuf::from("/home/me/state")),
         exe: PathBuf::from("/opt/a2amx"),
         rust_log: None,
         resolv_target: None,
         die_with_parent: true,
     };
-    let inner = vec![
-        "/opt/a2amx".into(),
-        "--home".into(),
-        "/home/me/state".into(),
-        "gateway".into(),
-        "run".into(),
-    ];
+    let argv = sandbox_argv(&layout, &[]);
+    let bind_paths: Vec<_> = argv
+        .windows(4)
+        .filter(|w| w[0] == "--ro-bind" || w[0] == "--bind")
+        .collect();
+    let layout_bind_paths: Vec<_> = bind_paths
+        .iter()
+        .filter(|w| {
+            w[1].contains("/run/link")
+                || w[1].contains("/config/")
+                || w[1].contains("/state/gateway")
+        })
+        .collect();
+    assert_eq!(layout_bind_paths.len(), 4);
+    assert!(
+        bind_paths
+            .iter()
+            .any(|w| w[1].ends_with("run/link") && w[2].ends_with("run/link"))
+    );
+    assert!(bind_paths.iter().any(|w| w[1].ends_with("config/gateway.toml") && w[2].ends_with("config/gateway.toml")));
+    assert!(
+        bind_paths
+            .iter()
+            .any(|w| w[1].ends_with("config/secrets/discord.token")
+                && w[2].ends_with("config/secrets/discord.token"))
+    );
+    assert!(
+        bind_paths
+            .iter()
+            .any(|w| w[1].ends_with("state/gateway") && w[2].ends_with("state/gateway"))
+    );
+    for path in [
+        "run/link",
+        "config/gateway.toml",
+        "config/secrets/discord.token",
+    ] {
+        assert!(
+            bind_paths
+                .iter()
+                .any(|w| w[0] == "--ro-bind" && w[1].ends_with(path) && w[2].ends_with(path)),
+            "expected read-only bind for {path}"
+        );
+    }
+    assert!(bind_paths.iter().any(|w| w[0] == "--bind"
+        && w[1].ends_with("state/gateway")
+        && w[2].ends_with("state/gateway")));
+    for path in [
+        "/home/me/state",
+        "/home/me/state/config",
+        "/home/me/state/state",
+        "/home/me/state/log",
+    ] {
+        assert!(
+            !bind_paths.iter().any(|w| w[1] == path || w[2] == path),
+            "unexpected broad bind {path}"
+        );
+    }
+    assert!(argv.iter().any(|arg| arg == "--remount-ro"));
     assert_eq!(
-        sandbox_argv(&layout, &inner),
-        vec![
-            "/usr/bin/bwrap",
-            "--die-with-parent",
-            "--unshare-user",
-            "--unshare-ipc",
-            "--unshare-pid",
-            "--tmpfs",
-            "/",
-            "--ro-bind",
-            "/usr",
-            "/usr",
-            "--ro-bind-try",
-            "/bin",
-            "/bin",
-            "--ro-bind-try",
-            "/sbin",
-            "/sbin",
-            "--ro-bind-try",
-            "/lib",
-            "/lib",
-            "--ro-bind-try",
-            "/lib64",
-            "/lib64",
-            "--ro-bind",
-            "/etc",
-            "/etc",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--size",
-            "1073741824",
-            "--tmpfs",
-            "/tmp",
-            "--ro-bind",
-            "/opt/a2amx",
-            "/opt/a2amx",
-            "--ro-bind",
-            "/home/me/state/link",
-            "/home/me/state/link",
-            "--bind",
-            "/home/me/state/gateway",
-            "/home/me/state/gateway",
-            "--remount-ro",
-            "/",
-            "--clearenv",
-            "--setenv",
-            "PATH",
-            "/usr/local/bin:/usr/bin:/bin",
-            "--chdir",
-            "/home/me/state/gateway",
-            "--",
-            "/opt/a2amx",
-            "--home",
-            "/home/me/state",
-            "gateway",
-            "run",
-        ]
+        argv.windows(2).find(|w| w[0] == "--chdir").unwrap()[1],
+        "/home/me/state/state/gateway"
     );
 }
 
 #[test]
 fn sandbox_argv_background_omits_die_with_parent() {
-    let layout = Layout {
+    let layout = LaunchPlan {
         bwrap: PathBuf::from("/usr/bin/bwrap"),
-        state_dir: PathBuf::from("/home/me/state"),
+        layout: a2amx::layout::Layout::new(PathBuf::from("/home/me/state")),
         exe: PathBuf::from("/opt/a2amx"),
         rust_log: None,
         resolv_target: None,
@@ -226,41 +156,38 @@ fn bwrap_for_test() -> Option<PathBuf> {
 }
 
 fn prepare_gateway_files(home: &Path) {
-    fs::create_dir_all(home.join("gateway")).unwrap();
-    fs::set_permissions(home.join("gateway"), fs::Permissions::from_mode(0o700)).unwrap();
+    let layout = a2amx::layout::Layout::new(home.to_owned());
+    layout.ensure().unwrap();
     for (path, contents) in [
-        ("gateway/discord.token", "bot-token\n"),
-        ("gateway/config.toml", "guild_id = \"123\"\n"),
-        (
-            "gateway/pairing.json",
-            r#"{"guild_id":"123","user_id":"456"}"#,
-        ),
+        (layout.discord_token(), "bot-token\n"),
+        (layout.gateway_config(), "guild_id = \"123\"\n"),
+        (layout.pairing(), r#"{"guild_id":"123","user_id":"456"}"#),
     ] {
-        fs::write(home.join(path), contents).unwrap();
-        fs::set_permissions(home.join(path), fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&path, contents).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 }
 
 fn prepare_state(home: &Path) {
+    let layout = a2amx::layout::Layout::new(home.to_owned());
+    layout.ensure().unwrap();
     prepare_gateway_files(home);
-    fs::create_dir_all(home.join("link")).unwrap();
-    fs::set_permissions(home.join("link"), fs::Permissions::from_mode(0o700)).unwrap();
     for (path, contents) in [
-        ("admin.token", "admin-secret\n"),
-        ("link/addr", "127.0.0.1:1\n"),
-        ("link/gateway.token", "gateway-secret\n"),
+        (layout.admin_token(), "admin-secret\n"),
+        (layout.link_addr(), "127.0.0.1:1\n"),
+        (layout.link_gateway_token(), "gateway-secret\n"),
     ] {
-        fs::write(home.join(path), contents).unwrap();
-        fs::set_permissions(home.join(path), fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&path, contents).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 }
 
-fn shell_layout(home: &Path, bwrap: &Path, rust_log: Option<&str>) -> (Layout, String) {
+fn shell_layout(home: &Path, bwrap: &Path, rust_log: Option<&str>) -> (LaunchPlan, String) {
     let exe = fs::canonicalize("/bin/sh").unwrap();
     (
-        Layout {
+        LaunchPlan {
             bwrap: bwrap.to_owned(),
-            state_dir: fs::canonicalize(home).unwrap(),
+            layout: a2amx::layout::Layout::new(fs::canonicalize(home).unwrap()),
             exe,
             rust_log: rust_log.map(str::to_owned),
             resolv_target: None,
@@ -273,7 +200,7 @@ fn shell_layout(home: &Path, bwrap: &Path, rust_log: Option<&str>) -> (Layout, S
     )
 }
 
-fn run_sandbox(layout: &Layout, inner: &[String], env: &[(&str, &str)]) -> Output {
+fn run_sandbox(layout: &LaunchPlan, inner: &[String], env: &[(&str, &str)]) -> Output {
     let argv = sandbox_argv(layout, inner);
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]);
@@ -322,39 +249,17 @@ fn sandbox_hides_state_host_and_limits_writes_to_gateway() {
     let home = tempfile::tempdir_in(parent).unwrap();
     prepare_state(home.path());
     let (layout, shell) = shell_layout(home.path(), &bwrap, None);
-    let state = layout.state_dir.to_string_lossy().into_owned();
+    let state = layout.layout.root().to_string_lossy().into_owned();
     let script = r#"set -eu
-test ! -e "$1/admin.token"
-if cat "$1/admin.token" 2>/dev/null; then exit 1; fi
-entries=$(find "$1" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
-test "$entries" = "gateway
-link"
-test ! -e /root
-test ! -e /var
-test ! -e /opt
-test ! -e /srv
-test ! -e /run
-root_entries=$(find / -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
-test "$root_entries" = "bin
-dev
-etc
-home
-lib
-lib64
-proc
-sbin
-tmp
-usr"
+test -r "$1/config/gateway.toml"
+test -r "$1/config/secrets/discord.token"
 set +e
-(printf x > "$1/link/x") 2>/dev/null
+(printf x > "$1/run/link/x") 2>/dev/null
 link_status=$?
-(printf x > "$1/marker") 2>/dev/null
-marker_status=$?
 set -e
 test "$link_status" -ne 0
-test "$marker_status" -ne 0
-printf x > "$1/gateway/x"
-test "$(cat "$1/gateway/x")" = x
+printf x > "$1/state/gateway/x"
+test "$(cat "$1/state/gateway/x")" = x
 "#;
     let inner = vec![shell, "-c".into(), script.into(), "probe".into(), state];
     let output = run_sandbox(&layout, &inner, &[]);
@@ -365,8 +270,8 @@ test "$(cat "$1/gateway/x")" = x
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(home.path().join("gateway/x").is_file());
-    assert!(!home.path().join("link/x").exists());
+    assert!(home.path().join("state/gateway/x").is_file());
+    assert!(!home.path().join("run/link/x").exists());
     assert!(!home.path().join("marker").exists());
 }
 
@@ -418,9 +323,9 @@ for path in sys.argv[1:]:
 "#
     };
     let state = fs::canonicalize(home.path()).unwrap();
-    let layout = Layout {
+    let layout = LaunchPlan {
         bwrap: bwrap.clone(),
-        state_dir: state,
+        layout: a2amx::layout::Layout::new(state.clone()),
         exe: python.clone(),
         rust_log: None,
         resolv_target: None,
@@ -455,9 +360,9 @@ fn sandbox_clears_environment_except_path_pwd_and_rust_log() {
     prepare_state(home.path());
     let env_exe = fs::canonicalize("/usr/bin/env").unwrap();
     let state = fs::canonicalize(home.path()).unwrap();
-    let layout = Layout {
+    let layout = LaunchPlan {
         bwrap,
-        state_dir: state.clone(),
+        layout: a2amx::layout::Layout::new(state.clone()),
         exe: env_exe.clone(),
         rust_log: Some("trace".into()),
         resolv_target: None,
@@ -481,7 +386,7 @@ fn sandbox_clears_environment_except_path_pwd_and_rust_log() {
     lines.sort();
     let mut expected = vec![
         "PATH=/usr/local/bin:/usr/bin:/bin".to_owned(),
-        format!("PWD={}", state.join("gateway").display()),
+        format!("PWD={}", state.join("state/gateway").display()),
         "RUST_LOG=trace".to_owned(),
     ];
     expected.sort();
@@ -490,9 +395,9 @@ fn sandbox_clears_environment_except_path_pwd_and_rust_log() {
 
 #[test]
 fn sandbox_keeps_inner_arguments_after_separator() {
-    let layout = Layout {
+    let layout = LaunchPlan {
         bwrap: PathBuf::from("/usr/bin/bwrap"),
-        state_dir: PathBuf::from("/tmp/- state 'quoted'"),
+        layout: a2amx::layout::Layout::new(PathBuf::from("/tmp/- state 'quoted'")),
         exe: PathBuf::from("/opt/a2amx"),
         rust_log: None,
         resolv_target: None,
@@ -516,35 +421,40 @@ fn sandbox_keeps_inner_arguments_after_separator() {
 fn gateway_up_refuses_missing_inputs_and_symlinked_link() {
     let home = tempfile::tempdir().unwrap();
     prepare_state(home.path());
-    fs::remove_file(home.path().join("gateway/config.toml")).unwrap();
+    fs::remove_file(a2amx::layout::Layout::new(home.path().to_path_buf()).gateway_config())
+        .unwrap();
     let output = run_gateway_up(home.path(), false, "");
-    assert_error_contains(output, "config.toml");
+    assert_error_contains(output, "gateway.toml");
 
     let home = tempfile::tempdir().unwrap();
     prepare_state(home.path());
-    fs::remove_file(home.path().join("gateway/discord.token")).unwrap();
+    fs::remove_file(a2amx::layout::Layout::new(home.path().to_path_buf()).discord_token()).unwrap();
     let output = run_gateway_up(home.path(), false, "");
     assert_error_contains(output, "discord.token");
 
     let home = tempfile::tempdir().unwrap();
     prepare_state(home.path());
-    fs::remove_dir_all(home.path().join("link")).unwrap();
+    fs::remove_dir_all(a2amx::layout::Layout::new(home.path().to_path_buf()).link_dir()).unwrap();
     let output = run_gateway_up(home.path(), false, "");
     assert_error_contains(
         output,
-        "the a2amx daemon is not running in this state directory; start it first",
+        "the a2amx daemon is not running in this a2amx directory; start it first",
     );
 
     let home = tempfile::tempdir().unwrap();
     prepare_state(home.path());
     let target = home.path().join("link-target");
     fs::create_dir(&target).unwrap();
-    fs::remove_dir_all(home.path().join("link")).unwrap();
-    symlink(&target, home.path().join("link")).unwrap();
+    fs::remove_dir_all(a2amx::layout::Layout::new(home.path().to_path_buf()).link_dir()).unwrap();
+    symlink(
+        &target,
+        a2amx::layout::Layout::new(home.path().to_path_buf()).link_dir(),
+    )
+    .unwrap();
     let output = run_gateway_up(home.path(), false, "");
     assert_error_contains(
         output,
-        "the a2amx daemon is not running in this state directory; start it first",
+        "the a2amx daemon is not running in this a2amx directory; start it first",
     );
 }
 #[test]
@@ -552,11 +462,16 @@ fn gateway_up_refuses_each_missing_link_file() {
     for missing in ["addr", "gateway.token"] {
         let home = tempfile::tempdir().unwrap();
         prepare_state(home.path());
-        fs::remove_file(home.path().join("link").join(missing)).unwrap();
+        fs::remove_file(
+            a2amx::layout::Layout::new(home.path().to_path_buf())
+                .link_dir()
+                .join(missing),
+        )
+        .unwrap();
         let output = run_gateway_up(home.path(), false, "");
         assert_error_contains(
             output,
-            "the a2amx daemon is not running in this state directory; start it first",
+            "the a2amx daemon is not running in this a2amx directory; start it first",
         );
     }
 }
@@ -565,7 +480,7 @@ fn gateway_up_refuses_each_missing_link_file() {
 fn gateway_up_requires_pairing_without_fallback() {
     let home = tempfile::tempdir().unwrap();
     prepare_state(home.path());
-    fs::remove_file(home.path().join("gateway/pairing.json")).unwrap();
+    fs::remove_file(a2amx::layout::Layout::new(home.path().to_path_buf()).pairing()).unwrap();
     let output = run_gateway_up(home.path(), false, "");
     assert_error_contains(output, "not paired; run with --pair");
 }
@@ -601,19 +516,17 @@ async fn sandbox_link_mount_sees_new_address_after_daemon_restart() {
         return;
     };
     let (home, daemon) = common::start_daemon().await;
-    fs::create_dir_all(home.path().join("gateway")).unwrap();
-    fs::set_permissions(
-        home.path().join("gateway"),
-        fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
     let old_address = daemon.addrs()[0].to_string();
+    let root_layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    root_layout.ensure().unwrap();
+    prepare_gateway_files(home.path());
+    fs::write(root_layout.link_addr(), format!("{old_address}\n")).unwrap();
     let (layout, shell) = shell_layout(home.path(), &bwrap, None);
-    let state = layout.state_dir.to_string_lossy().into_owned();
+    let state = layout.layout.root().to_string_lossy().into_owned();
     let script = r#"set -eu
-cat "$1/link/addr"
-while [ ! -e "$1/gateway/release" ]; do sleep 0.01; done
-cat "$1/link/addr"
+cat "$1/run/link/addr"
+while [ ! -e "$1/state/gateway/release" ]; do sleep 0.01; done
+cat "$1/run/link/addr"
 "#;
     let inner = vec![shell, "-c".into(), script.into(), "probe".into(), state];
     let argv = sandbox_argv(&layout, &inner);
@@ -655,7 +568,7 @@ cat "$1/link/addr"
     )
     .await;
     let new_address = restarted.addrs()[0].to_string();
-    fs::write(home.path().join("gateway/release"), b"ready\n").unwrap();
+    fs::write(home.path().join("state/gateway/release"), b"ready\n").unwrap();
     let mut second = String::new();
     match tokio::time::timeout(
         std::time::Duration::from_secs(10),

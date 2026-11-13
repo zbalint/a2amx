@@ -50,12 +50,15 @@ async fn omp_new_wires_the_extension_overlay_and_operator_line() -> anyhow::Resu
         vec![
             "-e".to_owned(),
             dir.path()
-                .join(format!("omp/extension-{}.ts", env!("CARGO_PKG_VERSION")))
+                .join(format!(
+                    "run/omp/extension-{}.ts",
+                    env!("CARGO_PKG_VERSION")
+                ))
                 .to_string_lossy()
                 .into_owned(),
             "--config".to_owned(),
             dir.path()
-                .join("omp/overlay.yml")
+                .join("run/omp/overlay.yml")
                 .to_string_lossy()
                 .into_owned(),
             "--append-system-prompt".to_owned(),
@@ -80,12 +83,15 @@ async fn no_authorize_peers_leaves_the_operator_line_out() -> anyhow::Result<()>
         vec![
             "-e".to_owned(),
             dir.path()
-                .join(format!("omp/extension-{}.ts", env!("CARGO_PKG_VERSION")))
+                .join(format!(
+                    "run/omp/extension-{}.ts",
+                    env!("CARGO_PKG_VERSION")
+                ))
                 .to_string_lossy()
                 .into_owned(),
             "--config".to_owned(),
             dir.path()
-                .join("omp/overlay.yml")
+                .join("run/omp/overlay.yml")
                 .to_string_lossy()
                 .into_owned(),
         ]
@@ -109,11 +115,12 @@ fn install_writes_owner_only_files_and_repairs_edits() {
     use std::os::unix::fs::PermissionsExt;
 
     let home = tempfile::tempdir().unwrap();
-    let installed = a2amx::omp::install(home.path()).unwrap();
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    let installed = a2amx::omp::install(&layout).unwrap();
     assert!(installed.extension.is_absolute());
     assert!(installed.overlay.is_absolute());
     let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode(&home.path().join("omp")), 0o700);
+    assert_eq!(mode(&layout.omp_dir()), 0o700);
     assert_eq!(mode(&installed.extension), 0o600);
     assert_eq!(mode(&installed.overlay), 0o600);
     assert_eq!(
@@ -127,7 +134,7 @@ fn install_writes_owner_only_files_and_repairs_edits() {
     std::fs::write(&installed.extension, "x").unwrap();
     std::fs::set_permissions(&installed.extension, std::fs::Permissions::from_mode(0o644)).unwrap();
     std::fs::set_permissions(&installed.overlay, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let repaired = a2amx::omp::install(home.path()).unwrap();
+    let repaired = a2amx::omp::install(&layout).unwrap();
     assert_eq!(repaired.extension, installed.extension);
     assert_eq!(repaired.overlay, installed.overlay);
     assert_eq!(

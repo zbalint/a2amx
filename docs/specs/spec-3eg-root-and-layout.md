@@ -375,3 +375,23 @@ The tester found three gaps between the diff and the locked text; all three are 
   add it with the section 2 table and the two-sentence confinement rule.
 
 No other section changes. Judge: the architect reads the three diffs and reruns the Amendment 1 grep.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review; the exact model was not recorded); developer OMP harness, planning, working and advisor models not stated in its report; tester OMP harness, deepseek-v4.1-flash. BLOCKED/amend cycles: 2 (developer m_6945, tester m_7054).
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Ten findings (F1-F10) in the first draft, among them a false claim that a path containing the root is rejected like `$HOME` (the explicit branch only uses `is_within`), `connect_gateway` needed `&Layout`, `ensure` must not run inside the sandbox, the acceptance grep missed compound literals, mutant (c) needed the restrictive-umask fork test | applied to the spec before locking |
+| Implementation | developer | BLOCKED m_6945: `AGENTS.md`, `SECURITY.md` and `a2amx.toml.example` name a moved path but were outside the scope (the architect's scope search skipped root files) | Amendment 1 |
+| Implementation | developer | Reported a premature "BLOCKED - QUOTA", reverted its own wiring once, deferred required items to the architect | one-item assignments; rejected the deferrals |
+| Architect review | architect, Sonnet 5.5 | `confine.rs` overlap guards narrowed from `layout.root()` to `state_dir()`, which would let an explicit write or unhide inside `R/config` or `R/log` pass | reverted to `layout.root()`; new test `explicit_writes_inside_a2amx_root_are_rejected` |
+| Architect review | architect, Sonnet 5.5 | `gateway_proc::layout_for` stripped a trailing `gateway` path component, so a root named `gateway` resolved to its parent | heuristic removed; regression test for a root named `gateway` |
+| Tester pass | tester, deepseek-v4.1-flash | BLOCKED m_7054: `src/delivery.rs` test fixture outside the scope (the architect's scope search covered the moved paths but not the callers of `Store::open` in test modules); `<home>` instead of `<root>` in `SECURITY.md` and `a2amx.toml.example`; the `docs/architecture.md` Directory layout section missing | Amendment 2 |
+| Tester pass | tester | B1: the confined-tree test was vacuous (preflight given a directory and a silent return, fake database, cwd under the root, root shadowed by the plan's `/tmp`) | test rewritten and shown to pass for real |
+| Tester pass | tester | B2: team-up preflight built `Host.home` from the a2amx root instead of the real `HOME` | fixed; the architect's mutant survived because no test covered it, so a regression test was added |
+| Tester pass | tester | B3: section 5.3 protected root not implemented | implemented with a plan-level test |
+| Tester pass | tester | Gateway argv test missed bind modes and a broad root bind; `relay_files::load` creating a directory was untested; fresh-daemon tree test absent; stale texts and names (`cli.rs`, `client.rs`, `gateway_proc.rs`, `state_dir` identifiers), stale docs; `ensure_empty_file` created `run/` itself | fixed; tests added; the log-body test was dropped because no fixture captures the daemon log (allowed by section 7) |
+| Architect review | architect, Sonnet 5.5 | The diff removed `--remount-ro /` from the gateway sandbox without reason and the tests asserted its absence; a probe showed it works with the file binds | restored; argv assertions flipped |
+| Architect review | architect, Sonnet 5.5 | The developer removed the relay member-limit log text for no reason; a dead `_layout_root` binding and an unused `_host` parameter remained | restored; removed |
+| Developer mutants | developer | Mutants e and f (hides of `run` and `secrets`) survived the first `mandatory_hides_remain` test | test strengthened; both killed |

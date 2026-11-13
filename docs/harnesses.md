@@ -39,7 +39,7 @@ Claude's development-channel dialog; this research preview needs a claude.ai or 
 login. A successful write has `write_complete` evidence until the prompt hook confirms
 `native_receipt`; a missing receipt never triggers a resend.
 
-`--harness omp` writes the A2AMX extension into the state directory, loads it into OMP
+`--harness omp` writes the A2AMX extension into the a2amx directory's runtime tree, loads it into OMP
 with `-e` and a per-session `--config` overlay, and delivers messages natively without
 typing into the terminal.
 
@@ -68,7 +68,7 @@ and `WAYLAND_DISPLAY`. `DOCKER_HOST`, `DOCKER_CONTEXT`, `CONTAINER_HOST`,
 `LIBVIRT_DEFAULT_URI` stay set only with their corresponding runtime grant. Those grants
 expose only the configured system runtime sockets. Rootless sockets under
 `$XDG_RUNTIME_DIR` remain hidden. For an OMP session, the `omp` directory inside the
-state directory stays visible, read-only; the rest of the state directory is hidden.
+`<root>/run/omp` stays visible, read-only; the rest of the a2amx directory is hidden.
 
 See [Harness login and state files](confinement.md#harness-login-and-state-files) for login renewal and state files.
 
@@ -129,7 +129,7 @@ byte 0x03. Confinement of a Generic session needs `env` with `--ignore-signal` a
 - Sessions still share the host network and any directory that is writable in each of
   them (for example one named with `--confine-write`), so a helper started in one session
   can be found by the others through a loopback port or a file in such a directory.
-  In these docs, the state directory is a2amx's own and is hidden. `/tmp` is private to
+  In these docs, the a2amx directory is a2amx's own and is hidden. `/tmp` is private to
   each session and `$XDG_RUNTIME_DIR` is hidden, so a helper whose socket, lock, or pid
   file lives in either cannot be found by the other sessions.
 - When the session's command exits, or the sandbox is killed, every process in it ends,

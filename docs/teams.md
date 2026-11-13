@@ -6,7 +6,7 @@ How-to and reference for operators configuring and managing a group of sessions.
 
 `a2amx team status`, `team up` (file form), `team down`, and `team reset` use
 `a2amx.toml` in the invoking directory when it exists. Otherwise they use
-`<state home>/team.toml` as a global fallback. A global file gets its team name
+`<root>/config/team.toml` as a global fallback. A global file gets its team name
 from the invoking directory: the final directory component is lowercased,
 non-alphanumeric runs become `-`, and the result is limited to 40 bytes. A
 global file must not set `team`; it may set `private` and `allow`, which apply
@@ -123,12 +123,12 @@ the container grants other than `docker` remain session-only. Run `a2amx confine
 grant names and see [Confinement](confinement.md#credential-environment-variables)
 for the closed credential environment list.
 
-`auto = true` is accepted only in the global `<state home>/team.toml` `[confine]`
+`auto = true` is accepted only in the global `<root>/config/team.toml` `[confine]`
 table, and requires `enabled = true`. It detects project markers and git remotes at
 each start and adds the matching grants plus `cache`; local `a2amx.toml` files and
 explicit `--file` inputs must not set the key. When a detected grant is not in the
 accepted set, `team up` shows its reason and exposure and asks before starting.
-Answering yes records that grant name in `<state home>/auto-grants`, covering every
+Answering yes records that grant name in `<root>/state/auto-grants`, covering every
 project using the global file; delete the file to ask again. `team up --yes` accepts
 for one run without recording, a non-terminal run without it refuses, and
 `team up --dry-run` never prompts or writes and marks each new grant `not yet accepted`.
@@ -220,7 +220,7 @@ filesystem reason, skipped missing defaults, and redacted command for each sessi
 would start. The confinement line is `confinement: off`, `confinement: manual`, or
 `confinement: auto`; automatic sessions also print one `  <grant>: <reason>` line per
 detected grant, such as `  cache: always added by auto`. A new auto grant not in
-`<state home>/auto-grants` is followed by `  not yet accepted: NAME, ...`; dry runs
+`<root>/state/auto-grants` is followed by `  not yet accepted: NAME, ...`; dry runs
 never prompt or write that file. Already-running rows include their current mode as
 `(confine off|manual|auto)`.
 Paths accept absolute names, `~`, `~/...`, or other relative names resolved against the

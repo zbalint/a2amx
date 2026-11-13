@@ -39,8 +39,8 @@ people, or a host suffix for cross-host use (0.4.0), without a change.
 
 ### D2. The gateway has its own role, checked fail-closed
 
-The gateway gets a third daemon role beside admin and session, with its own token file in the
-state directory (0600), never the admin token. Its requests are a short list: hand the daemon
+The gateway gets a third daemon role beside admin and session, with its own token file at
+`<root>/run/link/gateway.token` (0600), never the admin token. Its requests are a short list: hand the daemon
 one inbound human message, fetch pending outbound human messages, acknowledge one.
 
 The check used to be a deny-list on sessions only, so a role added beside admin and session
@@ -89,7 +89,7 @@ A team file can come from a repository, so the file alone grants nothing: the le
   covered members have exited, nothing passes, but the lease record stays until it expires or the
   daemon stops. Stopping one agent does not end it. A restart always needs a new lease.
 - **What persists.** The pairing record (the Discord user id and the server id) is kept by the
-  gateway, in a 0600 file under the state directory, not by the daemon (decided during
+  gateway, in a 0600 file under `<root>/state/gateway/pairing.json`, not by the daemon (decided during
   implementation: the daemon never needs the Discord ids). The lease does not persist.
 - **Who is covered.** The lease names the session ids that were team members when the code was
   redeemed, not the team name, so a session that joins or reuses the name later gets no remote
@@ -171,8 +171,8 @@ because bubblewrap alone does not cover it:
   unit with address limits, and the docs say so (philosophy rule 1: no claim of a sandbox).
 - The existing session confinement profile is built for agents and does not restrict the
   network; the gateway needs its own, much smaller profile: no home directory, no repository, no
-  harness configuration or credentials, no sockets other than its own, a state directory it can
-  write, and read-only access to its own two tokens.
+  harness configuration or credentials, no sockets other than its own, and a writable
+  `<root>/state/gateway/` tree, with read-only access to its own two tokens.
 - Whether to run as a separate unprivileged user where that is practical, and which Linux
   capabilities to drop, are for the spec.
 
@@ -244,7 +244,7 @@ reaches the human, not the agents, but it bypasses every daemon limit on that di
 | session name | an agent takes the human's address | remove: the name grammar forbids `:` | creating a session named `human:owner` fails |
 | restart or exit | pending messages reach a different session | constrain: the check runs again at delivery | a message for a session that exited is not delivered |
 | channel to agent mapping | a message in one agent's channel reaches another agent | constrain: the daemon takes the recipient from the channel the gateway names and rechecks eligibility for that agent | a message in agent A's channel is never delivered to agent B |
-| pairing record | an unconfined process repoints it to its own account | constrain: written only by the daemon, 0600 in the state directory, hidden from confined sessions; an unconfined same-user process is out of scope (philosophy) | a confined session cannot read or write it |
+| pairing record | an unconfined process repoints it to its own account | constrain: written only by the daemon, 0600 in `<root>/state/gateway/pairing.json`, hidden from confined sessions; an unconfined same-user process is out of scope (philosophy) | a confined session cannot read or write it |
 | gateway token and bot token files | read by an agent | constrain: 0600, gateway-only, outside session views | a confined session cannot read either |
 | bot token | holder speaks to the human as any agent, reads the channels | cannot be removed: resettable in the developer portal; permissions kept small; documented | none; a documentation check |
 | second member in the server | reads everything the agents send | constrain: private server, no invite link, member check if the spec can do it | the gateway stops sending when the member check fails (if built) |

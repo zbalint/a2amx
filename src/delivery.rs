@@ -583,7 +583,9 @@ mod tests {
         sender_address: &str,
     ) -> anyhow::Result<(tempfile::TempDir, Store, Arc<FakeState>, i64)> {
         let dir = tempfile::tempdir()?;
-        let store = Store::open(dir.path().to_path_buf(), Limits::default()).await?;
+        let layout = crate::layout::Layout::new(dir.path().to_path_buf());
+        layout.ensure()?;
+        let store = Store::open(&layout, Limits::default()).await?;
         let seq = store
             .insert_message(NewMessage {
                 boot: "boot-a".into(),

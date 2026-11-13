@@ -1,6 +1,6 @@
 # Your first team
 
-The samples below came from `a2amx v0.1.2-133-g91c802a`. Long paths are shortened to `/home/user/demo/proj` and `/home/user/.local/state/a2amx`.
+The samples below came from `a2amx v0.1.2-133-g91c802a`. Long paths are shortened to `/home/user/demo/proj` and `/home/user/.a2amx`.
 
 ## Install and start the daemon
 
@@ -98,7 +98,7 @@ would start demo-architect
   grants: cache, cargo
   writable: /home/user/demo/proj/.git
   protected: /home/user/demo/proj/.git/config
-  hidden: /home/user/.local/state/a2amx
+  hidden: /home/user/.a2amx
   hidden: /mnt/wslg
   ...
 ```

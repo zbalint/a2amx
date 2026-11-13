@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
@@ -28,7 +27,7 @@ pub fn load(home: &std::path::Path) -> anyhow::Result<Loaded> {
 }
 
 pub async fn run(loaded: Loaded, discord_config: DiscordConfig, mut io: Io) -> anyhow::Result<()> {
-    let daemon = Client::connect_gateway(&loaded.link_dir).await?;
+    let daemon = Client::connect_gateway(&loaded.layout).await?;
     let discord = Discord::new(discord_config);
     let (control_channel, mut watch) = connect_control(&loaded, &discord).await?;
     let paired_author = if let Some(mut pair_io) = io.pair.take() {
@@ -46,9 +45,9 @@ pub async fn run(loaded: Loaded, discord_config: DiscordConfig, mut io: Io) -> a
             .user_id
     };
 
-    let state_path = loaded.gateway_dir.join("seen.json");
+    let state_path = loaded.layout.seen();
     let mut relay = Relay {
-        link_dir: loaded.link_dir.clone(),
+        layout: loaded.layout.clone(),
         paired_author: paired_author.clone(),
         daemon,
         discord,
@@ -130,7 +129,7 @@ pub async fn pair_only(
     discord_config: DiscordConfig,
     mut io: PairIo,
 ) -> anyhow::Result<()> {
-    let _ = Client::connect_gateway(&loaded.link_dir).await?;
+    let _ = Client::connect_gateway(&loaded.layout).await?;
     let discord = Discord::new(discord_config);
     let (control_channel, mut watch) = connect_control(&loaded, &discord).await?;
     let pairing = pair(&loaded, &control_channel, &mut watch, &mut io).await?;
@@ -163,7 +162,7 @@ async fn connect_control(loaded: &Loaded, discord: &Discord) -> anyhow::Result<(
 }
 
 struct Relay {
-    link_dir: PathBuf,
+    layout: crate::layout::Layout,
     paired_author: String,
     daemon: Client,
     discord: Discord,
@@ -186,7 +185,7 @@ impl Relay {
         if !self.broken || Instant::now() < self.next_reconnect {
             return;
         }
-        match Client::connect_gateway(&self.link_dir).await {
+        match Client::connect_gateway(&self.layout).await {
             Ok(client) => {
                 self.daemon = client;
                 self.broken = false;
@@ -379,6 +378,6 @@ async fn pair(
         guild_id: loaded.config.guild_id.clone(),
         user_id: event.author,
     };
-    relay_files::write_pairing(&loaded.home, &pairing)?;
+    relay_files::write_pairing(loaded.layout.root(), &pairing)?;
     Ok(pairing)
 }

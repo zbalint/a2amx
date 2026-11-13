@@ -44,11 +44,10 @@ fn write_file(path: &std::path::Path, text: &str, mode: u32) {
 }
 
 fn valid_gateway(home: &std::path::Path) {
-    let gateway = home.join("gateway");
-    fs::create_dir_all(&gateway).unwrap();
-    fs::set_permissions(&gateway, fs::Permissions::from_mode(0o700)).unwrap();
-    write_file(&gateway.join("discord.token"), "bot-token\n", 0o600);
-    write_file(&gateway.join("config.toml"), "guild_id = \"123\"\n", 0o600);
+    let layout = a2amx::layout::Layout::new(home.to_owned());
+    layout.ensure().unwrap();
+    write_file(&layout.discord_token(), "bot-token\n", 0o600);
+    write_file(&layout.gateway_config(), "guild_id = \"123\"\n", 0o600);
 }
 async fn wait_for_member_checks(discord: &FakeDiscord, baseline: u64) {
     eventually(|| async { (discord.member_count_requests() >= baseline + 2).then_some(()) }).await;
@@ -60,13 +59,22 @@ fn announced_pairing_code(lines: &std::sync::Arc<std::sync::Mutex<Vec<String>>>)
     })
 }
 
+#[test]
+fn load_does_not_create_missing_home() {
+    let parent = tempdir().unwrap();
+    let home = parent.path().join("missing");
+    let error = relay_files::load(&home).expect_err("missing gateway files");
+    assert!(!home.exists(), "load must not create the a2amx directory");
+    assert!(!error.to_string().is_empty());
+}
+
 #[tokio::test]
 async fn pairing_existing_record_warns_replaces_and_announces_after_write() {
     let (home, daemon) = start_daemon().await;
     let discord = FakeDiscord::new("123", 2).await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"111"}"#,
         0o600,
     );
@@ -89,11 +97,13 @@ async fn pairing_existing_record_warns_replaces_and_announces_after_write() {
                     if line
                         == "paired with Discord account 789; starting the gateway (Ctrl-C stops it)"
                     {
-                        let pairing = fs::read_to_string(home_for_io.join("gateway/pairing.json"))
-                            .ok()
-                            .and_then(|record| {
-                                serde_json::from_str::<a2amx::relay_files::Pairing>(&record).ok()
-                            });
+                        let pairing =
+                            fs::read_to_string(home_for_io.join("state/gateway/pairing.json"))
+                                .ok()
+                                .and_then(|record| {
+                                    serde_json::from_str::<a2amx::relay_files::Pairing>(&record)
+                                        .ok()
+                                });
                         persisted_for_io
                             .lock()
                             .unwrap()
@@ -145,12 +155,12 @@ async fn pairing_existing_record_warns_replaces_and_announces_after_write() {
     assert!(warning_index < code_index);
     assert!(code_index < success_index);
     assert_eq!(*persisted_on_success.lock().unwrap(), vec![true]);
-    let record = fs::read_to_string(home.path().join("gateway/pairing.json")).unwrap();
+    let record = fs::read_to_string(home.path().join("state/gateway/pairing.json")).unwrap();
     let pairing: a2amx::relay_files::Pairing = serde_json::from_str(&record).unwrap();
     assert_eq!(pairing.guild_id, "123");
     assert_eq!(pairing.user_id, "789");
     assert_eq!(
-        fs::metadata(home.path().join("gateway/pairing.json"))
+        fs::metadata(home.path().join("state/gateway/pairing.json"))
             .unwrap()
             .permissions()
             .mode()
@@ -186,11 +196,13 @@ async fn pairing_without_record_announces_after_write() {
                     if line
                         == "paired with Discord account 789; starting the gateway (Ctrl-C stops it)"
                     {
-                        let pairing = fs::read_to_string(home_for_io.join("gateway/pairing.json"))
-                            .ok()
-                            .and_then(|record| {
-                                serde_json::from_str::<a2amx::relay_files::Pairing>(&record).ok()
-                            });
+                        let pairing =
+                            fs::read_to_string(home_for_io.join("state/gateway/pairing.json"))
+                                .ok()
+                                .and_then(|record| {
+                                    serde_json::from_str::<a2amx::relay_files::Pairing>(&record)
+                                        .ok()
+                                });
                         persisted_for_io
                             .lock()
                             .unwrap()
@@ -288,7 +300,7 @@ async fn pair_only_pairs_without_sync_or_ready_line() {
     assert!(!lines.iter().any(|line| {
         line == "paired with Discord account 789; starting the gateway (Ctrl-C stops it)"
     }));
-    let record = fs::read_to_string(home.path().join("gateway/pairing.json")).unwrap();
+    let record = fs::read_to_string(home.path().join("state/gateway/pairing.json")).unwrap();
     let pairing: a2amx::relay_files::Pairing = serde_json::from_str(&record).unwrap();
     assert_eq!(pairing.user_id, "789");
     daemon.shutdown().await.unwrap();
@@ -324,7 +336,7 @@ async fn pair_only_decline_does_not_write_pairing() {
     discord.push_message(&control, "789", &code).await.unwrap();
     let error = settled(task).await.unwrap_err().to_string();
     assert_eq!(error, "pairing not confirmed");
-    assert!(!home.path().join("gateway/pairing.json").exists());
+    assert!(!home.path().join("state/gateway/pairing.json").exists());
     daemon.shutdown().await.unwrap();
 }
 
@@ -335,7 +347,7 @@ async fn pair_only_refuses_before_pairing_when_daemon_is_stopped() {
     valid_gateway(home.path());
     let loaded = relay_files::load(home.path()).unwrap();
     daemon.shutdown().await.unwrap();
-    let addr = home.path().join("link/addr");
+    let addr = home.path().join("run/link/addr");
     if addr.exists() {
         fs::remove_file(&addr).unwrap();
     }
@@ -361,7 +373,7 @@ async fn pair_only_refuses_before_pairing_when_daemon_is_stopped() {
     .to_string();
     assert!(!error.is_empty());
     assert!(announcements.lock().unwrap().is_empty());
-    assert!(!home.path().join("gateway/pairing.json").exists());
+    assert!(!home.path().join("state/gateway/pairing.json").exists());
 }
 
 #[tokio::test]
@@ -370,11 +382,11 @@ async fn pairing_decline_preserves_existing_record_and_has_no_success_announceme
     let discord = FakeDiscord::new("123", 2).await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"111"}"#,
         0o600,
     );
-    let before = fs::read(home.path().join("gateway/pairing.json")).unwrap();
+    let before = fs::read(home.path().join("state/gateway/pairing.json")).unwrap();
     let loaded = relay_files::load(home.path()).unwrap();
     let announcements = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let announcements_for_io = std::sync::Arc::clone(&announcements);
@@ -404,7 +416,7 @@ async fn pairing_decline_preserves_existing_record_and_has_no_success_announceme
     let error = settled(task).await.unwrap_err().to_string();
     assert!(error.contains("pairing not confirmed"));
     assert_eq!(
-        fs::read(home.path().join("gateway/pairing.json")).unwrap(),
+        fs::read(home.path().join("state/gateway/pairing.json")).unwrap(),
         before
     );
     assert!(!announcements.lock().unwrap().iter().any(|line| {
@@ -456,7 +468,7 @@ async fn pairing_rejects_invalid_author_before_confirmation_or_write() {
         "pairing refused: the message author is not a Discord user ID"
     );
     assert!(!confirm_called.load(std::sync::atomic::Ordering::SeqCst));
-    assert!(!home.path().join("gateway/pairing.json").exists());
+    assert!(!home.path().join("state/gateway/pairing.json").exists());
     daemon.shutdown().await.unwrap();
 }
 
@@ -465,7 +477,7 @@ fn load_reads_defaults_and_pairing() {
     let home = tempdir().unwrap();
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -484,12 +496,12 @@ fn load_rejects_unknown_config_key() {
     valid_gateway(home.path());
     fs::OpenOptions::new()
         .append(true)
-        .open(home.path().join("gateway/config.toml"))
+        .open(home.path().join("config/gateway.toml"))
         .unwrap()
         .write_all(b"unknown = true\n")
         .unwrap();
     let error = relay_files::load(home.path()).unwrap_err().to_string();
-    assert!(error.contains("config.toml"));
+    assert!(error.contains("unknown") || error.contains("gateway.toml"));
     assert!(error.contains("unknown"));
 }
 
@@ -506,19 +518,25 @@ fn load_rejects_loose_modes_for_each_secret_file() {
         valid_gateway(home.path());
         if file == "pairing.json" {
             write_file(
-                &home.path().join("gateway/pairing.json"),
+                &home.path().join("state/gateway/pairing.json"),
                 r#"{"guild_id":"123","user_id":"456"}"#,
                 0o644,
             );
         } else {
-            fs::set_permissions(
-                home.path().join("gateway").join(file),
-                fs::Permissions::from_mode(0o644),
-            )
-            .unwrap();
+            let path = if file == "discord.token" {
+                home.path().join("config/secrets/discord.token")
+            } else {
+                home.path().join("config/gateway.toml")
+            };
+            fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap();
         }
         let error = relay_files::load(home.path()).unwrap_err().to_string();
-        assert!(error.contains(file), "{error}");
+        let expected = if file == "config.toml" {
+            "gateway.toml"
+        } else {
+            file
+        };
+        assert!(error.contains(expected), "{error}");
     }
 }
 
@@ -528,8 +546,8 @@ fn load_rejects_symlinked_secret_file() {
     valid_gateway(home.path());
     let target = home.path().join("token-target");
     write_file(&target, "bot-token\n", 0o600);
-    fs::remove_file(home.path().join("gateway/discord.token")).unwrap();
-    std::os::unix::fs::symlink(&target, home.path().join("gateway/discord.token")).unwrap();
+    fs::remove_file(home.path().join("config/secrets/discord.token")).unwrap();
+    std::os::unix::fs::symlink(&target, home.path().join("config/secrets/discord.token")).unwrap();
     let error = relay_files::load(home.path()).unwrap_err().to_string();
     assert!(error.contains("discord.token"), "{error}");
 }
@@ -543,13 +561,13 @@ fn load_rejects_bad_values_and_oversized_config() {
     ] {
         let home = tempdir().unwrap();
         valid_gateway(home.path());
-        write_file(&home.path().join("gateway/config.toml"), config, 0o600);
+        write_file(&home.path().join("config/gateway.toml"), config, 0o600);
         assert!(relay_files::load(home.path()).is_err(), "{config}");
     }
     let home = tempdir().unwrap();
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         &format!("guild_id = \"123\"\n#{}\n", "x".repeat(70 * 1024)),
         0o600,
     );
@@ -562,7 +580,7 @@ fn load_rejects_pairing_for_another_guild() {
     let home = tempdir().unwrap();
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"999","user_id":"456"}"#,
         0o600,
     );
@@ -576,7 +594,7 @@ async fn relay_starts_syncs_control_channel_and_stops() {
     let discord = FakeDiscord::new("123", 2).await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -634,11 +652,11 @@ fn gateway_token_cli_reads_stdin_and_writes_trimmed_secret() {
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     assert_eq!(
-        fs::read_to_string(home.path().join("gateway/discord.token")).unwrap(),
+        fs::read_to_string(home.path().join("config/secrets/discord.token")).unwrap(),
         "secret-token"
     );
     assert_eq!(
-        fs::metadata(home.path().join("gateway/discord.token"))
+        fs::metadata(home.path().join("config/secrets/discord.token"))
             .unwrap()
             .permissions()
             .mode()
@@ -666,16 +684,17 @@ fn gateway_token_cli_rejects_oversized_stdin_without_writing() {
     let output = command.wait_with_output().unwrap();
     assert!(!output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("gateway token exceeds 64 KiB"));
-    assert!(!home.path().join("gateway/discord.token").exists());
+    assert!(!home.path().join("config/secrets/discord.token").exists());
 }
 
 #[tokio::test]
 async fn gateway_client_uses_gateway_token_file() {
     let (home, daemon) = start_daemon().await;
-    let admin_token = fs::read_to_string(home.path().join("admin.token")).unwrap();
-    let gateway_token = fs::read_to_string(home.path().join("gateway.token")).unwrap();
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    let admin_token = fs::read_to_string(layout.admin_token()).unwrap();
+    let gateway_token = fs::read_to_string(layout.link_gateway_token()).unwrap();
     assert_ne!(admin_token, gateway_token);
-    let mut gateway = a2amx::client::Client::connect_gateway(home.path())
+    let mut gateway = a2amx::client::Client::connect_gateway(&layout)
         .await
         .unwrap();
     assert!(matches!(
@@ -734,9 +753,11 @@ async fn pairing_true_confirmation_writes_record_with_ids() {
     discord.push_message(&control, "789", &code).await.unwrap();
     // Wrong texts and the control category/channel are established by run(); pairing.json
     // records the confirmed account once the code matched and the prompt returned true.
-    eventually(|| async { fs::read_to_string(home.path().join("gateway/pairing.json")).ok() })
-        .await;
-    let record = fs::read_to_string(home.path().join("gateway/pairing.json")).unwrap();
+    eventually(|| async {
+        fs::read_to_string(home.path().join("state/gateway/pairing.json")).ok()
+    })
+    .await;
+    let record = fs::read_to_string(home.path().join("state/gateway/pairing.json")).unwrap();
     let pairing: a2amx::relay_files::Pairing = serde_json::from_str(&record).unwrap();
     assert_eq!(pairing.guild_id, "123");
     assert_eq!(pairing.user_id, "789");
@@ -744,7 +765,7 @@ async fn pairing_true_confirmation_writes_record_with_ids() {
     task.abort();
     let _ = task.await;
     assert_eq!(
-        fs::metadata(home.path().join("gateway/pairing.json"))
+        fs::metadata(home.path().join("state/gateway/pairing.json"))
             .unwrap()
             .permissions()
             .mode()
@@ -814,7 +835,7 @@ async fn pairing_false_confirmation_writes_no_record() {
     let result = settled(task).await;
     assert!(result.unwrap_err().to_string().contains("not confirmed"));
     assert!(prompt.lock().unwrap().as_deref() == Some("bind Discord account 789? [y/N]"));
-    assert!(!home.path().join("gateway/pairing.json").exists());
+    assert!(!home.path().join("state/gateway/pairing.json").exists());
     daemon.shutdown().await.unwrap();
 }
 
@@ -824,7 +845,7 @@ async fn member_limit_above_max_fails_the_strict_start() {
     let discord = FakeDiscord::new("123", 3).await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -875,12 +896,12 @@ async fn member_limit_pauses_inbound_and_resumes_at_limit() {
     let discord = FakeDiscord::new("123", 2).await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         "guild_id = \"123\"\nmember_check_ms = 10\nsync_ms = 10\nidle_ms = 10\n",
         0o600,
     );
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -948,12 +969,12 @@ async fn member_pause_holds_agent_delivery_and_channels() {
     common::issue_and_redeem(&mut admin, &mut gw, "q-team").await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 20\nreconnect_ms = 50\n",
         0o600,
     );
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -1124,12 +1145,12 @@ async fn failed_outbound_post_reports_undeliverable() {
     common::issue_and_redeem(&mut admin, &mut gw, "fail-team").await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 50\n",
         0o600,
     );
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -1214,12 +1235,12 @@ async fn failed_channel_creation_reports_undeliverable() {
     let discord = FakeDiscord::new("123", 2).await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         "guild_id = \"123\"\nsync_ms = 60000\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 50\n",
         0o600,
     );
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -1359,12 +1380,12 @@ async fn unlisted_agent_channel_is_unbound() {
     common::issue_and_redeem(&mut admin, &mut gw, "unbind-team").await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 50\n",
         0o600,
     );
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -1434,12 +1455,12 @@ async fn daemon_down_answers_only_the_paired_author_and_reconnects_after_restart
     let discord = FakeDiscord::new("123", 2).await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 50\n",
         0o600,
     );
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -1526,12 +1547,12 @@ async fn reconnect_waits_for_configured_interval() {
     let discord = FakeDiscord::new("123", 2).await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 400\n",
         0o600,
     );
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
@@ -1582,7 +1603,7 @@ async fn reconnect_waits_for_configured_interval() {
         }
     });
     write_file(
-        &home.path().join("link/addr"),
+        &home.path().join("run/link/addr"),
         &format!("{address}\n"),
         0o600,
     );
@@ -1608,13 +1629,13 @@ async fn gateway_run_with_trace_logs_leak_no_token() {
     let discord = FakeDiscord::new("123", 2).await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );
     a2amx::relay_files::write_token(home.path(), "fake-token").unwrap();
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         &format!(
             "guild_id = \"123\"\napi_base = \"{}\"\ngateway_url = \"{}\"\n",
             discord.api_base, discord.gateway_url
@@ -1691,7 +1712,7 @@ async fn gateway_run_pair_binary_prompts_and_writes_record() {
     valid_gateway(home.path());
     a2amx::relay_files::write_token(home.path(), "fake-token").unwrap();
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         &format!(
             "guild_id = \"123\"\napi_base = \"{}\"\ngateway_url = \"{}\"\n",
             discord.api_base, discord.gateway_url
@@ -1764,7 +1785,7 @@ async fn gateway_run_pair_binary_prompts_and_writes_record() {
     use std::io::Write as _;
     child.stdin.as_mut().unwrap().write_all(b"y\n").unwrap();
     eventually(|| async {
-        let record = fs::read_to_string(home.path().join("gateway/pairing.json")).ok()?;
+        let record = fs::read_to_string(home.path().join("state/gateway/pairing.json")).ok()?;
         serde_json::from_str::<a2amx::relay_files::Pairing>(&record)
             .ok()
             .filter(|pairing| pairing.guild_id == "123" && pairing.user_id == "999")
@@ -1780,7 +1801,7 @@ async fn gateway_run_pair_binary_prompts_and_writes_record() {
     })
     .await;
     assert_eq!(
-        fs::metadata(home.path().join("gateway/pairing.json"))
+        fs::metadata(home.path().join("state/gateway/pairing.json"))
             .unwrap()
             .permissions()
             .mode()
@@ -1789,7 +1810,7 @@ async fn gateway_run_pair_binary_prompts_and_writes_record() {
     );
     let _ = kill_and_wait(child).await;
 
-    let before = fs::read(home.path().join("gateway/pairing.json")).unwrap();
+    let before = fs::read(home.path().join("state/gateway/pairing.json")).unwrap();
     let home_path = home.path().to_owned();
     let mut second = tokio::task::spawn_blocking(move || {
         ProcessCommand::new(env!("CARGO_BIN_EXE_a2amx"))
@@ -1851,7 +1872,7 @@ async fn gateway_run_pair_binary_prompts_and_writes_record() {
             .contains("pairing not confirmed")
     );
     assert_eq!(
-        fs::read(home.path().join("gateway/pairing.json")).unwrap(),
+        fs::read(home.path().join("state/gateway/pairing.json")).unwrap(),
         before
     );
 }
@@ -1870,13 +1891,22 @@ fn load_rejects_symlinked_config_and_pairing() {
         valid_gateway(home.path());
         let target_path = home.path().join(target);
         write_file(&target_path, contents, 0o600);
-        let path = home.path().join("gateway").join(file);
+        let path = home.path().join(if file == "config.toml" {
+            "config/gateway.toml"
+        } else {
+            "state/gateway/pairing.json"
+        });
         if path.exists() {
             fs::remove_file(&path).unwrap();
         }
         std::os::unix::fs::symlink(&target_path, &path).unwrap();
         let error = relay_files::load(home.path()).unwrap_err().to_string();
-        assert!(error.contains(file), "{error}");
+        let expected = if file == "config.toml" {
+            "gateway.toml"
+        } else {
+            file
+        };
+        assert!(error.contains(expected), "{error}");
     }
 }
 
@@ -1923,12 +1953,12 @@ async fn relay_end_to_end_confined_both_and_send_agents() {
     let send_code = common::issue_code(&mut admin, "send-team").await;
     valid_gateway(home.path());
     write_file(
-        &home.path().join("gateway/config.toml"),
+        &home.path().join("config/gateway.toml"),
         "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 20\n",
         0o600,
     );
     write_file(
-        &home.path().join("gateway/pairing.json"),
+        &home.path().join("state/gateway/pairing.json"),
         r#"{"guild_id":"123","user_id":"456"}"#,
         0o600,
     );

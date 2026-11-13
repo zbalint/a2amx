@@ -323,7 +323,7 @@ async fn confined_codex_uses_private_socket_dir_and_delivers() {
             remote: None,
         }),
     };
-    let session_dir = state_dir.path().join("codex/s2");
+    let session_dir = state_dir.path().join("run/codex/s2");
     let socket_dir = session_dir.join("sock");
     std::fs::create_dir_all(&socket_dir).unwrap();
     symlink("/tmp", session_dir.join("stale")).unwrap();
@@ -379,11 +379,10 @@ async fn confined_codex_uses_private_socket_dir_and_delivers() {
             &cwd,
             &Host {
                 home: PathBuf::from(std::env::var_os("HOME").expect("HOME")),
-                state_dir: state_dir.path().to_path_buf(),
+                layout: a2amx::layout::Layout::new(state_dir.path().to_path_buf()),
                 runtime_dir: PathBuf::from(
                     std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"),
                 ),
-                empty_file: state_dir.path().join("confine-empty"),
             },
         )
         .expect("expected Codex plan"),
@@ -647,7 +646,7 @@ async fn confined_codex_rejects_hostile_socket_links() {
         let mut request_client = Client::connect(state_dir.path()).await.unwrap();
         let mut fake_server: Option<FakeCodex> = None;
         let response = if index == 2 {
-            let existing_dirs = std::fs::read_dir(state_dir.path().join("codex"))
+            let existing_dirs = std::fs::read_dir(state_dir.path().join("run/codex"))
                 .into_iter()
                 .flatten()
                 .filter_map(Result::ok)
@@ -655,7 +654,7 @@ async fn confined_codex_rejects_hostile_socket_links() {
                 .collect::<Vec<_>>();
             let pending = tokio::spawn(async move { request_client.request(request).await });
             let socket_dir = common::eventually(|| async {
-                std::fs::read_dir(state_dir.path().join("codex"))
+                std::fs::read_dir(state_dir.path().join("run/codex"))
                     .ok()?
                     .filter_map(Result::ok)
                     .filter_map(|entry| {
@@ -754,8 +753,8 @@ async fn confined_codex_rejects_host_substituted_socket_dir() {
             remote: None,
         }),
     };
-    std::fs::create_dir_all(state_dir.path().join("codex")).unwrap();
-    let session_dir = state_dir.path().join("codex/s2");
+    std::fs::create_dir_all(state_dir.path().join("run/codex")).unwrap();
+    let session_dir = state_dir.path().join("run/codex/s2");
     let socket_dir = session_dir.join("sock");
     let pending = tokio::spawn(async move { admin.request(request).await.unwrap() });
     common::eventually(|| async {
@@ -813,7 +812,7 @@ async fn confined_codex_guest_cannot_replace_socket_directory() {
     let program = cwd.join("codex");
     std::fs::write(&program, FAKE_CODEX).unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let session_dir = state_dir.path().join("codex/s2");
+    let session_dir = state_dir.path().join("run/codex/s2");
     let socket_dir = session_dir.join("sock");
     let request = Request::Confine {
         confine: ConfineRequest::default(),
