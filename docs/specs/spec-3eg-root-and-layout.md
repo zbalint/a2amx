@@ -16,7 +16,8 @@ nothing here is released alone.
 `src/main.rs`, `src/cli.rs`, `src/daemon.rs`, `src/client.rs`, `src/store.rs`, `src/codex.rs`,
 `src/omp.rs`, `src/relay_files.rs`, `src/relay.rs`, `src/gateway_proc.rs`,
 `src/gateway_launch.rs`, `src/confine.rs`, `src/team.rs`, `scripts/install.sh`, every test file under
-`tests/` that names a moved path or the changed texts (section 7), and the docs named in section 6.
+`tests/` that names a moved path or the changed texts (section 7), the docs named in section 6, and
+(Amendment 1) `SECURITY.md` and `a2amx.toml.example`.
 **Does not touch:** `CHANGELOG.md`, `docs/backlog.md`, `AGENTS.md`, `Cargo.toml`, `docs/specs/`
 (the architect edits these), `src/messaging.rs`, `src/mcp.rs`, `src/wire.rs`, `src/session.rs`,
 `src/hook.rs`, `src/bridge.rs`, `extension/`, every other file. If a file outside this list turns out
@@ -334,3 +335,25 @@ renames); the team file rules; `auto-grants` content or semantics (the file only
 | `tests/common/mod.rs` creates `bwrap-path` inside the root temp directory | `tests/common/mod.rs:54,349` | read |
 | The Discord token travels in an `Authorization` header and errors are logged as `%error` | `src/discord.rs:321-338`, `src/relay.rs:67-311` | read (log contents beyond the `%error` formatting not verified) |
 | bubblewrap cannot create a mount point under a read-only root, so the hidden directories must exist on the host | consultant's knowledge of bubblewrap, not probed | recall (covered by `ensure` and the fail-closed plan) |
+
+## Amendment 1 (developer BLOCKED m_6945, verified by the architect)
+
+The developer's scoped search found three files outside section 0 that name a moved path:
+`AGENTS.md:155` (`<home>/gateway/` for the gateway's config, token and pairing, and `:114` "temp state
+dir"), `SECURITY.md:29` (`<state>/link/`) and `a2amx.toml.example:47` (`<state home>/team.toml`). The
+architect re-ran a repository-wide search (all files outside `target/`, `docs/specs/`, `docs/backlog.md`,
+`CHANGELOG.md`, `src/`, `tests/`) for `<home>/`, `<state>`, `state home`, `/link/`, `local/state`,
+`state dir`, `XDG_STATE`, `INSTALL_DIR`: those three files are all, plus `docs/*.md` pages that section 6
+already covers (`delivery.md:581`, `teams.md:9,126,131,223`, `permissions.md:43,92,174,247`,
+`harnesses.md:42,71,132`, `architecture.md:271,302,343,410,427,437-444`).
+
+Decision:
+- `SECURITY.md` and `a2amx.toml.example` are added to the edit scope; the change is wording only:
+  `<state>/link/` becomes `<root>/run/link/`, and `<state home>/team.toml` becomes
+  `<root>/config/team.toml` (and `a2amx.toml.example:47` keeps its meaning: `auto` is read from any team
+  file only after the later spec; until then the comment names the global file's new location).
+- `AGENTS.md` stays out of scope. The architect edits it when committing (the `relay_files` row and the
+  "temp state dir" line, and a `layout` row in the Modules table); the developer does not.
+- No other section changes. Judge for the added files: the architect reads the diff; the section 9 greps
+  gain no new match because they cover `src scripts README.md docs`; run
+  `rg -n "<home>/|<state>|state home|local/state" SECURITY.md a2amx.toml.example` and it must match nothing.
