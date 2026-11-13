@@ -357,3 +357,21 @@ Decision:
 - No other section changes. Judge for the added files: the architect reads the diff; the section 9 greps
   gain no new match because they cover `src scripts README.md docs`; run
   `rg -n "<home>/|<state>|state home|local/state" SECURITY.md a2amx.toml.example` and it must match nothing.
+
+## Amendment 2 (tester BLOCKED m_7054, verified by the architect)
+
+The tester found three gaps between the diff and the locked text; all three are real.
+
+- **`src/delivery.rs` joins the scope** (test fixture only, `src/delivery.rs:586-588`: it builds a `Layout`,
+  calls `ensure()` and passes `&Layout` to `Store::open`). The `Store::open(&Layout)` signature change
+  of section 4 forces it; the architect's scope search covered the callers of the moved paths but not
+  the callers of `Store::open` inside `#[cfg(test)]` modules. No production code in `src/delivery.rs`
+  changes.
+- **`<root>` wording.** `SECURITY.md:29` and `a2amx.toml.example:47` say `<home>/run/link/` and
+  `<home>/config/team.toml`; Amendment 1 says `<root>/...` and its grep
+  `rg -n "<home>/|<state>|state home|local/state" SECURITY.md a2amx.toml.example` must match nothing.
+  The two lines change to `<root>/run/link/` and `<root>/config/team.toml`.
+- **`docs/architecture.md` "Directory layout"** (section 6) is a required deliverable and is missing:
+  add it with the section 2 table and the two-sentence confinement rule.
+
+No other section changes. Judge: the architect reads the three diffs and reruns the Amendment 1 grep.
