@@ -10,9 +10,10 @@ can read it.
 
 ## When you are at the computer
 
-Presence is an interactive attach. The daemon keeps the owner present for 60 seconds after the
-last interactive attachment ends by default; `a2amx daemon start --owner-away-secs SECONDS` (or
-`A2AMX_OWNER_AWAY_SECS`) changes that grace period. `owner_present` refuses an agent's
+Presence is an interactive attach. The daemon keeps the owner present for the `owner_away`
+duration from `daemon.toml` (`60s` / `1m` by default) after the last interactive attachment
+ends; `a2amx daemon start --owner-away-secs SECONDS` (or `A2AMX_OWNER_AWAY_SECS`) changes that
+grace period. `owner_present` refuses an agent's
 `send_message(to="human:owner", ...)` while the owner is present. `list_agents` reports `owner`
 as `present` or `away` for remote-enabled sessions, and the daemon emits one
 “The owner is away from the computer...” notice when the state changes to away. Human inbound

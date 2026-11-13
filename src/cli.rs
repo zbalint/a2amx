@@ -45,6 +45,11 @@ pub enum Command {
         #[command(subcommand)]
         action: DaemonAction,
     },
+    /// Inspect daemon configuration.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// Inspect confinement grants.
     Confine {
         #[command(subcommand)]
@@ -209,6 +214,12 @@ pub enum ConfineAction {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum ConfigAction {
+    /// Show daemon configuration and value sources.
+    Show,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum DaemonAction {
     /// Start the host daemon.
     Start {
@@ -221,8 +232,9 @@ pub enum DaemonAction {
         #[arg(long)]
         foreground: bool,
         /// Seconds the owner remains present after the last interactive attachment ends.
-        #[arg(long, env = "A2AMX_OWNER_AWAY_SECS", default_value_t = 60)]
-        owner_away_secs: u64,
+        /// The default comes from daemon.toml, then 60 seconds.
+        #[arg(long, env = "A2AMX_OWNER_AWAY_SECS")]
+        owner_away_secs: Option<u64>,
     },
     /// Show daemon state and sessions.
     Status,

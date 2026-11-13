@@ -390,9 +390,14 @@ The resolved a2amx root is `<root>` (`--home`, then `A2AMX_HOME`, then `$HOME/.a
 | `seen()` | `<root>/state/gateway/seen.json` |
 | `team_file()` | `<root>/config/team.toml` |
 | `gateway_config()` | `<root>/config/gateway.toml` |
+| `daemon_config()` | `<root>/config/daemon.toml` |
 | `discord_token()` | `<root>/config/secrets/discord.token` |
 | `daemon_log()` | `<root>/log/daemon.log` |
 | `gateway_log()` | `<root>/log/gateway.log` |
+
+The `config` module owns `config/daemon.toml`: it resolves each daemon key as flag or environment, then file,
+then the Rust default, and the binary (`src/main.rs`) hands the result to `DaemonConfig`. `a2amx config show`
+prints the same resolution with each value's source.
 
 Confined sessions may read `bin/`, `config/`, and `log/`, but those trees are mounted read-only.
 The `state/`, `run/`, and `config/secrets/` trees are hidden from confined sessions.

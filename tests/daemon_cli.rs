@@ -2789,3 +2789,119 @@ fn not_ready_watcher_does_not_receive_heartbeat() {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
+
+#[test]
+fn foreground_rejects_invalid_daemon_config_without_starting() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    std::fs::write(home.join("config/daemon.toml"), "limits.rate = 0\n").unwrap();
+    let mut child = a2amx(&home, &["daemon", "start", "--foreground"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = wait_exit(&mut child, Duration::from_secs(10));
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    assert!(
+        status.is_some(),
+        "foreground daemon did not reject invalid config"
+    );
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("limits.rate"));
+    assert!(!home.join("run/addr").exists());
+}
+
+#[test]
+fn background_rejects_invalid_daemon_config_before_child_or_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    std::fs::write(home.join("config/daemon.toml"), "limits.rate = 0\n").unwrap();
+    let output = run(&home, &["daemon", "start"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("limits.rate"));
+    assert!(!home.join("run/addr").exists());
+    assert!(!home.join("log/daemon.log").exists());
+}
+
+#[test]
+fn foreground_start_creates_daemon_template() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let mut child = a2amx(&home, &["daemon", "start", "--foreground"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !home.join("run/addr").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        std::fs::read_to_string(home.join("config/daemon.toml"))
+            .unwrap()
+            .contains("# owner_away")
+    );
+    let _ = run(&home, &["daemon", "stop", "--yes"]);
+    let _ = child.wait();
+}
+
+#[test]
+fn configured_daemon_starts_and_stops() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    std::fs::write(
+        home.join("config/daemon.toml"),
+        "[limits]\nretention = \"3d\"\n",
+    )
+    .unwrap();
+    let _cleanup = Cleanup(&home);
+    let started = run(&home, &["daemon", "start"]);
+    assert!(started.status.success(), "{}", stderr(&started));
+    assert!(run(&home, &["daemon", "status"]).status.success());
+    assert!(run(&home, &["daemon", "stop", "--yes"]).status.success());
+}
+
+#[test]
+fn config_show_is_read_only_on_fresh_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let mut command = a2amx(&home, &["config", "show"]);
+    command.env_remove("A2AMX_OWNER_AWAY_SECS");
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let expected_first_line = format!(
+        "daemon.toml: {} (absent)\n",
+        home.join("config/daemon.toml").display()
+    );
+    assert!(stdout(&output).starts_with(&expected_first_line));
+    assert!(!home.join("config/daemon.toml").exists());
+    assert!(!home.join("config").exists());
+    assert!(!home.exists());
+}
+
+#[test]
+fn config_show_reads_owner_away_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let output = a2amx(&home, &["config", "show"])
+        .env("A2AMX_OWNER_AWAY_SECS", "5")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output)
+            .lines()
+            .any(|line| line == "owner_away = \"5s\"  (env)")
+    );
+    assert!(!home.exists());
+}

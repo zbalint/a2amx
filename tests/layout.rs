@@ -52,6 +52,7 @@ fn accessors_match_root_table() {
         (layout.seen(), "/r/state/gateway/seen.json"),
         (layout.team_file(), "/r/config/team.toml"),
         (layout.gateway_config(), "/r/config/gateway.toml"),
+        (layout.daemon_config(), "/r/config/daemon.toml"),
         (layout.discord_token(), "/r/config/secrets/discord.token"),
         (layout.daemon_log(), "/r/log/daemon.log"),
         (layout.gateway_log(), "/r/log/gateway.log"),

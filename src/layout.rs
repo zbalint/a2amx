@@ -105,6 +105,9 @@ impl Layout {
     pub fn gateway_config(&self) -> PathBuf {
         self.config_dir().join("gateway.toml")
     }
+    pub fn daemon_config(&self) -> PathBuf {
+        self.config_dir().join("daemon.toml")
+    }
     pub fn discord_token(&self) -> PathBuf {
         self.secrets_dir().join("discord.token")
     }

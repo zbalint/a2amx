@@ -315,3 +315,21 @@ cargo test --test daemon_cli
   cap removed, `deny_unknown_fields` removed; name the killing test for each.
 - A scratch directory, if any, is under `target/scratch/3eh/` and deleted before the report.
 - Contract tests of section 7 pass without edits to the twelve `DaemonConfig` sites.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review; the exact model was not recorded); developer OMP harness, default model openai-codex/gpt-5.6-luna, smol model not exposed, advisor automated; tester OMP harness, models not stated in its report. BLOCKED/amend cycles: 1 (developer BLOCKED on the assignment order: test 15 was placed before `docs/configuration.md` existed; the assignment was amended, the spec text did not change).
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Ten findings in the first draft (line anchors, acceptance greps, test coverage and scenario walk-throughs) | verified and applied to the spec before locking |
+| Draft review | architect, Sonnet 5.5 | Asked the owner which keys are configurable without first reading the full recorded decision | owner pushed back; the recorded rule was applied |
+| Implementation | developer | BLOCKED: test 15 ordered before the docs file it reads existed | assignment order amended |
+| Architect review | architect, Sonnet 5.5 | Round 1: the key table was not shared by template, show and sources (spec 2.2 unmet); a 150-line `load_daemon`; `unwrap_or("default")`; raw `libc` instead of `rustix`; `unreachable!()`; a reflowed comment in `src/main.rs`; a duplicated bound message; weak show test and precedence mutant | fix round 1 |
+| Tester pass | tester | `format_duration(0s)` printed `0d`, not `0s` (spec 2.3) | fixed; literal assertions added |
+| Tester pass | tester | `parse_duration` panicked on a trailing multi-byte character (`owner_away = "é"`) instead of returning the key-named error | fixed with `strip_suffix`; non-ASCII cases added |
+| Tester pass | tester | Test gaps: `show` on a fresh root (absent line, nothing created), all eleven file values, template round trip over all keys, zero for `lease` and `code_ttl`, binary-level `A2AMX_OWNER_AWAY_SECS`; a foreground test with no timeout | tests added or bounded; mutants killed |
+| Architect review | architect, Sonnet 5.5 | A read error other than "not found" (spec 2) had no test: a mutant treating every error as absent survived | test added (`non_directory_config_parent_is_an_error`) |
+| Architect review | architect, Sonnet 5.5 | The reflowed `src/main.rs` shortcut comment was reported restored but was not | restored in fix round 3 |
+| Architect review | architect, Sonnet 5.5 | `load_daemon` is still about 125 lines of linear, repetitive per-key code | accepted (loop guard); follow-up candidate |
+| Architect review | architect, Sonnet 5.5 | Review of round 1 missed the zero and multi-byte duration cases the tester found | logged as a review miss |

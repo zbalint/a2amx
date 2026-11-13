@@ -8,7 +8,8 @@ The brackets below describe optional arguments; angle brackets name required val
 
 ```text
 a2amx daemon start [--foreground] [--owner-away-secs SECONDS] # start the daemon; detached by default
-a2amx daemon status               # show daemon state, build version and session counts
+a2amx config show                    # show daemon configuration and value sources
+a2amx daemon status                  # show daemon state, build version and session counts
 a2amx daemon stop [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx new --watch developer --heartbeat 30m -- sh # digest watched peers after idle
 a2amx new --watch developer --activity-working-after 2m --activity-idle-after 30s -- sh # notices on peer transitions

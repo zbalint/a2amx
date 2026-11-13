@@ -15,7 +15,9 @@ use tokio::sync::mpsc;
 use tracing_subscriber::prelude::*;
 
 use a2amx::bridge;
-use a2amx::cli::{Cli, Command, ConfineAction, DaemonAction, GatewayAction, TeamAction};
+use a2amx::cli::{
+    Cli, Command, ConfigAction, ConfineAction, DaemonAction, GatewayAction, TeamAction,
+};
 use a2amx::client::{Attachment, Client};
 use a2amx::confine::ConfineRequest;
 use a2amx::daemon::{self, Daemon, DaemonConfig};
@@ -204,6 +206,24 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
             GatewayAction::Status => return run_gateway_status(&home).await,
             GatewayAction::Run { pair, pair_only } => run_gateway(home, pair, pair_only).await,
         },
+        Command::Config {
+            action: ConfigAction::Show,
+        } => {
+            let env_value = match std::env::var("A2AMX_OWNER_AWAY_SECS") {
+                Ok(value) => Some(
+                    value
+                        .parse::<u64>()
+                        .with_context(|| "A2AMX_OWNER_AWAY_SECS must be an integer")?,
+                ),
+                Err(std::env::VarError::NotPresent) => None,
+                Err(error) => return Err(anyhow!("cannot read A2AMX_OWNER_AWAY_SECS: {error}")),
+            };
+            let layout = a2amx::layout::Layout::new(home.clone());
+            let output =
+                tokio::task::spawn_blocking(move || a2amx::config::show_daemon(&layout, env_value))
+                    .await??;
+            write_stdout(output.into_bytes()).await
+        }
         Command::Daemon { action } => match action {
             DaemonAction::Start {
                 listen,
@@ -421,25 +441,25 @@ async fn run_daemon(
     home: PathBuf,
     listen: Vec<std::net::SocketAddr>,
     host_name: Option<String>,
-    owner_away_secs: u64,
+    owner_away_secs: Option<u64>,
 ) -> anyhow::Result<()> {
-    let listen = if listen.is_empty() {
-        vec![
-            "127.0.0.1:0"
-                .parse()
-                .context("default daemon listen address")?,
-        ]
-    } else {
-        listen
-    };
-    let daemon = Daemon::start(DaemonConfig {
-        root: home,
+    let overrides = a2amx::config::Overrides {
         listen,
         host_name,
-        limits: a2amx::messaging::Limits {
-            away_secs: owner_away_secs,
-            ..Default::default()
-        },
+        owner_away_secs,
+    };
+    let layout = a2amx::layout::Layout::new(home.clone());
+    let loaded = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        layout.ensure()?;
+        a2amx::config::ensure_daemon_file(&layout)?;
+        a2amx::config::load_daemon(&layout, &overrides)
+    })
+    .await??;
+    let daemon = Daemon::start(DaemonConfig {
+        root: home,
+        listen: loaded.settings.listen,
+        host_name: loaded.settings.host_name,
+        limits: loaded.settings.limits,
         bwrap_path: None,
         env_path: None,
     })
@@ -461,7 +481,7 @@ async fn run_daemon_background(
     home: PathBuf,
     listen: Vec<std::net::SocketAddr>,
     host_name: Option<String>,
-    owner_away_secs: u64,
+    owner_away_secs: Option<u64>,
 ) -> anyhow::Result<()> {
     if Client::connect(&home).await.is_ok() {
         let running = read_addrs(&home).await.unwrap_or_default();
@@ -474,8 +494,15 @@ async fn run_daemon_background(
     let (log, exe) = {
         let home = home.clone();
         let log_path = log_path.clone();
+        let overrides = a2amx::config::Overrides {
+            listen: listen.clone(),
+            host_name: host_name.clone(),
+            owner_away_secs,
+        };
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            a2amx::layout::Layout::new(home.clone()).ensure()?;
+            let layout = a2amx::layout::Layout::new(home.clone());
+            layout.ensure()?;
+            a2amx::config::load_daemon(&layout, &overrides)?;
             let log = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -491,9 +518,9 @@ async fn run_daemon_background(
         .arg("--home")
         .arg(&home)
         .args(["daemon", "start", "--foreground"]);
-    command
-        .arg("--owner-away-secs")
-        .arg(owner_away_secs.to_string());
+    if let Some(value) = owner_away_secs {
+        command.arg("--owner-away-secs").arg(value.to_string());
+    }
     for addr in &listen {
         command.arg("--listen").arg(addr.to_string());
     }
