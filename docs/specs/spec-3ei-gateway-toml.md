@@ -325,3 +325,17 @@ cargo test --test daemon_cli
   in `ensure_file`, the template written by `gateway up` removed, the missing-`guild_id` error removed,
   `deny_unknown_fields` removed on `GatewayFile`; name the killing test for each.
 - A scratch directory, if any, is under `target/scratch/3ei/` and deleted before the report.
+
+## Amendment 1
+
+Raised by the developer (BLOCKED, 2026-11-13): section 2.1 says `parse_duration(format_duration(d))` returns `d`
+for every value with a sub-second part, but `format_duration` takes `std::time::Duration`, which can hold
+sub-millisecond values that no whole-millisecond text can carry.
+
+Decision: the round trip holds for whole-millisecond durations, which is every value `parse_duration` and the
+loader produce. `format_duration` of a value with a sub-second part prints `duration.as_millis()` followed by
+`ms` (truncating a sub-millisecond remainder toward zero); no caller passes such a value, and no test does
+(tests use literals in whole milliseconds). Section 2.1's last sentence reads: "`parse_duration` of its output
+returns the same value for every whole-millisecond duration." Nothing else in the spec changes; section 8 item 7
+already uses whole-millisecond literals only. Gate re-run: `rg -n "round trip|same value" docs/specs/spec-3ei-gateway-toml.md`
+shows only section 2.1, section 8 items 3 and 7, and this amendment, all consistent with this decision.
