@@ -136,10 +136,11 @@ status-line command is exact).
    CLAUDE_WINDOW_MAX_SECS`; an invalid bucket counts as missing. Its window is `left =
    (remaining_fraction * 100.0 - 1e-9).ceil()` clamped to `0..=100`: the epsilon cancels float noise
    (`0.07 * 100.0` is `7.000000000000001`, which a bare `ceil` would turn into 8) and the `ceil` keeps a
-   remainder of 1e-9 or more from showing as 0 (`QuotaInfo::exhausted()` turns 0 into "quota exhausted";
-   a fraction below 1e-9 counts as 0).
+   remainder from showing as 0 (`QuotaInfo::exhausted()` turns 0 into "quota exhausted"). The formula alone
+   is the contract (Amendment 2): there is no separate threshold branch, so a fraction of `1e-11` or less
+   gives 0 and anything above it gives at least 1.
    `resets_at = now_unix + reset_in_seconds`. Worked values: `1.0` -> 100, `0.763` -> 77, `0.999` -> 100,
-   `0.07` -> 7, `0.001` -> 1, `0.0` -> 0.
+   `0.07` -> 7, `0.001` -> 1, `1e-10` -> 1, `1e-12` -> 0, `0.0` -> 0.
 3. Group of the session: from `input.model.id`, the first matching rule wins, in this order: starts with
    `claude` or `gpt` -> `3p`; contains `argon` -> `gemini-argon-wtu`; starts with `gemini` -> `gemini`;
    anything else, or a missing `model.id` -> no group. With a group, the five-hour and weekly windows come
@@ -224,7 +225,7 @@ that, and does not add a refusal.
    with `model.id` `gemini-3.8-flash-low` (group `gemini`); a payload with model `claude-sonnet-x` (group
    `3p`); model absent and an unknown model id `foo` (smallest over groups, with the `resets_at` of the
    bucket that gave the minimum, and the earlier reset on a tie: the section 4 example); the Argon group
-   (weekly only); `remaining_fraction` `0.763` -> 77, `0.07` -> 7, `0.001` -> 1, `0.0` -> 0; `reset_in_seconds` `0` and `700000` rejected; `remaining_fraction` `1.2`
+   (weekly only); `remaining_fraction` `0.763` -> 77, `0.07` -> 7, `0.001` -> 1, `1e-10` -> 1, `1e-12` -> 0, `0.0` -> 0; `reset_in_seconds` `0` and `700000` rejected; `remaining_fraction` `1.2`
    and `"x"` rejected; unknown bucket keys ignored; no `quota` key -> `None`.
 3. `tests/agy_wiring.rs` (new): `wire_agy_argv` with no user settings produces exactly one `--settings` with
    the exact JSON of section 3 (literal expected string); a user `--settings` keeps its other keys,
@@ -331,3 +332,23 @@ decision to keep `agy` out of `starting()` (item 5) stands. Rejected: leaving `H
 `/exit` (needs the idle detection of spec 3). Reconciled against the rest of the spec: no other section
 mentions Ctrl-D for `agy`; acceptance step 4 (`rg -l "Agy" src`) is unchanged because `session.rs` and
 `daemon_cli.rs` already appear (`daemon_cli.rs` is a test file and not in that `src` list).
+
+## Amendment 2 (2026-11-14, architect, after the tester's BLOCKED m_7415)
+
+The tester found that section 4 item 2 stated the rounding twice with different results. The formula
+`(f * 100.0 - 1e-9).ceil()` gives 1 for `f = 1e-10`; the prose I added after the consultant's nit
+("a fraction below 1e-9 counts as 0") gives 0 (the epsilon applies to `f * 100`, so the threshold the
+formula implies is `f <= 1e-11`, not `1e-9`). The implementation followed the prose with an extra
+`if fraction < 1e-9 { 0 }` branch. Decision: the formula is the contract and the prose was wrong. The
+extra branch is removed (`ceil` of a negative tiny value is `-0.0`, which `clamp(0.0, 100.0)` turns into
+0, so `0.0` still gives 0); the worked values gain `1e-10` -> 1 and `1e-12` -> 0 (section 4 item 2 and
+section 9.2). Rejected: keeping the branch and rewriting the formula (it adds a special case that protects
+nothing the formula does not already do).
+
+The tester also reported three test gaps. They are implementation gaps and not contradictions: section
+9.2 requires positive cases for a `claude-` model (group `3p`), for an Argon model (weekly only, five-hour
+`None`) and for a missing `model.id` (smallest over groups), and section 9.3 requires the empty
+`gemini_dir` test with a decoy `antigravity-cli/settings.json` in the process's current directory.
+Confirmed against `tests/quota.rs:1289-1384` and `tests/agy_wiring.rs`: the claude case is only the
+negative "known group missing" one, no Argon-model or absent-model case exists, and no decoy test exists.
+The developer adds them. Reconciled: no other section states the rounding threshold.
