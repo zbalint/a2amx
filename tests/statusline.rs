@@ -46,6 +46,17 @@ fn payload(reset: u64) -> Vec<u8> {
     .unwrap()
 }
 
+fn agy_payload() -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "model": {"id": "gemini-3.8-flash-low"},
+        "quota": {
+            "gemini-5h": {"remaining_fraction": 0.763, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 3600},
+            "gemini-weekly": {"remaining_fraction": 0.9, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 7200}
+        }
+    }))
+    .unwrap()
+}
+
 fn sized_payload(size: usize, reset: u64) -> Vec<u8> {
     let rate_limits = serde_json::to_vec(&json!({
         "rate_limits": {
@@ -90,6 +101,36 @@ fn run_statusline(
         let _ = stdin.write_all(input);
     }
     child.wait_with_output().unwrap()
+}
+
+fn run_agy_statusline(address: SocketAddr, token: &str, input: &[u8], report: bool) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_a2amx"));
+    command.arg("statusline").arg("--harness").arg("agy");
+    if report {
+        command.arg("--report");
+    }
+    command
+        .env("A2AMX_ADDR", address.to_string())
+        .env("A2AMX_TOKEN", token)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input);
+    }
+    child.wait_with_output().unwrap()
+}
+
+async fn run_agy_statusline_async(
+    address: SocketAddr,
+    token: String,
+    input: Vec<u8>,
+    report: bool,
+) -> Output {
+    tokio::task::spawn_blocking(move || run_agy_statusline(address, &token, &input, report))
+        .await
+        .unwrap()
 }
 
 async fn run_statusline_async(
@@ -143,6 +184,20 @@ async fn claude_case() -> (TempDir, Daemon, Client, String, String, SocketAddr) 
     (dir, daemon, admin, id, token, address)
 }
 
+async fn agy_case() -> (TempDir, Daemon, Client, String, String, SocketAddr) {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (id, token, address) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("agent-agy"),
+        Harness::Agy,
+        Deliver::Hold,
+    )
+    .await;
+    (dir, daemon, admin, id, token, address)
+}
+
 #[tokio::test]
 async fn statusline_renders_and_reports_quota() {
     let (_dir, daemon, mut admin, id, token, address) = claude_case().await;
@@ -160,6 +215,36 @@ async fn statusline_renders_and_reports_quota() {
     assert_eq!(quota.five_hour_left, Some(77));
     assert_eq!(quota.weekly_left, Some(59));
     daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn agy_statusline_renders_and_reports_quota() {
+    let (_report_dir, report_daemon, mut report_admin, report_id, report_token, report_address) =
+        agy_case().await;
+    let output = run_agy_statusline_async(report_address, report_token, agy_payload(), true).await;
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let quota = wait_quota(&mut report_admin, &report_id).await;
+    assert_eq!(quota.five_hour_left, Some(77));
+    assert_eq!(quota.weekly_left, Some(90));
+    report_daemon.shutdown().await.unwrap();
+
+    let (
+        _visible_dir,
+        visible_daemon,
+        mut visible_admin,
+        visible_id,
+        visible_token,
+        visible_address,
+    ) = agy_case().await;
+    let output =
+        run_agy_statusline_async(visible_address, visible_token, agy_payload(), false).await;
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"5h 77% left 7d 90% left\n");
+    let quota = wait_quota(&mut visible_admin, &visible_id).await;
+    assert_eq!(quota.five_hour_left, Some(77));
+    assert_eq!(quota.weekly_left, Some(90));
+    visible_daemon.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -298,6 +383,31 @@ fn composed_statusline_preserves_input_and_user_shell_behavior() {
         assert_eq!(output.status.code(), Some(expected_status));
         assert_eq!(output.stdout, expected_stdout);
     }
+}
+
+#[test]
+fn claude_statusline_chain_contract_is_byte_exact() {
+    let cwd = TempDir::new().unwrap();
+    let config_dir = TempDir::new().unwrap();
+    let argv = wire_claude_argv(
+        vec![
+            "claude".into(),
+            "--settings".into(),
+            json!({"statusLine":{"type":"command","command":"cat"}}).to_string(),
+        ],
+        Path::new("/x/a2amx"),
+        cwd.path(),
+        config_dir.path(),
+        false,
+        None,
+    )
+    .unwrap();
+    let settings_index = argv.iter().position(|arg| arg == "--settings").unwrap();
+    let settings: Value = serde_json::from_str(&argv[settings_index + 1]).unwrap();
+    assert_eq!(
+        settings["statusLine"]["command"],
+        "i=$(cat; echo x); i=${i%x}; printf '%s' \"$i\" | '/x/a2amx' statusline --report; printf '%s' \"$i\" | (cat\n)"
+    );
 }
 
 #[test]

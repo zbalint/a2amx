@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+use crate::cli::StatuslineHarness;
 use crate::client::Client;
 use crate::mcp;
 use crate::quota;
@@ -13,8 +14,8 @@ use crate::wire::{QuotaWindow, Request, Response};
 const MAX_STDIN_BYTES: usize = 256 * 1024;
 const REPORT_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Read Claude's status-line payload, report valid quota, and render its short line.
-pub async fn run(report: bool) -> anyhow::Result<()> {
+/// Read a harness status-line payload, report valid quota, and render its short line.
+pub async fn run(report: bool, harness: StatuslineHarness) -> anyhow::Result<()> {
     let input = match tokio::task::spawn_blocking(read_stdin).await? {
         Ok(input) => input,
         Err(ReadError::TooLarge) => {
@@ -42,7 +43,11 @@ pub async fn run(report: bool) -> anyhow::Result<()> {
             return Ok(());
         }
     };
-    let Some(limits) = quota::from_claude_rate_limits(&payload, now_unix()) else {
+    let limits = match harness {
+        StatuslineHarness::Claude => quota::from_claude_rate_limits(&payload, now_unix()),
+        StatuslineHarness::Agy => quota::from_agy_status(&payload, now_unix()),
+    };
+    let Some(limits) = limits else {
         if !report {
             write_output(String::new()).await;
         }

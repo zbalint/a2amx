@@ -26,6 +26,7 @@ pub enum Harness {
     Generic,
     Omp,
     Codex,
+    Agy,
 }
 
 #[derive(
@@ -44,6 +45,7 @@ impl Harness {
             Self::Generic => "generic",
             Self::Omp => "omp",
             Self::Codex => "codex",
+            Self::Agy => "agy",
         }
     }
 
@@ -57,6 +59,7 @@ impl Harness {
             Some("claude") => Self::Claude,
             Some("codex") => Self::Codex,
             Some("omp") => Self::Omp,
+            Some("agy") => Self::Agy,
             _ => Self::Generic,
         }
     }
@@ -64,7 +67,7 @@ impl Harness {
     pub fn default_deliver(self) -> Deliver {
         match self {
             Self::Claude | Self::Omp | Self::Codex => Deliver::Auto,
-            Self::Generic => Deliver::Hold,
+            Self::Generic | Self::Agy => Deliver::Hold,
         }
     }
 }
@@ -280,7 +283,7 @@ pub fn claude_composer_empty(screen: &Screen, scrolled: bool) -> bool {
 
 pub fn ready(harness: Harness, screen: &Screen, scrolled: bool) -> bool {
     match harness {
-        Harness::Generic | Harness::Omp | Harness::Codex => {
+        Harness::Generic | Harness::Omp | Harness::Codex | Harness::Agy => {
             screen.modes.bracketed_paste && !scrolled
         }
         Harness::Claude => claude_ready(screen, scrolled),
@@ -337,7 +340,7 @@ pub fn paste_view(harness: Harness, text: &str) -> String {
                 escaped
             }
         }
-        Harness::Generic | Harness::Omp | Harness::Codex => text.to_owned(),
+        Harness::Generic | Harness::Omp | Harness::Codex | Harness::Agy => text.to_owned(),
     }
 }
 
@@ -449,6 +452,12 @@ fn read_status_line_file(path: &Path) -> Option<serde_json::Value> {
     settings.get("statusLine").cloned()
 }
 
+fn chained_command(executable: &str, report_flags: &str, user_command: &str) -> String {
+    format!(
+        "i=$(cat; echo x); i=${{i%x}}; printf '%s' \"$i\" | {executable} {report_flags}; printf '%s' \"$i\" | ({user_command}\n)"
+    )
+}
+
 fn build_status_line(resolved: &Option<serde_json::Value>, exe: &Path) -> serde_json::Value {
     let Some(status_line) = resolved else {
         return serde_json::json!({
@@ -468,9 +477,7 @@ fn build_status_line(resolved: &Option<serde_json::Value>, exe: &Path) -> serde_
         return status_line.clone();
     }
     let executable = shell_quote(exe.to_string_lossy().as_ref());
-    let command = format!(
-        "i=$(cat; echo x); i=${{i%x}}; printf '%s' \"$i\" | {executable} statusline --report; printf '%s' \"$i\" | ({command}\n)"
-    );
+    let command = chained_command(&executable, "statusline --report", command);
     let mut chained = serde_json::Map::new();
     chained.insert(
         "type".to_owned(),
@@ -483,6 +490,100 @@ fn build_status_line(resolved: &Option<serde_json::Value>, exe: &Path) -> serde_
         }
     }
     serde_json::Value::Object(chained)
+}
+
+fn resolve_agy_status_line(
+    user_settings: Option<&serde_json::Value>,
+    gemini_dir: &Path,
+) -> Option<serde_json::Value> {
+    if let Some(status_line) = user_settings.and_then(|settings| settings.get("statusLine")) {
+        return Some(status_line.clone());
+    }
+    // shortcut: project-level agy settings are not read; add them if agy's status-line precedence needs them.
+    if !gemini_dir.as_os_str().is_empty() {
+        return read_status_line_file(&gemini_dir.join("antigravity-cli/settings.json"));
+    }
+    None
+}
+
+fn build_agy_status_line(resolved: &Option<serde_json::Value>, exe: &Path) -> serde_json::Value {
+    let executable = shell_quote(exe.to_string_lossy().as_ref());
+    let Some(status_line) = resolved else {
+        return serde_json::json!({
+            "command": format!("{executable} statusline --harness agy"),
+            "enabled": true,
+        });
+    };
+    let Some(object) = status_line.as_object() else {
+        return status_line.clone();
+    };
+    let Some(command) = object.get("command").and_then(serde_json::Value::as_str) else {
+        return status_line.clone();
+    };
+    if command.as_bytes().contains(&0) {
+        return status_line.clone();
+    }
+    if object.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) {
+        return serde_json::json!({
+            "command": format!("{executable} statusline --harness agy --report"),
+            "enabled": true,
+        });
+    }
+    let mut chained = serde_json::Map::new();
+    chained.insert(
+        "command".to_owned(),
+        serde_json::Value::String(chained_command(
+            &executable,
+            "statusline --harness agy --report",
+            command,
+        )),
+    );
+    chained.insert("enabled".to_owned(), serde_json::Value::Bool(true));
+    for key in ["padding", "stack_with_default"] {
+        if let Some(value) = object.get(key) {
+            chained.insert(key.to_owned(), value.clone());
+        }
+    }
+    serde_json::Value::Object(chained)
+}
+
+pub fn wire_agy_argv(
+    argv: Vec<String>,
+    exe: &Path,
+    cwd: &Path,
+    gemini_dir: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let (argv, user_settings) = take_user_settings(argv, cwd)?;
+    let resolved_status_line = resolve_agy_status_line(user_settings.as_ref(), gemini_dir);
+    let mut settings = user_settings.unwrap_or_else(|| serde_json::json!({}));
+    let object = settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("--settings JSON must be an object"))?;
+    object.insert(
+        "statusLine".to_owned(),
+        build_agy_status_line(&resolved_status_line, exe),
+    );
+    object.insert(
+        "queuedMessages".to_owned(),
+        serde_json::Value::String("queue".to_owned()),
+    );
+    let trusted = object
+        .entry("trustedWorkspaces")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let trusted = trusted
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("--settings trustedWorkspaces must be an array"))?;
+    let cwd = cwd.to_string_lossy();
+    if !trusted
+        .iter()
+        .any(|value| value.as_str() == Some(cwd.as_ref()))
+    {
+        trusted.push(serde_json::Value::String(cwd.into_owned()));
+    }
+    Ok(insert_extras(
+        argv,
+        vec!["--settings".to_owned(), settings.to_string()],
+    ))
 }
 
 fn take_user_settings(

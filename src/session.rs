@@ -32,7 +32,7 @@ const STALE_DRAFT_MARGIN: Duration = Duration::from_secs(2); // shortcut: fixed 
 const RESET_POLL: Duration = Duration::from_millis(100);
 const RESET_TIMEOUT: Duration = Duration::from_secs(30);
 const GRACEFUL_TIMEOUT: Duration = Duration::from_secs(10);
-const CLAUDE_EXIT_KEY_GAP: Duration = Duration::from_millis(300);
+const EXIT_KEY_GAP: Duration = Duration::from_millis(300);
 type SpawnTask = Box<dyn FnOnce() + Send + 'static>;
 
 struct SpawnJob {
@@ -586,7 +586,7 @@ impl Session {
 
     pub(crate) fn starting(&self) -> bool {
         self.exit_code().is_none()
-            && !matches!(self.harness, Harness::Generic)
+            && !matches!(self.harness, Harness::Generic | Harness::Agy)
             && !self.ready_latched.load(Ordering::Acquire)
     }
 
@@ -998,7 +998,7 @@ impl Session {
         match self.harness {
             Harness::Omp => Self::stale_omp_draft(state),
             Harness::Claude => Self::stale_claude_draft(state),
-            Harness::Generic | Harness::Codex => false,
+            Harness::Generic | Harness::Codex | Harness::Agy => false,
         }
     }
 
@@ -1327,10 +1327,10 @@ impl Session {
                 return false;
             }
         }
-        if self.harness == Harness::Claude {
-            // shortcut: fixed 300 ms against Claude's pending-exit window; use a
-            // screen-based wait if a Claude release shortens that window.
-            tokio::time::sleep(CLAUDE_EXIT_KEY_GAP).await;
+        if matches!(self.harness, Harness::Claude | Harness::Agy) {
+            // shortcut: fixed 300 ms against Claude and Agy's pending-exit window; use a
+            // screen-based wait if either harness release shortens that window.
+            tokio::time::sleep(EXIT_KEY_GAP).await;
             match self.enqueue(key).await {
                 Ok(true) => {}
                 Ok(false) => {

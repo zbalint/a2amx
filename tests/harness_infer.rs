@@ -14,6 +14,19 @@ fn names_a_harness_by_executable_file_name() {
 }
 
 #[test]
+fn names_agy_by_exact_executable_file_name() {
+    assert_eq!(infer(&["agy"]), Harness::Agy);
+    assert_eq!(infer(&["/usr/local/bin/agy"]), Harness::Agy);
+    assert_eq!(infer(&["agyx"]), Harness::Generic);
+    assert_eq!(infer(&["my-agy"]), Harness::Generic);
+    assert_eq!(Harness::Agy.as_str(), "agy");
+    assert_eq!(
+        Harness::Agy.default_deliver(),
+        a2amx::harness::Deliver::Hold
+    );
+}
+
+#[test]
 fn anything_else_is_generic() {
     assert_eq!(infer(&["sh"]), Harness::Generic);
     assert_eq!(infer(&["Claude"]), Harness::Generic);

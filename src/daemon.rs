@@ -1011,7 +1011,7 @@ impl Runtime {
                     harness::needs_input(Harness::Claude, &state.emulator.screen())
                         .then_some("input?")
                 }
-                Harness::Omp | Harness::Generic => None,
+                Harness::Omp | Harness::Generic | Harness::Agy => None,
             };
             session.note_needs_input(signal, now);
             if session.exit_code().is_some() {
@@ -2008,7 +2008,7 @@ impl Runtime {
                 message: "session is unavailable".into(),
             });
         };
-        if session.harness() == Harness::Claude {
+        if matches!(session.harness(), Harness::Claude | Harness::Agy) {
             session.set_quota_report(five_hour, weekly);
         }
         Ok(Response::Ok)
@@ -3433,12 +3433,15 @@ fn session_quota(
 ) -> Option<QuotaInfo> {
     let harness = session.harness();
     if session.exit_code().is_some()
-        || !matches!(harness, Harness::Claude | Harness::Codex | Harness::Omp)
+        || !matches!(
+            harness,
+            Harness::Claude | Harness::Codex | Harness::Omp | Harness::Agy
+        )
     {
         return None;
     }
     let screen = quota::read(&session.lock().emulator.screen(), harness);
-    if harness == Harness::Claude {
+    if matches!(harness, Harness::Claude | Harness::Agy) {
         let (five_hour, weekly) = session.quota_report(store::now());
         let mut quota = screen.unwrap_or_default();
         if let Some(window) = five_hour {

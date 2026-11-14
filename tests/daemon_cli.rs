@@ -1453,6 +1453,25 @@ fn kill_sends_claude_two_key_exit_sequence() {
 }
 
 #[test]
+fn kill_sends_agy_two_key_exit_sequence() {
+    let fixture = ExitFixture::start("two", "agy");
+    let started = Instant::now();
+    let killed = run(&fixture.home, &["kill", "worker", "--yes"]);
+    assert!(killed.status.success(), "{}", stderr(&killed));
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "two-key exit took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(fixture.bytes(), b"\x04\x04");
+    assert!(
+        fixture.log().contains("outcome=\"exited\""),
+        "{}",
+        fixture.log()
+    );
+}
+
+#[test]
 fn kill_falls_back_after_graceful_timeout() {
     let fixture = ExitFixture::start("ignore", "claude");
     let started = Instant::now();

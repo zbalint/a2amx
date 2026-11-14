@@ -9,14 +9,14 @@ use crate::emulator::Screen;
 use crate::harness::Harness;
 use crate::wire::QuotaInfo;
 
-/// One Claude rate-limit window converted to percent remaining.
+/// One Claude or Agy rate-limit window converted to percent remaining.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClaudeWindow {
     pub left: u8,
     pub resets_at: u64,
 }
 
-/// Claude's independently optional five-hour and weekly rate-limit windows.
+/// Claude's or Agy's independently optional five-hour and weekly rate-limit windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClaudeRateLimits {
     pub five_hour: Option<ClaudeWindow>,
@@ -45,6 +45,99 @@ fn claude_window(value: Option<&Value>, now_unix: u64) -> Option<ClaudeWindow> {
     }
     let left = (100.0 - used).ceil().clamp(0.0, 100.0) as u8;
     Some(ClaudeWindow { left, resets_at })
+}
+
+#[derive(Default)]
+struct AgyBuckets {
+    five_hour: Option<ClaudeWindow>,
+    weekly: Option<ClaudeWindow>,
+}
+
+fn agy_window(value: &Value, now_unix: u64) -> Option<ClaudeWindow> {
+    let object = value.as_object()?;
+    let fraction = object.get("remaining_fraction")?.as_f64()?;
+    if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
+        return None;
+    }
+    let reset_in_seconds = object.get("reset_in_seconds")?.as_u64()?;
+    if !(1..=CLAUDE_WINDOW_MAX_SECS).contains(&reset_in_seconds) {
+        return None;
+    }
+    let resets_at = now_unix.checked_add(reset_in_seconds)?;
+    let left = (fraction * 100.0 - 1e-9).ceil().clamp(0.0, 100.0) as u8;
+    Some(ClaudeWindow { left, resets_at })
+}
+
+fn model_group(model: Option<&str>) -> Option<&'static str> {
+    let model = model?;
+    if model.starts_with("claude") || model.starts_with("gpt") {
+        Some("3p")
+    } else if model.contains("argon") {
+        Some("gemini-argon-wtu")
+    } else if model.starts_with("gemini") {
+        Some("gemini")
+    } else {
+        None
+    }
+}
+
+fn least_window<'a>(
+    buckets: impl Iterator<Item = &'a AgyBuckets>,
+    weekly: bool,
+) -> Option<ClaudeWindow> {
+    buckets
+        .filter_map(|bucket| {
+            if weekly {
+                bucket.weekly
+            } else {
+                bucket.five_hour
+            }
+        })
+        .min_by_key(|window| (window.left, window.resets_at))
+}
+
+/// Convert Antigravity's status-line quota payload into bounded windows.
+pub fn from_agy_status(input: &Value, now_unix: u64) -> Option<ClaudeRateLimits> {
+    let quota = input.get("quota")?.as_object()?;
+    let mut buckets = BTreeMap::<String, AgyBuckets>::new();
+    for (key, value) in quota {
+        let (group, weekly) = if let Some(group) = key.strip_suffix("-5h") {
+            (group, false)
+        } else if let Some(group) = key.strip_suffix("-weekly") {
+            (group, true)
+        } else {
+            continue;
+        };
+        let Some(window) = agy_window(value, now_unix) else {
+            continue;
+        };
+        let entry = buckets.entry(group.to_owned()).or_default();
+        if weekly {
+            entry.weekly = Some(window);
+        } else {
+            entry.five_hour = Some(window);
+        }
+    }
+    let group = model_group(
+        input
+            .get("model")
+            .and_then(|model| model.get("id"))
+            .and_then(Value::as_str),
+    );
+    let selected = group.and_then(|group| buckets.get(group));
+    let five_hour = selected.and_then(|bucket| bucket.five_hour).or_else(|| {
+        group
+            .is_none()
+            .then(|| least_window(buckets.values(), false))
+            .flatten()
+    });
+    let weekly = selected.and_then(|bucket| bucket.weekly).or_else(|| {
+        group
+            .is_none()
+            .then(|| least_window(buckets.values(), true))
+            .flatten()
+    });
+    (five_hour.is_some() || weekly.is_some()).then_some(ClaudeRateLimits { five_hour, weekly })
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,7 +199,7 @@ pub fn read(screen: &Screen, harness: Harness) -> Option<QuotaInfo> {
     match harness {
         Harness::Claude | Harness::Codex => read_windows(screen),
         Harness::Omp => read_omp_limit(screen),
-        Harness::Generic => None,
+        Harness::Generic | Harness::Agy => None,
     }
 }
 

@@ -485,7 +485,7 @@ fn harness_data(harness: Harness, home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
                 ]);
             }
         }
-        Harness::Generic | Harness::Codex => {}
+        Harness::Generic | Harness::Codex | Harness::Agy => {}
     }
     (dirs, files)
 }
@@ -603,7 +603,7 @@ fn validate_harness_data_paths(
     let expected_sources = match harness {
         Harness::Claude => vec![home.join(".claude")],
         Harness::Omp => vec![home.join(".omp/agent"), home.join(".omp")],
-        Harness::Generic | Harness::Codex => Vec::new(),
+        Harness::Generic | Harness::Codex | Harness::Agy => Vec::new(),
     };
     let expected_roots = expected_sources
         .iter()
@@ -658,7 +658,7 @@ pub fn ensure_data_dirs(harness: Harness, home: &Path) -> Result<()> {
     let root = match harness {
         Harness::Claude => home.join(".claude"),
         Harness::Omp => home.join(".omp"),
-        Harness::Generic | Harness::Codex => return Ok(()),
+        Harness::Generic | Harness::Codex | Harness::Agy => return Ok(()),
     };
     if !root.is_dir() {
         return Ok(());
@@ -1033,13 +1033,13 @@ fn add_harness_data_mounts(
     writable: &mut Vec<PathBuf>,
     skipped: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    if harness == Harness::Generic || harness == Harness::Codex {
+    if harness == Harness::Generic || harness == Harness::Codex || harness == Harness::Agy {
         return Ok(());
     }
     let root = match harness {
         Harness::Claude => home.join(".claude"),
         Harness::Omp => home.join(".omp"),
-        Harness::Generic | Harness::Codex => unreachable!(),
+        Harness::Generic | Harness::Codex | Harness::Agy => unreachable!(),
     };
     if !root.is_dir() {
         return Ok(());
@@ -1125,7 +1125,7 @@ pub fn plan_with_preflight(
             Harness::Claude => builder.home.join(".claude"),
             Harness::Omp => builder.home.join(".omp"),
             Harness::Codex => builder.home.join(".codex"),
-            Harness::Generic => unreachable!(),
+            Harness::Generic | Harness::Agy => unreachable!(),
         };
         let root = canonical_if_exists(&root);
         let operator_root = root.as_ref().is_some_and(|root| {
@@ -1323,7 +1323,7 @@ impl<'a> PlanBuilder<'a> {
             Harness::Claude => Some(self.home.join(".claude")),
             Harness::Omp => Some(self.home.join(".omp")),
             Harness::Codex => Some(self.home.join(".codex")),
-            Harness::Generic => None,
+            Harness::Generic | Harness::Agy => None,
         }
     }
 
@@ -2554,7 +2554,7 @@ pub fn launch_argv(
             let wrapped = plan.wrap(argv)?;
             crate::harness::append_system_prompt(wrapped, notice, harness, &plan.cwd)
         }
-        Harness::Codex => plan.wrap(argv),
+        Harness::Codex | Harness::Agy => plan.wrap(argv),
     }
 }
 

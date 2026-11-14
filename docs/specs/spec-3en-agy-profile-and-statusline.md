@@ -352,3 +352,22 @@ The tester also reported three test gaps. They are implementation gaps and not c
 Confirmed against `tests/quota.rs:1289-1384` and `tests/agy_wiring.rs`: the claude case is only the
 negative "known group missing" one, no Argon-model or absent-model case exists, and no decoy test exists.
 The developer adds them. Reconciled: no other section states the rounding threshold.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (spec review, two rounds); developer OMP
+openai-codex/gpt-5.6-luna; tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 1 BLOCKED
+(tester m_7415, Amendment 2) plus Amendment 1 from owner information.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review, round 1 | consultant | No `harness::ready` arm for `Agy`; the chained status-line design did not fit agy's shape (no `type` key) | Separate agy helpers sharing `chained_command`; `ready` arm added |
+| Draft review, round 1 | consultant | `confine.rs` anchor contradicted the preflight rule (`preflight_env` only for Generic) | `Agy` joins the Codex plain-wrap arm in `launch_argv` |
+| Draft review, round 1 | consultant | Bare `ceil(f*100)` gives 8 for 0.07 | Epsilon formula `(f*100 - 1e-9).ceil()` |
+| Draft review, round 2 | consultant | Empty `gemini_dir` reads a relative path; "byte-identical proven by tests" claim was false; `enabled:false` silently disabled quota | Guard and decoy test; literal contract test; report-only form |
+| Owner review | owner | Spec said `agy` gets no Ctrl-D; it exits on a double Ctrl-D like Claude | Amendment 1; `EXIT_KEY_GAP`; kill test added (not run red, disclosed) |
+| Implementation | developer | First report missed the quota cases, decoy test, `--report` on a fresh session, chain-order assertions and the shortcut comment | Added in the next report |
+| Implementation | developer | `starting()` latch conjunct dropped; found by the full suite | Restored |
+| Tester pass | tester | Spec prose ("below 1e-9 counts as 0") contradicted the formula; an extra branch was built from it (architect-introduced) | Amendment 2; branch removed |
+| Tester pass | tester | Two surviving mutants: `starting()` Agy exclusion and the confined Agy launch arm have no test | Accepted; covered by specs 2 and 3 tests |
+| Architect review | architect | Blank line deleted in `quota.rs` | Restored |

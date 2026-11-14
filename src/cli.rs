@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::harness::{Deliver, Harness};
 use crate::prefix::parse_prefix;
@@ -187,14 +187,23 @@ pub enum Command {
         #[arg(long)]
         channel: bool,
     },
-    /// Render Claude Code's status line and optionally report its quota.
+    /// Render Claude Code or Antigravity's status line and optionally report its quota.
     Statusline {
         /// Report quota without printing the visible line.
         #[arg(long)]
         report: bool,
+        /// Status-line payload format.
+        #[arg(long, value_enum, default_value = "claude")]
+        harness: StatuslineHarness,
     },
     /// Run the prompt-submit hook adapter (reads the harness payload on stdin).
     Hook,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum StatuslineHarness {
+    Claude,
+    Agy,
 }
 
 #[derive(Debug, Subcommand)]

@@ -172,8 +172,8 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 .map(|_| std::process::ExitCode::SUCCESS);
         }
         Command::Hook => return hook::run().await.map(|_| std::process::ExitCode::SUCCESS),
-        Command::Statusline { report } => {
-            return statusline::run(*report)
+        Command::Statusline { report, harness } => {
+            return statusline::run(*report, *harness)
                 .await
                 .map(|_| std::process::ExitCode::SUCCESS);
         }
@@ -1064,6 +1064,17 @@ async fn wired_command(
                 })
                 .await??)
             }
+        }
+        Harness::Agy => {
+            let exe = std::env::current_exe()?;
+            let wire_cwd = cwd.to_owned();
+            let gemini_dir = std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".gemini"))
+                .unwrap_or_default();
+            Ok(tokio::task::spawn_blocking(move || {
+                a2amx::harness::wire_agy_argv(command, &exe, &wire_cwd, &gemini_dir)
+            })
+            .await??)
         }
         Harness::Omp if !install_omp => Ok(command),
         Harness::Omp => {
