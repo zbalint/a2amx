@@ -514,16 +514,10 @@ pub fn parse(text: &str, dir: &std::path::Path, global: bool) -> anyhow::Result<
             })
             .transpose()?;
         let mut session = session_from_table(index, table)?;
-        session.confine = merge_confine(
-            &session.name,
-            confine.as_ref(),
-            own_confine.as_ref(),
-            global,
-        )?;
-        session.auto = global
-            && confine
-                .as_ref()
-                .is_some_and(|table| table.auto == Some(true));
+        session.confine = merge_confine(&session.name, confine.as_ref(), own_confine.as_ref())?;
+        session.auto = confine
+            .as_ref()
+            .is_some_and(|table| table.auto == Some(true));
         sessions.push(session);
     }
     let base_names: HashSet<String> = sessions
@@ -628,19 +622,11 @@ fn merge_confine(
     session_name: &str,
     team: Option<&ConfineTable>,
     own: Option<&ConfineTable>,
-    global: bool,
 ) -> anyhow::Result<Option<crate::confine::ConfineRequest>> {
     if let Some(table) = team {
         validate_confine_syntax("[confine] ", table)?;
-        if table.auto == Some(true) {
-            if !global {
-                bail!(
-                    "[confine] auto is only read from the global team file; run a2amx confine suggest and paste the grants line into your team file"
-                );
-            }
-            if table.enabled == Some(false) {
-                bail!("[confine] auto needs confinement; remove enabled = false");
-            }
+        if table.auto == Some(true) && table.enabled == Some(false) {
+            bail!("[confine] auto needs confinement; remove enabled = false");
         }
     }
     if own.is_some_and(|table| table.auto.is_some()) {

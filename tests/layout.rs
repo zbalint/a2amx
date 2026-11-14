@@ -47,7 +47,7 @@ fn accessors_match_root_table() {
         (layout.link_gateway_token(), "/r/run/link/gateway.token"),
         (layout.confine_empty(), "/r/run/confine-empty"),
         (layout.messages_db(), "/r/state/messages.db"),
-        (layout.auto_grants(), "/r/state/auto-grants"),
+        (layout.auto_grants(), "/r/state/auto-grants.toml"),
         (layout.pairing(), "/r/state/gateway/pairing.json"),
         (layout.seen(), "/r/state/gateway/seen.json"),
         (layout.team_file(), "/r/config/team.toml"),

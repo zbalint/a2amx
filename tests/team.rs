@@ -3632,25 +3632,22 @@ fn confine_entry_syntax_is_checked_at_parse_time() {
 }
 
 #[test]
-fn confine_auto_is_global_only_and_team_false_is_accepted() {
-    let global = team::parse(
-        "[confine]\nenabled = true\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
-        Path::new("/work/project"),
-        true,
-    )
-    .expect("global auto");
-    assert!(global[0].auto);
-
-    let local_error = team::parse(
-        "[confine]\nenabled = true\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
-        std::path::Path::new("/work/demo"),
-        false,
-    )
-    .expect_err("local auto");
-    assert_eq!(
-        local_error.to_string(),
-        "[confine] auto is only read from the global team file; run a2amx confine suggest and paste the grants line into your team file"
-    );
+fn confine_auto_is_accepted_in_any_team_file_and_team_false_is_accepted() {
+    for (text, dir, global) in [
+        (
+            "[confine]\nenabled = true\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+            Path::new("/work/project"),
+            true,
+        ),
+        (
+            "[confine]\nenabled = true\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+            Path::new("/work/demo"),
+            false,
+        ),
+    ] {
+        let sessions = team::parse(text, dir, global).expect("auto in team file");
+        assert!(sessions[0].auto);
+    }
 
     for value in ["true", "false"] {
         let error = team::parse(&format!(

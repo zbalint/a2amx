@@ -5,6 +5,7 @@ mod common;
 
 use common::pty::PtyHarness;
 use common::start_daemon;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -348,11 +349,14 @@ async fn dry_run_reports_unaccepted_grants_and_respects_seeded_file() {
         stdout.contains("  not yet accepted: cargo, cache\n"),
         "{stdout}"
     );
-    assert!(!state.path().join("state/auto-grants").exists());
+    assert!(!state.path().join("state/auto-grants.toml").exists());
 
     std::fs::write(
-        state.path().join("state/auto-grants"),
-        "unknown\n cache \n\ncargo\n",
+        state.path().join("state/auto-grants.toml"),
+        format!(
+            "[projects.{:?}]\ngrants = [\"unknown\", \"cache\", \"cargo\"]\n",
+            project.path().to_string_lossy()
+        ),
     )
     .expect("seed accepted grants");
     let seeded = run_binary(
@@ -369,8 +373,11 @@ async fn dry_run_reports_unaccepted_grants_and_respects_seeded_file() {
         "{}",
         String::from_utf8_lossy(&seeded.stdout)
     );
-    std::fs::write(state.path().join("state/auto-grants"), "x".repeat(4097))
-        .expect("oversized accepted grants");
+    std::fs::write(
+        state.path().join("state/auto-grants.toml"),
+        "x".repeat(65_537),
+    )
+    .expect("oversized accepted grants");
     let oversized = run_binary(
         state.path(),
         project.path(),
@@ -381,11 +388,175 @@ async fn dry_run_reports_unaccepted_grants_and_respects_seeded_file() {
     .expect("oversized dry run");
     assert!(!oversized.status.success());
     assert!(
-        String::from_utf8_lossy(&oversized.stderr)
-            .contains(&state.path().join("state/auto-grants").display().to_string())
+        String::from_utf8_lossy(&oversized.stderr).contains(&format!(
+            "accepted auto-grants.toml file {} is larger than 65536 bytes",
+            state.path().join("state/auto-grants.toml").display()
+        ))
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_auto_grants_file_validates_shape_size_and_fifo() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    std::fs::write(project.path().join("Cargo.toml"), "").expect("cargo marker");
+    let accepted = state.path().join("state/auto-grants.toml");
+    let base = format!(
+        "[projects.{:?}]\ngrants = [\"cache\"]\n",
+        project.path().to_string_lossy()
+    );
+    let exact = format!("{base}{}", "#".repeat(65_536 - base.len()));
+    assert_eq!(exact.len(), 65_536);
+    std::fs::write(&accepted, exact).expect("exact-size accepted grants");
+    let valid = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("exact-size dry run");
+    assert!(
+        valid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+    std::fs::write(&accepted, "[projects.\"/p\"]\ngrants = \"cache\"\n")
+        .expect("invalid accepted grants");
+    let invalid = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("invalid dry run");
+    assert_eq!(invalid.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains(&accepted.display().to_string()));
+    let invalid_normal = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up"],
+    )
+    .expect("invalid normal run");
+    assert_eq!(invalid_normal.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&invalid_normal.stderr).contains(&accepted.display().to_string())
+    );
+
+    std::fs::remove_file(&accepted).expect("remove accepted grants");
+    let fifo = AsyncCommand::new("mkfifo")
+        .arg(&accepted)
+        .status()
+        .await
+        .expect("mkfifo");
+    assert!(fifo.success(), "mkfifo status: {fifo}");
+    let state_path = state.path().to_owned();
+    let project_path = project.path().to_owned();
+    let home_path = user_home.path().to_owned();
+    let runtime_path = runtime.path().to_owned();
+    let fifo_result = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || {
+            run_binary(
+                &state_path,
+                &project_path,
+                &home_path,
+                &runtime_path,
+                &["team", "up", "--dry-run"],
+            )
+        }),
+    )
+    .await
+    .expect("FIFO check hung")
+    .expect("FIFO check task");
+    let fifo_output = fifo_result.expect("FIFO dry run");
+    assert!(!fifo_output.status.success());
+    assert!(String::from_utf8_lossy(&fifo_output.stderr).contains(&accepted.display().to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_utf8_project_directory_is_rejected_by_dry_run() {
+    let (state, _daemon) = start_daemon().await;
+    let root = tempfile::tempdir().expect("root");
+    let bad_name = std::ffi::OsString::from_vec(vec![b'p', 0x80]);
+    let bad = root.path().join(&bad_name);
+    std::fs::create_dir(&bad).expect("non-UTF-8 project");
+    std::fs::write(bad.join("Cargo.toml"), "").expect("cargo marker");
+    std::fs::write(
+        bad.join("a2amx.toml"),
+        "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n",
+    )
+    .expect("local team file");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    let output = run_binary(
+        state.path(),
+        &bad,
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("non-UTF-8 dry run");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("project directory is not valid UTF-8"));
+    assert!(stderr.contains(&format!("{:?}", bad.as_os_str())));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn symlinked_accepted_file_is_read_and_trailing_slash_key_does_not_match() {
+    let (state, _daemon) = start_daemon().await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    global_auto_file(state.path());
+    std::fs::write(project.path().join("Cargo.toml"), "").expect("cargo marker");
+    let accepted = state.path().join("state/auto-grants.toml");
+    let target = state.path().join("accepted-real.toml");
+    std::fs::write(
+        &target,
+        format!(
+            "[projects.{:?}]\ngrants = [\"cache\", \"cargo\"]\n",
+            project.path().to_string_lossy()
+        ),
+    )
+    .expect("real accepted file");
+    std::os::unix::fs::symlink(&target, &accepted).expect("accepted symlink");
+    let honored = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("symlink dry run");
+    assert!(honored.status.success());
+    assert!(!String::from_utf8_lossy(&honored.stdout).contains("not yet accepted"));
+    std::fs::write(
+        &target,
+        format!(
+            "[projects.{:?}]\ngrants = [\"cache\", \"cargo\"]\n",
+            format!("{}/", project.path().display())
+        ),
+    )
+    .expect("trailing slash accepted key");
+    let noncanonical = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("noncanonical dry run");
+    assert!(noncanonical.status.success());
+    assert!(String::from_utf8_lossy(&noncanonical.stdout).contains("not yet accepted"));
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn refusal_blocks_auto_start_and_yes_is_one_run_only() {
     let bwrap = AsyncCommand::new("bwrap").arg("--version").output().await;
@@ -438,7 +609,7 @@ async fn refusal_blocks_auto_start_and_yes_is_one_run_only() {
         !refused_stderr.contains("auto confinement for session"),
         "{refused_stderr}"
     );
-    assert!(!state.path().join("state/auto-grants").exists());
+    assert!(!state.path().join("state/auto-grants.toml").exists());
     let listed = run_binary(
         state.path(),
         project.path(),
@@ -452,7 +623,18 @@ async fn refusal_blocks_auto_start_and_yes_is_one_run_only() {
         "{}",
         String::from_utf8_lossy(&listed.stdout)
     );
-    std::fs::write(state.path().join("state/auto-grants"), "unknown\n").expect("unknown grant");
+    std::fs::write(state.path().join("state/auto-grants"), "cache\ncargo\n")
+        .expect("valid legacy grant");
+    let legacy_ignored = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .expect("legacy dry run");
+    assert!(legacy_ignored.status.success());
+    assert!(String::from_utf8_lossy(&legacy_ignored.stdout).contains("not yet accepted"));
 
     let accepted_once = run_binary(
         state.path(),
@@ -474,10 +656,11 @@ async fn refusal_blocks_auto_start_and_yes_is_one_run_only() {
             && yes_stderr.contains("auto confinement for session"),
         "{yes_stderr}"
     );
+    assert!(!state.path().join("state/auto-grants.toml").exists());
     assert_eq!(
         std::fs::read_to_string(state.path().join("state/auto-grants"))
             .expect("read unknown grant"),
-        "unknown\n"
+        "cache\ncargo\n"
     );
 }
 
@@ -516,10 +699,18 @@ async fn pty_yes_persists_accepted_grants_with_private_mode() -> anyhow::Result<
         project.path(),
         &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
     )?;
+    pty.wait_for_text("cargo: Cargo.toml found", Duration::from_secs(10))?;
     pty.wait_for_text(
-        "Accept these for auto mode on all projects?",
+        "Accept these for auto mode in this project (",
         Duration::from_secs(10),
     )?;
+    let screen = pty.screen_text();
+    assert!(
+        screen.find("cargo:").expect("cargo line")
+            < screen
+                .find("Accept these for auto mode in this project")
+                .expect("question")
+    );
     pty.send(b"y\n")?;
     assert_eq!(pty.wait_exit(Duration::from_secs(10))?, 0);
     let listed = run_binary(
@@ -534,14 +725,54 @@ async fn pty_yes_persists_accepted_grants_with_private_mode() -> anyhow::Result<
         "{}",
         String::from_utf8_lossy(&listed.stdout)
     );
-    let accepted = state.path().join("state/auto-grants");
-    assert_eq!(std::fs::read_to_string(&accepted)?, "cache\ncargo\n");
+    let accepted = state.path().join("state/auto-grants.toml");
     assert_eq!(
-        std::fs::metadata(accepted)?.permissions().mode() & 0o777,
+        std::fs::read_to_string(&accepted)?,
+        format!(
+            "[projects.{:?}]\ngrants = [\"cache\", \"cargo\"]\n",
+            project.path().to_string_lossy()
+        )
+    );
+    assert_eq!(
+        std::fs::metadata(&accepted)?.permissions().mode() & 0o777,
         0o600
     );
     assert!(user_home.path().join(".cargo").is_dir());
-
+    let project_b = tempfile::tempdir()?;
+    std::fs::write(project_b.path().join("Cargo.toml"), "")?;
+    std::fs::write(
+        state.path().join("config/team.toml"),
+        format!(
+            "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker-b\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\ncwd = {:?}\n",
+            project_b.path().to_string_lossy()
+        ),
+    )?;
+    let mut pty_b = PtyHarness::spawn_with_env_in(
+        &args,
+        state.path(),
+        project_b.path(),
+        &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
+    )?;
+    pty_b.wait_for_text("cargo: Cargo.toml found", Duration::from_secs(10))?;
+    pty_b.wait_for_text(
+        "Accept these for auto mode in this project (",
+        Duration::from_secs(10),
+    )?;
+    pty_b.send(b"y\n")?;
+    assert_eq!(pty_b.wait_exit(Duration::from_secs(10))?, 0);
+    let accepted_text = std::fs::read_to_string(&accepted)?;
+    let project_a = project.path().to_string_lossy().into_owned();
+    let project_b_key = project_b.path().to_string_lossy().into_owned();
+    let expected = if project_a < project_b_key {
+        format!(
+            "[projects.{project_a:?}]\ngrants = [\"cache\", \"cargo\"]\n\n[projects.{project_b_key:?}]\ngrants = [\"cache\", \"cargo\"]\n"
+        )
+    } else {
+        format!(
+            "[projects.{project_b_key:?}]\ngrants = [\"cache\", \"cargo\"]\n\n[projects.{project_a:?}]\ngrants = [\"cache\", \"cargo\"]\n"
+        )
+    };
+    assert_eq!(accepted_text, expected);
     Ok(())
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -581,12 +812,12 @@ async fn pty_no_and_eof_refuse_without_starting_or_writing() -> anyhow::Result<(
             &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
         )?;
         pty.wait_for_text(
-            "Accept these for auto mode on all projects?",
+            "Accept these for auto mode in this project (",
             Duration::from_secs(10),
         )?;
         pty.send(input)?;
         assert_ne!(pty.wait_exit(Duration::from_secs(10))?, 0);
-        assert!(!state.path().join("state/auto-grants").exists());
+        assert!(!state.path().join("state/auto-grants.toml").exists());
         let listed = run_binary(
             state.path(),
             project.path(),
@@ -643,7 +874,7 @@ async fn pty_deduplicates_auto_consent_across_sessions() -> anyhow::Result<()> {
         &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
     )?;
     pty.wait_for_text(
-        "Accept these for auto mode on all projects?",
+        "Accept these for auto mode in this project (",
         Duration::from_secs(10),
     )?;
     let screen = pty.screen_text();
@@ -655,8 +886,11 @@ async fn pty_deduplicates_auto_consent_across_sessions() -> anyhow::Result<()> {
     pty.send(b"y\n")?;
     assert_eq!(pty.wait_exit(Duration::from_secs(10))?, 0);
     assert_eq!(
-        std::fs::read_to_string(state.path().join("state/auto-grants"))?,
-        "cache\n"
+        std::fs::read_to_string(state.path().join("state/auto-grants.toml"))?,
+        format!(
+            "[projects.{:?}]\ngrants = [\"cache\"]\n",
+            first.path().to_string_lossy()
+        )
     );
     Ok(())
 }
@@ -674,7 +908,13 @@ async fn pty_subtracts_seeded_auto_grants_from_consent() -> anyhow::Result<()> {
     let user_home = tempfile::tempdir()?;
     let runtime = tempfile::tempdir()?;
     let _daemon = common::spawn_daemon_process(state.path(), user_home.path(), runtime.path());
-    std::fs::write(state.path().join("state/auto-grants"), "cache\n")?;
+    std::fs::write(
+        state.path().join("state/auto-grants.toml"),
+        format!(
+            "[projects.{:?}]\ngrants = [\"cache\"]\n",
+            cargo.path().to_string_lossy()
+        ),
+    )?;
     std::fs::write(cargo.path().join("Cargo.toml"), "")?;
     std::fs::write(
         state.path().join("config/team.toml"),
@@ -700,7 +940,7 @@ async fn pty_subtracts_seeded_auto_grants_from_consent() -> anyhow::Result<()> {
         &[("HOME", &home_env), ("XDG_RUNTIME_DIR", &runtime_env)],
     )?;
     pty.wait_for_text(
-        "Accept these for auto mode on all projects?",
+        "Accept these for auto mode in this project (",
         Duration::from_secs(10),
     )?;
     let screen = pty.screen_text();
@@ -717,8 +957,11 @@ async fn pty_subtracts_seeded_auto_grants_from_consent() -> anyhow::Result<()> {
     pty.send(b"y\n")?;
     assert_eq!(pty.wait_exit(Duration::from_secs(10))?, 0);
     assert_eq!(
-        std::fs::read_to_string(state.path().join("state/auto-grants"))?,
-        "cache\ncargo\n"
+        std::fs::read_to_string(state.path().join("state/auto-grants.toml"))?,
+        format!(
+            "[projects.{:?}]\ngrants = [\"cache\", \"cargo\"]\n",
+            cargo.path().to_string_lossy()
+        )
     );
     Ok(())
 }
@@ -1416,17 +1659,26 @@ async fn global_auto_ignores_worktree_git_files_and_oversized_configs() {
     assert_eq!(grants, "  grants: cache");
 }
 
-#[test]
-fn local_auto_and_file_auto_are_rejected_before_daemon_use() {
-    let state = tempfile::tempdir().expect("state");
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_auto_and_file_auto_work_before_daemon_use() {
+    let (state, _daemon) = start_daemon().await;
     let project = tempfile::tempdir().expect("project");
     let user_home = tempfile::tempdir().expect("user home");
     let runtime = tempfile::tempdir().expect("runtime");
+    std::fs::write(project.path().join("Cargo.toml"), "").expect("cargo marker");
     std::fs::write(
         project.path().join("a2amx.toml"),
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n",
     )
     .expect("local team file");
+    std::fs::write(
+        state.path().join("state/auto-grants.toml"),
+        format!(
+            "[projects.{:?}]\ngrants = [\"cache\", \"cargo\"]\n",
+            project.path().to_string_lossy()
+        ),
+    )
+    .expect("seed first local acceptance");
     let local = run_binary(
         state.path(),
         project.path(),
@@ -1434,34 +1686,85 @@ fn local_auto_and_file_auto_are_rejected_before_daemon_use() {
         runtime.path(),
         &["team", "up", "--dry-run"],
     )
-    .expect("local auto rejection");
-    assert!(!local.status.success());
+    .expect("local auto dry run");
     assert!(
+        local.status.success(),
+        "{}",
         String::from_utf8_lossy(&local.stderr)
-            .contains("auto is only read from the global team file")
     );
-
-    let global = state.path().join("global.toml");
+    assert!(String::from_utf8_lossy(&local.stdout).contains("  grants: cache, cargo"));
+    assert!(!String::from_utf8_lossy(&local.stdout).contains("not yet accepted"));
+    let local_b = tempfile::tempdir().expect("second local project");
+    std::fs::write(local_b.path().join("Cargo.toml"), "").expect("second cargo marker");
     std::fs::write(
-        &global,
+        local_b.path().join("a2amx.toml"),
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n",
     )
-    .expect("explicit global file");
-    let global_path = global.to_str().expect("global path");
-    let explicit = run_binary(
+    .expect("second local team file");
+    let local_b_run = run_binary(
         state.path(),
-        project.path(),
+        local_b.path(),
         user_home.path(),
         runtime.path(),
-        &["team", "up", "--dry-run", "--file", global_path],
+        &["team", "up", "--dry-run"],
     )
-    .expect("explicit global auto rejection");
-    assert!(!explicit.status.success());
+    .expect("second local dry run");
+    assert!(local_b_run.status.success());
+    assert!(String::from_utf8_lossy(&local_b_run.stdout).contains("not yet accepted"));
+    let file_project = tempfile::tempdir().expect("file project");
+    std::fs::write(file_project.path().join("Cargo.toml"), "").expect("file cargo marker");
+    let file = file_project.path().join("team.toml");
+    std::fs::write(
+        &file,
+        "[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n",
+    )
+    .expect("explicit team file");
+    let invoke_project = tempfile::tempdir().expect("invoking project");
+    std::fs::write(
+        state.path().join("state/auto-grants.toml"),
+        format!(
+            "[projects.{:?}]\ngrants = [\"cache\", \"cargo\"]\n",
+            file_project.path().to_string_lossy()
+        ),
+    )
+    .expect("seed explicit project acceptance");
+    let explicit_a = run_binary(
+        state.path(),
+        file_project.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "team",
+            "up",
+            "--dry-run",
+            "--file",
+            file.to_str().expect("file path"),
+        ],
+    )
+    .expect("explicit file A dry run");
+    assert!(explicit_a.status.success());
+    assert!(!String::from_utf8_lossy(&explicit_a.stdout).contains("not yet accepted"));
+    let explicit = run_binary(
+        state.path(),
+        invoke_project.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "team",
+            "up",
+            "--dry-run",
+            "--file",
+            file.to_str().expect("file path"),
+        ],
+    )
+    .expect("explicit file auto dry run");
     assert!(
+        explicit.status.success(),
+        "{}",
         String::from_utf8_lossy(&explicit.stderr)
-            .contains("auto is only read from the global team file")
     );
-    assert!(!String::from_utf8_lossy(&explicit.stderr).contains("cannot reach the a2amx daemon"));
+    assert!(String::from_utf8_lossy(&explicit.stdout).contains("  grants: cache, cargo"));
+    assert!(!String::from_utf8_lossy(&explicit.stdout).contains("not yet accepted"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

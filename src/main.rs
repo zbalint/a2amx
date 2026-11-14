@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::os::fd::AsFd;
@@ -48,18 +48,26 @@ const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const INPUT_CHUNK: usize = 8 * 1024;
 const DAEMON_STOP_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_AUTO_GRANTS_BYTES: usize = 4096;
+const MAX_AUTO_GRANTS_BYTES: usize = 65_536;
 
-fn read_accepted_grants(path: &Path) -> anyhow::Result<BTreeSet<String>> {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
+fn read_accepted_grants(path: &Path) -> anyhow::Result<a2amx::grant::Accepted> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(BTreeSet::new());
+            return Ok(BTreeMap::new());
         }
         Err(error) => {
             return Err(error).with_context(|| format!("cannot read {}", path.display()));
         }
     };
+    if !metadata.is_file() {
+        bail!(
+            "accepted auto-grants.toml file {} is not a regular file",
+            path.display()
+        );
+    }
+    let file =
+        std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
     let mut bytes = Vec::with_capacity(MAX_AUTO_GRANTS_BYTES + 1);
     let read = file
         .take((MAX_AUTO_GRANTS_BYTES + 1) as u64)
@@ -67,22 +75,30 @@ fn read_accepted_grants(path: &Path) -> anyhow::Result<BTreeSet<String>> {
         .with_context(|| format!("cannot read {}", path.display()))?;
     if read > MAX_AUTO_GRANTS_BYTES {
         bail!(
-            "accepted auto-grants file {} is larger than {} bytes",
+            "accepted auto-grants.toml file {} is larger than {} bytes",
             path.display(),
             MAX_AUTO_GRANTS_BYTES
         );
     }
-    let text = String::from_utf8(bytes)
-        .with_context(|| format!("accepted auto-grants file {} is not UTF-8", path.display()))?;
-    Ok(a2amx::grant::parse_accepted(&text))
+    let text = String::from_utf8(bytes).with_context(|| {
+        format!(
+            "accepted auto-grants.toml file {} is not UTF-8",
+            path.display()
+        )
+    })?;
+    a2amx::grant::parse_accepted(&text)
+        .with_context(|| format!("invalid accepted auto-grants.toml file {}", path.display()))
 }
 
-async fn load_accepted_grants(home: &Path) -> anyhow::Result<BTreeSet<String>> {
+async fn load_accepted_grants(home: &Path) -> anyhow::Result<a2amx::grant::Accepted> {
     let path = a2amx::layout::Layout::new(home.to_owned()).auto_grants();
     tokio::task::spawn_blocking(move || read_accepted_grants(&path)).await?
 }
 
-async fn save_accepted_grants(home: &Path, accepted: &BTreeSet<String>) -> anyhow::Result<()> {
+async fn save_accepted_grants(
+    home: &Path,
+    accepted: &a2amx::grant::Accepted,
+) -> anyhow::Result<()> {
     let path = a2amx::layout::Layout::new(home.to_owned()).auto_grants();
     let content = a2amx::grant::render_accepted(accepted);
     tokio::task::spawn_blocking(move || a2amx::omp::write_if_changed(&path, content.as_bytes()))
@@ -652,10 +668,19 @@ async fn confirm(prompt: &str, refusal: &str) -> anyhow::Result<bool> {
     ))
 }
 
+fn project_key(dir: &Path) -> anyhow::Result<&str> {
+    dir.to_str().ok_or_else(|| {
+        anyhow!(
+            "project directory is not valid UTF-8: {:?}",
+            dir.as_os_str()
+        )
+    })
+}
 /// `--yes` applies to this run only and is not saved.
 async fn confirm_new_grants(
     home: &Path,
-    accepted: &BTreeSet<String>,
+    project: &Path,
+    accepted: &a2amx::grant::Accepted,
     new_grants: &[(String, String)],
     yes: bool,
 ) -> anyhow::Result<()> {
@@ -664,13 +689,17 @@ async fn confirm_new_grants(
         write_stderr(lines.into_bytes()).await?;
         return Ok(());
     }
-    let prompt = format!("{lines}{}", a2amx::grant::CONSENT_QUESTION);
+    let prompt = format!("{lines}{}", a2amx::grant::consent_question(project));
     let refusal = a2amx::grant::consent_refusal(new_grants);
     if !confirm(&prompt, &refusal).await? {
         bail!("auto grants not accepted; nothing started");
     }
     let mut accepted = accepted.clone();
-    accepted.extend(new_grants.iter().map(|(grant, _)| grant.clone()));
+    accepted
+        .entry(project_key(project)?.to_owned())
+        .or_default()
+        .extend(new_grants.iter().map(|(grant, _)| grant.clone()));
+    // shortcut: concurrent team up runs can lose one project's acceptance; add a file lock if repeated prompts matter.
     save_accepted_grants(home, &accepted).await
 }
 
@@ -1872,17 +1901,27 @@ async fn run_team_up(
     let remote_team = wanted
         .iter()
         .find_map(|session| session.team.as_ref().map(|team| team.name.clone()));
-    let accepted = if has_auto {
+    let accepted_all = if has_auto {
         load_accepted_grants(&home).await?
     } else {
-        BTreeSet::new()
+        BTreeMap::new()
     };
+    let project_key = if has_auto {
+        Some(project_key(origin.dir)?.to_owned())
+    } else {
+        None
+    };
+    let accepted = project_key
+        .as_ref()
+        .and_then(|key| accepted_all.get(key))
+        .cloned()
+        .unwrap_or_default();
     let new_grants = team::new_auto_grants(&actions, &accepted);
     for output in team::escape_notices(&actions, a2amx::grant::all()) {
         write_stderr(output.into_bytes()).await?;
     }
     if !dry_run && !new_grants.is_empty() {
-        confirm_new_grants(&home, &accepted, &new_grants, yes).await?;
+        confirm_new_grants(&home, origin.dir, &accepted_all, &new_grants, yes).await?;
     }
     write_auto_summaries(&actions).await?;
     if dry_run {

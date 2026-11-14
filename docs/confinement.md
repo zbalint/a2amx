@@ -83,11 +83,12 @@ a2amx team up --dry-run
 
 The dry run shows the effective restrictions. An operator `write`, `hide`, or `unhide` entry that cannot be resolved is printed as `unresolved: PATH (write|hide|unhide: REASON)`; missing default hides and other optional paths remain `hidden: PATH (skipped missing)`.
 
-### Auto mode in one file
+### Auto mode in a team file
 
-To let a global team file detect the grants a project needs, put this file at
-`<root>/config/team.toml`. The a2amx home directory is selected in this order: `--home`,
-`A2AMX_HOME`, then `$HOME/.a2amx` (see [the CLI reference](cli.md#state-directory-and-attachment)).
+To let a team file detect the grants a project needs, put `[confine] auto = true` in that
+file. The project key is the canonical directory containing the local or `--file` team file,
+or the invoking directory for the global file. The a2amx home directory is selected in this
+order: `--home`, `A2AMX_HOME`, then `$HOME/.a2amx` (see [the CLI reference](cli.md#state-directory-and-attachment)).
 
 ```toml
 # global team file
@@ -103,28 +104,33 @@ attach = true
 ```
 
 The first `a2amx team up` prints each detected grant and its exposure, then asks
-`Accept these for auto mode on all projects?`. Answering yes keeps the accepted grant
-names in `<root>/state/auto-grants`; they apply to later projects using this global
-file. `a2amx team up --yes` accepts the grants for that run without writing the file.
-The detection rules are in [Automatic grant detection](#automatic-grant-detection);
-the global file does not repeat them.
+`Accept these for auto mode in this project (<project>)?`. Answering yes records the accepted
+grant names under that project in `<root>/state/auto-grants.toml`; edit or delete the project's
+table to revoke them. `a2amx team up --yes` accepts the grants for that run without writing the
+file. The detection rules are in [Automatic grant detection](#automatic-grant-detection).
+The old `<root>/state/auto-grants` file is ignored and can be deleted; it is never migrated.
+The accepted file is read through a symlink, but the first write replaces that symlink with a
+regular owner-only file. A local or explicit team file can run from outside its project
+directory; auto detection checks each session's own cwd, while acceptance remains keyed to the
+team file's project directory. A global team file run from two directories asks separately for
+each project's grants.
 Answering `n` leaves the team stopped:
 
 ```text
 using global team file /home/user/.a2amx/config/team.toml as team proj
 cargo: Cargo.toml found (the Rust toolchain, read-write: ~/.cargo ...)
 cache: always added by auto (your whole ~/.cache ...)
-Accept these for auto mode on all projects? [y/N] n
+Accept these for auto mode in this project (/home/user/demo/proj)? [y/N] n
 a2amx: auto grants not accepted; nothing started
 ```
 
-Without a terminal, a global auto run refuses instead of accepting silently:
+Without a terminal, an auto run refuses instead of accepting silently:
 
 ```text
 a2amx: auto confinement would open: cargo, cache; run a2amx team up on a terminal to accept them, or pass --yes for this run
 ```
 
-The dry run never prompts or writes `auto-grants`; it reports the new names as
+The dry run never prompts or writes `auto-grants.toml`; it reports the new names as
 `not yet accepted`:
 
 ```text
@@ -151,16 +157,23 @@ would start proj-builder
 These are three scopes, not layers:
 
 - `--confine` (with its `--confine-*` options) belongs to `a2amx new` for one session and reads no team file. Passing a `--confine-*` option without `--confine` is an error.
-- `[confine]` belongs to a team file. A team run reads one file: the `--file` you pass, otherwise the local `a2amx.toml` if it exists, otherwise the global `<root>/config/team.toml`; they are never merged, and a session's `enabled` beats the team's.
-- Global `auto = true` belongs to the global file's `[confine]` table, requires confinement (omit `enabled` or set it true) there, and adds detected grants plus `cache` only for sessions that end up confined.
+- `[confine]` belongs to a team file. A team run reads one file: the `--file` you pass, otherwise
+  the local `a2amx.toml` if it exists, otherwise the global `<root>/config/team.toml`; they are
+  never merged, and a session's `enabled` beats the team's. `auto = true` is valid in any of
+  those files and adds detected grants plus `cache` only for sessions that end up confined.
 
-Two cases can disagree: team `enabled = true` with session `enabled = false` leaves that session unconfined and gives it no auto grants; when no `--file` is given, a local `a2amx.toml` hides the global file entirely. `a2amx team up --dry-run` shows the effective plan before anything starts, and `a2amx confine show` shows a running session's plan. `a2amx confine suggest` prints a grants line, not the effective plan. `auto = true` in a local file or with `enabled = false`, and `auto` in `[session.confine]`, are rejected.
+Two cases can disagree: team `enabled = true` with session `enabled = false` leaves that session
+unconfined and gives it no auto grants; when no `--file` is given, a local `a2amx.toml` hides the
+global file entirely. `a2amx team up --dry-run` shows the effective plan before anything starts,
+and `a2amx confine show` shows a running session's plan. `a2amx confine suggest` prints a grants
+line, not the effective plan. `auto = true` with `enabled = false`, and `auto` in
+`[session.confine]`, are rejected.
 
 The effective session setting uses the session table when a scalar is present, otherwise
 the team table, otherwise the default (`enabled = false`, `default_hides = true`).
-`auto = true` is valid only in the global `<root>/config/team.toml` `[confine]` table
-and requires confinement (omit `enabled` or set it true). It detects project markers and bounded regular git configs,
-then adds the matching grants plus `cache`; local and explicit team files must not set it.
+`auto = true` is valid in any team file's `[confine]` table and requires confinement (omit
+`enabled` or set it true). It detects project markers and bounded regular git configs, then adds
+the matching grants plus `cache`; the acceptance key is the team's canonical project directory.
 `auto = false` is accepted in any team table and means nothing. A session-level `auto`
 key is always an error. `write`, `hide`, and `unhide` lists add in team-then-session order,
 with exact duplicates kept once. `grants` is per session by default; every grant may be set
@@ -216,14 +229,14 @@ are not in the closed credential list and reach every session either way. A gran
 that is a symlink is refused or reported unresolved; it is never created through.
 
 Grant names are closed and validated before launch; each grant is separate and explicit
-unless added by global auto detection. `harness-config` remains available as a
+unless added by auto detection. `harness-config` remains available as a
 session-only explicit grant, while Claude, OMP, and Codex sessions receive equivalent persistent
 access to their harness root by default.
 
 ### Automatic grant detection
 
-`a2amx confine suggest` and global `[confine] auto = true` use the same detector. Marker
-files are checked only in the session's project directory:
+`a2amx confine suggest` and team files with `[confine] auto = true` use the same detector. Marker
+files are checked in each session's own cwd; acceptance is still keyed to the team file's project directory:
 
 | Grant | Marker(s) |
 | --- | --- |
@@ -247,12 +260,11 @@ git grants. `cache` is always included. Results are deduplicated in grant-table 
 Under `auto`, `git push` works only when a remote is detected. A local team file
 requires an explicit grant. HTTPS pushes through `gh` also require `gh auth setup-git`.
 
-When global auto detection adds a grant that is not already accepted, `a2amx team up`
-prints the detector reason and the grant's exposure, then asks for confirmation before
-starting any session. Acceptance is by grant name, not by project or path: accepted
-names apply to every project started from the global team file. The names are stored
-one per line in `<root>/state/auto-grants`; delete that file to ask again. Unknown,
-blank, and padded lines are ignored.
+When auto detection adds a grant that is not already accepted for the team file's project,
+`a2amx team up` prints the detector reason and the grant's exposure, then asks for confirmation
+before starting any session. Accepted names are stored per project in
+`<root>/state/auto-grants.toml`; edit or delete that project's table to ask again. Unknown grant
+names are ignored when read and dropped when the file is rewritten.
 
 `a2amx team up --yes` prints the same consent details but accepts the detected grants
 for that run only and never writes the accepted-grants file. A non-terminal run without
@@ -271,11 +283,11 @@ symlink, the grant opens its canonical target. Open it only for an agent you tru
 ## Inspecting a session's effective confinement
 
 The attach status line shows a dim `[confined]` tag for manually configured confinement
-and `[confined auto]` when global auto detection added grants.
+and `[confined auto]` when team-file auto detection added grants.
 
 `a2amx list` and `a2amx list --details` add a `CONFINE` column immediately after
 `HARNESS`. It is `off` for an unconfined session, `manual` for explicit confinement,
-and `auto` when global auto detection was enabled. The value remains available for
+and `auto` when team-file auto detection was enabled. The value remains available for
 exited sessions.
 
 Use `a2amx confine show [SESSION]` to read the daemon's recorded confinement plan;
@@ -339,9 +351,9 @@ first succeed and the others fail with `Read-only file system`). Run `claude /lo
 session picks up that login. The explicit `harness-config` grant names the same capability
 for a session that needs it outside the default harness path.
 
-`cache` and marker-specific toolchain grants are explicit. Auto detection adds them only
-for a global team file with `[confine] auto = true`; local and explicit files must list
-grants themselves.
+`cache` and marker-specific toolchain grants are explicit unless auto detection is enabled.
+Auto detection adds them for any team file with `[confine] auto = true`; acceptance is recorded
+under that team's canonical project directory.
 
 ## Recipes by ecosystem
 
@@ -557,7 +569,7 @@ a2amx new --confine --confine-grant docker -- <command>
 grants = ["docker"]
 ```
 
-The grant adds the Docker daemon sockets and `DOCKER_HOST`/`DOCKER_CONTEXT`, so the agent can run any Docker command as you. An accidental `rm -rf ~/` still fails, but on a rootful daemon a deliberate privileged container is root on the host; `userns-remap` or a sandboxed runtime does not stop that because a container can opt out. Running the agents in a VM is the real isolation limit (see [The user's responsibility](philosophy.md#8-the-users-responsibility)); rootless Docker would also remove host root, but its socket is under the hidden `$XDG_RUNTIME_DIR` and cannot be used with this grant, as the paragraph below explains. `confine suggest` and global auto mode offer `docker` when a Docker marker is present, with the usual consent prompt for an auto-picked grant. A Docker Desktop user whose only socket is under `~/.docker` also needs the unhide described below, because the grant does not lift that hide. After the grant, the configured daemon socket is reachable; the maintainers did not test `docker run`, `docker build`, or `docker compose` here.
+The grant adds the Docker daemon sockets and `DOCKER_HOST`/`DOCKER_CONTEXT`, so the agent can run any Docker command as you. An accidental `rm -rf ~/` still fails, but on a rootful daemon a deliberate privileged container is root on the host; `userns-remap` or a sandboxed runtime does not stop that because a container can opt out. Running the agents in a VM is the real isolation limit (see [The user's responsibility](philosophy.md#8-the-users-responsibility)); rootless Docker would also remove host root, but its socket is under the hidden `$XDG_RUNTIME_DIR` and cannot be used with this grant, as the paragraph below explains. `confine suggest` and team-file auto mode offer `docker` when a Docker marker is present, with the usual consent prompt for an auto-picked grant. A Docker Desktop user whose only socket is under `~/.docker` also needs the unhide described below, because the grant does not lift that hide. After the grant, the configured daemon socket is reachable; the maintainers did not test `docker run`, `docker build`, or `docker compose` here.
 
 The Docker Desktop sockets `~/.docker/desktop/docker.sock` and `~/.docker/run/docker.sock` are
 also inside the default hide of `~/.docker`. The grant does not lift that hide, so both the grant
@@ -714,7 +726,7 @@ A blocked operation can report only an operating-system error, such as `Read-onl
 ## A complete team file
 
 The following file sets team defaults in `[confine]` and uses `cwd = "."`. Grants are
-explicit in a local file; use `auto = true` only in the global state-home team file.
+explicit in a local file; `auto = true` is valid in any team file and asks per project.
 
 ```toml
 team = "myproject"

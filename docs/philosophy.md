@@ -49,9 +49,9 @@ so saying that Docker access is root on the host would be false for that setup.
 A grant the user names (a flag or a line in the team file) needs no extra prompt:
 choosing it after reading its description is the confirmation. That includes a grants line
 printed by `confine suggest` that the user copies into a team file, because pasting it is the
-user's choice. A grant the tool picks for them, which only global auto mode does, is shown with
-its exposure and needs a yes, with No as the default. The yes is remembered by grant name, and
-`--yes` accepts for one run without remembering.
+user's choice. A grant the tool picks for them in `[confine] auto = true` is shown with its
+exposure and needs a yes, with No as the default. The yes is remembered for that project in
+`<root>/state/auto-grants.toml`, and `--yes` accepts for one run without remembering.
 
 ### 5. Grants are all or nothing
 

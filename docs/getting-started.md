@@ -57,7 +57,8 @@ grants = ["cargo", "cache"]
 ```
 
 Add confinement and that line to the team file. This is a complete local file; `auto = true`
-belongs only in the global file described in [Confinement](confinement.md#auto-mode-in-one-file).
+may also be used in its `[confine]` table when you want project-specific detection, as described
+in [Confinement](confinement.md#auto-mode-in-a-team-file).
 
 ```toml
 team = "demo"
@@ -171,9 +172,5 @@ Run `a2amx team up --dry-run` without a daemon; the error names `a2amx daemon st
 a2amx: cannot reach the a2amx daemon: start it with `a2amx daemon start`
 ```
 
-A local file that tries to enable auto mode is refused; use `a2amx confine suggest .` and paste
-its grants line instead:
-
-```text
-a2amx: team file /home/user/demo/proj/a2amx.toml: [confine] auto is only read from the global team file; run a2amx confine suggest and paste the grants line into your team file
-```
+An auto-enabled local or explicit team file is valid when confinement is enabled; it detects grants
+in the session cwd and records acceptance under the team file's project directory.

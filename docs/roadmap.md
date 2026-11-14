@@ -25,8 +25,8 @@ presence, viewer mode, and the remote cell of the attach status line are impleme
 See [Remote messaging](remote-messaging.md).
 
 Sessions may opt into bubblewrap confinement with named grants for the tools and
-credentials they may use; global auto mode asks before opening a grant the user has
-never accepted. `confine list`, `confine show`, and `confine suggest` expose grant
+credentials they may use; auto mode in any team file asks before opening a grant the user has
+never accepted for that project. `confine list`, `confine show`, and `confine suggest` expose grant
 names, effective plans, and copyable project grants. Team sessions also show a
 clickable member line on the attach screen. See [Confinement](confinement.md) and the
 [CLI reference](cli.md).

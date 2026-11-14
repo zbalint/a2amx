@@ -1,8 +1,8 @@
 //! Named opt-in capabilities for confinement.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::wire::ConfineInfo;
 
@@ -643,30 +643,90 @@ pub fn denial_help(
     output
 }
 
-/// Parse accepted auto-grant names, discarding blank and unknown lines.
-pub fn parse_accepted(text: &str) -> BTreeSet<String> {
-    text.lines()
-        .map(str::trim)
-        .filter(|name| all().iter().any(|grant| grant.name == *name))
-        .map(str::to_owned)
-        .collect()
+pub type Accepted = BTreeMap<String, BTreeSet<String>>;
+
+/// Parse accepted auto-grants.toml entries by canonical project path.
+pub fn parse_accepted(text: &str) -> Result<Accepted> {
+    if text.trim().is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let root: toml::Table =
+        toml::from_str(text).context("invalid accepted auto-grants.toml TOML")?;
+    let Some(projects) = root.get("projects") else {
+        bail!("accepted auto-grants.toml must contain only a projects table");
+    };
+    let Some(projects) = projects.as_table() else {
+        bail!("accepted auto-grants.toml must contain only a projects table");
+    };
+    if root.len() != 1 {
+        bail!("accepted auto-grants.toml must contain only a projects table");
+    }
+    let mut accepted = BTreeMap::new();
+    for (project, value) in projects {
+        if !project.starts_with('/') {
+            bail!("accepted auto-grants.toml project key is not absolute: {project}");
+        }
+        let table = value.as_table().ok_or_else(|| {
+            anyhow::anyhow!("accepted auto-grants.toml project {project} is not a table")
+        })?;
+        if table.len() != 1 || !table.contains_key("grants") {
+            bail!("accepted auto-grants.toml project {project} must contain only grants");
+        }
+        let grants = table["grants"].as_array().ok_or_else(|| {
+            anyhow::anyhow!("accepted auto-grants.toml project {project} grants is not a list")
+        })?;
+        let mut names = BTreeSet::new();
+        for grant in grants {
+            let name = grant.as_str().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "accepted auto-grants.toml project {project} has a non-string grant"
+                )
+            })?;
+            if all().iter().any(|row| row.name == name) {
+                names.insert(name.to_owned());
+            }
+        }
+        if !names.is_empty() {
+            accepted.insert(project.clone(), names);
+        }
+    }
+    Ok(accepted)
 }
 
-/// Render accepted auto-grant names in sorted order.
-pub fn render_accepted(names: &BTreeSet<String>) -> String {
-    if names.is_empty() {
+/// Render accepted auto-grants.toml entries by canonical project path.
+pub fn render_accepted(accepted: &Accepted) -> String {
+    let mut projects = toml::Table::new();
+    for (project, grants) in accepted {
+        if grants.is_empty() {
+            continue;
+        }
+        let grants = grants
+            .iter()
+            .cloned()
+            .map(toml::Value::String)
+            .collect::<Vec<_>>();
+        let mut table = toml::Table::new();
+        table.insert("grants".to_owned(), toml::Value::Array(grants));
+        projects.insert(project.clone(), toml::Value::Table(table));
+    }
+    if projects.is_empty() {
         return String::new();
     }
-    let mut rendered = names
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .join("\n");
-    rendered.push('\n');
-    rendered
+    let mut root = toml::Table::new();
+    root.insert("projects".to_owned(), toml::Value::Table(projects));
+    match toml::to_string(&toml::Value::Table(root)) {
+        Ok(rendered) => rendered,
+        Err(error) => unreachable!("generated accepted auto-grants.toml are serializable: {error}"),
+    }
 }
 
-pub const CONSENT_QUESTION: &str = "Accept these for auto mode on all projects? [y/N] ";
+/// Render the project-specific consent question.
+pub fn consent_question(project: &std::path::Path) -> String {
+    format!(
+        "Accept these for auto mode in this project ({})? [y/N] ",
+        project.display()
+    )
+}
 
 /// Render the refusal shown when auto grants are not accepted.
 pub fn consent_refusal(new: &[(String, String)]) -> String {

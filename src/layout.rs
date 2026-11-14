@@ -90,8 +90,9 @@ impl Layout {
     pub fn messages_db(&self) -> PathBuf {
         self.state_dir().join("messages.db")
     }
+    /// Accepted auto grants, keyed by canonical project directory.
     pub fn auto_grants(&self) -> PathBuf {
-        self.state_dir().join("auto-grants")
+        self.state_dir().join("auto-grants.toml")
     }
     pub fn pairing(&self) -> PathBuf {
         self.gateway_state_dir().join("pairing.json")

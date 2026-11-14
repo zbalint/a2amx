@@ -2,7 +2,7 @@ mod common;
 
 use common::keep_coverage_env;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 
 use a2amx::wire::ConfineInfo;
@@ -126,14 +126,79 @@ fn denial_help_respects_custom_hides_and_grants() {
 }
 
 #[test]
-fn accepted_grants_round_trip_and_drop_unknown_lines() {
-    let parsed = grant::parse_accepted(" ssh \nunknown\n\ncargo\n");
+fn accepted_grants_round_trip_and_drop_unknown_names() {
+    let parsed = grant::parse_accepted(
+        "[projects.\"/home/u/proj\"]\ngrants = [\"cache\", \"nope\", \"cargo\"]\n",
+    )
+    .expect("parse accepted grants");
     assert_eq!(
         parsed,
-        BTreeSet::from(["cargo".to_owned(), "ssh".to_owned()])
+        BTreeMap::from([(
+            "/home/u/proj".to_owned(),
+            BTreeSet::from(["cache".to_owned(), "cargo".to_owned()])
+        )])
     );
-    assert_eq!(grant::render_accepted(&parsed), "cargo\nssh\n");
-    assert_eq!(grant::render_accepted(&BTreeSet::new()), "");
+    assert_eq!(
+        grant::render_accepted(&parsed),
+        "[projects.\"/home/u/proj\"]\ngrants = [\"cache\", \"cargo\"]\n"
+    );
+    assert!(grant::render_accepted(&BTreeMap::new()).is_empty());
+    let expected_order = BTreeMap::from([
+        (
+            "/b".to_owned(),
+            BTreeSet::from(["ssh".to_owned(), "cache".to_owned()]),
+        ),
+        ("/a".to_owned(), BTreeSet::from(["cargo".to_owned()])),
+    ]);
+    assert_eq!(
+        grant::render_accepted(&expected_order),
+        "[projects.\"/a\"]\ngrants = [\"cargo\"]\n\n[projects.\"/b\"]\ngrants = [\"cache\", \"ssh\"]\n"
+    );
+}
+
+#[test]
+fn accepted_grants_validate_shape_and_absolute_keys() {
+    for text in [
+        "invalid = true\n",
+        "[projects.\"/p\"]\ngrants = \"x\"\n",
+        "[projects.\"rel/dir\"]\ngrants = [\"cache\"]\n",
+        "[projects.\"/p\"]\nother = true\n",
+        "[projects.\"/p\"]\ngrants = [1]\n",
+        "[projects.\"/p\"]\ngrants = [\"cache\"]\nextra = 1\n",
+    ] {
+        assert!(
+            grant::parse_accepted(text).is_err(),
+            "accepted auto-grants.toml project /p must reject: {text:?}"
+        );
+    }
+    assert!(grant::parse_accepted("not = [").is_err());
+    assert!(grant::parse_accepted("").expect("empty").is_empty());
+}
+
+#[test]
+fn accepted_grants_round_trip_keys_with_toml_delimiters() {
+    let accepted = BTreeMap::from([
+        (
+            "/p \"q\\ x".to_owned(),
+            BTreeSet::from(["cache".to_owned()]),
+        ),
+        (
+            "/p\n[projects.\"/o\"]".to_owned(),
+            BTreeSet::from(["cargo".to_owned()]),
+        ),
+    ]);
+    let rendered = grant::render_accepted(&accepted);
+    assert_eq!(
+        grant::parse_accepted(&rendered).expect("round trip"),
+        accepted
+    );
+    assert_eq!(accepted.len(), 2);
+}
+
+#[test]
+fn empty_project_grants_are_not_rendered() {
+    let accepted = BTreeMap::from([("/p".to_owned(), BTreeSet::new())]);
+    assert!(grant::render_accepted(&accepted).is_empty());
 }
 
 #[test]
@@ -178,8 +243,8 @@ fn consent_and_escape_lines_include_exposure_details() {
         "ssh: git remote uses ssh (keys)\n  can escape: remote hosts\nunknown: unlisted reason\n"
     );
     assert_eq!(
-        grant::CONSENT_QUESTION,
-        "Accept these for auto mode on all projects? [y/N] "
+        grant::consent_question(std::path::Path::new("/w/p")),
+        "Accept these for auto mode in this project (/w/p)? [y/N] "
     );
     assert_eq!(
         grant::escape_notice(

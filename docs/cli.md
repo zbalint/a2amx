@@ -129,7 +129,7 @@ Rootless runtime sockets under `$XDG_RUNTIME_DIR` remain hidden. These flags req
 `--confine`; path lists accept at most 64 entries and each entry is capped at 4096 bytes.
 
 The session status line adds a dim `[confined]` tag immediately after the session name,
-or `[confined auto]` when global auto detection added grants. `a2amx list` and
+or `[confined auto]` when team-file auto detection added grants. `a2amx list` and
 `a2amx list --details` add `CONFINE` immediately after `HARNESS`; it is `off`, `manual`,
 or `auto`, including for exited sessions.
 `a2amx team up --dry-run` reports confinement, writable/protected paths, the final hidden
@@ -155,10 +155,10 @@ also print one `  <grant>: <reason>` line per detected grant, such as
 `  cache: always added by auto`. An already-running session is reported with its mode,
 for example `already running agent-plan s1 (confine manual)`.
 
-When global automatic detection finds a grant not yet accepted, `a2amx team up` asks
-before starting. Pass `a2amx team up --yes` to accept those grants for that run without
-writing `<root>/state/auto-grants`; use a terminal to answer and save acceptance for
-future projects.
+When automatic detection finds a grant not yet accepted for the team file's project,
+`a2amx team up` asks before starting. Pass `a2amx team up --yes` to accept those grants for
+that run without writing `<root>/state/auto-grants.toml`; use a terminal to answer and save
+acceptance for that project.
 
 See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.
 

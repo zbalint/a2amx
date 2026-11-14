@@ -175,3 +175,18 @@ The developer reported (BLOCKED) that `docs/philosophy.md:51-54` and `docs/roadm
 ### Amendment 2
 
 Section 2.4's size error text conflicted with section 3.3 and the acceptance `rg` (`accepted auto-grants file` matches `auto-grants\b[^.]`). Ruling: every diagnostic about the accepted file says `accepted auto-grants.toml file ...`, so the size error is exactly `accepted auto-grants.toml file {path} is larger than 65536 bytes` and test 6 asserts the text `larger than 65536 bytes` as before. The developer's wording is correct. Nothing else changes.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness (model not recorded); developer OMP, openai-codex/gpt-5.6-luna; tester OMP, opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 2 (amendments 1 and 2).
+
+| Found | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Findings m_7203 (anchors, trust-boundary dispositions, round-trip test, size cap, FIFO) | Spec revised before the lock |
+| Implementation | developer, gpt-5.6-luna | `docs/philosophy.md:51-54` and `docs/roadmap.md:28` state the old rule and were outside scope; the gate's old-text grep missed them | Amendment 1 |
+| Implementation | developer | Size-error literal in 2.4 conflicted with 3.3 and the acceptance `rg` | Amendment 2 |
+| Tester pass | tester, deepseek-v4.1-flash | `docs_examples` failed (marker line removed from a doc block); developer had claimed only the daemon test fails | Fixed in fix round 1 |
+| Tester pass | tester | Consent prompt order reversed; pty assertions dropped or weakened; test 4 second half, test 5 first-creation and exactness, test 6 old-file seed absent or weak | Fixed in fix round 1 |
+| Tester pass | tester | Non-UTF-8 key and symlinked accepted file untested (two mutants survived); stale docs line 723, detection-cwd text, missing symlink and two-directory notes | Tests and docs added in fix round 1 |
+| Architect review | architect, Sonnet 5.5 | UTF-8 key conversion duplicated; a doc comment deleted | Fix round 2 |
+| Architect review | architect | Unknown project key check survived a mutant | Test added in fix round 3 |

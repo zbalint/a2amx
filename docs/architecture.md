@@ -385,7 +385,7 @@ The resolved a2amx root is `<root>` (`--home`, then `A2AMX_HOME`, then `$HOME/.a
 | `link_gateway_token()` | `<root>/run/link/gateway.token` |
 | `confine_empty()` | `<root>/run/confine-empty` |
 | `messages_db()` | `<root>/state/messages.db` |
-| `auto_grants()` | `<root>/state/auto-grants` |
+| `auto_grants()` | `<root>/state/auto-grants.toml` |
 | `pairing()` | `<root>/state/gateway/pairing.json` |
 | `seen()` | `<root>/state/gateway/seen.json` |
 | `team_file()` | `<root>/config/team.toml` |
@@ -419,7 +419,7 @@ and records missing operator paths for dry-run output. A late-created socket out
 launch-time hides remains visible; start container daemons before a confined session
 when their host sockets must be hidden.
 
-The `grant` module owns the table of named grants and the consent text, while the `suggest` module detects grants from project markers and git remotes. Under global `auto`, `team up` asks before opening a grant the user has not accepted. Accepted names are kept one per line in `<root>/state/auto-grants` and apply to later starts from that global team file.
+The `grant` module owns the table of named grants and the consent text, while the `suggest` module detects grants from project markers and git remotes. Under `[confine] auto = true`, `team up` asks before opening a grant the user has not accepted for the project. Accepted names are kept per project in `<root>/state/auto-grants.toml`.
 
 ### Status line
 
