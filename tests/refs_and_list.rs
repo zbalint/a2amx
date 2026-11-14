@@ -499,7 +499,7 @@ async fn list_as_applies_mutual_agent_allow() -> anyhow::Result<()> {
 [[session]]
 name = "architect"
 command = ["sh", "-c", "sleep 30"]
-allow = ["b/architect"]
+allow_agents = ["b/architect"]
 [[session]]
 name = "developer"
 command = ["sh", "-c", "sleep 30"]
@@ -511,7 +511,7 @@ command = ["sh", "-c", "sleep 30"]
 [[session]]
 name = "architect"
 command = ["sh", "-c", "sleep 30"]
-allow = ["a/architect"]
+allow_agents = ["a/architect"]
 [[session]]
 name = "developer"
 command = ["sh", "-c", "sleep 30"]

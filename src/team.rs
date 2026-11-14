@@ -46,7 +46,7 @@ pub struct TeamSession {
     #[serde(default)]
     pub remote: Option<RemoteMode>,
     #[serde(default)]
-    pub allow: Vec<String>,
+    pub allow_agents: Vec<String>,
     #[serde(skip)]
     pub confine: Option<crate::confine::ConfineRequest>,
     #[serde(skip)]
@@ -94,9 +94,7 @@ struct TeamFile {
     #[serde(default)]
     private: Option<bool>,
     #[serde(default)]
-    allow: Option<Vec<String>>,
-    #[serde(default)]
-    prefix: Option<toml::Value>,
+    allow_teams: Option<Vec<String>>,
     #[serde(default)]
     confine: Option<ConfineTable>,
     #[serde(default)]
@@ -267,12 +265,15 @@ pub fn inspect(wanted: &[TeamSession], existing: &[SessionSummary]) -> Vec<Entry
         .collect()
 }
 
-/// Derive the team name used by a global team file from its invoking directory.
-pub fn team_name_for(cwd: &std::path::Path) -> anyhow::Result<String> {
-    let component = cwd
+/// Derive a team name from a project directory.
+pub fn team_name_for(dir: &std::path::Path, remedy: &str) -> anyhow::Result<String> {
+    let component = dir
         .file_name()
         .ok_or_else(|| {
-            anyhow::anyhow!("cannot derive a team name from directory {}", cwd.display())
+            anyhow::anyhow!(
+                "cannot derive a team name from directory {}; {remedy}",
+                dir.display()
+            )
         })?
         .to_string_lossy();
     let mut name = String::new();
@@ -296,8 +297,8 @@ pub fn team_name_for(cwd: &std::path::Path) -> anyhow::Result<String> {
     }
     validate_name(&name).map_err(|error| {
         anyhow::anyhow!(
-            "cannot derive a valid team name {name:?} from directory {}: {error}; create an a2amx.toml here, or pass --file",
-            cwd.display()
+            "cannot derive a valid team name {name:?} from directory {}: {error}; {remedy}",
+            dir.display()
         )
     })?;
     Ok(name)
@@ -479,30 +480,29 @@ fn is_mnt_drive(components: &[std::path::Component<'_>]) -> bool {
         && components[2].as_os_str().to_string_lossy().as_bytes()[0].is_ascii_alphabetic()
 }
 
-pub fn parse(text: &str) -> anyhow::Result<Vec<TeamSession>> {
-    parse_with(text, None)
-}
-
-pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<TeamSession>> {
-    reject_old_confine_format(text)?;
+pub fn parse(text: &str, dir: &std::path::Path, global: bool) -> anyhow::Result<Vec<TeamSession>> {
+    reject_renamed_allow(text)?;
     let file: TeamFile = toml::from_str(text).context("invalid team file")?;
     let TeamFile {
         team,
         private,
-        allow,
-        prefix,
+        allow_teams,
         confine,
         session,
     } = file;
-    let global = default_team.is_some();
-    if team.is_some() && default_team.is_some() {
+    if team.is_some() && global {
         bail!("the global team file must not set team; the team is named after the directory");
     }
-    let team = team.or_else(|| default_team.map(str::to_owned));
-    if prefix.is_some() {
-        bail!("prefix was renamed to team; see the README");
-    }
-    let scope = build_scope(team, private, allow)?;
+    let remedy = if global {
+        "create an a2amx.toml here, or pass --file"
+    } else {
+        "set team in the file"
+    };
+    let team = match team {
+        Some(team) => team,
+        None => team_name_for(dir, remedy)?,
+    };
+    let scope = build_scope(team, private, allow_teams)?;
     let mut sessions = Vec::with_capacity(session.len());
     for (index, mut table) in session.into_iter().enumerate() {
         let own_confine = table
@@ -532,22 +532,15 @@ pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<
         .collect();
     for session in &mut sessions {
         let original_name = session.name.clone();
-        if let Some(base_scope) = &scope {
-            session.name = format!("{}-{original_name}", base_scope.name);
-            let mut session_scope = base_scope.clone();
-            session_scope.agents = resolve_agent_allow(
-                &session.allow,
-                &base_scope.name,
-                &session.name,
-                base_scope.private,
-            )?;
-            session.team = Some(session_scope);
-        } else {
-            if !session.allow.is_empty() {
-                bail!("session {}: allow needs a private team", session.name);
-            }
-            session.team = None;
-        }
+        session.name = format!("{}-{original_name}", scope.name);
+        let mut session_scope = scope.clone();
+        session_scope.agents = resolve_agent_allow(
+            &session.allow_agents,
+            &scope.name,
+            &session.name,
+            scope.private,
+        )?;
+        session.team = Some(session_scope);
         let session_scope = session.team.as_ref();
         resolve_references(
             &mut session.watch,
@@ -568,54 +561,22 @@ pub fn parse_with(text: &str, default_team: Option<&str>) -> anyhow::Result<Vec<
     Ok(sessions)
 }
 
-fn reject_old_confine_format(text: &str) -> anyhow::Result<()> {
+fn reject_renamed_allow(text: &str) -> anyhow::Result<()> {
     let Ok(root) = toml::from_str::<toml::Table>(text) else {
         return Ok(());
     };
-    if matches!(root.get("confine"), Some(toml::Value::Boolean(_))) {
-        bail!(
-            "confine is now a table: write [confine] with enabled = true; see docs/confinement.md"
-        );
+    if root.contains_key("allow") {
+        bail!("allow was renamed to allow_teams");
     }
     let Some(toml::Value::Array(sessions)) = root.get("session") else {
         return Ok(());
     };
-    const OLD_KEYS: [(&str, &str); 5] = [
-        (
-            "confine_write",
-            "confine_write was replaced by write in [session.confine]",
-        ),
-        (
-            "confine_hide",
-            "confine_hide was replaced by hide in [session.confine]",
-        ),
-        (
-            "confine_unhide",
-            "confine_unhide was replaced by unhide in [session.confine]",
-        ),
-        (
-            "confine_no_default_hides",
-            "confine_no_default_hides was replaced by default_hides = false in [session.confine]",
-        ),
-        (
-            "confine_allow_containers",
-            "confine_allow_containers was replaced by one grant per runtime, for example grants = [\"docker\"], in [session.confine]; run a2amx confine list",
-        ),
-    ];
     for (index, value) in sessions.iter().enumerate() {
-        let Some(table) = value.as_table() else {
-            continue;
-        };
-        let label = (index + 1).to_string();
-        if matches!(table.get("confine"), Some(toml::Value::Boolean(_))) {
-            bail!(
-                "session {label}: confine is now a table: use [session.confine] with enabled = true"
-            );
-        }
-        for (key, message) in OLD_KEYS {
-            if table.contains_key(key) {
-                bail!("session {label}: {message}");
-            }
+        if value
+            .as_table()
+            .is_some_and(|table| table.contains_key("allow"))
+        {
+            bail!("session {}: allow was renamed to allow_agents", index + 1);
         }
     }
     Ok(())
@@ -677,8 +638,8 @@ fn merge_confine(
                     "[confine] auto is only read from the global team file; run a2amx confine suggest and paste the grants line into your team file"
                 );
             }
-            if table.enabled != Some(true) {
-                bail!("[confine] auto needs enabled = true");
+            if table.enabled == Some(false) {
+                bail!("[confine] auto needs confinement; remove enabled = false");
             }
         }
     }
@@ -708,8 +669,8 @@ fn merge_confine(
         }
     }
     let enabled = own
-        .and_then(|table| table.enabled)
-        .or_else(|| team.and_then(|table| table.enabled))
+        .map(|table| table.enabled.unwrap_or(true))
+        .or_else(|| team.map(|table| table.enabled.unwrap_or(true)))
         .unwrap_or(false);
     let write = deduplicated_values(
         team.map_or(&[][..], |table| &table.write),
@@ -736,12 +697,12 @@ fn merge_confine(
             || !table.keep_env.is_empty()
             || table.default_hides.is_some()
     });
+    if own.is_some_and(|table| table.enabled == Some(false)) && own_has_options {
+        bail!(
+            "session {session_name}: [confine] options are set but enabled = false; remove the options or the enabled = false"
+        );
+    }
     if !enabled {
-        if own_has_options {
-            bail!(
-                "session {session_name}: [confine] options need enabled = true; add enabled = true to the session's confine table or to the team's"
-            );
-        }
         return Ok(None);
     }
     validate_confine_list(session_name, "write", &write)?;
@@ -768,51 +729,40 @@ fn merge_confine(
 }
 
 fn build_scope(
-    team: Option<String>,
+    name: String,
     private: Option<bool>,
-    allow: Option<Vec<String>>,
-) -> anyhow::Result<Option<TeamScope>> {
-    let allow_given = allow.is_some();
-    let allow = allow.unwrap_or_default();
-    let scope = if let Some(name) = team {
-        if name.is_empty() {
-            bail!("team must not be empty");
+    allow_teams: Option<Vec<String>>,
+) -> anyhow::Result<TeamScope> {
+    if name.is_empty() {
+        bail!("team must not be empty");
+    }
+    validate_name(&name).map_err(|error| anyhow::anyhow!("team {name:?}: {error}"))?;
+    if name.ends_with('-') {
+        bail!("team {name:?} must not end in '-'; the dash is added for you");
+    }
+    let private = private.unwrap_or(true);
+    let allow_given = allow_teams.is_some();
+    let allow = allow_teams.unwrap_or_default();
+    if !private && allow_given {
+        bail!("allow_teams needs a private team");
+    }
+    let mut seen = HashSet::with_capacity(allow.len());
+    for entry in &allow {
+        validate_name(entry)
+            .map_err(|error| anyhow::anyhow!("allow_teams entry {entry:?}: {error}"))?;
+        if entry == &name {
+            bail!("allow_teams entry must not be the team itself");
         }
-        validate_name(&name).map_err(|error| anyhow::anyhow!("team {name:?}: {error}"))?;
-        if name.ends_with('-') {
-            bail!("team {name:?} must not end in '-'; the dash is added for you");
+        if !seen.insert(entry) {
+            bail!("allow_teams entry {entry:?} is repeated");
         }
-        let private = private.unwrap_or(true);
-        if !private && allow_given {
-            bail!("allow needs a private team");
-        }
-        let mut seen = HashSet::with_capacity(allow.len());
-        for entry in &allow {
-            validate_name(entry)
-                .map_err(|error| anyhow::anyhow!("allow entry {entry:?}: {error}"))?;
-            if entry == &name {
-                bail!("allow entry must not be the team itself");
-            }
-            if !seen.insert(entry) {
-                bail!("allow entry {entry:?} is repeated");
-            }
-        }
-        Some(TeamScope {
-            name,
-            private,
-            allow,
-            agents: Vec::new(),
-        })
-    } else {
-        if private.is_some() {
-            bail!("private requires team");
-        }
-        if allow_given {
-            bail!("allow requires team");
-        }
-        None
-    };
-    Ok(scope)
+    }
+    Ok(TeamScope {
+        name,
+        private,
+        allow,
+        agents: Vec::new(),
+    })
 }
 
 fn session_from_table(index: usize, mut table: toml::value::Table) -> anyhow::Result<TeamSession> {
@@ -848,35 +798,35 @@ fn resolve_agent_allow(
         return Ok(Vec::new());
     }
     if !private {
-        bail!("session {session_name}: allow needs a private team");
+        bail!("session {session_name}: allow_agents needs a private team");
     }
     if entries.len() > 16 {
-        bail!("session {session_name}: allow has at most 16 entries");
+        bail!("session {session_name}: allow_agents has at most 16 entries");
     }
     let mut seen = HashSet::with_capacity(entries.len());
     let mut agents = Vec::with_capacity(entries.len());
     for entry in entries {
         let Some((team, agent)) = entry.split_once('/') else {
-            bail!("session {session_name}: allow entry {entry:?} must be TEAM/AGENT");
+            bail!("session {session_name}: allow_agents entry {entry:?} must be TEAM/AGENT");
         };
         if team.is_empty() || agent.is_empty() || agent.contains('/') {
-            bail!("session {session_name}: allow entry {entry:?} must be TEAM/AGENT");
+            bail!("session {session_name}: allow_agents entry {entry:?} must be TEAM/AGENT");
         }
         validate_name(team).map_err(|error| {
-            anyhow::anyhow!("session {session_name}: allow entry {entry:?}: {error}")
+            anyhow::anyhow!("session {session_name}: allow_agents entry {entry:?}: {error}")
         })?;
         validate_name(agent).map_err(|error| {
-            anyhow::anyhow!("session {session_name}: allow entry {entry:?}: {error}")
+            anyhow::anyhow!("session {session_name}: allow_agents entry {entry:?}: {error}")
         })?;
         if team == own_team {
-            bail!("session {session_name}: allow entry {entry:?} must name another team");
+            bail!("session {session_name}: allow_agents entry {entry:?} must name another team");
         }
         let resolved = format!("{team}-{agent}");
         validate_name(&resolved).map_err(|error| {
-            anyhow::anyhow!("session {session_name}: allow entry {entry:?}: {error}")
+            anyhow::anyhow!("session {session_name}: allow_agents entry {entry:?}: {error}")
         })?;
         if !seen.insert(resolved.clone()) {
-            bail!("session {session_name}: allow entry {entry:?} is repeated");
+            bail!("session {session_name}: allow_agents entry {entry:?} is repeated");
         }
         agents.push(resolved);
     }
@@ -946,7 +896,7 @@ pub fn flag_sessions(specs: &[String]) -> anyhow::Result<Vec<TeamSession>> {
             heartbeat: None,
             role: None,
             remote: None,
-            allow: Vec::new(),
+            allow_agents: Vec::new(),
             confine: None,
             auto: false,
             team: None,
@@ -1255,7 +1205,7 @@ mod tests {
             heartbeat: None,
             role: None,
             remote: None,
-            allow: Vec::new(),
+            allow_agents: Vec::new(),
             confine,
             auto,
             team: None,

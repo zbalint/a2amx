@@ -225,7 +225,7 @@ async fn team_up_validates_remote_before_start_and_carries_it_to_the_session() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
+async fn team_up_remote_lease_output_uses_derived_team_and_not_dry_run() {
     let (dir, daemon) = common::start_daemon().await;
     let Some(bwrap) = a2amx::confine::resolve_bwrap(None).ok() else {
         daemon.shutdown().await.unwrap();
@@ -308,10 +308,22 @@ async fn team_up_remote_lease_output_requires_a_team_and_not_dry_run() {
         runtime.path(),
         &["team", "up", "--detach", "--file", "config/team.toml"],
     );
-    assert!(unscoped.status.success());
-    assert!(
+    let unscoped_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&unscoped.stdout),
         String::from_utf8_lossy(&unscoped.stderr)
-            .contains("remote messaging is set but the file has no team name; no lease can start")
+    );
+    let prefix = "post this code in the control channel within 10m: ";
+    let lease_lines: Vec<_> = unscoped_output
+        .lines()
+        .filter(|line| line.starts_with(prefix))
+        .collect();
+    assert_eq!(lease_lines.len(), 1, "{unscoped_output}");
+    let code = &lease_lines[0][prefix.len()..];
+    assert_eq!(code.len(), 12, "{unscoped_output}");
+    assert!(
+        code.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{unscoped_output}"
     );
     daemon.shutdown().await.unwrap();
 }
@@ -397,7 +409,7 @@ enabled = true
     pty.wait_for_text("press Enter to attach to the session", wait)?;
     assert!(
         pty.screen_text()
-            .contains("remote messaging is set but the file has no team name; no lease can start")
+            .contains("post this code in the control channel within")
     );
     assert_waiting_before_enter(&mut pty, Duration::from_millis(1500)).await?;
     pty.send(b"\r")?;

@@ -778,7 +778,7 @@ async fn explicit_container_grant_reports_escape_notice_in_dry_run() {
     let runtime = tempfile::tempdir().expect("runtime");
     std::fs::write(
         project.path().join("a2amx.toml"),
-        "[confine]\nenabled = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n[session.confine]\ngrants = [\"docker\"]\n",
+        "team = \"worker-test\"\n[confine]\nenabled = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n[session.confine]\ngrants = [\"docker\"]\n",
     )
     .expect("local team file");
 
@@ -797,13 +797,13 @@ async fn explicit_container_grant_reports_escape_notice_in_dry_run() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("session worker: grant docker can escape: "),
+        stderr.contains("session worker-test-worker: grant docker can escape: "),
         "{stderr}"
     );
 
     std::fs::write(
         project.path().join("a2amx.toml"),
-        "[confine]\nenabled = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n[session.confine]\ngrants = [\"cargo\"]\n",
+        "team = \"worker-test\"\n[confine]\nenabled = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n[session.confine]\ngrants = [\"cargo\"]\n",
     )
     .expect("local team file");
     let output = run_binary(
@@ -1659,7 +1659,7 @@ async fn real_up_reuses_auto_grants_and_running_session_is_not_rescanned() {
     let manual_project = tempfile::tempdir().expect("manual project");
     std::fs::write(
         manual_project.path().join("manual.toml"),
-        "[confine]\nenabled = true\n[[session]]\nname = \"manualworker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\n",
+        "team = \"manual\"\n[confine]\nenabled = true\n[[session]]\nname = \"manualworker\"\ncommand = [\"sh\", \"-c\", \"sleep 30\"]\n",
     )
     .expect("manual team file");
     let manual_up = run_binary(
@@ -1682,9 +1682,9 @@ async fn real_up_reuses_auto_grants_and_running_session_is_not_rescanned() {
     );
     let manual_id = String::from_utf8_lossy(&manual_up.stdout)
         .lines()
-        .find(|line| line.starts_with("started manualworker "))
+        .find(|line| line.starts_with("started manual-manualworker "))
         .and_then(|line| line.split_whitespace().nth(2))
-        .expect("started manualworker id")
+        .expect("started manual-manualworker id")
         .to_owned();
     {
         let listed = String::from_utf8(
@@ -1718,7 +1718,9 @@ async fn real_up_reuses_auto_grants_and_running_session_is_not_rescanned() {
         )
         .expect("manual team status output");
         assert!(
-            status.contains(&format!("manualworker - running manual {manual_id}")),
+            status.contains(&format!(
+                "manual-manualworker manual (private) running manual {manual_id}"
+            )),
             "{status}"
         );
     }
@@ -1736,7 +1738,7 @@ async fn real_up_reuses_auto_grants_and_running_session_is_not_rescanned() {
         std::eprintln!("DEBUG manual_id={manual_id:?} stdout={stdout:?}");
         assert!(
             stdout.contains(&format!(
-                "already running manualworker {manual_id} (confine manual)"
+                "already running manual-manualworker {manual_id} (confine manual)"
             )),
             "{stdout}"
         );

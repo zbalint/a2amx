@@ -5,7 +5,7 @@
 # "myproject-architect".
 team = "myproject"
 # private = false # teams are private by default
-# allow = ["other-team"] # file-level allow: mutual private-team consent by team name
+# allow_teams = ["other-team"] # file-level allow: mutual private-team consent by team name
 # Each element of command is one argument. Write ["claude", "--model", "sonnet"],
 # never ["claude --model sonnet"] (the whole string would be taken as the program name).
 #
@@ -19,9 +19,9 @@ name = "architect"
 command = ["claude", "--model", "sonnet"]
 attach = true # at most one session; the one `team up` attaches to
 role = "architect"
-# allow = ["other-team/architect"] # session-level allow; requires mutual consent and a private team
+# allow_agents = ["other-team/architect"] # session-level allow; requires mutual consent and a private team
 # reset = ["/clear"] # steps `a2amx reset` types, one to eight slash commands
-# control_from = ["developer"] # sessions allowed to reset this one through the MCP tool
+control_from = ["developer"] # sessions allowed to reset this one through the MCP tool
 watch = ["developer", "consultant"] # notify this session when a watched peer exits naturally
 heartbeat = "30m" # digest watched peers after 30 minutes of idle time; needs watch
 # activity = { working_after = "2m", idle_after = "30s" } # transition notices; needs watch

@@ -28,9 +28,9 @@ fn parse_complete_blocks(markdown: &str, label: &str) -> usize {
             continue;
         }
         let result = if block.lines().next() == Some("# global team file") {
-            a2amx::team::parse_with(&block, Some("demo"))
+            a2amx::team::parse(&block, std::path::Path::new("/work/demo"), true)
         } else {
-            a2amx::team::parse(&block)
+            a2amx::team::parse(&block, std::path::Path::new("/work/demo"), false)
         };
         if let Err(error) = result {
             panic!("{label} TOML did not parse: {error}\n{block}");
@@ -81,7 +81,9 @@ fn toml_examples_in_the_confinement_guide_parse() {
         other_lines.push(uncommented);
     }
     let reconstructed = other_lines.join("\n");
-    if let Err(error) = a2amx::team::parse(&reconstructed) {
+    if let Err(error) =
+        a2amx::team::parse(&reconstructed, std::path::Path::new("/work/demo"), false)
+    {
         panic!("a2amx.toml.example confinement block did not parse: {error}");
     }
 }

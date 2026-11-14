@@ -186,8 +186,8 @@ enabled = true
 ```
 
 `send` allows the agent to message the human. `both` additionally allows the paired human to
-message that agent. Remote-enabled sessions must be confined. The team file must have a team
-name, because leases and the gateway's agent list are per team.
+message that agent. Remote-enabled sessions must be confined. A team file supplies an explicit or
+derived team name, because leases and the gateway's agent list are per team.
 
 The standalone command-line form is `a2amx new --confine --remote <send|both> -- <command>`;
 remote messaging requires `--confine`. It marks a session but does not put an ungrouped session

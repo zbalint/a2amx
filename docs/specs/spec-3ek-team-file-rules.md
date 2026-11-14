@@ -232,3 +232,18 @@ the developer mutates in the checkout, names the failing test per mutant, restor
 | `tests/docs_examples.rs` parses doc and README team blocks | `docs_examples.rs:24-95` | read |
 
 Not verified before locking: the exact text serde and `toml` give for the removed keys (test 6 asserts only the names above); which tests in `tests/daemon_cli.rs`, `refs_and_list.rs`, `confine_show.rs`, `auto_confine.rs` change by visibility (the developer reports them).
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness (model not recorded); developer OMP, openai-codex/gpt-5.6-luna; tester OMP, opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0 (one informational ruling, amendment 1: test 6.5's `session a:` literal means the final name, `session proj-a:`).
+
+| Found | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | `enabled` formula contradicted the owner's decision (per table); `auto needs enabled` check not re-read after the default flipped; over-engineered `Result<String,String>` API; `team_name_for` has two error branches; further M2-M7, L1-L4 | Spec rewritten before the lock |
+| Tester pass | tester, deepseek-v4.1-flash | Section 6 tests 9-12 absent; seven mutants survived (M9, M10, M11, M15, M16, M17, M19) | Tests added in fix round 1; developer reran each mutant |
+| Tester pass | tester | Two status tests lost their behavior; assertions weakened in three tests; one test renamed to match nothing | Restored in fix round 1 |
+| Tester pass | tester | Unrequested duplicate validator `validate_sessions_before_prefix` changing error literals | Removed in fix round 1 |
+| Tester pass | tester | `docs/teams.md` auto paragraph garbled, breaking-changes paragraph missing, examples pointed outside the team | Fixed in fix round 1 |
+| Implementation | developer, gpt-5.6-luna | Claimed a mutant mapping without running mutants; one mutant survived until a no-table assertion was added | Mutants run in isolation in fix round 1 |
+| Architect review | architect, Sonnet 5.5 | Watch/control_from resolver order swapped; duplicate global-team pre-scan; four unused `_cwd` parameters; a repeated `team_name_for` call | Removed in fix round 2 |
+| Spec | architect | Test 6.5 literal used an unprefixed name | Amendment 1 |

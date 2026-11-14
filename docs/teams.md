@@ -9,30 +9,38 @@ How-to and reference for operators configuring and managing a group of sessions.
 `<root>/config/team.toml` as a global fallback. A global file gets its team name
 from the invoking directory: the final directory component is lowercased,
 non-alphanumeric runs become `-`, and the result is limited to 40 bytes. A
-global file must not set `team`; it may set `private` and `allow`, which apply
-to the derived team. Relative session `cwd` values (including `cwd = "."`) are
-resolved against the invoking directory for a global file. The fallback refuses
+global file must not set `team`; it may set `private` and `allow_teams`, which apply to the
+derived team. A local file without `team` derives its team name from the invoking directory; an explicit file without
+`team` derives it from the file's canonical project directory. Relative session `cwd` values (including
+`cwd = "."`) are resolved against the corresponding project directory. The fallback refuses
 the filesystem root, home directories, hidden or user-data directories under
 home, the daemon state and system trees, and top-level/container or Windows
 home directories. A local `a2amx.toml` or explicit `--file` always overrides
 the fallback and the guard. Two project directories with the same final
 component therefore share a derived team name and its sessions; this is a
 known limitation.
+### Breaking changes
+
+Team files without an explicit `team` now derive a private team name from their project directory.
+The file-level `allow` key is now `allow_teams`, and session-level `allow` is now `allow_agents`.
+Presence of a `[confine]` table confines sessions, including `auto = false`; set `enabled = false`
+to disable it. Existing sessions keep their unprefixed names; stop them before starting the renamed
+team sessions.
 A team file looks like:
 
 ```toml
 team = "myproject"
 # private = false # teams are private by default
-# allow = ["other-team"] # file-level allow: mutual private-team consent by team name
+# allow_teams = ["other-team"] # file-level allow: mutual private-team consent by team name
 [[session]]
 name = "architect"
 command = ["claude"]
 attach = true
 role = "architect"
-allow = ["other-team/architect"] # session-level allow: mutual consent by final agent name
+allow_agents = ["other-team/architect"] # session-level allow: mutual consent by final agent name
 reset = ["/clear", "/prewalk restart"]
 control_from = ["developer"]
-watch = ["developer"]
+watch = ["developer", "consultant"]
 heartbeat = "30m" # digest watched peers after 30 minutes of idle time
 activity = { working_after = "2m", idle_after = "30s" } # notices on peer transitions
 # Reference forms: bare local "developer", explicit "other-team/architect", global "/hand".
@@ -44,14 +52,14 @@ cwd = "."
 role = "developer"
 ```
 
-The old `prefix` team-file key was renamed to `team`.
+The old `prefix` key is rejected by the strict team-file parser.
 
 ## Visibility
 
 The file-level `team` prefixes every session name (`architect` becomes `myproject-architect`).
-Teams are private by default; file-level `allow` names teams, and naming a public team changes nothing.
+Teams are private by default; file-level `allow_teams` names teams, and naming a public team changes nothing.
 Private teams can see ungrouped sessions and public teams, but two private teams need mutual
-file-level `allow` entries. A session-level `allow` uses the same key with `team/agent`
+file-level `allow_teams` entries. A session-level `allow_agents` uses `TEAM/AGENT`
 entries such as `other-team/architect`; both named sessions must list each other. It adds
 that pair to the team-level visibility rule, still needs a private team, and does not expose
 the rest of either team. Changing a running session's list changes its scope and is a
@@ -96,7 +104,7 @@ mutual or larger activity-watch cycles (`activity notices would loop ...`); manu
 started sessions are not checked, so avoid enabling activity in both directions.
 
 A cross-team `control_from` entry such as `other-team/agent` works only when the
-two sessions can already see each other. Mutual session-level `allow` lets one
+two sessions can already see each other. Mutual session-level `allow_agents` lets one
 architect reset the other when the target lists that architect in `control_from`.
 
 `role` is an optional label of at most 64 characters, shown only to that session in
@@ -109,23 +117,23 @@ Within a `[[session]]` table, `name` may be omitted when `role` is set; the role
 
 `remote` is optional and enables remote human messaging for this session. Set it to `send` to
 let the agent message the paired human, or `both` to allow messages in both directions. It
-requires confinement; remote messaging is off when the key is omitted. A team name is required
-for the gateway lease, so an ungrouped session does not reach the gateway. See
+requires confinement; remote messaging is off when the key is omitted. A derived or explicit
+team name is always available to the gateway lease.
 [Remote messaging](remote-messaging.md).
 
 ### Confinement settings
 
 Use an optional team-level `[confine]` table for defaults and a `[session.confine]`
-table for session settings. `enabled` defaults to false, and `default_hides` defaults
-to true. `write`, `hide`, and `unhide` lists add team entries before session entries,
+table for session settings. The tables enable confinement by presence unless `enabled = false`;
+`default_hides` defaults to true. `write`, `hide`, and `unhide` lists add team entries before session
 while scalars override. A team-level `grants` list applies to every session; `harness-config` and
 the container grants other than `docker` remain session-only. Run `a2amx confine list` for valid
 grant names and see [Confinement](confinement.md#credential-environment-variables)
 for the closed credential environment list.
 
 `auto = true` is accepted only in the global `<root>/config/team.toml` `[confine]`
-table, and requires `enabled = true`. It detects project markers and git remotes at
-each start and adds the matching grants plus `cache`; local `a2amx.toml` files and
+table and requires confinement (omit `enabled` or set it to true). It detects project markers and git
+remotes at each start and adds the matching grants plus `cache`; local `a2amx.toml` files and
 explicit `--file` inputs must not set the key. When a detected grant is not in the
 accepted set, `team up` shows its reason and exposure and asks before starting.
 Answering yes records that grant name in `<root>/state/auto-grants`, covering every
@@ -146,15 +154,15 @@ there is no separate build-path switch. Tool directories named by grants are cre
 only when a real session starts. Dry runs list missing grant directories as skipped;
 credential grants never create files or directories.
 
-Options on a disabled session need `enabled = true`; team options without any enabled
-value confine nothing. Lists accept at most 64 entries of at most 4096 bytes. Codex sessions
+An explicit `enabled = false` disables a table; options in that same disabled table are rejected.
+Team and session options without an `enabled` value enable confinement. Lists accept at most 64 entries of at most 4096 bytes. Codex sessions
 can be confined alongside Claude Code and OMP.
 See [Confinement](confinement.md) for recipes by ecosystem, credentials and Docker.
 
 A copy to start from is in [a2amx.toml.example](../a2amx.toml.example); your own `a2amx.toml` is gitignored.
 
-Use `--file` for another file; relative `cwd` values are relative to that file's
-directory, while an omitted `cwd` uses the invoking directory. `up` skips and reports
+Use `--file` for another file; relative `cwd` values and omitted `cwd` are resolved against
+the corresponding project directory. `up` skips and reports
 running sessions. An exited session holding a requested name stops the whole team
 before any spawn; remove it with `a2amx kill NAME` first. A live team name with different
 private/allow settings (file-level or session-level) is a conflict; run `a2amx team down` before changing those settings.
@@ -175,8 +183,8 @@ a stderr hint to use full names from `a2amx list`.
 When a team file with a team name enables remote messaging, `a2amx team up` prints the enabled
 agents and a single-use code to post in the Discord control channel:
 `post this code in the control channel within 10m: <code>`.
-If remote messaging is set but the file has no team name, it warns:
-`remote messaging is set but the file has no team name; no lease can start`.
+`remote` messaging always has a team name from an explicit or derived file; a flag-form session
+without a team cannot start a gateway lease.
 
 `a2amx team reset [--file F | NAME ...] [--except NAME]... [--include-attached] [--yes]`
 runs the configured reset sequence (default `/clear`) for each selected session, in file order or NAME

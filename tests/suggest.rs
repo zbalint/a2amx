@@ -243,7 +243,8 @@ command = [\"cat\"]\n\
 [session.confine]\n\
 {fragment}"
     );
-    a2amx::team::parse(&team_file).expect("rendered grants parse");
+    a2amx::team::parse(&team_file, std::path::Path::new("/work/demo"), false)
+        .expect("rendered grants parse");
 }
 
 #[test]

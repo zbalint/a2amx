@@ -68,11 +68,10 @@ socket root.
 ### Team file
 
 Use one optional `[confine]` table for team defaults and `[session.confine]` for per-session
-settings. Set `enabled = true` in either table; lists add and scalars override. `write`,
+settings. A table enables confinement by presence unless `enabled = false`; lists add and scalars override. `write`,
 `hide`, `unhide`, and `keep_env` are arrays, with `keep_env` per-session only;
-`default_hides` and `auto` are booleans, and `grants` names a capability for that
-session. In the complete example below, `cwd = "."` is relative to the team file's
-directory; other relative paths are relative to the resolved session working directory.
+`default_hides` and `auto` are booleans, and `grants` names a capability for that session.
+In the complete example below, `cwd = "."` is relative to the team file's directory; other relative paths are relative to the resolved session working directory.
 
 ### Preview
 
@@ -152,23 +151,22 @@ would start proj-builder
 These are three scopes, not layers:
 
 - `--confine` (with its `--confine-*` options) belongs to `a2amx new` for one session and reads no team file. Passing a `--confine-*` option without `--confine` is an error.
-- `[confine] enabled = true` belongs to a team file. A team run reads one file: the `--file` you pass, otherwise the local `a2amx.toml` if it exists, otherwise the global `<root>/config/team.toml`; they are never merged, and a session's `enabled` beats the team's.
-- Global `auto = true` belongs to the global file's `[confine]` table, needs `enabled = true` there, and adds detected grants plus `cache` only for sessions that end up confined.
+- `[confine]` belongs to a team file. A team run reads one file: the `--file` you pass, otherwise the local `a2amx.toml` if it exists, otherwise the global `<root>/config/team.toml`; they are never merged, and a session's `enabled` beats the team's.
+- Global `auto = true` belongs to the global file's `[confine]` table, requires confinement (omit `enabled` or set it true) there, and adds detected grants plus `cache` only for sessions that end up confined.
 
 Two cases can disagree: team `enabled = true` with session `enabled = false` leaves that session unconfined and gives it no auto grants; when no `--file` is given, a local `a2amx.toml` hides the global file entirely. `a2amx team up --dry-run` shows the effective plan before anything starts, and `a2amx confine show` shows a running session's plan. `a2amx confine suggest` prints a grants line, not the effective plan. `auto = true` in a local file or with `enabled = false`, and `auto` in `[session.confine]`, are rejected.
 
 The effective session setting uses the session table when a scalar is present, otherwise
 the team table, otherwise the default (`enabled = false`, `default_hides = true`).
-`auto = true` is valid only in the global `<root>/config/team.toml` `[confine]` table and
-requires `enabled = true`. It detects project markers and bounded regular git configs,
+`auto = true` is valid only in the global `<root>/config/team.toml` `[confine]` table
+and requires confinement (omit `enabled` or set it true). It detects project markers and bounded regular git configs,
 then adds the matching grants plus `cache`; local and explicit team files must not set it.
 `auto = false` is accepted in any team table and means nothing. A session-level `auto`
 key is always an error. `write`, `hide`, and `unhide` lists add in team-then-session order,
 with exact duplicates kept once. `grants` is per session by default; every grant may be set
 in the team table except `harness-config` and the container grants other than `docker`, which remain session-only.
-`enabled = false` needs no other key. A team table with options but no `enabled` anywhere
-confines nothing, while team `enabled = false` and session `enabled = true` confines that
-session and still applies the team's lists.
+`enabled = false` needs no other key. A team or session table with options but no `enabled` value
+enables confinement, while an explicit `enabled = false` disables it and rejects options in that table.
 
 ### Grants
 

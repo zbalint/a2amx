@@ -777,15 +777,23 @@ fn team_table_accepts_new_grants_and_rejects_the_rest() {
         "cache",
         "huggingface-token",
     ] {
-        team::parse(&format!(
-            "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
-        ))
+        team::parse(
+            &format!(
+                "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
+            ),
+            std::path::Path::new("/work/demo"),
+            false,
+        )
         .expect("team-default grant is allowed team-wide");
     }
     for grant in ["podman", "harness-config"] {
-        let error = team::parse(&format!(
-            "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
-        ))
+        let error = team::parse(
+            &format!(
+                "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
+            ),
+            std::path::Path::new("/work/demo"),
+            false,
+        )
         .expect_err("non-team grant is session-only");
         assert!(error.to_string().contains("grant it in the session"));
     }

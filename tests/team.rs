@@ -17,26 +17,34 @@ use a2amx::wire::{Request, Response, SessionSummary};
 #[test]
 fn global_team_name_is_normalized_valid_and_bounded() {
     assert_eq!(
-        team::team_name_for(Path::new("/work/My_Project.v2")).unwrap(),
+        team::team_name_for(Path::new("/work/My_Project.v2"), "R").unwrap(),
         "my-project-v2"
     );
-    assert_eq!(team::team_name_for(Path::new("/work/ABC")).unwrap(), "abc");
+    assert_eq!(
+        team::team_name_for(Path::new("/work/ABC"), "R").unwrap(),
+        "abc"
+    );
     for path in ["/work/s12", "/work/---"] {
-        let error = team::team_name_for(Path::new(path))
+        let error = team::team_name_for(Path::new(path), "R")
             .unwrap_err()
             .to_string();
         assert!(error.contains(path));
-        assert!(error.contains("--file"));
+        assert!(error.ends_with("; R"), "{error}");
     }
+    let error = team::team_name_for(Path::new("/"), "R")
+        .unwrap_err()
+        .to_string();
+    assert!(error.ends_with("; R"), "{error}");
     let path = format!("/work/{}-{}", "a".repeat(39), "b".repeat(30));
     assert_eq!(
-        team::team_name_for(Path::new(&path)).unwrap(),
+        team::team_name_for(Path::new(&path), "R").unwrap(),
         "a".repeat(39)
     );
-    let bounded = team::team_name_for(Path::new(&path)).unwrap();
-    let sessions = team::parse_with(
+    let bounded = team::team_name_for(Path::new(&path), "R").unwrap();
+    let sessions = team::parse(
         "[[session]]\nname = 'architect'\ncommand = ['cat']\n[[session]]\nname = 'consultant'\ncommand = ['cat']",
-        Some(&bounded),
+        Path::new(&path),
+        false,
     )
     .unwrap();
     assert_eq!(sessions[0].name, format!("{bounded}-architect"));
@@ -47,19 +55,21 @@ fn global_team_name_is_normalized_valid_and_bounded() {
 fn remote_modes_parse_and_require_confinement() {
     let sessions = team::parse(
         r#"
-        [[session]]
-        name = "both"
-        command = ["cat"]
-        remote = "both"
-        [session.confine]
-        enabled = true
-        [[session]]
-        name = "send"
-        command = ["cat"]
-        remote = "send"
-        [session.confine]
-        enabled = true
-        "#,
+    [[session]]
+    name = "both"
+    command = ["cat"]
+    remote = "both"
+    [session.confine]
+    enabled = true
+    [[session]]
+    name = "send"
+    command = ["cat"]
+    remote = "send"
+    [session.confine]
+    enabled = true
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     assert_eq!(sessions[0].remote, Some(RemoteMode::Both));
@@ -67,13 +77,15 @@ fn remote_modes_parse_and_require_confinement() {
 
     let error = team::parse(
         r#"
-        [[session]]
-        name = "worker"
-        command = ["cat"]
-        remote = "maybe"
-        [session.confine]
-        enabled = true
-        "#,
+    [[session]]
+    name = "worker"
+    command = ["cat"]
+    remote = "maybe"
+    [session.confine]
+    enabled = true
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap_err();
     let error = format!("{error:#}");
@@ -82,11 +94,13 @@ fn remote_modes_parse_and_require_confinement() {
 
     let error = team::parse(
         r#"
-        [[session]]
-        name = "worker"
-        command = ["cat"]
-        remote = "both"
-        "#,
+    [[session]]
+    name = "worker"
+    command = ["cat"]
+    remote = "both"
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap_err()
     .to_string();
@@ -192,7 +206,21 @@ fn new_confine_options_require_confine_before_daemon_connection() {
 }
 
 #[test]
-fn parse_with_applies_derived_private_team_and_rejects_global_team_key() {
+fn parse_omitted_team_derives_private_team_from_directory() {
+    let sessions = team::parse(
+        "[[session]]\nname = 'a'\ncommand = ['cat']",
+        Path::new("/work/proj"),
+        false,
+    )
+    .expect("derived team");
+    assert_eq!(sessions[0].name, "proj-a");
+    let scope = sessions[0].team.as_ref().expect("private team");
+    assert_eq!(scope.name, "proj");
+    assert!(scope.private);
+}
+
+#[test]
+fn parse_derives_private_team_and_rejects_global_team_key() {
     let text = r#"
 [[session]]
 name = "architect"
@@ -201,7 +229,7 @@ command = ["cat"]
 name = "consultant"
 command = ["cat"]
 "#;
-    let sessions = team::parse_with(text, Some("proj")).unwrap();
+    let sessions = team::parse(text, Path::new("/work/proj"), false).unwrap();
     assert_eq!(
         sessions
             .iter()
@@ -214,18 +242,27 @@ command = ["cat"]
             .iter()
             .all(|session| session.team.as_ref().is_some_and(|team| team.private))
     );
-    let error = team::parse_with(
+    let error = team::parse(
         "team = 'wrong'\n[[session]]\nname = 'a'\ncommand = ['cat']",
-        Some("proj"),
+        Path::new("/work/proj"),
+        true,
     )
     .unwrap_err()
     .to_string();
     assert!(error.contains("must not set team"));
-    assert!(
-        team::parse(text)
-            .unwrap()
-            .iter()
-            .all(|session| session.team.is_none())
+}
+#[test]
+fn parse_explicit_team_works_at_filesystem_root() {
+    let sessions = team::parse(
+        "team = 'root-team'\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        Path::new("/"),
+        false,
+    )
+    .expect("explicit team at root");
+    assert_eq!(sessions[0].name, "root-team-worker");
+    assert_eq!(
+        sessions[0].team.as_ref().expect("team scope").name,
+        "root-team"
     );
 }
 #[test]
@@ -325,58 +362,86 @@ fn global_guard_characterizes_windows_home_reason() {
 }
 
 #[test]
-fn parse_global_team_conflict_precedes_prefix() {
-    let error = team::parse_with("team = 'demo'\nprefix = 'old'", Some("project"))
-        .unwrap_err()
-        .to_string();
-    assert_eq!(
-        error,
-        "the global team file must not set team; the team is named after the directory"
-    );
-}
-
-#[test]
 fn parse_reports_invalid_team_name_with_team_prefix() {
-    let error = team::parse("team = 'bad name!'").unwrap_err().to_string();
+    let error = team::parse(
+        "team = 'bad name!'",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.starts_with("team \"bad name!\": "), "{error}");
 }
 
 #[test]
 fn parse_reports_invalid_allow_entry_with_entry_prefix() {
-    let error = team::parse("team = 'demo'\nallow = ['bad name!']")
-        .unwrap_err()
-        .to_string();
-    assert!(error.starts_with("allow entry \"bad name!\": "), "{error}");
-}
-
-#[test]
-fn parse_prefix_precedes_private_without_team() {
-    let error = team::parse("prefix = 'old'\nprivate = true")
-        .unwrap_err()
-        .to_string();
-    assert_eq!(error, "prefix was renamed to team; see the README");
-}
-
-#[test]
-fn parse_characterizes_private_requires_team() {
-    assert_eq!(
-        team::parse("private = true").unwrap_err().to_string(),
-        "private requires team"
+    let error = team::parse(
+        "team = 'demo'\nallow_teams = ['bad name!']",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.starts_with("allow_teams entry \"bad name!\": "),
+        "{error}"
     );
+}
+
+#[test]
+fn parse_prefix_is_rejected_by_strict_parser() {
+    let error = team::parse(
+        "prefix = 'old'\nprivate = true",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .unwrap_err();
+    let full = format!("{error:#}");
+    assert!(full.contains("prefix"), "{full}");
+    assert!(!full.contains("renamed"), "{full}");
+}
+
+#[test]
+fn parse_private_defaults_when_team_is_omitted() {
+    let sessions = team::parse(
+        "private = true\n[[session]]\nname = 'a'\ncommand = ['cat']",
+        Path::new("/work/proj"),
+        false,
+    )
+    .unwrap();
+    assert_eq!(sessions[0].name, "proj-a");
+    assert!(sessions[0].team.as_ref().is_some_and(|team| team.private));
 }
 
 #[test]
 fn parse_characterizes_allow_requires_team() {
     assert_eq!(
-        team::parse("allow = []").unwrap_err().to_string(),
-        "allow requires team"
+        team::parse("allow = []", Path::new("/work/proj"), false)
+            .unwrap_err()
+            .to_string(),
+        "allow was renamed to allow_teams"
+    );
+}
+#[test]
+fn parse_rejects_session_two_legacy_allow_with_index() {
+    let error = team::parse(
+        "[[session]]\nname = 'a'\ncommand = ['cat']\n[[session]]\nname = 'b'\ncommand = ['cat']\nallow = ['x/y']",
+        Path::new("/work/proj"),
+        false,
+    )
+    .expect_err("legacy session allow");
+    assert_eq!(
+        error.to_string(),
+        "session 2: allow was renamed to allow_agents"
     );
 }
 
 #[test]
 fn parse_characterizes_empty_team() {
     assert_eq!(
-        team::parse("team = ''").unwrap_err().to_string(),
+        team::parse("team = ''", Path::new("/work/proj"), false)
+            .unwrap_err()
+            .to_string(),
         "team must not be empty"
     );
 }
@@ -384,7 +449,9 @@ fn parse_characterizes_empty_team() {
 #[test]
 fn parse_characterizes_team_trailing_dash() {
     assert_eq!(
-        team::parse("team = 'demo-'").unwrap_err().to_string(),
+        team::parse("team = 'demo-'", Path::new("/work/proj"), false)
+            .unwrap_err()
+            .to_string(),
         "team \"demo-\" must not end in '-'; the dash is added for you"
     );
 }
@@ -392,38 +459,54 @@ fn parse_characterizes_team_trailing_dash() {
 #[test]
 fn parse_public_team_precedes_allow_validation() {
     assert_eq!(
-        team::parse("team = 'demo'\nprivate = false\nallow = ['demo', 'demo']")
-            .unwrap_err()
-            .to_string(),
-        "allow needs a private team"
+        team::parse(
+            "team = 'demo'\nprivate = false\nallow_teams = ['demo', 'demo']",
+            Path::new("/work/proj"),
+            false,
+        )
+        .unwrap_err()
+        .to_string(),
+        "allow_teams needs a private team"
     );
 }
 
 #[test]
 fn parse_characterizes_self_allow() {
     assert_eq!(
-        team::parse("team = 'demo'\nallow = ['demo']")
-            .unwrap_err()
-            .to_string(),
-        "allow entry must not be the team itself"
+        team::parse(
+            "team = 'demo'\nallow_teams = ['demo']",
+            Path::new("/work/proj"),
+            false
+        )
+        .unwrap_err()
+        .to_string(),
+        "allow_teams entry must not be the team itself"
     );
 }
 
 #[test]
 fn parse_characterizes_repeated_allow() {
     assert_eq!(
-        team::parse("team = 'demo'\nallow = ['other', 'other']")
-            .unwrap_err()
-            .to_string(),
-        "allow entry \"other\" is repeated"
+        team::parse(
+            "team = 'demo'\nallow_teams = ['other', 'other']",
+            Path::new("/work/proj"),
+            false
+        )
+        .unwrap_err()
+        .to_string(),
+        "allow_teams entry \"other\" is repeated"
     );
 }
 
 #[test]
 fn parse_characterizes_role_name_error() {
-    let error = team::parse("[[session]]\nrole = 'Bad'\ncommand = ['cat']")
-        .unwrap_err()
-        .to_string();
+    let error = team::parse(
+        "[[session]]\nrole = 'Bad'\ncommand = ['cat']",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(
         error.contains("session 1: name taken from role \"Bad\":"),
         "{error}"
@@ -434,9 +517,13 @@ fn parse_characterizes_role_name_error() {
 #[test]
 fn parse_characterizes_missing_name_and_role() {
     assert_eq!(
-        team::parse("[[session]]\ncommand = ['cat']")
-            .unwrap_err()
-            .to_string(),
+        team::parse(
+            "[[session]]\ncommand = ['cat']",
+            Path::new("/work/proj"),
+            false
+        )
+        .unwrap_err()
+        .to_string(),
         "session 1: name or role is required"
     );
 }
@@ -444,10 +531,10 @@ fn parse_characterizes_missing_name_and_role() {
 #[test]
 fn parse_characterizes_session_allow_without_team() {
     assert_eq!(
-        team::parse("[[session]]\nname = 'architect'\ncommand = ['cat']\nallow = ['other/peer']")
+        team::parse("team = 'proj'\nprivate = false\n[[session]]\nname = 'architect'\ncommand = ['cat']\nallow_agents = ['other/peer']", Path::new("/work/proj"), false)
             .unwrap_err()
             .to_string(),
-        "session architect: allow needs a private team"
+        "session proj-architect: allow_agents needs a private team"
     );
 }
 
@@ -534,6 +621,133 @@ fn reset_targets_preserve_order_and_protect_attached_sessions() {
             ]
         );
     }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_file_dry_run_uses_local_file_and_derived_team() {
+    let home = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(home.path(), Some("host-a"), Default::default()).await;
+    let project = home.path().join("proj-one");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("a2amx.toml"),
+        "[[session]]\nname = 'worker'\ncommand = ['sh', '-c', 'sleep 30']\n",
+    )
+    .unwrap();
+    let output = run_binary_in(home.path(), &project, &["team", "up", "--dry-run"]).unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("  cwd: {}\n", project.display())),
+        "{:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let started = run_binary_in(home.path(), &project, &["team", "up", "--detach"]).unwrap();
+    assert!(started.status.success(), "{:?}", started);
+    let status = run_binary_in(home.path(), &project, &["team", "status"]).unwrap();
+    assert!(status.status.success(), "{:?}", status);
+    let status = String::from_utf8(status.stdout).unwrap();
+    assert!(
+        status.contains("proj-one-worker proj-one (private)"),
+        "{status}"
+    );
+    let stopped = run_binary_in(home.path(), &project, &["team", "down"]).unwrap();
+    assert!(stopped.status.success(), "{:?}", stopped);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_file_dry_run_canonicalizes_dotdot_parent_for_omitted_cwd() {
+    let home = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(home.path(), Some("host-a"), Default::default()).await;
+    let project = home.path().join("fixed-project");
+    let child = project.join("child");
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::write(
+        project.join("team.toml"),
+        "[[session]]\nname = 'worker'\ncommand = ['sh', '-c', 'pwd']\n",
+    )
+    .unwrap();
+    let file = child.join("../team.toml").to_string_lossy().into_owned();
+    let output = run_binary_in(
+        home.path(),
+        &child,
+        &["team", "up", "--dry-run", "--file", &file],
+    )
+    .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("  cwd: {}\n", project.display())),
+        "{:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_file_cli_reports_legacy_allow_rename() {
+    let home = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(home.path(), Some("host-a"), Default::default()).await;
+    let file = home.path().join("legacy.toml");
+    std::fs::write(
+        &file,
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\nallow = ['x/y']\n",
+    )
+    .unwrap();
+    let file = file.to_string_lossy().into_owned();
+    let output = run_binary_in(
+        home.path(),
+        home.path(),
+        &["team", "up", "--dry-run", "--file", &file],
+    )
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("allow was renamed to allow_agents"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&file), "{stderr}");
+    daemon.shutdown().await.unwrap();
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_file_explicit_team_works_in_non_derivable_directory_and_omitted_fails() {
+    let home = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(home.path(), Some("host-a"), Default::default()).await;
+    let dir = home.path().join("___");
+    std::fs::create_dir_all(&dir).unwrap();
+    let explicit = dir.join("explicit.toml");
+    std::fs::write(
+        &explicit,
+        "team = 'explicit'\n[[session]]\nname = 'worker'\ncommand = ['cat']\n",
+    )
+    .unwrap();
+    let explicit = explicit.to_string_lossy().into_owned();
+    let output = run_binary_in(
+        home.path(),
+        &dir,
+        &["team", "up", "--dry-run", "--file", &explicit],
+    )
+    .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("would start explicit-worker"));
+
+    let omitted = dir.join("omitted.toml");
+    std::fs::write(
+        &omitted,
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\n",
+    )
+    .unwrap();
+    let omitted = omitted.to_string_lossy().into_owned();
+    let output = run_binary_in(
+        home.path(),
+        &dir,
+        &["team", "up", "--dry-run", "--file", &omitted],
+    )
+    .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("set team in the file"));
+    daemon.shutdown().await.unwrap();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn global_team_file_is_used_with_local_precedence_and_guard() {
@@ -732,24 +946,26 @@ command = ["sh", "-c", "sleep 30"]
 fn parse_preserves_commands_cwd_order_and_attach_selection() {
     let actual = team::parse(
         r#"
-[[session]]
-name = "architect"
-command = ["claude"]
-role = "architect"
-attach = true
+    [[session]]
+    name = "architect"
+    command = ["claude"]
+    role = "architect"
+    attach = true
 
-[[session]]
-name = "developer"
-command = ["omp"]
-cwd = "."
-"#,
+    [[session]]
+    name = "developer"
+    command = ["omp"]
+    cwd = "."
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     assert_eq!(
         actual,
         vec![
             TeamSession {
-                name: "architect".into(),
+                name: "demo-architect".into(),
                 command: vec!["claude".into()],
                 cwd: None,
                 attach: true,
@@ -760,13 +976,18 @@ cwd = "."
                 activity: None,
                 role: Some("architect".into()),
                 remote: None,
-                allow: Vec::new(),
+                allow_agents: Vec::new(),
                 confine: None,
                 auto: false,
-                team: None,
+                team: Some(a2amx::messaging::TeamScope {
+                    name: "demo".into(),
+                    private: true,
+                    allow: Vec::new(),
+                    agents: Vec::new(),
+                }),
             },
             TeamSession {
-                name: "developer".into(),
+                name: "demo-developer".into(),
                 command: vec!["omp".into()],
                 cwd: Some(".".into()),
                 attach: false,
@@ -777,10 +998,15 @@ cwd = "."
                 activity: None,
                 role: None,
                 remote: None,
-                allow: Vec::new(),
+                allow_agents: Vec::new(),
                 confine: None,
                 auto: false,
-                team: None,
+                team: Some(a2amx::messaging::TeamScope {
+                    name: "demo".into(),
+                    private: true,
+                    allow: Vec::new(),
+                    agents: Vec::new(),
+                }),
             },
         ]
     );
@@ -790,15 +1016,17 @@ cwd = "."
 fn parse_resolves_agent_allow_only_for_the_declaring_session() {
     let sessions = team::parse(
         r#"team = "a2amx"
-allow = ["other"]
-[[session]]
-name = "architect"
-command = ["cat"]
-allow = ["saltmdb/architect"]
-[[session]]
-name = "developer"
-command = ["cat"]
-"#,
+    allow_teams = ["other"]
+    [[session]]
+    name = "architect"
+    command = ["cat"]
+    allow_agents = ["saltmdb/architect"]
+    [[session]]
+    name = "developer"
+    command = ["cat"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -830,9 +1058,9 @@ fn parse_rejects_invalid_session_agent_allow_entries() {
             entry.to_owned()
         };
         let text = format!(
-            "team = \"a2amx\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [\"{allow}\"]"
+            "team = \"a2amx\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow_agents = [\"{allow}\"]"
         );
-        let error = team::parse(&text).expect_err(entry);
+        let error = team::parse(&text, std::path::Path::new("/work/demo"), false).expect_err(entry);
         assert!(error.to_string().contains("session"), "{entry}: {error}");
         assert!(error.to_string().contains("allow"), "{entry}: {error}");
     }
@@ -841,22 +1069,18 @@ fn parse_rejects_invalid_session_agent_allow_entries() {
         .collect::<Vec<_>>()
         .join(", ");
     let error = team::parse(&format!(
-        "team = \"a2amx\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [{entries}]"
-    ))
+        "team = \"a2amx\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow_agents = [{entries}]"
+    ), std::path::Path::new("/work/demo"), false)
     .expect_err("allow cap");
     assert!(error.to_string().contains("session"));
     assert!(error.to_string().contains("allow"));
-    let error = team::parse(
-        "team = \"a2amx\"\nprivate = false\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [\"saltmdb/architect\"]",
-    )
+    let error = team::parse("team = \"a2amx\"\nprivate = false\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow_agents = [\"saltmdb/architect\"]", std::path::Path::new("/work/demo"), false)
     .expect_err("public team");
     assert!(error.to_string().contains("session a2amx-architect"));
     assert!(error.to_string().contains("allow"));
-    let error = team::parse(
-        "[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [\"saltmdb/architect\"]",
-    )
-    .expect_err("ungrouped session");
-    assert!(error.to_string().contains("session architect"));
+    let error = team::parse("team = \"demo\"\nprivate = false\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow_agents = [\"saltmdb/architect\"]", std::path::Path::new("/work/demo"), false)
+        .expect_err("public team");
+    assert!(error.to_string().contains("session demo-architect"));
     assert!(error.to_string().contains("allow"));
 }
 
@@ -864,13 +1088,15 @@ fn parse_rejects_invalid_session_agent_allow_entries() {
 fn parse_defaults_name_to_role() {
     let sessions = team::parse(
         r#"
-[[session]]
-role = "architect"
-command = ["cat"]
-"#,
+    [[session]]
+    role = "architect"
+    command = ["cat"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
-    assert_eq!(sessions[0].name, "architect");
+    assert_eq!(sessions[0].name, "demo-architect");
     assert_eq!(sessions[0].role.as_deref(), Some("architect"));
 }
 
@@ -878,15 +1104,17 @@ command = ["cat"]
 fn parse_defaults_role_name_before_prefix_and_reference_resolution() {
     let sessions = team::parse(
         r#"
-team = "t"
-[[session]]
-role = "architect"
-command = ["cat"]
-[[session]]
-name = "developer"
-command = ["cat"]
-watch = ["architect"]
-"#,
+    team = "t"
+    [[session]]
+    role = "architect"
+    command = ["cat"]
+    [[session]]
+    name = "developer"
+    command = ["cat"]
+    watch = ["architect"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     assert_eq!(sessions[0].name, "t-architect");
@@ -897,14 +1125,16 @@ watch = ["architect"]
 fn parse_explicit_name_wins_over_role() {
     let sessions = team::parse(
         r#"
-[[session]]
-name = "worker"
-role = "architect"
-command = ["cat"]
-"#,
+    [[session]]
+    name = "worker"
+    role = "architect"
+    command = ["cat"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
-    assert_eq!(sessions[0].name, "worker");
+    assert_eq!(sessions[0].name, "demo-worker");
     assert_eq!(sessions[0].role.as_deref(), Some("architect"));
 }
 
@@ -922,7 +1152,7 @@ fn parse_rejects_invalid_derived_names_with_name_guidance() {
         ),
     ] {
         let text = format!("[[session]]\nrole = {role:?}\ncommand = [\"cat\"]");
-        let error = team::parse(&text).expect_err(role);
+        let error = team::parse(&text, std::path::Path::new("/work/demo"), false).expect_err(role);
         let error = error.to_string();
         assert!(error.contains(expected), "{error}");
         assert!(error.contains("set name explicitly"), "{error}");
@@ -931,7 +1161,12 @@ fn parse_rejects_invalid_derived_names_with_name_guidance() {
 
 #[test]
 fn parse_requires_name_or_role() {
-    let error = team::parse("[[session]]\ncommand = [\"cat\"]").expect_err("missing identity");
+    let error = team::parse(
+        "[[session]]\ncommand = [\"cat\"]",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .expect_err("missing identity");
     assert_eq!(error.to_string(), "session 1: name or role is required");
 }
 
@@ -939,13 +1174,15 @@ fn parse_requires_name_or_role() {
 fn parse_rejects_duplicate_derived_names() {
     let error = team::parse(
         r#"
-[[session]]
-role = "developer"
-command = ["cat"]
-[[session]]
-role = "developer"
-command = ["cat"]
-"#,
+    [[session]]
+    role = "developer"
+    command = ["cat"]
+    [[session]]
+    role = "developer"
+    command = ["cat"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect_err("duplicate role-only names");
     assert!(error.to_string().contains("duplicate name"), "{error:#}");
@@ -955,14 +1192,16 @@ command = ["cat"]
 fn parse_accepts_and_validates_roles() {
     let valid = team::parse(
         r#"
-[[session]]
-name = "worker"
-command = ["cat"]
-role = "architect"
-[[session]]
-name = "plain"
-command = ["cat"]
-"#,
+    [[session]]
+    name = "worker"
+    command = ["cat"]
+    role = "architect"
+    [[session]]
+    name = "plain"
+    command = ["cat"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect("valid roles");
     assert_eq!(valid[0].role.as_deref(), Some("architect"));
@@ -979,7 +1218,7 @@ command = ["cat"]
         "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nrole = \"architect \"",
         "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nrole = 5",
     ] {
-        let error = team::parse(text).expect_err(text);
+        let error = team::parse(text, std::path::Path::new("/work/demo"), false).expect_err(text);
         assert!(format!("{error:#}").contains("role"), "{error:#}");
     }
 }
@@ -988,12 +1227,14 @@ command = ["cat"]
 fn prefixed_role_errors_name_the_final_session() {
     let error = team::parse(
         r#"
-team = "team"
-[[session]]
-name = "worker"
-command = ["cat"]
-role = ""
-"#,
+    team = "team"
+    [[session]]
+    name = "worker"
+    command = ["cat"]
+    role = ""
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect_err("empty role");
     assert!(error.to_string().contains("session team-worker"));
@@ -1003,17 +1244,19 @@ role = ""
 fn parse_prefixes_names_and_same_file_references() {
     let sessions = team::parse(
         r#"
-team = "a2amx"
-[[session]]
-name = "architect"
-command = ["claude"]
-watch = ["developer", "other/architect", "/hand"]
-control_from = ["developer"]
-[[session]]
-name = "developer"
-command = ["omp"]
-control_from = ["architect"]
-"#,
+    team = "a2amx"
+    [[session]]
+    name = "architect"
+    command = ["claude"]
+    watch = ["developer", "other/architect", "/hand"]
+    control_from = ["developer"]
+    [[session]]
+    name = "developer"
+    command = ["omp"]
+    control_from = ["architect"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     assert_eq!(sessions[0].name, "a2amx-architect");
@@ -1033,7 +1276,8 @@ fn parse_rejects_unknown_local_and_malformed_explicit_references() {
             let text = format!(
                 "team = \"demo\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\n{key} = [\"{reference}\"]"
             );
-            let error = team::parse(&text).expect_err(&text);
+            let error =
+                team::parse(&text, std::path::Path::new("/work/demo"), false).expect_err(&text);
             let error = format!("{error:#}");
             assert!(error.contains(key), "{error}");
             if reference == "outsider" {
@@ -1044,31 +1288,38 @@ fn parse_rejects_unknown_local_and_malformed_explicit_references() {
             }
         }
     }
-    let sessions = team::parse(
-        "[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nwatch = [\"outsider\", \"other/architect\", \"/hand\"]",
-    ).unwrap();
+    let sessions = team::parse("[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nwatch = [\"/outsider\", \"other/architect\", \"/hand\"]", std::path::Path::new("/work/demo"), false).unwrap();
     assert_eq!(sessions[0].watch, ["outsider", "other-architect", "hand"]);
 }
 
 #[test]
 fn parse_rejects_invalid_team_keys_and_old_prefix() {
     for (keys, label) in [
-        ("prefix = \"x\"", "renamed to team"),
+        ("prefix = \"x\"", "prefix"),
         ("team = \"\"", "team"),
         ("team = \"demo-\"", "team"),
         ("team = 5", "team"),
-        ("private = true", "private"),
-        ("private = false", "private"),
-        ("allow = [\"x\"]", "allow"),
-        ("allow = []", "allow"),
-        ("team = \"demo\"\nprivate = false\nallow = [\"x\"]", "allow"),
-        ("team = \"demo\"\nprivate = false\nallow = []", "allow"),
-        ("team = \"demo\"\nallow = [\"demo\"]", "allow"),
-        ("team = \"demo\"\nallow = [\"x\", \"x\"]", "allow"),
-        ("team = \"demo\"\nallow = [\"Bad\"]", "allow"),
+        ("allow = [\"x\"]", "allow was renamed to allow_teams"),
+        ("allow = []", "allow was renamed to allow_teams"),
+        (
+            "team = \"demo\"\nprivate = false\nallow_teams = [\"x\"]",
+            "allow_teams needs a private team",
+        ),
+        (
+            "team = \"demo\"\nallow_teams = [\"demo\"]",
+            "allow_teams entry must not be the team itself",
+        ),
+        (
+            "team = \"demo\"\nallow_teams = [\"x\", \"x\"]",
+            "allow_teams entry",
+        ),
+        (
+            "team = \"demo\"\nallow_teams = [\"Bad\"]",
+            "allow_teams entry",
+        ),
     ] {
         let text = format!("{keys}\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]");
-        let error = team::parse(&text).expect_err(&text);
+        let error = team::parse(&text, std::path::Path::new("/work/demo"), false).expect_err(&text);
         assert!(format!("{error:#}").contains(label), "{error:#}");
     }
 }
@@ -1084,16 +1335,14 @@ fn parse_validates_prefixed_final_names() {
     ] {
         let text =
             format!("team = \"{prefix}\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]");
-        let error = team::parse(&text).expect_err(&text);
+        let error = team::parse(&text, std::path::Path::new("/work/demo"), false).expect_err(&text);
         assert!(format!("{error:#}").contains(final_name), "{error:#}");
     }
 }
 
 #[test]
 fn parse_rejects_prefixed_self_watch() {
-    let error = team::parse(
-        "team = \"a2amx\"\n[[session]]\nname = \"developer\"\ncommand = [\"cat\"]\nwatch = [\"developer\"]",
-    )
+    let error = team::parse("team = \"a2amx\"\n[[session]]\nname = \"developer\"\ncommand = [\"cat\"]\nwatch = [\"developer\"]", std::path::Path::new("/work/demo"), false)
     .expect_err("prefixed self watch");
     assert!(error.to_string().contains("watches itself"), "{error:#}");
 }
@@ -1104,16 +1353,17 @@ fn parse_rejects_whitespace_in_executable_and_preserves_argument_boundaries() {
         let text = format!(
             "team = \"pfx\"\n[[session]]\nname = \"architect\"\ncommand = [\"{executable}\"]"
         );
-        let error = team::parse(&text).expect_err(&text);
+        let error = team::parse(&text, std::path::Path::new("/work/demo"), false).expect_err(&text);
         let error = format!("{error:#}");
         assert!(
             error.contains("session pfx-architect: command[0]"),
             "{error}"
         );
-        assert!(error.contains("own array element"), "{error}");
     }
     let sessions = team::parse(
         "[[session]]\nname = \"architect\"\ncommand = [\"claude\", \"--model\", \"opus\"]",
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     assert_eq!(sessions[0].command, ["claude", "--model", "opus"]);
@@ -1123,19 +1373,18 @@ fn parse_rejects_whitespace_in_executable_and_preserves_argument_boundaries() {
 fn parse_rejects_invalid_sessions_and_identifies_the_entry() {
     for (text, label) in [
         ("[[session]]\ncommand = [\"cat\"]", "session 1"),
-        ("[[session]]\nname = \"\"\ncommand = [\"cat\"]", "session 1"),
         (
             "[[session]]\nname = \"Bad_Name\"\ncommand = [\"cat\"]",
             "Bad_Name",
         ),
         (
             "[[session]]\nname = \"a\"\ncommand = [\"cat\"]\n[[session]]\nname = \"a\"\ncommand = [\"cat\"]",
-            "a",
+            "demo-a",
         ),
-        ("[[session]]\nname = \"a\"\ncommand = []", "a"),
+        ("[[session]]\nname = \"a\"\ncommand = []", "demo-a"),
         (
             "[[session]]\nname = \"a\"\ncommand = [\"cat\"]\nattach = true\n[[session]]\nname = \"b\"\ncommand = [\"cat\"]\nattach = true",
-            "b",
+            "demo-b",
         ),
         (
             "[[session]]\nname = \"a\"\ncommand = [\"cat\"]\nextra = true",
@@ -1143,22 +1392,24 @@ fn parse_rejects_invalid_sessions_and_identifies_the_entry() {
         ),
         ("[[session]]\nname = \"a\"\ncommand = \"cat\"", "session 1"),
     ] {
-        let error = team::parse(text).expect_err(text);
+        let error = team::parse(text, std::path::Path::new("/work/demo"), false).expect_err(text);
         assert!(format!("{error:#}").contains(label), "{error:#}");
     }
-    assert!(team::parse("").is_err());
-    assert!(team::parse("unexpected = true").is_err());
+    assert!(team::parse("", Path::new("/work/proj"), false).is_err());
+    assert!(team::parse("unexpected = true", Path::new("/work/proj"), false).is_err());
 }
 
 #[test]
 fn parse_validates_watch_names_and_self_reference() {
     let parsed = team::parse(
         r#"
-[[session]]
-name = "architect"
-command = ["cat"]
-watch = ["developer"]
-"#,
+    [[session]]
+    name = "architect"
+    command = ["cat"]
+    watch = ["/developer"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     assert_eq!(parsed[0].watch, vec!["developer"]);
@@ -1169,19 +1420,23 @@ watch = ["developer"]
         ),
         (
             "[[session]]\nname = \"self\"\ncommand = [\"cat\"]\nwatch = [\"Bad_Name\"]",
-            "watch entry",
+            "unknown session Bad_Name in watch of demo-self",
         ),
     ] {
-        let error = team::parse(text).expect_err(text);
+        let error = team::parse(text, std::path::Path::new("/work/demo"), false).expect_err(text);
         assert!(format!("{error:#}").contains(label), "{error:#}");
     }
 }
 
 #[test]
-fn parse_rejects_the_daemon_sender_name() {
-    let error = team::parse("[[session]]\nname = \"a2amx-daemon\"\ncommand = [\"cat\"]")
-        .expect_err("daemon sender name");
-    assert!(error.to_string().contains("reserved for the daemon"));
+fn parse_prefixes_daemon_like_session_name() {
+    let sessions = team::parse(
+        "[[session]]\nname = \"a2amx-daemon\"\ncommand = [\"cat\"]",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .expect("prefixed daemon-like session");
+    assert_eq!(sessions[0].name, "demo-a2amx-daemon");
 }
 #[test]
 fn flag_sessions_support_bare_executables_and_first_equals_only() {
@@ -1200,7 +1455,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 activity: None,
                 role: None,
                 remote: None,
-                allow: Vec::new(),
+                allow_agents: Vec::new(),
                 confine: None,
                 auto: false,
                 team: None,
@@ -1217,7 +1472,7 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
                 activity: None,
                 role: None,
                 remote: None,
-                allow: Vec::new(),
+                allow_agents: Vec::new(),
                 confine: None,
                 auto: false,
                 team: None,
@@ -1247,41 +1502,47 @@ fn flag_sessions_support_bare_executables_and_first_equals_only() {
 fn confinement_team_defaults_and_validation_are_explicit() {
     let sessions = team::parse(
         r#"
-[confine]
-enabled = true
-[[session]]
-name = "worker"
-command = ["cat"]
-[session.confine]
-write = ["./data"]
-hide = ["./secrets"]
-unhide = ["./public"]
-grants = ["docker"]
-"#,
+    [confine]
+    enabled = true
+    [[session]]
+    name = "worker"
+    command = ["cat"]
+    [session.confine]
+    write = ["./data"]
+    hide = ["./secrets"]
+    unhide = ["./public"]
+    grants = ["docker"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     let request = sessions[0].confine.as_ref().expect("confined");
     assert_eq!(request.write, ["./data"]);
     assert!(request.grants.contains(&"docker".to_owned()));
-    let error = team::parse(
-        r#"
-[[session]]
-name = "worker"
-command = ["cat"]
-[session.confine]
-hide = ["./secrets"]
-"#,
-    )
-    .expect_err("options without enabled");
-    assert!(error.to_string().contains("need enabled = true"));
     let sessions = team::parse(
         r#"
-[[session]]
-name = "worker"
-command = ["codex"]
-[session.confine]
-enabled = true
-"#,
+    [[session]]
+    name = "worker"
+    command = ["cat"]
+    [session.confine]
+    hide = ["./secrets"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .expect("options without enabled");
+    assert!(sessions[0].confine.is_some());
+    let sessions = team::parse(
+        r#"
+    [[session]]
+    name = "worker"
+    command = ["codex"]
+    [session.confine]
+    enabled = true
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect("codex confinement");
     assert!(sessions[0].confine.is_some());
@@ -1290,12 +1551,14 @@ enabled = true
 fn confined_claude_prompt_file_after_separator_is_ignored() {
     let sessions = team::parse(
         r#"
-[confine]
-enabled = true
-[[session]]
-name = "worker"
-command = ["claude", "--", "--append-system-prompt-file=prompt.txt"]
-"#,
+    [confine]
+    enabled = true
+    [[session]]
+    name = "worker"
+    command = ["claude", "--", "--append-system-prompt-file=prompt.txt"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect("post-separator prompt option is not part of the command");
     assert!(sessions[0].confine.is_some());
@@ -1348,9 +1611,12 @@ fn plan_preserves_wanted_order_and_preflights_every_exited_conflict() {
 
 #[test]
 fn plan_reports_running_team_setting_mismatch() {
-    let wanted =
-        team::parse("team = \"demo\"\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]")
-            .unwrap();
+    let wanted = team::parse(
+        "team = \"demo\"\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .unwrap();
     let mut existing = summary("demo-worker", "s1", None);
     existing.team = Some(a2amx::messaging::TeamScope {
         name: "demo".into(),
@@ -1370,9 +1636,7 @@ fn plan_reports_running_team_setting_mismatch() {
 }
 #[test]
 fn plan_notices_agent_scope_mismatch_and_accepts_matching_scope() {
-    let wanted = team::parse(
-        "team = \"a2amx\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow = [\"saltmdb/architect\"]",
-    )
+    let wanted = team::parse("team = \"a2amx\"\n[[session]]\nname = \"architect\"\ncommand = [\"cat\"]\nallow_agents = [\"saltmdb/architect\"]", std::path::Path::new("/work/demo"), false)
     .unwrap();
     let mut existing = summary("a2amx-architect", "s1", None);
     existing.team = Some(a2amx::messaging::TeamScope {
@@ -1470,6 +1734,7 @@ async fn status_reports_running_and_missing_without_changing_sessions() {
     std::fs::write(
         dir.path().join("up.toml"),
         r#"
+team = "config"
 [[session]]
 name = "running"
 command = ["sh", "-c", "sleep 30"]
@@ -1485,6 +1750,7 @@ command = ["sh", "-c", "sleep 30"]
     std::fs::write(
         dir.path().join("config/team.toml"),
         r#"
+team = "config"
 [[session]]
 name = "running"
 command = ["sh", "-c", "sleep 30"]
@@ -1509,8 +1775,8 @@ command = ["cat"]
     assert!(status.stderr.is_empty());
     let stdout = String::from_utf8(status.stdout).unwrap();
     assert!(stdout.contains("NAME TEAM STATE CONFINE NOTE\n"));
-    assert!(stdout.contains("running - running off s1\n"));
-    assert!(stdout.contains("missing - missing  -\n"));
+    assert!(stdout.contains("config-running config (private) running off s1\n"));
+    assert!(stdout.contains("config-missing config (private) missing  -\n"));
 
     let after = run_binary(dir.path(), &["list"]).unwrap().stdout;
     assert_eq!(after, before);
@@ -1519,19 +1785,27 @@ command = ["cat"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_keeps_generic_running_note_as_the_session_id() {
     let (dir, _daemon) = common::start_daemon().await;
-    let plain = run_binary(
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    common::new_team_agent(
+        &mut admin,
         dir.path(),
-        &["new", "--detach", "--name", "plain", "--", "cat"],
+        Some("config-plain"),
+        Harness::Generic,
+        Deliver::Hold,
+        Some(a2amx::messaging::TeamScope {
+            name: "config".into(),
+            private: true,
+            allow: Vec::new(),
+            agents: Vec::new(),
+        }),
+        &[],
+        &[],
     )
-    .unwrap();
-    assert!(
-        plain.status.success(),
-        "{}",
-        String::from_utf8_lossy(&plain.stderr)
-    );
+    .await;
     std::fs::write(
         dir.path().join("config/team.toml"),
         r#"
+team = "config"
 [[session]]
 name = "plain"
 command = ["cat"]
@@ -1544,40 +1818,37 @@ command = ["cat"]
         &["team", "status", "--file", "config/team.toml"],
     )
     .unwrap();
-    assert!(status.status.success());
+    assert_eq!(status.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(status.stdout).unwrap(),
-        "NAME TEAM STATE CONFINE NOTE\nplain - running off s1\n"
+        "NAME TEAM STATE CONFINE NOTE\nconfig-plain config (private) running off s1\n"
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_marks_a_running_claude_session_that_is_not_ready() {
     let (dir, _daemon) = common::start_daemon().await;
-    let worker = run_binary(
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    common::new_team_agent(
+        &mut admin,
         dir.path(),
-        &[
-            "new",
-            "--detach",
-            "--harness",
-            "claude",
-            "--name",
-            "worker",
-            "--",
-            "sh",
-            "-c",
-            "sleep 30",
-        ],
+        Some("config-worker"),
+        Harness::Claude,
+        Deliver::Hold,
+        Some(a2amx::messaging::TeamScope {
+            name: "config".into(),
+            private: true,
+            allow: Vec::new(),
+            agents: Vec::new(),
+        }),
+        &[],
+        &[],
     )
-    .unwrap();
-    assert!(
-        worker.status.success(),
-        "{}",
-        String::from_utf8_lossy(&worker.stderr)
-    );
+    .await;
     std::fs::write(
         dir.path().join("config/team.toml"),
         r#"
+team = "config"
 [[session]]
 name = "worker"
 command = ["claude"]
@@ -1590,50 +1861,62 @@ command = ["claude"]
         &["team", "status", "--file", "config/team.toml"],
     )
     .unwrap();
-    assert!(status.status.success());
-    assert_eq!(
-        String::from_utf8(status.stdout).unwrap(),
-        "NAME TEAM STATE CONFINE NOTE\nworker - running off s1 (not ready: starting)\n"
+    assert_eq!(status.status.code(), Some(0));
+    let stdout = String::from_utf8(status.stdout).unwrap();
+    assert!(
+        stdout.contains("config-worker config (private) running off "),
+        "{stdout}"
     );
+    assert!(stdout.contains("(not ready: starting)"), "{stdout}");
 }
 
-// A blocking spawn kept out of the async test body (Sonar rust:S7487).
-fn start_fake_claude(dir: &Path) -> std::io::Result<Output> {
+async fn start_fake_claude(dir: &Path) -> anyhow::Result<()> {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_claude.sh");
-    Command::new(env!("CARGO_BIN_EXE_a2amx"))
-        .arg("--home")
-        .arg(dir)
-        .args([
-            "new",
-            "--detach",
-            "--harness",
-            "claude",
-            "--name",
-            "ready",
-            "--",
-        ])
-        .arg("sh")
-        .arg(&fixture)
-        .current_dir(dir)
-        .env("OUT", dir.join("out"))
-        .env("PASTE_LEN", "1")
-        .env("MODE", "ready")
-        .stdin(Stdio::null())
-        .output()
+    let mut client = Client::connect(dir).await?;
+    let response = client
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), fixture.to_string_lossy().into_owned()],
+            cols: 80,
+            rows: 24,
+            cwd: None,
+            env: vec![
+                ("OUT".into(), dir.join("out").to_string_lossy().into_owned()),
+                ("PASTE_LEN".into(), "1".into()),
+                ("MODE".into(), "ready".into()),
+            ],
+            reset: Vec::new(),
+            control_from: Vec::new(),
+            watch: Vec::new(),
+            name: Some("config-ready".into()),
+            harness: Harness::Claude,
+            deliver: Some(Deliver::Hold),
+            team: Some(a2amx::messaging::TeamScope {
+                name: "config".into(),
+                private: true,
+                allow: Vec::new(),
+                agents: Vec::new(),
+            }),
+            role: None,
+            remote: None,
+            heartbeat: None,
+            activity: None,
+        })
+        .await?;
+    match response {
+        Response::Created { .. } => Ok(()),
+        other => anyhow::bail!("fake Claude start failed: {other:?}"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_leaves_a_ready_claude_session_unmarked() {
     let (dir, _daemon) = common::start_daemon().await;
-    let started = start_fake_claude(dir.path()).unwrap();
-    assert!(
-        started.status.success(),
-        "{}",
-        String::from_utf8_lossy(&started.stderr)
-    );
+    start_fake_claude(dir.path())
+        .await
+        .expect("start team-scoped fake Claude");
     std::fs::write(
         dir.path().join("config/team.toml"),
-        "[[session]]\nname = \"ready\"\ncommand = [\"claude\"]\n",
+        "team = \"config\"\n[[session]]\nname = \"ready\"\ncommand = [\"claude\"]\n",
     )
     .unwrap();
 
@@ -1649,10 +1932,11 @@ async fn status_leaves_a_ready_claude_session_unmarked() {
         (!rows.contains("not ready")).then_some(rows)
     })
     .await;
-    assert_eq!(
-        rows,
-        "NAME TEAM STATE CONFINE NOTE\nready - running off s1\n"
+    assert!(
+        rows.contains("config-ready config (private) running off "),
+        "{rows}"
     );
+    assert!(!rows.contains("(not ready:"), "{rows}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1662,7 +1946,14 @@ async fn status_reports_conflicts_without_a_generic_error_line() {
         run_binary(
             dir.path(),
             &[
-                "new", "--detach", "--name", "exited", "--", "sh", "-c", "exit 0"
+                "new",
+                "--detach",
+                "--name",
+                "config-exited",
+                "--",
+                "sh",
+                "-c",
+                "exit 0"
             ],
         )
         .unwrap()
@@ -1679,15 +1970,25 @@ async fn status_reports_conflicts_without_a_generic_error_line() {
     .await;
     std::fs::write(
         dir.path().join("exited.toml"),
-        "[[session]]\nname = 'exited'\ncommand = ['cat']",
+        "team = \"config\"\n[[session]]\nname = 'exited'\ncommand = ['cat']",
     )
     .unwrap();
     let exited = run_binary(dir.path(), &["team", "status", "--file", "exited.toml"]).unwrap();
     assert_eq!(exited.status.code(), Some(1));
     let exited_stdout = String::from_utf8(exited.stdout).unwrap();
-    assert!(exited_stdout.contains("exited - exited"));
-    assert!(exited_stdout.contains("run a2amx kill exited first"));
-    assert!(!String::from_utf8_lossy(&exited.stderr).starts_with("a2amx:"));
+    assert!(
+        exited_stdout.contains("config-exited config (private) exited"),
+        "{exited_stdout}"
+    );
+    assert!(
+        exited_stdout.contains("run a2amx kill config-exited first"),
+        "{exited_stdout}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&exited.stderr).starts_with("a2amx:"),
+        "{:?}",
+        exited.stderr
+    );
 
     let mismatch_team = r#"team = "x"
 [[session]]
@@ -1728,14 +2029,15 @@ async fn dry_run_prints_wired_commands_without_starting_or_installing() {
     std::fs::write(
         dir.path().join("dry.toml"),
         r#"
+team = "wired"
 [[session]]
 name = "claude"
 command = ["claude", "--settings", "{\"x\":\"UNIQUE-SECRET\"}"]
 cwd = "."
 role = "developer"
 attach = true
-watch = ["other"]
-control_from = ["other"]
+watch = ["/other"]
+control_from = ["/other"]
 heartbeat = "5s"
 activity = { working_after = "2m", idle_after = "30s" }
 [[session]]
@@ -1758,9 +2060,9 @@ command = ["omp", "--secret"]
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("would start claude\n"));
-    assert!(stdout.contains("would start generic\n"));
-    assert!(stdout.contains("would start omp\n"));
+    assert!(stdout.contains("would start wired-claude\n"));
+    assert!(stdout.contains("would start wired-generic\n"));
+    assert!(stdout.contains("would start wired-omp\n"));
     assert!(stdout.contains("  harness: claude\n"));
     assert!(stdout.contains("  cwd: "));
     assert!(stdout.contains("  role: developer\n"));
@@ -2040,7 +2342,7 @@ async fn dry_run_prints_exact_already_running_report() {
     let (dir, _daemon) = common::start_daemon().await;
     std::fs::write(
         dir.path().join("running.toml"),
-        "[[session]]\nname = \"running\"\ncommand = [\"cat\"]\n",
+        "team = \"running\"\n[[session]]\nname = \"running\"\ncommand = [\"cat\"]\n",
     )
     .unwrap();
     let started = run_binary(
@@ -2065,7 +2367,7 @@ async fn dry_run_prints_exact_already_running_report() {
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "already running running s1 (confine off)\n"
+        "already running running-running s1 (confine off)\n"
     );
 }
 
@@ -2127,7 +2429,7 @@ async fn status_notes_messages_lost_in_a_daemon_restart_only_for_wanted_names() 
     let (_recipient_id, _recipient_token, _recipient_addr) = common::new_agent(
         &mut admin,
         dir.path(),
-        Some("wanted"),
+        Some("wanted-wanted"),
         Harness::Generic,
         Deliver::Hold,
     )
@@ -2145,7 +2447,7 @@ async fn status_notes_messages_lost_in_a_daemon_restart_only_for_wanted_names() 
         .unwrap();
     let accepted = sender
         .request(Request::SendMessage {
-            to: "wanted@host-a".into(),
+            to: "wanted-wanted@host-a".into(),
             subject: "restart".into(),
             message: "body".into(),
         })
@@ -2157,7 +2459,7 @@ async fn status_notes_messages_lost_in_a_daemon_restart_only_for_wanted_names() 
     let restarted = common::start_daemon_in(dir.path(), Some("host-a"), Default::default()).await;
     std::fs::write(
         dir.path().join("wanted.toml"),
-        "[[session]]\nname = 'wanted'\ncommand = ['cat']",
+        "team = \"wanted\"\n[[session]]\nname = 'wanted'\ncommand = ['cat']",
     )
     .unwrap();
     let wanted = run_binary(dir.path(), &["team", "status", "--file", "wanted.toml"]).unwrap();
@@ -2192,16 +2494,16 @@ async fn up_starts_in_order_and_skips_running_sessions_without_attachment() {
     );
     assert_eq!(
         first.stdout,
-        b"started architect s1\nstarted developer s2\n"
+        b"started config-architect s1\nstarted config-developer s2\n"
     );
     let listed = run_binary(dir.path(), &["list"]).unwrap();
     let listed = String::from_utf8(listed.stdout).unwrap();
-    for (id, name) in [("s1", "architect"), ("s2", "developer")] {
+    for (id, name) in [("s1", "config-architect"), ("s2", "config-developer")] {
         let cells = common::list_cells(&listed, id);
-        assert_eq!(&cells[..5], [id, name, "generic", "off", "running"]);
-        assert_eq!(cells[6], "working");
-        assert_eq!(cells[8], "no");
-        for index in [5, 7] {
+        assert_eq!(&cells[..5], [id, name, "config", "(private)", "generic"]);
+        assert_eq!(cells[8], "working");
+        assert_eq!(cells[10], "no");
+        for index in [7, 9] {
             let bytes = cells[index].as_bytes();
             assert!(bytes.len() >= 2);
             assert!(
@@ -2216,7 +2518,7 @@ async fn up_starts_in_order_and_skips_running_sessions_without_attachment() {
     assert!(second.status.success());
     assert_eq!(
         second.stdout,
-        b"already running architect s1 (confine off)\nalready running developer s2 (confine off)\n"
+        b"already running config-architect s1 (confine off)\nalready running config-developer s2 (confine off)\n"
     );
     let listed_again = run_binary(dir.path(), &["list"]).unwrap();
     assert_eq!(listed_again.stdout, listed.as_bytes());
@@ -2250,12 +2552,15 @@ async fn down_kills_only_named_team_sessions_and_reports_missing_names() {
         "{}",
         String::from_utf8_lossy(&down.stderr)
     );
-    assert_eq!(down.stdout, b"killed architect s1\nkilled developer s2\n");
+    assert_eq!(
+        down.stdout,
+        b"killed config-architect s1\nkilled config-developer s2\n"
+    );
     let repeated = run_binary(dir.path(), &["team", "down", "--file", "config/team.toml"]).unwrap();
     assert!(repeated.status.success());
     assert_eq!(
         repeated.stdout,
-        b"no session architect\nno session developer\n"
+        b"no session config-architect\nno session config-developer\n"
     );
     let listed = String::from_utf8(run_binary(dir.path(), &["list"]).unwrap().stdout).unwrap();
     let cells = common::list_cells(&listed, "s3");
@@ -2263,7 +2568,7 @@ async fn down_kills_only_named_team_sessions_and_reports_missing_names() {
         &cells[..5],
         ["s3", "unrelated", "generic", "off", "running"]
     );
-    assert!(!listed.contains("architect") && !listed.contains("developer"));
+    assert!(!listed.contains("config-architect") && !listed.contains("config-developer"));
     let named = run_binary(dir.path(), &["team", "down", "unrelated", "missing"]).unwrap();
     assert!(named.status.success());
     assert_eq!(named.stdout, b"killed unrelated s3\nno session missing\n");
@@ -2328,7 +2633,14 @@ async fn exited_conflicts_prevent_every_spawn_and_down_removes_exited_sessions()
         run_binary(
             dir.path(),
             &[
-                "new", "--detach", "--name", "exited", "--", "sh", "-c", "exit 0"
+                "new",
+                "--detach",
+                "--name",
+                "local-exited",
+                "--",
+                "sh",
+                "-c",
+                "exit 0"
             ]
         )
         .unwrap()
@@ -2346,6 +2658,7 @@ async fn exited_conflicts_prevent_every_spawn_and_down_removes_exited_sessions()
     std::fs::write(
         dir.path().join("a2amx.toml"),
         r#"
+team = "local"
 [[session]]
 name = "missing"
 command = ["cat"]
@@ -2361,14 +2674,17 @@ command = ["cat"]
     assert!(
         String::from_utf8(up.stderr)
             .unwrap()
-            .contains("session exited has exited (s1); run a2amx kill exited first")
+            .contains("session local-exited has exited (s1); run a2amx kill local-exited first")
     );
     let listed = String::from_utf8(run_binary(dir.path(), &["list"]).unwrap().stdout).unwrap();
-    assert!(listed.contains("s1  exited"));
+    assert!(listed.contains("s1  local-exited"));
     assert!(!listed.contains("missing") && !listed.contains("s2"));
     let down = run_binary(dir.path(), &["team", "down"]).unwrap();
     assert!(down.status.success());
-    assert_eq!(down.stdout, b"no session missing\nkilled exited s1\n");
+    assert_eq!(
+        down.stdout,
+        b"no session local-missing\nkilled local-exited s1\n"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2377,6 +2693,7 @@ async fn first_spawn_failure_keeps_started_sessions_and_stops_the_team() {
     std::fs::write(
         dir.path().join("a2amx.toml"),
         r#"
+team = "local"
 [[session]]
 name = "started"
 command = ["cat"]
@@ -2391,15 +2708,18 @@ command = ["cat"]
     .unwrap();
     let output = run_binary(dir.path(), &["team", "up", "--detach"]).unwrap();
     assert!(!output.status.success());
-    assert_eq!(output.stdout, b"started started s1\n");
+    assert_eq!(output.stdout, b"started local-started s1\n");
     assert!(
         String::from_utf8(output.stderr)
             .unwrap()
-            .contains("failed broken:")
+            .contains("failed local-broken:")
     );
     let listed = String::from_utf8(run_binary(dir.path(), &["list"]).unwrap().stdout).unwrap();
     let cells = common::list_cells(&listed, "s1");
-    assert_eq!(&cells[..5], ["s1", "started", "generic", "off", "running"]);
+    assert_eq!(
+        &cells[..5],
+        ["s1", "local-started", "local", "(private)", "generic"]
+    );
     assert!(!listed.contains("broken") && !listed.contains("later"));
 }
 
@@ -2538,11 +2858,17 @@ attach = true
         &args(&["team", "up", "architect=cat", "developer=cat"]),
         dir.path(),
     )?;
-    first.wait_for_text("architect-ready", wait)?;
-    assert!(!first.screen_text().contains("developer-ready"));
+    first.wait_for_text("architect@host-a", wait)?;
     first.send(&[2, b'd'])?;
-    first.wait_for_text("[detached from s1]", wait)?;
+    first.wait_for_text("[detached from s3]", wait)?;
     assert_eq!(first.wait_exit(wait)?, 0);
+
+    let mut conflict = PtyHarness::spawn(
+        &args(&["team", "up", "config-architect=cat", "config-developer=cat"]),
+        dir.path(),
+    )?;
+    assert_eq!(conflict.wait_exit(wait)?, 1);
+    assert!(conflict.screen_text().contains("different team setting"));
 
     let mut detached = PtyHarness::spawn(
         &args(&["team", "up", "--detach", "--file", &team_file]),
@@ -2552,12 +2878,12 @@ attach = true
     assert!(
         detached
             .screen_text()
-            .contains("already running architect s1")
+            .contains("already running config-architect s1")
     );
     assert!(
         detached
             .screen_text()
-            .contains("already running developer s2")
+            .contains("already running config-developer s2")
     );
     Ok(())
 }
@@ -2569,18 +2895,29 @@ fn configured_reset_and_controller_are_accepted_by_team_parser() {
 name = "worker"
 command = ["cat"]
 reset = ["/clear", "/prewalk restart"]
-control_from = ["architect"]
+control_from = ["/architect"]
 "#;
-    let sessions = team::parse(text).expect("valid reset configuration");
+    let sessions = team::parse(text, std::path::Path::new("/work/demo"), false)
+        .expect("valid reset configuration");
     assert_eq!(
         sessions[0].reset,
         Some(vec!["/clear".into(), "/prewalk restart".into()])
     );
     assert_eq!(sessions[0].control_from, ["architect"]);
-    assert!(team::parse(&format!("{text}\nunknown = true")).is_err());
-    let empty_reset =
-        team::parse("[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nreset = []")
-            .expect_err("empty reset must be rejected");
+    assert!(
+        team::parse(
+            &format!("{text}\nunknown = true"),
+            Path::new("/work/proj"),
+            false
+        )
+        .is_err()
+    );
+    let empty_reset = team::parse(
+        "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nreset = []",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .expect_err("empty reset must be rejected");
     assert!(empty_reset.to_string().contains("reset"));
     for reset in [
         "reset = [\"clear\"]",
@@ -2588,11 +2925,14 @@ control_from = ["architect"]
         &format!("reset = [\"/{}\"]", "x".repeat(200)),
     ] {
         let invalid = format!("[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n{reset}");
-        assert!(team::parse(&invalid).is_err(), "{reset}");
+        assert!(
+            team::parse(&invalid, Path::new("/work/proj"), false).is_err(),
+            "{reset}"
+        );
     }
     let invalid_control =
         "[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\ncontrol_from = [\"Bad_Name\"]";
-    assert!(team::parse(invalid_control).is_err());
+    assert!(team::parse(invalid_control, Path::new("/work/proj"), false).is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2615,10 +2955,11 @@ for raw in sys.stdin.buffer:
     .unwrap();
     let config = format!(
         r#"
+team = "team"
 [[session]]
 name = "controller"
-command = ["sh", "-c", "printf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > '{controller}'; sleep 30"]
 
+command = ["sh", "-c", "printf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > '{controller}'; sleep 30"]
 [[session]]
 name = "other"
 command = ["sh", "-c", "printf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > '{other}'; sleep 30"]
@@ -2658,7 +2999,7 @@ control_from = ["controller"]
         .unwrap();
     let reset = controller
         .request(Request::Reset {
-            session: "target".into(),
+            session: "team-target".into(),
         })
         .await
         .unwrap();
@@ -2669,7 +3010,7 @@ control_from = ["controller"]
         .unwrap();
     let denied = other
         .request(Request::Reset {
-            session: "target".into(),
+            session: "team-target".into(),
         })
         .await
         .unwrap();
@@ -2680,7 +3021,7 @@ control_from = ["controller"]
 }
 
 fn assert_validation_error(label: &str, text: &str, expected: &str) {
-    let error = match team::parse(text) {
+    let error = match team::parse(text, std::path::Path::new("/work/demo"), false) {
         Ok(_) => panic!("expected {label} error containing {expected:?}"),
         Err(error) => error.to_string(),
     };
@@ -2692,7 +3033,7 @@ fn parse_characterizes_invalid_session_name() {
     assert_validation_error(
         "invalid session name",
         "[[session]]\nname = 'Bad'\ncommand = ['cat']",
-        "session 1 (Bad): invalid name \"Bad\"",
+        "session 1 (demo-Bad): invalid name \"demo-Bad\"",
     );
 }
 
@@ -2701,7 +3042,7 @@ fn parse_characterizes_empty_command() {
     assert_validation_error(
         "empty command",
         "[[session]]\nname = 'worker'\ncommand = []",
-        "session worker: command must not be empty",
+        "session demo-worker: command must not be empty",
     );
 }
 
@@ -2719,7 +3060,7 @@ fn parse_characterizes_second_attach() {
     assert_validation_error(
         "second attach",
         "[[session]]\nname = 'first'\ncommand = ['cat']\nattach = true\n[[session]]\nname = 'second'\ncommand = ['cat']\nattach = true",
-        "session second: at most one session can attach",
+        "session demo-second: at most one session can attach",
     );
 }
 
@@ -2728,7 +3069,7 @@ fn parse_characterizes_empty_reset() {
     assert_validation_error(
         "empty reset",
         "[[session]]\nname = 'worker'\ncommand = ['cat']\nreset = []",
-        "session worker: reset must contain at least one step",
+        "session demo-worker: reset must contain at least one step",
     );
 }
 
@@ -2737,7 +3078,7 @@ fn parse_characterizes_invalid_reset_step() {
     assert_validation_error(
         "invalid reset step",
         "[[session]]\nname = 'worker'\ncommand = ['cat']\nreset = ['not-a-control-key']",
-        "session worker: reset step 1 must start with '/'",
+        "session demo-worker: reset step 1 must start with '/'",
     );
 }
 
@@ -2746,7 +3087,7 @@ fn parse_characterizes_invalid_control_from() {
     assert_validation_error(
         "invalid control_from",
         "[[session]]\nname = 'worker'\ncommand = ['cat']\ncontrol_from = ['Bad']",
-        "session worker control_from entry \"Bad\": invalid name",
+        "unknown session Bad in control_from of demo-worker",
     );
 }
 
@@ -2755,7 +3096,7 @@ fn parse_characterizes_invalid_watch() {
     assert_validation_error(
         "invalid watch",
         "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['Bad']",
-        "session worker watch entry \"Bad\": invalid name",
+        "unknown session Bad in watch of demo-worker",
     );
 }
 
@@ -2763,8 +3104,8 @@ fn parse_characterizes_invalid_watch() {
 fn parse_characterizes_invalid_heartbeat() {
     assert_validation_error(
         "invalid heartbeat interval",
-        "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['other']\nheartbeat = '0s'",
-        "session worker: invalid heartbeat",
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['/other']\nheartbeat = '0s'",
+        "session demo-worker: invalid heartbeat",
     );
 }
 
@@ -2773,7 +3114,7 @@ fn parse_characterizes_invalid_role() {
     assert_validation_error(
         "invalid role",
         "[[session]]\nname = 'worker'\ncommand = ['cat']\nrole = ' '",
-        "session worker: role must not have leading or trailing whitespace",
+        "session demo-worker: role must not have leading or trailing whitespace",
     );
 }
 
@@ -2783,47 +3124,47 @@ fn parse_characterizes_check_precedence() {
         (
             "duplicate precedes command",
             "[[session]]\nname = 'same'\ncommand = ['cat']\n[[session]]\nname = 'same'\ncommand = []",
-            "session same: duplicate name",
+            "session demo-same: duplicate name",
         ),
         (
             "command precedes attach",
             "[[session]]\nname = 'first'\ncommand = ['cat']\nattach = true\n[[session]]\nname = 'second'\ncommand = []\nattach = true",
-            "session second: command must not be empty",
+            "session demo-second: command must not be empty",
         ),
         (
             "attach precedes reset",
             "[[session]]\nname = 'first'\ncommand = ['cat']\nattach = true\n[[session]]\nname = 'second'\ncommand = ['cat']\nattach = true\nreset = []",
-            "session second: at most one session can attach",
+            "session demo-second: at most one session can attach",
         ),
         (
             "reset precedes links",
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nreset = []\ncontrol_from = ['Bad']",
-            "session worker: reset must contain at least one step",
+            "unknown session Bad in control_from of demo-worker",
         ),
         (
-            "control_from precedes watch",
+            "watch precedes control_from",
             "[[session]]\nname = 'worker'\ncommand = ['cat']\ncontrol_from = ['Bad']\nwatch = ['Bad']\nheartbeat = '0s'",
-            "session worker control_from entry \"Bad\": invalid name",
+            "unknown session Bad in watch of demo-worker",
         ),
         (
             "heartbeat precedes activity",
-            "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['other']\nheartbeat = '0s'\nactivity = {}",
-            "session worker: invalid heartbeat",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['/other']\nheartbeat = '0s'\nactivity = {}",
+            "session demo-worker: invalid heartbeat",
         ),
         (
             "activity precedes role",
-            "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['other']\nactivity = {}\nrole = ' '",
-            "session worker: activity needs at least one duration",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nwatch = ['/other']\nactivity = {}\nrole = ' '",
+            "session demo-worker: activity needs at least one duration",
         ),
         (
             "empty watch precedes heartbeat interval",
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nheartbeat = '0s'",
-            "session worker: heartbeat needs a non-empty watch",
+            "session demo-worker: heartbeat needs a non-empty watch",
         ),
         (
             "session 1 role precedes session 2 name",
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nrole = ' '\n[[session]]\nname = 'Bad'\ncommand = ['cat']",
-            "session worker: role must not have leading or trailing whitespace",
+            "session demo-worker: role must not have leading or trailing whitespace",
         ),
     ];
     for (label, text, expected) in cases {
@@ -2925,31 +3266,35 @@ async fn dry_run_prints_idle_only_activity_detail() {
 fn heartbeat_team_entry_requires_watch_and_validates_interval() {
     let parsed = team::parse(
         r#"
-[[session]]
-name = "architect"
-command = ["sh"]
-watch = ["developer"]
-heartbeat = "30m"
-"#,
+    [[session]]
+    name = "architect"
+    command = ["sh"]
+    watch = ["/developer"]
+    heartbeat = "30m"
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     assert_eq!(parsed[0].heartbeat.as_deref(), Some("30m"));
 
     let no_watch = team::parse(
         r#"
-[[session]]
-name = "architect"
-command = ["sh"]
-heartbeat = "30m"
-"#,
+    [[session]]
+    name = "architect"
+    command = ["sh"]
+    heartbeat = "30m"
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap_err();
     assert!(format!("{no_watch:#}").contains("heartbeat needs a non-empty watch"));
 
     for value in ["0s", "25h", "30", "m", "1d", "-5m"] {
         let error = team::parse(&format!(
-            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"developer\"]\nheartbeat = {value:?}"
-        ))
+            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"/developer\"]\nheartbeat = {value:?}"
+        ), std::path::Path::new("/work/demo"), false)
         .unwrap_err();
         assert!(
             format!("{error:#}").contains("invalid heartbeat"),
@@ -2962,12 +3307,14 @@ heartbeat = "30m"
 fn activity_team_entry_requires_watch_duration_and_validates_fields() {
     let parsed = team::parse(
         r#"
-[[session]]
-name = "architect"
-command = ["sh"]
-watch = ["developer"]
-activity = { working_after = "2m", idle_after = "30s" }
-"#,
+    [[session]]
+    name = "architect"
+    command = ["sh"]
+    watch = ["/developer"]
+    activity = { working_after = "2m", idle_after = "30s" }
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -2984,19 +3331,19 @@ activity = { working_after = "2m", idle_after = "30s" }
             "activity needs a non-empty watch",
         ),
         (
-            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"developer\"]\nactivity = {}",
+            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"/developer\"]\nactivity = {}",
             "activity needs at least one duration",
         ),
         (
-            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"developer\"]\nactivity = { idle_after = \"25h\" }",
+            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"/developer\"]\nactivity = { idle_after = \"25h\" }",
             "invalid activity idle_after",
         ),
         (
-            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"developer\"]\nactivity = { nope = \"30s\" }",
+            "[[session]]\nname = \"architect\"\ncommand = [\"sh\"]\nwatch = [\"/developer\"]\nactivity = { nope = \"30s\" }",
             "unknown field",
         ),
     ] {
-        let error = team::parse(text).unwrap_err();
+        let error = team::parse(text, std::path::Path::new("/work/demo"), false).unwrap_err();
         assert!(
             format!("{error:#}").contains(expected),
             "{expected}: {error:#}"
@@ -3008,54 +3355,65 @@ activity = { working_after = "2m", idle_after = "30s" }
 fn activity_team_cycles_are_rejected_in_file_order() {
     let mutual = team::parse(
         r#"
-[[session]]
-name = "a"
-command = ["sh"]
-watch = ["b"]
-activity = { idle_after = "30s" }
-[[session]]
-name = "b"
-command = ["sh"]
-watch = ["a"]
-activity = { working_after = "2m" }
-"#,
+    [[session]]
+    name = "a"
+    command = ["sh"]
+    watch = ["b"]
+    activity = { idle_after = "30s" }
+    [[session]]
+    name = "b"
+    command = ["sh"]
+    watch = ["a"]
+    activity = { working_after = "2m" }
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap_err();
-    assert!(format!("{mutual:#}").contains("activity notices would loop between a and b"));
+    assert!(
+        format!("{mutual:#}").contains("activity notices would loop between demo-a and demo-b")
+    );
 
     let ring = team::parse(
         r#"
-[[session]]
-name = "a"
-command = ["sh"]
-watch = ["b"]
-activity = { idle_after = "30s" }
-[[session]]
-name = "b"
-command = ["sh"]
-watch = ["c"]
-activity = { idle_after = "30s" }
-[[session]]
-name = "c"
-command = ["sh"]
-watch = ["a"]
-activity = { idle_after = "30s" }
-"#,
+    [[session]]
+    name = "a"
+    command = ["sh"]
+    watch = ["b"]
+    activity = { idle_after = "30s" }
+    [[session]]
+    name = "b"
+    command = ["sh"]
+    watch = ["c"]
+    activity = { idle_after = "30s" }
+    [[session]]
+    name = "c"
+    command = ["sh"]
+    watch = ["a"]
+    activity = { idle_after = "30s" }
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap_err();
-    assert!(format!("{ring:#}").contains("activity notices would loop between a, b and c"));
+    assert!(
+        format!("{ring:#}")
+            .contains("activity notices would loop between demo-a, demo-b and demo-c")
+    );
 
     team::parse(
         r#"
-[[session]]
-name = "a"
-command = ["sh"]
-watch = ["b"]
-activity = { idle_after = "30s" }
-[[session]]
-name = "b"
-command = ["sh"]
-"#,
+    [[session]]
+    name = "a"
+    command = ["sh"]
+    watch = ["b"]
+    activity = { idle_after = "30s" }
+    [[session]]
+    name = "b"
+    command = ["sh"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .unwrap();
 }
@@ -3063,24 +3421,26 @@ command = ["sh"]
 fn confine_table_merges_team_defaults_and_session_grants() {
     let sessions = team::parse(
         r#"
-team = "myproject"
-[confine]
-enabled = true
-write = ["~/.ctrscm"]
-default_hides = true
-[[session]]
-name = "architect"
-command = ["claude"]
-[session.confine]
-grants = ["docker"]
-keep_env = ["GITHUB_TOKEN", "GITHUB_TOKEN"]
-write = ["~/.cache"]
-[[session]]
-name = "scratch"
-command = ["omp"]
-[session.confine]
-enabled = false
-"#,
+    team = "myproject"
+    [confine]
+    enabled = true
+    write = ["~/.ctrscm"]
+    default_hides = true
+    [[session]]
+    name = "architect"
+    command = ["claude"]
+    [session.confine]
+    grants = ["docker"]
+    keep_env = ["GITHUB_TOKEN", "GITHUB_TOKEN"]
+    write = ["~/.cache"]
+    [[session]]
+    name = "scratch"
+    command = ["omp"]
+    [session.confine]
+    enabled = false
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect("new confine table");
     assert_eq!(
@@ -3104,18 +3464,20 @@ enabled = false
 fn confine_table_merges_team_grants_before_session_grants() {
     let sessions = team::parse(
         r#"
-[confine]
-enabled = true
-grants = ["cargo-token"]
-[[session]]
-name = "with-own"
-command = ["cat"]
-[session.confine]
-grants = ["go"]
-[[session]]
-name = "without-own"
-command = ["cat"]
-"#,
+    [confine]
+    enabled = true
+    grants = ["cargo-token"]
+    [[session]]
+    name = "with-own"
+    command = ["cat"]
+    [session.confine]
+    grants = ["go"]
+    [[session]]
+    name = "without-own"
+    command = ["cat"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect("team grants");
     assert_eq!(
@@ -3141,50 +3503,58 @@ fn confine_table_rejects_old_keys_and_team_grants() {
     let old_inputs = [
         (
             "confine = false\n[[session]]\nname = 'worker'\ncommand = ['cat']",
-            "confine is now a table: write [confine] with enabled = true; see docs/confinement.md",
+            "ConfineTable",
         ),
         (
             "confine = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
-            "confine is now a table: write [confine] with enabled = true; see docs/confinement.md",
+            "ConfineTable",
         ),
         (
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine = false",
-            "session 1: confine is now a table: use [session.confine] with enabled = true",
+            "ConfineTable",
         ),
         (
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_write = ['x']",
-            "session 1: confine_write was replaced by write in [session.confine]",
+            "confine_write",
         ),
         (
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_hide = ['x']",
-            "session 1: confine_hide was replaced by hide in [session.confine]",
+            "confine_hide",
         ),
         (
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_unhide = ['x']",
-            "session 1: confine_unhide was replaced by unhide in [session.confine]",
+            "confine_unhide",
         ),
         (
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_no_default_hides = true",
-            "session 1: confine_no_default_hides was replaced by default_hides = false in [session.confine]",
+            "confine_no_default_hides",
         ),
         (
             "[[session]]\nname = 'worker'\ncommand = ['cat']\nconfine_allow_containers = true",
-            "session 1: confine_allow_containers was replaced by one grant per runtime, for example grants = [\"docker\"], in [session.confine]; run a2amx confine list",
+            "confine_allow_containers",
         ),
     ];
     for (text, expected) in old_inputs {
-        let error = team::parse(text).expect_err("old confinement syntax");
-        assert_eq!(error.to_string(), expected);
+        let error = team::parse(text, std::path::Path::new("/work/demo"), false)
+            .expect_err("old confinement syntax");
+        let full = format!("{error:#}");
+        assert!(full.contains(expected), "{full}");
+        assert!(
+            !full.contains("replaced") && !full.contains("renamed"),
+            "{full}"
+        );
     }
 
-    team::parse(
-        "[confine]\ngrants = ['gh', 'ssh', 'git-credentials', 'docker']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
-    )
+    team::parse("[confine]\ngrants = ['gh', 'ssh', 'git-credentials', 'docker']\n[[session]]\nname = 'worker'\ncommand = ['cat']", std::path::Path::new("/work/demo"), false)
     .expect("credential team grants");
     for grant in ["podman", "harness-config"] {
-        let error = team::parse(&format!(
-            "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
-        ))
+        let error = team::parse(
+            &format!(
+                "[confine]\ngrants = ['{grant}']\n[[session]]\nname = 'worker'\ncommand = ['cat']"
+            ),
+            std::path::Path::new("/work/demo"),
+            false,
+        )
         .expect_err("non-credential team grant");
         assert!(error.to_string().contains("grant it in the session"));
     }
@@ -3194,6 +3564,8 @@ fn confine_table_rejects_old_keys_and_team_grants() {
 fn confine_table_keeps_credentials_per_session_only() {
     let team_error = team::parse(
         "[confine]\nkeep_env = ['GITHUB_TOKEN']\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect_err("team keep_env");
     assert_eq!(
@@ -3201,15 +3573,14 @@ fn confine_table_keeps_credentials_per_session_only() {
         "[confine] keep_env: a credential variable is returned per session, not team-wide; put keep_env in [session.confine]"
     );
 
-    let disabled = team::parse(
-        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nkeep_env = ['GITHUB_TOKEN']",
-    )
-    .expect_err("keep_env without enabled");
-    assert!(disabled.to_string().contains("need enabled = true"));
+    let sessions = team::parse("[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nkeep_env = ['GITHUB_TOKEN']", std::path::Path::new("/work/demo"), false)
+        .expect("keep_env without enabled");
+    assert_eq!(
+        sessions[0].confine.as_ref().unwrap().keep_env,
+        ["GITHUB_TOKEN"]
+    );
 
-    let sessions = team::parse(
-        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = true\nkeep_env = ['GITHUB_TOKEN', 'GITHUB_TOKEN']",
-    )
+    let sessions = team::parse("[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = true\nkeep_env = ['GITHUB_TOKEN', 'GITHUB_TOKEN']", std::path::Path::new("/work/demo"), false)
     .expect("session keep_env");
     assert_eq!(
         sessions[0]
@@ -3225,12 +3596,14 @@ fn confine_table_keeps_credentials_per_session_only() {
 fn confine_entry_syntax_is_checked_at_parse_time() {
     let session_error = team::parse(
         r#"
-[[session]]
-name = "worker"
-command = ["cat"]
-[session.confine]
-write = ["$HOME/.cache"]
-"#,
+    [[session]]
+    name = "worker"
+    command = ["cat"]
+    [session.confine]
+    write = ["$HOME/.cache"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect_err("session shell-style path");
     assert!(
@@ -3241,12 +3614,14 @@ write = ["$HOME/.cache"]
 
     let team_error = team::parse(
         r#"
-[confine]
-write = ["$HOME/.cache"]
-[[session]]
-name = "worker"
-command = ["cat"]
-"#,
+    [confine]
+    write = ["$HOME/.cache"]
+    [[session]]
+    name = "worker"
+    command = ["cat"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect_err("team shell-style path");
     assert!(
@@ -3258,15 +3633,18 @@ command = ["cat"]
 
 #[test]
 fn confine_auto_is_global_only_and_team_false_is_accepted() {
-    let global = team::parse_with(
+    let global = team::parse(
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
-        Some("project"),
+        Path::new("/work/project"),
+        true,
     )
     .expect("global auto");
     assert!(global[0].auto);
 
     let local_error = team::parse(
         "[confine]\nenabled = true\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect_err("local auto");
     assert_eq!(
@@ -3277,7 +3655,7 @@ fn confine_auto_is_global_only_and_team_false_is_accepted() {
     for value in ["true", "false"] {
         let error = team::parse(&format!(
             "[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nauto = {value}"
-        ))
+        ), std::path::Path::new("/work/demo"), false)
         .expect_err("session auto");
         assert_eq!(
             error.to_string(),
@@ -3285,40 +3663,69 @@ fn confine_auto_is_global_only_and_team_false_is_accepted() {
         );
     }
 
-    let missing_enabled = team::parse_with(
+    let missing_enabled = team::parse(
         "[confine]\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
-        Some("project"),
+        Path::new("/work/project"),
+        true,
     )
-    .expect_err("auto needs enabled");
-    assert_eq!(
-        missing_enabled.to_string(),
-        "[confine] auto needs enabled = true"
-    );
+    .expect("auto defaults to confinement");
+    assert!(missing_enabled[0].auto);
 
-    let global_false = team::parse_with(
+    let global_false = team::parse(
         "[confine]\nauto = false\n[[session]]\nname = 'worker'\ncommand = ['cat']",
-        Some("project"),
+        Path::new("/work/project"),
+        true,
     )
     .expect("global false");
     assert!(!global_false[0].auto);
 
-    let local_false =
-        team::parse("[confine]\nauto = false\n[[session]]\nname = 'worker'\ncommand = ['cat']")
-            .expect("local false");
+    let local_false = team::parse(
+        "[confine]\nauto = false\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .expect("local false");
     assert!(!local_false[0].auto);
+    let auto_disabled = team::parse(
+        "[confine]\nenabled = false\nauto = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        Path::new("/work/project"),
+        true,
+    )
+    .expect_err("auto disabled");
+    assert_eq!(
+        auto_disabled.to_string(),
+        "[confine] auto needs confinement; remove enabled = false"
+    );
+
+    let disabled = team::parse(
+        "[confine]\nenabled = false\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        Path::new("/work/project"),
+        true,
+    )
+    .expect("disabled confinement");
+    assert_eq!(disabled[0].confine, None);
+
+    let mixed = team::parse(
+        "[confine]\n[[session]]\nname = 'disabled'\ncommand = ['cat']\n[session.confine]\nenabled = false\n[[session]]\nname = 'enabled'\ncommand = ['cat']",
+        Path::new("/work/project"),
+        true,
+    )
+    .expect("mixed session confinement");
+    assert_eq!(mixed[0].confine, None);
+    assert!(mixed[1].confine.is_some());
 }
 
 #[test]
 fn confine_table_requires_enabled_for_own_options_and_deduplicates_lists() {
-    let error = team::parse(
-        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['x']",
-    )
-    .expect_err("options without enabled");
-    assert!(error.to_string().contains("need enabled = true"));
-
     let sessions = team::parse(
-    "[confine]\nenabled = true\nwrite = ['x', 'x']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['x', 'y', 'y']\ngrants = ['docker', 'docker']",
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['x']",
+        std::path::Path::new("/work/demo"),
+        false,
     )
+    .expect("options default to enabled");
+    assert!(sessions[0].confine.is_some());
+
+    let sessions = team::parse("[confine]\nenabled = true\nwrite = ['x', 'x']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['x', 'y', 'y']\ngrants = ['docker', 'docker']", std::path::Path::new("/work/demo"), false)
     .expect("deduplicated confine lists");
     let request = sessions[0].confine.as_ref().expect("confined");
     assert_eq!(request.write, ["x", "y"]);
@@ -3327,17 +3734,32 @@ fn confine_table_requires_enabled_for_own_options_and_deduplicates_lists() {
 
 #[test]
 fn confine_table_covers_disabled_and_merged_limit_rules() {
-    let inherited = team::parse(
-        "[confine]\nenabled = false\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = true",
-    )
+    let inherited = team::parse("[confine]\nenabled = false\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = true", std::path::Path::new("/work/demo"), false)
     .expect("session enables team defaults");
     assert_eq!(
         inherited[0].confine.as_ref().expect("confined").write,
         ["team"]
     );
-    let default_hides =
-        team::parse("[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']")
-            .expect("default hides on");
+    let team_disabled = team::parse(
+        "[confine]\nenabled = false\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['own']",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .expect("session options override team disabled");
+    assert_eq!(
+        team_disabled[0]
+            .confine
+            .as_ref()
+            .expect("session confinement")
+            .write,
+        ["team", "own"]
+    );
+    let default_hides = team::parse(
+        "[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .expect("default hides on");
     assert!(
         !default_hides[0]
             .confine
@@ -3346,33 +3768,42 @@ fn confine_table_covers_disabled_and_merged_limit_rules() {
             .no_default_hides
     );
 
-    let ignored = team::parse(
+    let enabled = team::parse(
         "[confine]\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n",
+        std::path::Path::new("/work/demo"),
+        false,
     )
-    .expect("team options without enabled are ignored");
-    assert_eq!(ignored[0].confine, None);
+    .expect("team options default to enabled");
+    assert!(enabled[0].confine.is_some());
+    let no_table = team::parse(
+        "[[session]]\nname = 'worker'\ncommand = ['cat']",
+        std::path::Path::new("/work/demo"),
+        false,
+    )
+    .expect("no confine table");
+    assert_eq!(no_table[0].confine, None);
 
-    let disabled = team::parse(
-        "[confine]\nenabled = true\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false",
-    )
+    let disabled = team::parse("[confine]\nenabled = true\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false", std::path::Path::new("/work/demo"), false)
     .expect("session can opt out");
     assert_eq!(disabled[0].confine, None);
 
-    let own_option = team::parse(
-        "[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\nwrite = ['own']",
-    )
-    .expect_err("disabled session options");
-    assert!(own_option.to_string().contains("need enabled = true"));
+    let own_option = team::parse("[confine]\nenabled = true\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\nwrite = ['own']", std::path::Path::new("/work/demo"), false)
+        .expect_err("disabled session options");
+    assert!(
+        own_option
+            .to_string()
+            .contains("options are set but enabled = false")
+    );
 
     let unknown_key = team::parse(
         "[confine]\nenabled = true\nnope = true\n[[session]]\nname = 'worker'\ncommand = ['cat']",
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect_err("unknown confine key");
     assert!(format!("{unknown_key:#}").contains("unknown field"));
 
-    let unknown_grant = team::parse(
-        "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = true\ngrants = ['container']",
-    )
+    let unknown_grant = team::parse("[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = true\ngrants = ['container']", std::path::Path::new("/work/demo"), false)
     .expect_err("unknown session grant");
     assert!(
         unknown_grant
@@ -3390,7 +3821,7 @@ fn confine_table_covers_disabled_and_merged_limit_rules() {
         .join(", ");
     let merged_limit = team::parse(&format!(
         "[confine]\nenabled = true\nwrite = [{team_paths}]\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = [{session_paths}]"
-    ))
+    ), std::path::Path::new("/work/demo"), false)
     .expect_err("merged write limit");
     assert!(
         merged_limit
@@ -3400,7 +3831,7 @@ fn confine_table_covers_disabled_and_merged_limit_rules() {
     let long_path = "x".repeat(4097);
     let merged_bytes = team::parse(&format!(
         "[confine]\nenabled = true\nwrite = ['team']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['{long_path}']"
-    ))
+    ), std::path::Path::new("/work/demo"), false)
     .expect_err("merged write byte limit");
     assert!(
         merged_bytes

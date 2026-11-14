@@ -560,36 +560,19 @@ fn team_reset_file_resets_sessions_in_file_order() {
     std::fs::write(
         &file,
         format!(
-            "[[session]]\nname = \"alpha\"\ncommand = [\"{}\"]\n\
-             [[session]]\nname = \"beta\"\ncommand = [\"{}\"]\n",
+            "[[session]]\nname = \"alpha\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n\
+             [[session]]\nname = \"beta\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n",
             fixture.display(),
             fixture.display()
         ),
     )
     .unwrap();
     assert!(run(&home, &["daemon", "start"]).status.success());
-    for name in ["alpha", "beta"] {
-        let created = run(
-            &home,
-            &[
-                "new",
-                "--detach",
-                "--name",
-                name,
-                "--harness",
-                "generic",
-                "--",
-                "python3",
-                "-u",
-                fixture.to_str().unwrap(),
-            ],
-        );
-        assert!(created.status.success(), "stderr: {}", stderr(&created));
-    }
-
     let file_arg = file.to_str().unwrap();
-    let reset = run(&home, &["team", "reset", "--file", file_arg, "--yes"]);
+    let started = run(&home, &["team", "up", "--detach", "--file", file_arg]);
+    assert!(started.status.success(), "stderr: {}", stderr(&started));
 
+    let reset = run(&home, &["team", "reset", "--file", file_arg, "--yes"]);
     assert!(
         reset.status.success(),
         "stdout: {}\nstderr: {}",
@@ -598,9 +581,9 @@ fn team_reset_file_resets_sessions_in_file_order() {
     );
     assert_eq!(
         stdout(&reset),
-        "reset alpha s1: 1 step\nreset beta s2: 1 step\n"
+        "reset config-alpha s1: 1 step\nreset config-beta s2: 1 step\n"
     );
-    for name in ["alpha", "beta"] {
+    for name in ["config-alpha", "config-beta"] {
         let screen = screen_contains_until(&home, &["screen", name], "marker:/clear");
         assert!(screen.status.success(), "stderr: {}", stderr(&screen));
     }
@@ -617,47 +600,28 @@ fn team_reset_reports_missing_and_exited_before_resetting_ready() {
     std::fs::write(
         &file,
         format!(
-            "[[session]]\nname = \"missing\"\ncommand = [\"{}\"]\n\
-             [[session]]\nname = \"exited\"\ncommand = [\"{}\"]\n\
+            "team = \"config\"\n[[session]]\nname = \"missing\"\ncommand = [\"{}\"]\n\
+             [[session]]\nname = \"exited\"\ncommand = [\"true\"]\n\
              [[session]]\nname = \"ready\"\ncommand = [\"{}\"]\n",
-            fixture.display(),
             fixture.display(),
             fixture.display()
         ),
     )
     .unwrap();
+    let start_file = home.join("config/start.toml");
+    std::fs::write(
+        &start_file,
+        format!(
+            "team = \"config\"\n[[session]]\nname = \"exited\"\ncommand = [\"true\"]\n\
+             [[session]]\nname = \"ready\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n",
+            fixture.display()
+        ),
+    )
+    .unwrap();
     assert!(run(&home, &["daemon", "start"]).status.success());
-    let exited = run(
-        &home,
-        &[
-            "new",
-            "--detach",
-            "--name",
-            "exited",
-            "--harness",
-            "generic",
-            "--",
-            "true",
-        ],
-    );
-    assert!(exited.status.success(), "stderr: {}", stderr(&exited));
-    let ready = run(
-        &home,
-        &[
-            "new",
-            "--detach",
-            "--name",
-            "ready",
-            "--harness",
-            "generic",
-            "--",
-            "python3",
-            "-u",
-            fixture.to_str().unwrap(),
-        ],
-    );
-    assert!(ready.status.success(), "stderr: {}", stderr(&ready));
-
+    let start_file_arg = start_file.to_str().unwrap();
+    let started = run(&home, &["team", "up", "--detach", "--file", start_file_arg]);
+    assert!(started.status.success(), "stderr: {}", stderr(&started));
     let file_arg = file.to_str().unwrap();
     let reset = run(&home, &["team", "reset", "--file", file_arg, "--yes"]);
 
@@ -669,7 +633,7 @@ fn team_reset_reports_missing_and_exited_before_resetting_ready() {
     );
     assert_eq!(
         stdout(&reset),
-        "no session missing\nskipped exited s1 (exited)\nreset ready s2: 1 step\n"
+        "no session config-missing\nskipped config-exited s1 (exited)\nreset config-ready s2: 1 step\n"
     );
 }
 
@@ -684,47 +648,29 @@ fn team_reset_continues_after_a_not_ready_session_and_fails() {
     std::fs::write(
         &file,
         format!(
-            "[[session]]\nname = \"first\"\ncommand = [\"{}\"]\n\
-             [[session]]\nname = \"not-ready\"\ncommand = [\"{}\"]\n\
-             [[session]]\nname = \"last\"\ncommand = [\"{}\"]\n",
-            fixture.display(),
+            "[[session]]\nname = \"first\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n\
+             [[session]]\nname = \"not-ready\"\ncommand = [\"sleep\", \"30\"]\n\
+             [[session]]\nname = \"last\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n",
             fixture.display(),
             fixture.display()
         ),
     )
     .unwrap();
     assert!(run(&home, &["daemon", "start"]).status.success());
-    for (name, command) in [
-        ("first", vec!["python3", "-u", fixture.to_str().unwrap()]),
-        ("not-ready", vec!["sleep", "30"]),
-        ("last", vec!["python3", "-u", fixture.to_str().unwrap()]),
-    ] {
-        let mut args = vec![
-            "new",
-            "--detach",
-            "--name",
-            name,
-            "--harness",
-            "generic",
-            "--",
-        ];
-        args.extend(command);
-        let created = run(&home, &args);
-        assert!(created.status.success(), "stderr: {}", stderr(&created));
-    }
-
     let file_arg = file.to_str().unwrap();
+    let started = run(&home, &["team", "up", "--detach", "--file", file_arg]);
+    assert!(started.status.success(), "stderr: {}", stderr(&started));
     let reset = run(&home, &["team", "reset", "--file", file_arg, "--yes"]);
 
     assert!(!reset.status.success(), "stdout: {}", stdout(&reset));
     assert!(
-        stderr(&reset).contains("failed not-ready: not_ready:"),
+        stderr(&reset).contains("failed config-not-ready: not_ready:"),
         "{}",
         stderr(&reset)
     );
     assert_eq!(
         stdout(&reset),
-        "reset first s1: 1 step\nreset last s3: 1 step\n"
+        "reset config-first s1: 1 step\nreset config-last s3: 1 step\n"
     );
 }
 
@@ -739,34 +685,17 @@ fn team_reset_except_leaves_the_named_session_untouched() {
     std::fs::write(
         &file,
         format!(
-            "[[session]]\nname = \"keep\"\ncommand = [\"{}\"]\n\
-             [[session]]\nname = \"reset\"\ncommand = [\"{}\"]\n",
+            "[[session]]\nname = \"keep\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n\
+             [[session]]\nname = \"reset\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n",
             fixture.display(),
             fixture.display()
         ),
     )
     .unwrap();
     assert!(run(&home, &["daemon", "start"]).status.success());
-    for name in ["keep", "reset"] {
-        let created = run(
-            &home,
-            &[
-                "new",
-                "--detach",
-                "--name",
-                name,
-                "--harness",
-                "generic",
-                "--",
-                "python3",
-                "-u",
-                fixture.to_str().unwrap(),
-            ],
-        );
-        assert!(created.status.success(), "stderr: {}", stderr(&created));
-    }
-
     let file_arg = file.to_str().unwrap();
+    let started = run(&home, &["team", "up", "--detach", "--file", file_arg]);
+    assert!(started.status.success(), "stderr: {}", stderr(&started));
     let reset = run(
         &home,
         &[
@@ -775,7 +704,7 @@ fn team_reset_except_leaves_the_named_session_untouched() {
             "--file",
             file_arg,
             "--except",
-            "keep",
+            "config-keep",
             "--except",
             "not-selected",
             "--yes",
@@ -783,8 +712,8 @@ fn team_reset_except_leaves_the_named_session_untouched() {
     );
 
     assert!(reset.status.success(), "stderr: {}", stderr(&reset));
-    assert_eq!(stdout(&reset), "reset reset s2: 1 step\n");
-    let keep_screen = run(&home, &["screen", "keep"]);
+    assert_eq!(stdout(&reset), "reset config-reset s2: 1 step\n");
+    let keep_screen = run(&home, &["screen", "config-keep"]);
     assert!(
         keep_screen.status.success(),
         "stderr: {}",
@@ -804,34 +733,17 @@ fn team_reset_requires_yes_for_nonterminal_invocation() {
     std::fs::write(
         &file,
         format!(
-            "[[session]]\nname = \"alpha\"\ncommand = [\"{}\"]\n\
-             [[session]]\nname = \"beta\"\ncommand = [\"{}\"]\n",
+            "[[session]]\nname = \"alpha\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n\
+             [[session]]\nname = \"beta\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n",
             fixture.display(),
             fixture.display()
         ),
     )
     .unwrap();
     assert!(run(&home, &["daemon", "start"]).status.success());
-    for name in ["alpha", "beta"] {
-        let created = run(
-            &home,
-            &[
-                "new",
-                "--detach",
-                "--name",
-                name,
-                "--harness",
-                "generic",
-                "--",
-                "python3",
-                "-u",
-                fixture.to_str().unwrap(),
-            ],
-        );
-        assert!(created.status.success(), "stderr: {}", stderr(&created));
-    }
-
     let file_arg = file.to_str().unwrap();
+    let started = run(&home, &["team", "up", "--detach", "--file", file_arg]);
+    assert!(started.status.success(), "stderr: {}", stderr(&started));
     let reset = run(&home, &["team", "reset", "--file", file_arg]);
 
     assert!(!reset.status.success());
@@ -840,7 +752,7 @@ fn team_reset_requires_yes_for_nonterminal_invocation() {
         "{}",
         stderr(&reset)
     );
-    for name in ["alpha", "beta"] {
+    for name in ["config-alpha", "config-beta"] {
         let screen = run(&home, &["screen", name]);
         assert!(screen.status.success(), "stderr: {}", stderr(&screen));
         assert!(!stdout(&screen).contains("marker:/clear"));

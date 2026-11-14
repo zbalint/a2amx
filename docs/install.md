@@ -41,7 +41,7 @@ user. There is no override, and containers must use a non-root user too.
 
 ## Requirements for confinement
 
-Using `a2amx new --confine`, or a `[confine]` table with `enabled = true` in a team file, needs `bwrap` (bubblewrap)
+Using `a2amx new --confine`, or a `[confine]` table in a team file, needs `bwrap` (bubblewrap)
 on the daemon's startup `PATH`; the request is refused when it is missing. A confined
 Generic session also needs an `env` that supports `--ignore-signal` and
 `--default-signal` (GNU coreutils 8.31 or newer, or uutils). When the login overlay of a

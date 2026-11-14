@@ -1583,13 +1583,15 @@ fn new_grants_open_only_existing_paths_and_release_only_their_environment() {
 fn team_file_cargo_token_grant_releases_environment() {
     let sessions = team::parse(
         r#"
-[confine]
-enabled = true
-grants = ["cargo-token"]
-[[session]]
-name = "worker"
-command = ["cat"]
-"#,
+    [confine]
+    enabled = true
+    grants = ["cargo-token"]
+    [[session]]
+    name = "worker"
+    command = ["cat"]
+    "#,
+        std::path::Path::new("/work/demo"),
+        false,
     )
     .expect("team cargo-token grant");
     let request = sessions[0]

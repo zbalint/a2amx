@@ -281,13 +281,13 @@ pub enum GatewayAction {
 pub enum TeamAction {
     /// Show the desired team's session states without changing anything.
     Status {
-        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory).
+        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). A file without team is named after its directory.
         #[arg(long)]
         file: Option<PathBuf>,
     },
     /// Start the sessions that are not running.
     Up {
-        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). Cannot be combined with NAME=EXECUTABLE items.
+        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). Cannot be combined with NAME=EXECUTABLE items. A file without team is named after its directory.
         #[arg(long, conflicts_with = "items")]
         file: Option<PathBuf>,
         /// Do not attach to any session.
@@ -304,7 +304,7 @@ pub enum TeamAction {
     },
     /// Kill the team's sessions, running or exited.
     Down {
-        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). Cannot be combined with NAME=EXECUTABLE items.
+        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). Cannot be combined with NAME=EXECUTABLE items. A file without team is named after its directory.
         #[arg(long, conflicts_with = "names")]
         file: Option<PathBuf>,
         /// Session names (default: every name in the team file).
@@ -316,7 +316,7 @@ pub enum TeamAction {
 
     /// Reset the team's sessions (clear their conversations).
     Reset {
-        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). Cannot be combined with session names.
+        /// Team file (default: a2amx.toml in the current directory, else the global team.toml in the a2amx config directory). Cannot be combined with session names. A file without team is named after its directory.
         #[arg(long, conflicts_with = "names")]
         file: Option<PathBuf>,
         /// Session names (default: every name in the team file).

@@ -1055,7 +1055,6 @@ fn auto_grants_for(dir: &Path, home: &Path) -> Vec<(&'static str, String)> {
 
 async fn resolve_auto_grants(
     actions: &mut [team::Action],
-    cwd: &Path,
     origin: TeamOrigin<'_>,
 ) -> anyhow::Result<()> {
     let host_home = std::env::var_os("HOME")
@@ -1071,7 +1070,7 @@ async fn resolve_auto_grants(
         let resolved_dir = session
             .cwd
             .as_deref()
-            .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
+            .map_or_else(|| origin.dir.to_owned(), |path| origin.dir.join(path));
         let scan_home = host_home.clone();
         let found =
             tokio::task::spawn_blocking(move || auto_grants_for(&resolved_dir, &scan_home)).await?;
@@ -1198,7 +1197,7 @@ async fn create_session(
 struct TeamSource {
     path: PathBuf,
     dir: PathBuf,
-    default_team: Option<String>,
+    global: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1211,11 +1210,20 @@ async fn resolve_team_file(home: &Path, file: Option<PathBuf>) -> anyhow::Result
     let invoking_cwd = std::env::current_dir()?;
     if let Some(file) = file {
         let path = invoking_cwd.join(file);
-        let dir = path.parent().unwrap_or(&invoking_cwd).to_owned();
+        let parent = path.parent().unwrap_or(&invoking_cwd).to_owned();
+        let dir = tokio::task::spawn_blocking(move || {
+            std::fs::canonicalize(&parent).with_context(|| {
+                format!(
+                    "cannot canonicalize team file directory {}",
+                    parent.display()
+                )
+            })
+        })
+        .await??;
         return Ok(TeamSource {
             path,
             dir,
-            default_team: None,
+            global: false,
         });
     }
     let state_home = home.to_owned();
@@ -1240,8 +1248,8 @@ async fn resolve_team_file(home: &Path, file: Option<PathBuf>) -> anyhow::Result
             Ok(_) => {
                 return Ok(TeamSource {
                     path: local,
-                    dir: invoking_cwd,
-                    default_team: None,
+                    dir: cwd,
+                    global: false,
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1270,15 +1278,15 @@ async fn resolve_team_file(home: &Path, file: Option<PathBuf>) -> anyhow::Result
             }
         }
         team::check_global_allowed(&cwd, user_home.as_deref(), &state_home)?;
-        let name = team::team_name_for(&cwd)?;
         Ok(TeamSource {
             path: global,
             dir: cwd,
-            default_team: Some(name),
+            global: true,
         })
     })
     .await??;
-    if let Some(name) = &result.default_team {
+    if result.global {
+        let name = team::team_name_for(&result.dir, "create an a2amx.toml here, or pass --file")?;
         write_stderr(
             format!(
                 "using global team file {} as team {name}\n",
@@ -1295,7 +1303,7 @@ async fn read_team(source: TeamSource) -> anyhow::Result<Vec<TeamSession>> {
     tokio::task::spawn_blocking(move || {
         let text = std::fs::read_to_string(&source.path)
             .with_context(|| format!("cannot read team file {}", source.path.display()))?;
-        team::parse_with(&text, source.default_team.as_deref())
+        team::parse(&text, &source.dir, source.global)
             .with_context(|| format!("team file {}", source.path.display()))
     })
     .await?
@@ -1494,7 +1502,6 @@ async fn note_lost_messages(home: &Path, wanted: &[TeamSession]) {
 
 async fn dry_run_report(
     home: &Path,
-    cwd: &Path,
     origin: TeamOrigin<'_>,
     actions: &[team::Action],
     existing: &[SessionSummary],
@@ -1511,7 +1518,7 @@ async fn dry_run_report(
                 output.push_str(&format!("already running {name} {id} (confine {mode})\n"));
             }
             team::Action::Start(session) => {
-                output.push_str(&dry_run_start(home, cwd, origin, session, accepted).await?);
+                output.push_str(&dry_run_start(home, origin, session, accepted).await?);
             }
         }
     }
@@ -1520,7 +1527,6 @@ async fn dry_run_report(
 
 async fn dry_run_start(
     home: &Path,
-    cwd: &Path,
     origin: TeamOrigin<'_>,
     session: &TeamSession,
     accepted: &BTreeSet<String>,
@@ -1529,7 +1535,7 @@ async fn dry_run_start(
     let resolved_cwd = session
         .cwd
         .as_deref()
-        .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
+        .map_or_else(|| origin.dir.to_owned(), |path| origin.dir.join(path));
     team::validate_session_confine(session, &resolved_cwd)?;
     let confine_plan = if let Some(request) = session.confine.as_ref() {
         let host_home = PathBuf::from(std::env::var_os("HOME").context("HOME not set")?);
@@ -1594,14 +1600,13 @@ async fn dry_run_start(
 
 fn validate_team_session(
     home: &Path,
-    cwd: &Path,
     origin: TeamOrigin<'_>,
     session: &TeamSession,
 ) -> anyhow::Result<()> {
     let resolved_cwd = session
         .cwd
         .as_deref()
-        .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
+        .map_or_else(|| origin.dir.to_owned(), |path| origin.dir.join(path));
     team::validate_session_confine(session, &resolved_cwd)?;
     let Some(request) = session.confine.as_ref() else {
         return Ok(());
@@ -1671,7 +1676,6 @@ async fn start_planned_session(
     home: &Path,
     client: &mut Client,
     session: Box<TeamSession>,
-    cwd: &Path,
     origin: TeamOrigin<'_>,
     cols: u16,
     rows: u16,
@@ -1693,7 +1697,7 @@ async fn start_planned_session(
     let resolved_cwd = session
         .cwd
         .as_deref()
-        .map_or_else(|| cwd.to_owned(), |path| origin.dir.join(path));
+        .map_or_else(|| origin.dir.to_owned(), |path| origin.dir.join(path));
     team::validate_session_confine(&session, &resolved_cwd)?;
     let confine = session
         .confine
@@ -1852,10 +1856,10 @@ async fn run_team_up(
         dir: &file_dir,
         file: team_file.as_deref(),
     };
-    resolve_auto_grants(&mut actions, &cwd, origin).await?;
+    resolve_auto_grants(&mut actions, origin).await?;
     for action in &actions {
         if let team::Action::Start(session) = action {
-            validate_team_session(&home, &cwd, origin, session)?;
+            validate_team_session(&home, origin, session)?;
         }
     }
     let has_auto = actions.iter().any(|action| {
@@ -1882,7 +1886,7 @@ async fn run_team_up(
     }
     write_auto_summaries(&actions).await?;
     if dry_run {
-        let output = dry_run_report(&home, &cwd, origin, &actions, &existing, &accepted).await?;
+        let output = dry_run_report(&home, origin, &actions, &existing, &accepted).await?;
         write_stdout(output.into_bytes()).await?;
         note_lost_messages(&home, &wanted).await;
         return Ok(());
@@ -1906,7 +1910,7 @@ async fn run_team_up(
                 (name, id)
             }
             team::Action::Start(session) => {
-                start_planned_session(&home, &mut client, session, &cwd, origin, cols, rows).await?
+                start_planned_session(&home, &mut client, session, origin, cols, rows).await?
             }
         };
         if attach_name == Some(name.as_str()) {
