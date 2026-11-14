@@ -179,6 +179,12 @@ pub struct Presence {
     last_announced: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresenceCause {
+    Attached,
+    Grace,
+}
+
 impl Presence {
     pub fn new(away_secs: u64) -> Self {
         Self {
@@ -217,11 +223,25 @@ impl Presence {
         }
     }
 
+    pub fn cause(&self, now: std::time::Instant) -> Option<PresenceCause> {
+        if self.interactive > 0 {
+            Some(PresenceCause::Attached)
+        } else if self
+            .last_interactive
+            .is_some_and(|last| now < last + Duration::from_secs(self.away_secs))
+        {
+            Some(PresenceCause::Grace)
+        } else {
+            None
+        }
+    }
+
     pub fn present(&self, now: std::time::Instant) -> bool {
-        self.interactive > 0
-            || self
-                .last_interactive
-                .is_some_and(|last| now < last + Duration::from_secs(self.away_secs))
+        self.cause(now).is_some()
+    }
+
+    pub fn away_secs(&self) -> u64 {
+        self.away_secs
     }
 
     pub fn poll(&mut self, now: std::time::Instant) -> bool {

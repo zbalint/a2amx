@@ -188,3 +188,15 @@ The developer reported (BLOCKED, verified by reading `src/daemon.rs:366-379` and
 ### Amendment 2
 
 The tester found (static, verified by reading `src/daemon.rs:847-874` and `3735-3742`) a race in section 4.8's snapshot-then-release order: the poll tick takes the live ids under the sessions lock, releases it, and later prunes the presence map; a session created and attached in between has its fresh entry pruned, and its live attachment never recreates it, so its refusals stop until it reattaches. Ruling: the poll tick takes the presence lock **while it still holds the sessions lock** (order sessions then presence, the order `list_agents` already uses), builds the live-id set, prunes, and collects the transitioned sessions under both locks, then releases both before the notice `.await`. A session created after that moment is not pruned in this tick because the prune only removes ids that are absent from the map at that moment; a session in the map is live. Nothing may take presence then sessions. Section 4.8's wording about releasing the sessions lock before locking presence is replaced by this; nothing else changes. No new test is required (the window is not deterministically observable); the architect verifies the order by reading.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness (model not recorded); developer OMP, openai-codex/gpt-5.6-luna; tester OMP, opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 2 (amendments 1 and 2).
+
+| Found | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Three existing tests (`:910`, `:969`, `:1045`) would go red or become vacuous under the per-session rule; the remote-only notice test lost its coverage; the `send_message` tool description (`src/mcp.rs:542`) would become false and was outside scope; lock order and entry lifecycle unspecified; the notice test could miss the mutant; line anchors off by a few lines | Spec revised before the lock |
+| Implementation | developer | The exited-attach mutant the spec asked for cannot be observed through any public seam (an exited session cannot authenticate); the architect and consultant had not checked observability at the lock | Amendment 1: tests `:969` and `:1045` stay as contract tests, lifecycle verified by reading |
+| Tester pass | tester | Static race: the poll tick released the sessions lock before pruning the presence map, so a session attached in between lost its fresh entry | Amendment 2: the poll prunes under both locks (`poll_transitions`) |
+| Architect review | architect, Sonnet 5.5 | The developer also reworded the quota sentence of the tool description (and its pinned test copy), outside the one sentence the spec allows | Reverted in fix round 1 |
+| Architect review | architect | Entry lifecycle (4.7) and lock order (4.8) are not observable through a test | Verified by reading `src/daemon.rs` (`attach` creates the only entry, `mode_changed` and the guard use `get_mut`, `poll_transitions` locks sessions then presence); recorded here |

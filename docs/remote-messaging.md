@@ -10,14 +10,16 @@ can read it.
 
 ## When you are at the computer
 
-Presence is an interactive attach. The daemon keeps the owner present for the `owner_away`
-duration from `daemon.toml` (`60s` / `1m` by default) after the last interactive attachment
-ends; `a2amx daemon start --owner-away-secs SECONDS` (or `A2AMX_OWNER_AWAY_SECS`) changes that
-grace period. `owner_present` refuses an agent's
-`send_message(to="human:owner", ...)` while the owner is present. `list_agents` reports `owner`
-as `present` or `away` for remote-enabled sessions, and the daemon emits one
-“The owner is away from the computer...” notice when the state changes to away. Human inbound
-messages are accepted regardless of that state.
+Presence is per session. The owner is present for a session while attached to it interactively and
+for the `owner_away` duration from `daemon.toml` (`60s` / `1m` by default) after that attachment
+ends; `a2amx daemon start --owner-away-secs SECONDS` (or `A2AMX_OWNER_AWAY_SECS`) changes the
+grace period. Other sessions, including detached ones, can message the owner. Viewer mode does not
+count as interactive presence; `a2amx list` shows `yes` or `viewer` per session. `owner_present`
+refuses an agent's `send_message(to="human:owner", ...)` only while the owner is present for that
+agent's session.
+`list_agents` reports `owner` as `present` or `away` for the caller's remote-enabled session. The
+daemon emits one “The owner is away from the computer...” notice when the owner leaves that session.
+Human inbound messages are accepted regardless of that state.
 
 Remote messaging is off by default, enabled per agent, and available only to confined sessions.
 A human can watch an attached session without claiming owner presence by using viewer mode (`v` after

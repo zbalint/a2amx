@@ -27,8 +27,8 @@ How-to for operators giving agents peer-message instructions and avoiding creden
   Check `message_status` when the reply matters.
 
 To message the paired human, use the `human:owner` address. A remote-enabled caller gets a
-top-level `owner` field in `list_agents`, showing whether the owner is present or away.
-`owner_present` refuses that message while the owner is at the computer; see
-[Remote messaging](remote-messaging.md).
+top-level `owner` field in `list_agents`, showing whether the owner is present or away for that
+session. `owner_present` refuses that message while the owner is attached to your session; other
+sessions can still message the owner. See [Remote messaging](remote-messaging.md).
 
 For harness setup, see [Harnesses](harnesses.md).

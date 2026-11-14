@@ -94,7 +94,7 @@ struct Runtime {
     omp_usage: Mutex<Option<(Instant, BTreeMap<String, QuotaInfo>)>>,
     omp_usage_attempt: Mutex<Option<Instant>>,
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
-    presence: Arc<Mutex<messaging::Presence>>,
+    presence: Arc<Mutex<HashMap<String, messaging::Presence>>>,
     leases: Mutex<PresenceLeases>,
     gateway_connections: AtomicUsize,
     new_session_gate: tokio::sync::Mutex<()>,
@@ -837,6 +837,26 @@ impl Runtime {
             .extend(tasks);
     }
 
+    fn poll_transitions(&self) -> Vec<Arc<Session>> {
+        let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
+        let live_ids = sessions
+            .values()
+            .filter(|session| session.exit_code().is_none())
+            .map(|session| session.id().0.clone())
+            .collect::<HashSet<_>>();
+        presence.retain(|id, _| live_ids.contains(id));
+        sessions
+            .values()
+            .filter(|session| session.exit_code().is_none())
+            .filter_map(|session| {
+                presence
+                    .get_mut(&session.id().0)
+                    .and_then(|state| state.poll(Instant::now()).then_some(session.clone()))
+            })
+            .collect()
+    }
+
     async fn poll_presence(self: Arc<Self>, mut stopping: watch::Receiver<bool>) {
         let mut ticker = tokio::time::interval(HEARTBEAT_POLL);
         ticker.tick().await;
@@ -844,28 +864,15 @@ impl Runtime {
             tokio::select! {
                 _ = stopping.changed() => return,
                 _ = ticker.tick() => {
-                    let away = self
-                        .presence
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .poll(Instant::now());
-                    if away {
-                        self.send_presence_notices().await;
-                    }
+                    let transitioned = self.poll_transitions();
+                    self.send_presence_notices(transitioned).await;
                 }
             }
         }
     }
 
-    async fn send_presence_notices(&self) {
+    async fn send_presence_notices(&self, sessions: Vec<Arc<Session>>) {
         let now = Instant::now();
-        let sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
         for session in sessions {
             if self
                 .remote_ineligible(&session, now, messaging::Direction::ToHuman)
@@ -1293,6 +1300,22 @@ impl Runtime {
         }
     }
 
+    fn owner_cause(
+        &self,
+        session_id: &str,
+        now: Instant,
+    ) -> Option<(messaging::PresenceCause, u64)> {
+        self.presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(session_id)
+            .and_then(|presence| {
+                presence
+                    .cause(now)
+                    .map(|cause| (cause, presence.away_secs()))
+            })
+    }
+
     fn recipient(&self, to: &str) -> Option<Arc<Session>> {
         let local = messaging::local_part(to, &self.host_name)?;
         self.sessions
@@ -1322,16 +1345,16 @@ impl Runtime {
             {
                 return failed(error_code, message);
             }
-            if self
-                .presence
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .present(Instant::now())
-            {
-                return failed(
-                    code::OWNER_PRESENT,
-                    "the owner is at the computer; write to them in the terminal instead",
-                );
+            if let Some((cause, away_secs)) = self.owner_cause(sender_id, Instant::now()) {
+                let message = match cause {
+                    messaging::PresenceCause::Attached => {
+                        "the owner is attached to this session in the terminal (viewer mode does not count); write to them there instead".to_owned()
+                    }
+                    messaging::PresenceCause::Grace => format!(
+                        "the owner left this session less than {away_secs} seconds ago; try again later or write to them in the terminal"
+                    ),
+                };
+                return failed(code::OWNER_PRESENT, &message);
             }
             let new = NewMessage {
                 boot: self.boot.clone(),
@@ -2422,9 +2445,7 @@ impl Daemon {
             // shortcut: accepted-send timestamps are memory-only; persist them if
             // rate limits must survive daemon restarts.
             rate: tokio::sync::Mutex::new(HashMap::new()),
-            presence: Arc::new(Mutex::new(messaging::Presence::new(
-                config.limits.away_secs,
-            ))),
+            presence: Arc::new(Mutex::new(HashMap::new())),
             leases: Mutex::new(PresenceLeases::default()),
             gateway_connections: AtomicUsize::new(0),
             new_session_gate: tokio::sync::Mutex::new(()),
@@ -3055,13 +3076,15 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
     let owner = viewer
         .as_ref()
         .filter(|viewer| viewer.remote().is_some())
-        .map(|_| {
-            let present = runtime
-                .presence
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .present(Instant::now());
-            if present { "present" } else { "away" }.to_owned()
+        .map(|viewer| {
+            if runtime
+                .owner_cause(&viewer.id().0, Instant::now())
+                .is_some()
+            {
+                "present".to_owned()
+            } else {
+                "away".to_owned()
+            }
         });
     let omp_usage = runtime.omp_usage();
     let agents = sessions
@@ -3509,7 +3532,7 @@ struct AttachmentGuard {
     session: Arc<Session>,
     generation: u64,
     closed: watch::Sender<bool>,
-    presence: Arc<Mutex<messaging::Presence>>,
+    presence: Arc<Mutex<HashMap<String, messaging::Presence>>>,
     viewer: bool,
     counted: bool,
 }
@@ -3529,11 +3552,14 @@ impl Drop for AttachmentGuard {
                 state.pending_attachment = None;
             }
         }
-        if self.counted {
-            self.presence
+        if self.counted
+            && let Some(presence) = self
+                .presence
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .attach_ended(Instant::now(), self.viewer);
+                .get_mut(&self.session.id().0)
+        {
+            presence.attach_ended(Instant::now(), self.viewer);
         }
         let _ = self.closed.send(true);
     }
@@ -3705,6 +3731,8 @@ async fn attach(
             .presence
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .entry(session.id().0.clone())
+            .or_insert_with(|| messaging::Presence::new(runtime.limits.away_secs))
             .attach_started(Instant::now(), viewer);
         guard.counted = true;
     }
@@ -3792,11 +3820,14 @@ async fn attach(
                     ClientFrame::Release => {},
                     ClientFrame::Mode { viewer } => {
                         if guard.counted && guard.viewer != viewer {
-                            runtime
+                            if let Some(presence) = runtime
                                 .presence
                                 .lock()
                                 .unwrap_or_else(PoisonError::into_inner)
-                                .mode_changed(Instant::now(), viewer);
+                                .get_mut(&session.id().0)
+                            {
+                                presence.mode_changed(Instant::now(), viewer);
+                            }
                             guard.viewer = viewer;
                         }
                         let mut state = session.lock();

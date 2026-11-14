@@ -55,6 +55,25 @@ fn viewer_attachments_do_not_count_as_presence() {
 }
 
 #[test]
+fn presence_cause_distinguishes_attached_grace_and_away() {
+    let start = instant(0);
+    let mut presence = messaging::Presence::new(30);
+    assert_eq!(presence.cause(start), None);
+    presence.attach_started(start, false);
+    assert_eq!(
+        presence.cause(start),
+        Some(messaging::PresenceCause::Attached)
+    );
+    let ended = start + Duration::from_secs(1);
+    presence.attach_ended(ended, false);
+    assert_eq!(
+        presence.cause(ended + Duration::from_secs(29)),
+        Some(messaging::PresenceCause::Grace)
+    );
+    assert_eq!(presence.cause(ended + Duration::from_secs(30)), None);
+}
+
+#[test]
 fn multiple_interactive_attachments_keep_presence_until_the_last_ends() {
     let start = instant(0);
     let mut presence = messaging::Presence::new(10);
@@ -435,7 +454,7 @@ async fn interactive_presence_refuses_human_send_then_allows_it_after_grace() {
             .unwrap(),
         Response::Failed {
             code: code::OWNER_PRESENT.into(),
-            message: "the owner is at the computer; write to them in the terminal instead".into(),
+            message: "the owner is attached to this session in the terminal (viewer mode does not count); write to them there instead".into(),
         }
     );
     drop(attachment);
@@ -481,6 +500,206 @@ async fn interactive_presence_refuses_human_send_then_allows_it_after_grace() {
             .unwrap(),
         Response::Ok
     );
+    drop(attachment);
+    daemon.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn attached_owner_presence_is_scoped_to_the_sending_session() {
+    let Some((dir, daemon)) = start_confined_daemon_with_limits(Limits::default()).await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture_a = tempfile::tempdir().unwrap();
+    let fixture_b = tempfile::tempdir().unwrap();
+    let team = team_scope("presence-sender-session");
+    let (session_a, token_a) = create_confined_with_token(
+        &mut admin,
+        fixture_a.path(),
+        "presence-session-a",
+        Some(RemoteMode::Both),
+        Some(team.clone()),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let (_session_b, token_b) = create_confined_with_token(
+        &mut admin,
+        fixture_b.path(),
+        "presence-session-b",
+        Some(RemoteMode::Both),
+        Some(team),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "presence-sender-session").await;
+    let mut sender_a = Client::connect_addr(daemon.addrs()[0], &token_a)
+        .await
+        .unwrap();
+    let mut sender_b = Client::connect_addr(daemon.addrs()[0], &token_b)
+        .await
+        .unwrap();
+    let attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&session_a, false, 80, 24)
+        .await
+        .unwrap();
+    assert_eq!(owner_state(&mut sender_a).await.as_deref(), Some("present"));
+    assert_eq!(owner_state(&mut sender_b).await.as_deref(), Some("away"));
+    assert!(matches!(
+        sender_b
+            .request(Request::SendMessage {
+                to: messaging::HUMAN_SESSION.into(),
+                subject: "detached sender".into(),
+                message: "accepted".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Accepted { .. }
+    ));
+    assert_eq!(
+        sender_a
+            .request(Request::SendMessage {
+                to: messaging::HUMAN_SESSION.into(),
+                subject: "attached sender".into(),
+                message: "refused".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Failed {
+            code: code::OWNER_PRESENT.into(),
+            message: "the owner is attached to this session in the terminal (viewer mode does not count); write to them there instead".into(),
+        }
+    );
+    drop(attachment);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn grace_presence_is_scoped_and_reports_its_cause() {
+    let limits = Limits {
+        away_secs: 30,
+        ..Limits::default()
+    };
+    let Some((dir, daemon)) = start_confined_daemon_with_limits(limits).await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture_a = tempfile::tempdir().unwrap();
+    let fixture_b = tempfile::tempdir().unwrap();
+    let team = team_scope("presence-grace");
+    let (session_a, token_a) = create_confined_with_token(
+        &mut admin,
+        fixture_a.path(),
+        "presence-grace-a",
+        Some(RemoteMode::Both),
+        Some(team.clone()),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let (_session_b, token_b) = create_confined_with_token(
+        &mut admin,
+        fixture_b.path(),
+        "presence-grace-b",
+        Some(RemoteMode::Both),
+        Some(team),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "presence-grace").await;
+    let mut sender_a = Client::connect_addr(daemon.addrs()[0], &token_a)
+        .await
+        .unwrap();
+    let mut sender_b = Client::connect_addr(daemon.addrs()[0], &token_b)
+        .await
+        .unwrap();
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&session_a, false, 80, 24)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Mode { viewer: true })
+        .await
+        .unwrap();
+    attachment.send(ClientFrame::Redraw).await.unwrap();
+    receive_data(&mut attachment).await;
+    assert_eq!(owner_state(&mut sender_a).await.as_deref(), Some("present"));
+    assert_eq!(owner_state(&mut sender_b).await.as_deref(), Some("away"));
+    assert_eq!(
+        sender_a
+            .request(Request::SendMessage {
+                to: messaging::HUMAN_SESSION.into(),
+                subject: "grace".into(),
+                message: "refused".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Failed {
+            code: code::OWNER_PRESENT.into(),
+            message: "the owner left this session less than 30 seconds ago; try again later or write to them in the terminal".into(),
+        }
+    );
+    assert!(matches!(
+        sender_b
+            .request(Request::SendMessage {
+                to: messaging::HUMAN_SESSION.into(),
+                subject: "grace other session".into(),
+                message: "accepted".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Accepted { .. }
+    ));
+    drop(attachment);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn viewer_only_remote_session_can_message_owner() {
+    let Some((dir, daemon)) = start_confined_daemon().await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let (session, token) = create_confined_with_token(
+        &mut admin,
+        fixture.path(),
+        "presence-viewer-only",
+        Some(RemoteMode::Both),
+        Some(team_scope("presence-viewer-only")),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "presence-viewer-only").await;
+    let mut sender = Client::connect_addr(daemon.addrs()[0], &token)
+        .await
+        .unwrap();
+    let attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_viewer(&session, false, 80, 24, 0)
+        .await
+        .unwrap();
+    assert!(matches!(
+        sender
+            .request(Request::SendMessage {
+                to: messaging::HUMAN_SESSION.into(),
+                subject: "viewer".into(),
+                message: "accepted".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Accepted { .. }
+    ));
     drop(attachment);
     daemon.shutdown().await.unwrap();
 }
@@ -726,6 +945,85 @@ async fn force_takeover_replaces_presence_without_double_counting() {
 }
 
 #[tokio::test]
+async fn away_notice_is_sent_only_to_the_transitioning_session() {
+    let limits = Limits {
+        away_secs: 0,
+        ..Limits::default()
+    };
+    let Some((dir, daemon)) = start_confined_daemon_with_limits(limits).await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture_a = tempfile::tempdir().unwrap();
+    let fixture_b = tempfile::tempdir().unwrap();
+    let team = team_scope("presence-notice-sessions");
+    let (session_a, _token_a) = create_confined_with_token(
+        &mut admin,
+        fixture_a.path(),
+        "notice-session-a",
+        Some(RemoteMode::Both),
+        Some(team.clone()),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let (session_b, _token_b) = create_confined_with_token(
+        &mut admin,
+        fixture_b.path(),
+        "notice-session-b",
+        Some(RemoteMode::Both),
+        Some(team),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "presence-notice-sessions").await;
+    let mut first = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&session_a, false, 40, 10)
+        .await
+        .unwrap();
+    let second = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&session_b, false, 40, 10)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    first
+        .send(ClientFrame::Mode { viewer: true })
+        .await
+        .unwrap();
+    first.send(ClientFrame::Redraw).await.unwrap();
+    receive_data(&mut first).await;
+    let mut a_notice = false;
+    for _ in 0..100 {
+        if message_subjects(&mut admin, &session_a)
+            .await
+            .iter()
+            .any(|subject| subject == messaging::PRESENCE_SUBJECT)
+        {
+            a_notice = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(a_notice, "transitioning session receives owner-away notice");
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    assert!(
+        !message_subjects(&mut admin, &session_b)
+            .await
+            .iter()
+            .any(|subject| subject == messaging::PRESENCE_SUBJECT)
+    );
+    drop(second);
+    drop(first);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn away_notice_is_fixed_and_sent_once_to_remote_sessions_only() {
     let limits = Limits {
         away_secs: 3,
@@ -772,6 +1070,14 @@ async fn away_notice_is_fixed_and_sent_once_to_remote_sessions_only() {
         .await
         .unwrap();
     assert_eq!(owner_state(&mut non_remote_client).await, None);
+    let local_attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&non_remote, false, 40, 10)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    drop(local_attachment);
     let attachment = Client::connect(dir.path())
         .await
         .unwrap()
@@ -907,7 +1213,7 @@ async fn away_notice_body_matches_the_fixed_operator_message() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(1_200)).await;
-    assert_eq!(owner_state(&mut observer).await.as_deref(), Some("present"));
+    assert_eq!(owner_state(&mut observer).await.as_deref(), Some("away"));
     assert!(
         message_infos(&mut admin, &sender_id)
             .await

@@ -60,7 +60,7 @@ runs have not been tested live.
   hands it back to start the lease. The lease lasts at most a day and ends when the team goes
   down or the daemon stops. A message that arrives without a valid lease is rejected.
 - A message from the phone carries less authority than input typed at the computer. Owner
-  presence and viewer mode keep remote messages away while the owner is at the computer.
+  presence and viewer mode keep the attached session quiet while the owner is at the computer.
 - Remote messaging has its own rate limits, enforced by the daemon.
 - It is a messaging feature only: no terminal output, remote control, attachments or direct
   messages with agents. Discord text is not end-to-end encrypted, and the documentation says so.
