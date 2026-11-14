@@ -268,3 +268,15 @@ cargo test --test attach_cli
   removed from `run_daemon`; `client.toml` read added before the adapter early return; `deny_unknown_fields`
   removed; the `Source::File` label printed as `default` in `show_client`. Name the killing test for each.
 - A scratch directory, if any, is under `target/scratch/3ej/` and deleted before the report.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review; the exact model was not recorded); developer OMP harness, default model openai-codex/gpt-5.6-luna, smol model and advisor not exposed; tester OMP harness, model opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0. Fix rounds after the tester pass: 1.
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The draft's range check on `--viewer-after` would have broken `tests/attach_cli.rs` (a test passes `18446744073709551615`); eight other findings | the check was removed, the rest applied before locking |
+| Implementation | developer, gpt-5.6-luna | Mutation table over-claimed: the exact `C-space` arm deletion was reported killed but not run; the new error arms and labels were asserted but not mutated | corrected in the developer's follow-up messages; the tester ran the arm deletion |
+| Tester pass | tester, deepseek-v4.1-flash | Two surviving mutants (the `key prefix:` wrapper and the `read_config` file-name literal) and six assertion gaps: link target not checked, template load partial, show lines via `contains`, foreground test environment not cleared, existing attach test edited instead of copied, `docs/cli.md` section list stale | fix round 1: tests tightened, both mutants killed by named tests |
+| Architect review | architect, Sonnet 5.5 | Struct blank lines removed around `LoadedGateway`/`ClientSettings` | restored by the architect (tiny change) |
+| Architect review | architect, Sonnet 5.5 | Environment: three tests fail in the architect's confined session only (read-only `$HOME`), as in 3ei | recorded as environment, not code |

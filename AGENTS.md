@@ -167,7 +167,7 @@ specs showing it found nothing.
 | `status` | Attach status-line formatting and status frames |
 | `statusline` | The `a2amx statusline` command that Claude Code runs as its status line: it reports quota to the daemon and prints the short quota line |
 | `layout` | The a2amx root directory (`~/.a2amx`, `A2AMX_HOME` or `--home`) and every path below it: `bin/ config/ state/ run/ log/`; the only place that names them and the only code that creates directories under the root (`Layout::ensure`) |
-| `config` | The policy files `config/daemon.toml` and `config/gateway.toml`: the key tables, defaults-file-override resolution (flag, environment, file, default), value validation, duration parsing and formatting, the commented templates written once, and the text of `a2amx config show` |
+| `config` | The policy files `config/daemon.toml`, `config/gateway.toml` and `config/client.toml`: the key tables, defaults-file-override resolution (flag, environment, file, default), value validation, duration parsing and formatting, the commented templates written once, and the text of `a2amx config show` |
 | `store` | SQLite message and delivery-attempt persistence |
 | `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
 | `cli` | Command-line shape |

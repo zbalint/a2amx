@@ -86,6 +86,19 @@ pub fn parse_prefix(spec: &str) -> Result<u8> {
     );
 }
 
+/// Format a prefix byte using the canonical control-key notation.
+pub fn format_prefix(byte: u8) -> String {
+    match byte {
+        0 => "C-space".to_owned(),
+        1..=8 | 11..=12 | 14..=26 => format!("C-{}", (b'a' + byte - 1) as char),
+        0x1c => "C-\\".to_owned(),
+        0x1d => "C-]".to_owned(),
+        0x1e => "C-^".to_owned(),
+        0x1f => "C-_".to_owned(),
+        _ => format!("0x{byte:02x}"),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PasteState {
     Outside { matched: usize },

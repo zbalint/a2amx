@@ -401,7 +401,9 @@ prints the same resolution with each value's source. It also owns `config/gatewa
 (`guild_id`, the control category and channel, `max_members` and four intervals as duration strings, with an `ms`
 unit) and two test-only endpoint keys; the gateway commands `gateway token` and `gateway up` write the commented
 template once, and `relay_files::load` reads the file through its strict owner-only reader and fails when
-`guild_id` is not set.
+`guild_id` is not set. It also owns `config/client.toml`: two keys (`prefix`, `viewer_after`) read by every
+command except the harness adapters, and the daemon writes its commented template once at start; a flag or
+environment value beats the file, and `config show` labels each key `default`, `file` or `override`.
 
 Confined sessions may read `bin/`, `config/`, and `log/`, but those trees are mounted read-only.
 The `state/`, `run/`, and `config/secrets/` trees are hidden from confined sessions.

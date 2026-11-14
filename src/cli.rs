@@ -14,18 +14,18 @@ pub struct Cli {
     #[arg(long, global = true, env = "A2AMX_HOME")]
     pub home: Option<PathBuf>,
 
-    /// Prefix key used by an attached client.
+    /// Prefix key used by an attached client. Defaults to client.toml, then C-b.
     #[arg(
         long,
         global = true,
         env = "A2AMX_PREFIX",
-        default_value = "C-b",
         value_parser = parse_prefix
     )]
-    pub prefix: u8,
+    pub prefix: Option<u8>,
     /// Seconds without owner input before an interactive attachment becomes a viewer.
-    #[arg(long, global = true, env = "A2AMX_VIEWER_AFTER", default_value_t = 300)]
-    pub viewer_after: u64,
+    /// Defaults to client.toml, then 300 seconds.
+    #[arg(long, global = true, env = "A2AMX_VIEWER_AFTER")]
+    pub viewer_after: Option<u64>,
 
     #[command(subcommand)]
     pub command: Command,

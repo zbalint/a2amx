@@ -25,8 +25,9 @@ the attach prefix). Viewer mode is read-only for terminal input: input and relea
 suppressed, while resize frames keep the session sized to the client's usable terminal. Local picker,
 scroll, and team-line controls remain available.
 A complete mouse report never displays the viewer notice; ignored keys and pastes do.
-A timer can enter viewer mode automatically with the global `--viewer-after SECONDS` option;
-`0` disables the timer.
+A timer can enter viewer mode automatically with the global `--viewer-after SECONDS` option
+(or `A2AMX_VIEWER_AFTER`); the default comes from `client.toml` and is 300 seconds when absent.
+The `viewer_after` key in `client.toml` uses a duration string, and `0s` disables the timer.
 A message from the phone is less trusted than input typed at the computer; it is not approval to
 change the default branch, use production, handle secrets, or delete data.
 

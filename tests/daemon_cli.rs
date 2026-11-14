@@ -211,7 +211,8 @@ fn background_reports_a_startup_failure() {
     let message = stderr(&output);
     assert!(
         message.contains("a2amx path is not a directory")
-            || message.contains("daemon exited during startup"),
+            || message.contains("daemon exited during startup")
+            || message.contains("Not a directory"),
         "stderr: {message}"
     );
 }
@@ -2835,7 +2836,11 @@ fn foreground_start_creates_daemon_template() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");
     let _cleanup = Cleanup(&home);
-    let mut child = a2amx(&home, &["daemon", "start", "--foreground"])
+    let mut command = a2amx(&home, &["daemon", "start", "--foreground"]);
+    command
+        .env_remove("A2AMX_PREFIX")
+        .env_remove("A2AMX_VIEWER_AFTER");
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .spawn()
@@ -2850,8 +2855,40 @@ fn foreground_start_creates_daemon_template() {
             .unwrap()
             .contains("# owner_away")
     );
+    assert!(
+        std::fs::read_to_string(home.join("config/client.toml"))
+            .unwrap()
+            .contains("# prefix")
+    );
     let _ = run(&home, &["daemon", "stop", "--yes"]);
     let _ = child.wait();
+}
+
+#[test]
+fn invalid_client_config_stops_regular_commands_but_not_confine_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    std::fs::write(home.join("config/client.toml"), "prefix = \"x\"\n").unwrap();
+
+    let mut list = a2amx(&home, &["list"]);
+    list.env_remove("A2AMX_PREFIX");
+    list.env_remove("A2AMX_VIEWER_AFTER");
+    let output = list.output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("client.toml: key prefix:"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!home.join("run/addr").exists());
+
+    let mut confine = a2amx(&home, &["confine", "list"]);
+    confine.env_remove("A2AMX_PREFIX");
+    confine.env_remove("A2AMX_VIEWER_AFTER");
+    let output = confine.output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!home.join("run/addr").exists());
 }
 
 #[test]
@@ -2877,6 +2914,8 @@ fn config_show_is_read_only_on_fresh_root() {
     let home = dir.path().join("state");
     let mut command = a2amx(&home, &["config", "show"]);
     command.env_remove("A2AMX_OWNER_AWAY_SECS");
+    command.env_remove("A2AMX_PREFIX");
+    command.env_remove("A2AMX_VIEWER_AFTER");
     let output = command.output().unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     let expected = format!(
@@ -2901,15 +2940,21 @@ max_members = 2  (default)\n\
 sync = \"15s\"  (default)\n\
 idle = \"1s\"  (default)\n\
 member_check = \"1m\"  (default)\n\
-reconnect = \"5s\"  (default)\n",
+reconnect = \"5s\"  (default)\n\
+\n\
+client.toml: {} (absent)\n\
+prefix = \"C-b\"  (default)\n\
+viewer_after = \"5m\"  (default)\n",
         home.join("config/daemon.toml").display(),
         home.join("config/gateway.toml").display(),
+        home.join("config/client.toml").display(),
     );
     let text = stdout(&output);
     assert_eq!(text, expected);
-    assert_eq!(text.lines().count(), 22);
+    assert_eq!(text.lines().count(), 26);
     assert!(!home.join("config/daemon.toml").exists());
     assert!(!home.join("config/gateway.toml").exists());
+    assert!(!home.join("config/client.toml").exists());
     assert!(!home.join("config").exists());
     assert!(!home.exists());
 }

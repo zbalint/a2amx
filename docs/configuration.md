@@ -64,6 +64,34 @@ error. The file is operator policy: an unconfined operator can edit it; a symlin
 file is followed as an operator-selected configuration path; confined sessions only see `config/`
 read-only.
 
+## `client.toml`
+
+The daemon creates this file once on a foreground or background start when it is absent. It
+never rewrites an existing file. Every a2amx command reads it, except the harness adapters
+(`mcp`, `hook`, `statusline`, `omp-bridge`) and `confine list` or `confine suggest`.
+
+```toml
+# A2AMX client settings. Every a2amx command reads this file, so a change applies to the next command. The daemon writes this file once and never rewrites it.
+# prefix: prefix key used by an attached client.
+# prefix = "C-b"
+# viewer_after: seconds without owner input before an attachment becomes a viewer.
+# viewer_after = "5m"
+```
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `prefix` | `C-b` | Existing control notation such as `C-a`, `C-space`, `C-\`, `C-]`, `C-^`, or `C-_`; reserved controls are rejected |
+| `viewer_after` | `5m` | Whole seconds from `0s` through `3650d`; `0s` disables the timer |
+
+Flags and environment variables override the file per key: `--prefix` or `A2AMX_PREFIX`, and
+`--viewer-after` or `A2AMX_VIEWER_AFTER`. Values are resolved with override, file, then Rust
+default precedence. The flag and environment timer values remain integer seconds and are not
+subject to the file's `3650d` ceiling. `daemon start` writes this file once; other commands
+only read it. An invalid file also stops `daemon stop` and `gateway up`, `gateway stop`, or
+`gateway status` until it is fixed. The harness adapters and `confine list` or `confine suggest`
+do not read it. A malformed `A2AMX_PREFIX` or `A2AMX_VIEWER_AFTER` environment value still
+fails every command during argument parsing, including adapters.
+
 ## `gateway.toml`
 
 The gateway commands create this file once when it is absent (`gateway token` or `gateway up`) and

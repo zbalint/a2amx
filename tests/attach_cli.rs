@@ -1007,6 +1007,30 @@ async fn custom_prefix_and_sigwinch_resize_reach_attached_session() -> anyhow::R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_file_prefix_reaches_attached_session() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    std::fs::write(dir.path().join("config/client.toml"), "prefix = \"C-x\"\n")?;
+    let script = "stty size; while :; do read line; done";
+    let (_, code) = run_cli(dir.path(), &["new", "--detach", "--", "sh", "-c", script])?;
+    assert_eq!(code, 0);
+
+    let mut args = vec![
+        "-u".to_owned(),
+        "A2AMX_PREFIX".to_owned(),
+        "-u".to_owned(),
+        "A2AMX_VIEWER_AFTER".to_owned(),
+        env!("CARGO_BIN_EXE_a2amx").to_owned(),
+    ];
+    args.extend(cli_args(dir.path(), &["attach", "s1"]));
+    let mut attached = PtyHarness::spawn_program("env", &args, dir.path(), &[])?;
+    attached.wait_for_text("24 80", WAIT)?;
+    attached.send(&[24, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn output_failure_restores_the_outer_terminal_before_returning_an_error() -> anyhow::Result<()>
 {
     let (dir, _daemon) = common::start_daemon().await;

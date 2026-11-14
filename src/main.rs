@@ -148,10 +148,6 @@ struct AttachOptions {
 }
 
 async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
-    let attach_options = AttachOptions {
-        prefix: cli.prefix,
-        viewer_after: (cli.viewer_after != 0).then(|| Duration::from_secs(cli.viewer_after)),
-    };
     let home_arg = cli.home;
     match &cli.command {
         Command::Mcp { channel } => {
@@ -198,6 +194,20 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         _ => {}
     }
     let home = resolve_home(home_arg)?;
+    let client_overrides = a2amx::config::ClientOverrides {
+        prefix: cli.prefix,
+        viewer_after_secs: cli.viewer_after,
+    };
+    let show_client_overrides = client_overrides.clone();
+    let client_layout = a2amx::layout::Layout::new(home.clone());
+    let loaded_client = tokio::task::spawn_blocking(move || {
+        a2amx::config::load_client(&client_layout, &client_overrides)
+    })
+    .await??;
+    let attach_options = AttachOptions {
+        prefix: loaded_client.settings.prefix,
+        viewer_after: loaded_client.settings.viewer_after,
+    };
     let result = match cli.command {
         Command::Gateway { action } => match action {
             GatewayAction::Token => run_gateway_token(&home).await,
@@ -219,10 +229,13 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 Err(error) => return Err(anyhow!("cannot read A2AMX_OWNER_AWAY_SECS: {error}")),
             };
             let layout = a2amx::layout::Layout::new(home.clone());
+            let client_overrides = show_client_overrides.clone();
             let output = tokio::task::spawn_blocking(move || {
                 let mut output = a2amx::config::show_daemon(&layout, env_value)?;
                 output.push('\n');
                 output.push_str(&a2amx::config::show_gateway(&layout)?);
+                output.push('\n');
+                output.push_str(&a2amx::config::show_client(&layout, &client_overrides)?);
                 Ok::<_, anyhow::Error>(output)
             })
             .await??;
@@ -463,6 +476,7 @@ async fn run_daemon(
     let loaded = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         layout.ensure()?;
         a2amx::config::ensure_daemon_file(&layout)?;
+        a2amx::config::ensure_client_file(&layout)?;
         a2amx::config::load_daemon(&layout, &overrides)
     })
     .await??;

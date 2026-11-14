@@ -108,6 +108,10 @@ impl Layout {
     pub fn daemon_config(&self) -> PathBuf {
         self.config_dir().join("daemon.toml")
     }
+
+    pub fn client_config(&self) -> PathBuf {
+        self.config_dir().join("client.toml")
+    }
     pub fn discord_token(&self) -> PathBuf {
         self.secrets_dir().join("discord.token")
     }

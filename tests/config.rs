@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use a2amx::config::{self, Overrides, Source};
+use a2amx::config::{self, ClientOverrides, Overrides, Source};
 use a2amx::layout::Layout;
 use a2amx::messaging::Limits;
 use std::fs;
@@ -21,6 +21,13 @@ fn empty_overrides() -> Overrides {
         listen: vec![],
         host_name: None,
         owner_away_secs: None,
+    }
+}
+
+fn empty_client_overrides() -> ClientOverrides {
+    ClientOverrides {
+        prefix: None,
+        viewer_after_secs: None,
     }
 }
 fn source_all(loaded: &config::LoadedDaemon, source: Source) {
@@ -264,20 +271,32 @@ fn bounded_and_nonregular_files_are_rejected() {
     let oversized = config::load_daemon(&layout, &empty_overrides())
         .unwrap_err()
         .to_string();
-    assert!(oversized.contains("exceeds 65536"));
+    assert!(
+        oversized.contains("daemon.toml") && oversized.contains("exceeds 65536"),
+        "{oversized}"
+    );
     fs::remove_file(layout.daemon_config()).unwrap();
     fs::write(layout.daemon_config(), [0xff, 0xfe]).unwrap();
-    assert!(config::load_daemon(&layout, &empty_overrides()).is_err());
+    let non_utf8 = config::load_daemon(&layout, &empty_overrides())
+        .unwrap_err()
+        .to_string();
+    assert!(non_utf8.contains("daemon.toml"), "{non_utf8}");
     fs::remove_file(layout.daemon_config()).unwrap();
     fs::create_dir(layout.daemon_config()).unwrap();
-    assert!(config::load_daemon(&layout, &empty_overrides()).is_err());
+    let directory = config::load_daemon(&layout, &empty_overrides())
+        .unwrap_err()
+        .to_string();
+    assert!(directory.contains("daemon.toml"), "{directory}");
     fs::remove_dir(layout.daemon_config()).unwrap();
     let status = Command::new("mkfifo")
         .arg(layout.daemon_config())
         .status()
         .unwrap();
     assert!(status.success());
-    assert!(config::load_daemon(&layout, &empty_overrides()).is_err());
+    let fifo = config::load_daemon(&layout, &empty_overrides())
+        .unwrap_err()
+        .to_string();
+    assert!(fifo.contains("daemon.toml"), "{fifo}");
     fs::remove_file(layout.daemon_config()).unwrap();
     symlink(layout.root().join("missing"), layout.daemon_config()).unwrap();
     config::ensure_daemon_file(&layout).unwrap();
@@ -712,4 +731,248 @@ fn docs_template_is_consistent() {
     let docs = include_str!("../docs/configuration.md");
     assert!(docs.contains(&config::daemon_template()));
     assert!(docs.contains(&config::gateway_template()));
+}
+
+#[test]
+fn client_defaults_file_zero_and_overrides() {
+    let (_dir, layout) = layout();
+    let loaded = config::load_client(&layout, &empty_client_overrides()).unwrap();
+    assert_eq!(loaded.settings.prefix, 2);
+    assert_eq!(loaded.settings.viewer_after, Some(Duration::from_secs(300)));
+    assert_eq!(
+        loaded.sources,
+        [
+            ("prefix", Source::Default),
+            ("viewer_after", Source::Default)
+        ]
+    );
+
+    fs::write(
+        layout.client_config(),
+        "prefix = \"C-a\"\nviewer_after = \"10m\"\n",
+    )
+    .unwrap();
+    let loaded = config::load_client(&layout, &empty_client_overrides()).unwrap();
+    assert_eq!(loaded.settings.prefix, 1);
+    assert_eq!(loaded.settings.viewer_after, Some(Duration::from_secs(600)));
+    assert_eq!(
+        loaded.sources,
+        [("prefix", Source::File), ("viewer_after", Source::File)]
+    );
+
+    fs::write(layout.client_config(), "viewer_after = \"0s\"\n").unwrap();
+    let loaded = config::load_client(&layout, &empty_client_overrides()).unwrap();
+    assert_eq!(loaded.settings.viewer_after, None);
+
+    fs::write(
+        layout.client_config(),
+        "prefix = \"C-a\"\nviewer_after = \"10m\"\n",
+    )
+    .unwrap();
+    let loaded = config::load_client(
+        &layout,
+        &ClientOverrides {
+            prefix: Some(24),
+            viewer_after_secs: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(loaded.settings.prefix, 24);
+    assert_eq!(loaded.sources[0], ("prefix", Source::Override));
+    assert_eq!(loaded.sources[1], ("viewer_after", Source::File));
+
+    let loaded = config::load_client(
+        &layout,
+        &ClientOverrides {
+            prefix: None,
+            viewer_after_secs: Some(u64::MAX),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        loaded.settings.viewer_after,
+        Some(Duration::from_secs(u64::MAX))
+    );
+    assert_eq!(loaded.sources[1], ("viewer_after", Source::Override));
+}
+
+#[test]
+fn client_invalid_values_name_file_and_key() {
+    let (_dir, layout) = layout();
+    for body in [
+        "unknown = true\n",
+        "prefix = \"x\"\n",
+        "prefix = \"C-[\"\n",
+        "prefix = \"\"\n",
+        "prefix = 5\n",
+        "viewer_after = \"1500ms\"\n",
+        "viewer_after = \"5w\"\n",
+        "viewer_after = \"\"\n",
+        "viewer_after = \"3651d\"\n",
+    ] {
+        fs::write(layout.client_config(), body).unwrap();
+        let error = config::load_client(&layout, &empty_client_overrides())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("client.toml"), "{body}: {error}");
+        if body.starts_with("unknown") {
+            assert!(error.contains("unknown"), "{error}");
+        } else if body == "prefix = 5\n" {
+            assert!(
+                error.contains("client.toml") && error.contains("prefix"),
+                "{error}"
+            );
+        } else if body.starts_with("prefix") {
+            assert!(
+                error.starts_with(&format!(
+                    "{}: key prefix:",
+                    layout.client_config().display()
+                )),
+                "{error}"
+            );
+        } else {
+            assert!(
+                error.starts_with(&format!(
+                    "{}: key viewer_after:",
+                    layout.client_config().display()
+                )),
+                "{error}"
+            );
+        }
+    }
+    fs::write(layout.client_config(), "viewer_after = \"3651d\"\n").unwrap();
+    let error = config::load_client(&layout, &empty_client_overrides())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("between 0s and 3650d"), "{error}");
+}
+
+#[test]
+fn client_template_round_trip_mode_and_writer_safety() {
+    let (_dir, layout) = layout();
+    config::ensure_client_file(&layout).unwrap();
+    assert_eq!(
+        fs::metadata(layout.client_config())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let loaded = config::load_client(&layout, &empty_client_overrides()).unwrap();
+    assert_eq!(loaded.settings.prefix, 2);
+    assert_eq!(loaded.settings.viewer_after, Some(Duration::from_secs(300)));
+    assert_eq!(
+        loaded.sources,
+        [
+            ("prefix", Source::Default),
+            ("viewer_after", Source::Default)
+        ]
+    );
+    let uncommented = fs::read_to_string(layout.client_config())
+        .unwrap()
+        .lines()
+        .filter_map(|line| {
+            let line = line.strip_prefix("# ")?;
+            line.contains(" = ").then_some(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(layout.client_config(), format!("{uncommented}\n")).unwrap();
+    let loaded = config::load_client(&layout, &empty_client_overrides()).unwrap();
+    assert_eq!(loaded.settings.prefix, 2);
+    assert_eq!(loaded.settings.viewer_after, Some(Duration::from_secs(300)));
+
+    fs::write(layout.client_config(), "").unwrap();
+    config::ensure_client_file(&layout).unwrap();
+    assert_eq!(fs::read(layout.client_config()).unwrap(), b"");
+    fs::remove_file(layout.client_config()).unwrap();
+    fs::write(layout.client_config(), "invalid = true\n").unwrap();
+    let original = fs::read(layout.client_config()).unwrap();
+    config::ensure_client_file(&layout).unwrap();
+    assert_eq!(fs::read(layout.client_config()).unwrap(), original);
+
+    fs::remove_file(layout.client_config()).unwrap();
+    let mut body = b"#".to_vec();
+    body.resize(64 * 1024 + 1, b'a');
+    fs::write(layout.client_config(), &body).unwrap();
+    let error = config::load_client(&layout, &empty_client_overrides())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(": client.toml exceeds 65536"), "{error}");
+    fs::write(layout.client_config(), [0xff, 0xfe]).unwrap();
+    let error = config::load_client(&layout, &empty_client_overrides())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(": client.toml is not UTF-8"), "{error}");
+
+    fs::remove_file(layout.client_config()).unwrap();
+    let target = layout.root().join("missing-client");
+    symlink(&target, layout.client_config()).unwrap();
+    config::ensure_client_file(&layout).unwrap();
+    assert!(!target.exists());
+    assert_eq!(layout.client_config().read_link().unwrap(), target);
+
+    fs::remove_file(layout.client_config()).unwrap();
+    let status = Command::new("mkfifo")
+        .arg(layout.client_config())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let error = config::load_client(&layout, &empty_client_overrides())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(": client.toml is not a regular file"),
+        "{error}"
+    );
+    fs::remove_file(layout.client_config()).unwrap();
+}
+
+#[test]
+fn client_show_and_template_docs_are_exactly_scoped() {
+    let (_dir, layout) = layout();
+    let expected = format!(
+        "client.toml: {} (absent)\n\
+prefix = \"C-b\"  (default)\n\
+viewer_after = \"5m\"  (default)\n",
+        layout.client_config().display()
+    );
+    assert_eq!(
+        config::show_client(&layout, &empty_client_overrides()).unwrap(),
+        expected
+    );
+    assert!(!layout.config_dir().join("client.toml").exists());
+    fs::write(layout.client_config(), "prefix = \"C-B\"\n").unwrap();
+    let expected_file = format!(
+        "client.toml: {} (present)\n\
+prefix = \"C-b\"  (file)\n\
+viewer_after = \"5m\"  (default)\n",
+        layout.client_config().display()
+    );
+    assert_eq!(
+        config::show_client(&layout, &empty_client_overrides()).unwrap(),
+        expected_file
+    );
+    let expected_override = format!(
+        "client.toml: {} (present)\n\
+prefix = \"C-a\"  (override)\n\
+viewer_after = \"5m\"  (default)\n",
+        layout.client_config().display()
+    );
+    assert_eq!(
+        config::show_client(
+            &layout,
+            &ClientOverrides {
+                prefix: Some(1),
+                viewer_after_secs: None,
+            },
+        )
+        .unwrap(),
+        expected_override
+    );
+    let template = config::client_template();
+    assert!(!template.contains("daemon.toml"));
+    assert!(!template.contains("gateway"));
+    assert!(include_str!("../docs/configuration.md").contains(&template));
 }

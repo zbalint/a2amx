@@ -8,13 +8,13 @@ The brackets below describe optional arguments; angle brackets name required val
 
 ```text
 a2amx daemon start [--foreground] [--owner-away-secs SECONDS] # start the daemon; detached by default
-a2amx config show                    # show daemon and gateway configuration and value sources
+a2amx config show                    # show daemon, gateway and client configuration and value sources
 a2amx daemon status                  # show daemon state, build version and session counts
 a2amx daemon stop [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx new --watch developer --heartbeat 30m -- sh # digest watched peers after idle
 a2amx new --watch developer --activity-working-after 2m --activity-idle-after 30s -- sh # notices on peer transitions
 a2amx list [--details]
-a2amx [--viewer-after SECONDS] attach <id|name> [--force]
+a2amx [--prefix PREFIX] [--viewer-after SECONDS] attach <id|name> [--force]
 a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx kill --exited              # remove every exited session without prompting
 a2amx reset <id|name>               # type the configured reset sequence
@@ -183,16 +183,18 @@ With `--pair`, pairing stays in the foreground until confirmation and then hands
 background gateway; `--pair --foreground` keeps the gateway in this terminal until Ctrl-C.
 
 `gateway token` also creates the commented `config/gateway.toml` template once when absent.
-`config show` prints the gateway section after the daemon section without creating either file.
+`config show` prints the daemon, gateway, and client sections after reading values without creating
+any of the files.
 
 ## State directory and attachment
 
 The a2amx home directory is `--home`, then `A2AMX_HOME`, then `$HOME/.a2amx`.
 
 The global `--viewer-after SECONDS` option (or `A2AMX_VIEWER_AFTER`) switches an interactive
-attachment to read-only viewer mode after that many seconds without input from the owner at the computer (keys, paste, mouse, prefix, picker, or scroll input; agent output does not reset it).
-The default is 300 seconds; `0` disables the timer. Viewer mode can also be toggled with the prefix
-key followed by `v`.
+attachment to read-only viewer mode after that many seconds without input from the owner at the computer
+(keys, paste, mouse, prefix, picker, or scroll input; agent output does not reset it). The default
+comes from `client.toml`, then 300 seconds; `0` disables the timer. Viewer mode can also be toggled with
+the prefix key followed by `v`.
 Viewer mode does not send terminal input or release frames to the session; it still sends resize
 frames so the session stays sized to the client's usable terminal. It still updates the local
 screen, lets prefix commands open the picker or scroll mode, and routes team-line clicks on their
@@ -203,7 +205,7 @@ attachment does not count as owner presence.
 The attach status line shows a yellow `VIEW` marker when the client is in viewer mode; the overlay says
 `VIEW MODE` and `typing is off, press the prefix key then v`.
 
-The prefix key is Ctrl-B (`--prefix` or `A2AMX_PREFIX` to change it). After the prefix: `d` detach,
+The prefix key defaults to Ctrl-B and comes from `client.toml` (`--prefix` or `A2AMX_PREFIX` overrides it).
 `v` toggle viewer mode, `w` session picker, `[` scroll mode, `s` toggles the status and team lines,
 `r` releases the session's message hold, `1`–`9` select a team member, `n` and `p` select the next
 or previous non-exited member, and the prefix twice sends a literal prefix. The picker accepts

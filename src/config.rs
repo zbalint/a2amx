@@ -99,6 +99,34 @@ pub struct LoadedGateway {
     pub sources: Vec<(&'static str, Source)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ClientSettings {
+    pub prefix: u8,
+    pub viewer_after: Option<Duration>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClientOverrides {
+    pub prefix: Option<u8>,
+    pub viewer_after_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadedClient {
+    pub settings: ClientSettings,
+    pub sources: Vec<(&'static str, Source)>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ClientFile {
+    prefix: Option<String>,
+    viewer_after: Option<String>,
+}
+
+const DEFAULT_CLIENT_PREFIX: u8 = 0x02;
+const DEFAULT_CLIENT_VIEWER_AFTER_SECS: u64 = 300;
+
 #[derive(Debug, Clone, Copy)]
 struct Key {
     name: &'static str,
@@ -266,21 +294,25 @@ fn read_config(path: &Path) -> anyhow::Result<Option<String>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).with_context(|| format!("cannot read {}", path.display())),
     };
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("configuration");
     let metadata = file
         .metadata()
         .with_context(|| format!("cannot inspect {}", path.display()))?;
     if !metadata.file_type().is_file() {
-        bail!("{}: daemon.toml is not a regular file", path.display());
+        bail!("{}: {file_name} is not a regular file", path.display());
     }
     let mut bytes = Vec::with_capacity(MAX_FILE_BYTES + 1);
     file.take((MAX_FILE_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .with_context(|| format!("cannot read {}", path.display()))?;
     if bytes.len() > MAX_FILE_BYTES {
-        bail!("{}: daemon.toml exceeds 65536 bytes", path.display());
+        bail!("{}: {file_name} exceeds 65536 bytes", path.display());
     }
     let text = String::from_utf8(bytes)
-        .map_err(|_| anyhow!("{}: daemon.toml is not UTF-8", path.display()))?;
+        .map_err(|_| anyhow!("{}: {file_name} is not UTF-8", path.display()))?;
     Ok(Some(text))
 }
 
@@ -609,6 +641,136 @@ pub fn ensure_daemon_file(layout: &Layout) -> anyhow::Result<()> {
     ensure_file(&layout.daemon_config(), &daemon_template())
 }
 
+fn client_display_prefix(loaded: &LoadedClient) -> String {
+    format!(
+        "\"{}\"",
+        crate::prefix::format_prefix(loaded.settings.prefix)
+    )
+}
+
+fn client_display_viewer_after(loaded: &LoadedClient) -> String {
+    format!(
+        "\"{}\"",
+        format_duration(loaded.settings.viewer_after.unwrap_or(Duration::ZERO))
+    )
+}
+
+#[derive(Clone, Copy)]
+struct ClientKey {
+    name: &'static str,
+    description: &'static str,
+    example: &'static str,
+    display: fn(&LoadedClient) -> String,
+}
+
+const CLIENT_KEYS: &[ClientKey] = &[
+    ClientKey {
+        name: "prefix",
+        description: "prefix key used by an attached client.",
+        example: "\"C-b\"",
+        display: client_display_prefix,
+    },
+    ClientKey {
+        name: "viewer_after",
+        description: "seconds without owner input before an attachment becomes a viewer.",
+        example: "\"5m\"",
+        display: client_display_viewer_after,
+    },
+];
+
+pub fn load_client(layout: &Layout, overrides: &ClientOverrides) -> anyhow::Result<LoadedClient> {
+    let path = layout.client_config();
+    let file = read_config(&path)?;
+    let parsed: ClientFile = file
+        .as_deref()
+        .map(|text| toml::from_str(text).map_err(|error| anyhow!("{}: {error}", path.display())))
+        .transpose()?
+        .unwrap_or_default();
+    let file_prefix = parsed
+        .prefix
+        .as_deref()
+        .map(crate::prefix::parse_prefix)
+        .transpose()
+        .map_err(|error| file_error(&path, "prefix", error))?;
+    let file_viewer_after = parsed
+        .viewer_after
+        .as_deref()
+        .map(|value| {
+            parse_limited_duration(
+                &path,
+                "viewer_after",
+                value,
+                DurationRule::WholeSecondsOrZero,
+            )
+        })
+        .transpose()?;
+    let (prefix, prefix_source) = resolve(DEFAULT_CLIENT_PREFIX, file_prefix, overrides.prefix);
+    let (viewer_after, viewer_source) = resolve(
+        Some(Duration::from_secs(DEFAULT_CLIENT_VIEWER_AFTER_SECS)),
+        file_viewer_after.map(|value| (value != Duration::ZERO).then_some(value)),
+        overrides
+            .viewer_after_secs
+            .map(|value| (value != 0).then_some(Duration::from_secs(value))),
+    );
+    Ok(LoadedClient {
+        settings: ClientSettings {
+            prefix,
+            viewer_after,
+        },
+        sources: vec![("prefix", prefix_source), ("viewer_after", viewer_source)],
+    })
+}
+
+fn append_template_keys(
+    text: &mut String,
+    keys: impl IntoIterator<Item = (&'static str, &'static str, &'static str)>,
+) {
+    for (name, description, example) in keys {
+        text.push_str(&format!("# {name}: {description}\n# {name} = {example}\n"));
+    }
+}
+
+pub fn client_template() -> String {
+    let mut text = String::from(
+        "# A2AMX client settings. Every a2amx command reads this file, so a change applies to the next command. The daemon writes this file once and never rewrites it.\n",
+    );
+    append_template_keys(
+        &mut text,
+        CLIENT_KEYS
+            .iter()
+            .map(|key| (key.name, key.description, key.example)),
+    );
+    text
+}
+
+pub fn ensure_client_file(layout: &Layout) -> anyhow::Result<()> {
+    ensure_file(&layout.client_config(), &client_template())
+}
+
+pub fn show_client(layout: &Layout, overrides: &ClientOverrides) -> anyhow::Result<String> {
+    let loaded = load_client(layout, overrides)?;
+    let path = layout.client_config();
+    let mut out = format!(
+        "client.toml: {} ({})\n",
+        path.display(),
+        if path.exists() { "present" } else { "absent" }
+    );
+    for key in CLIENT_KEYS {
+        let source = loaded
+            .sources
+            .iter()
+            .find(|(name, _)| *name == key.name)
+            .map(|(_, source)| source_label(*source))
+            .unwrap_or("default");
+        out.push_str(&format!(
+            "{} = {}  ({source})\n",
+            key.name,
+            (key.display)(&loaded)
+        ));
+    }
+    Ok(out)
+}
+
 pub fn show_daemon(layout: &Layout, env_owner_away_secs: Option<u64>) -> anyhow::Result<String> {
     let loaded = load_daemon(
         layout,
@@ -646,7 +808,7 @@ struct GatewayKey {
     display: fn(&LoadedGateway) -> String,
 }
 
-fn gateway_source(source: Source) -> &'static str {
+fn source_label(source: Source) -> &'static str {
     match source {
         Source::Default => "default",
         Source::File => "file",
@@ -859,12 +1021,12 @@ pub fn gateway_template() -> String {
     let mut text = String::from(
         "# A2AMX gateway settings. Restart the gateway to apply changes. a2amx writes this file once and never rewrites it.\n",
     );
-    for key in GATEWAY_KEYS {
-        text.push_str(&format!(
-            "# {}: {}\n# {} = {}\n",
-            key.name, key.description, key.name, key.example
-        ));
-    }
+    append_template_keys(
+        &mut text,
+        GATEWAY_KEYS
+            .iter()
+            .map(|key| (key.name, key.description, key.example)),
+    );
     text
 }
 
@@ -885,7 +1047,7 @@ pub fn show_gateway(layout: &Layout) -> anyhow::Result<String> {
             .sources
             .iter()
             .find(|(name, _)| *name == key.name)
-            .map(|(_, source)| gateway_source(*source))
+            .map(|(_, source)| source_label(*source))
             .unwrap_or("default");
         out.push_str(&format!(
             "{} = {}  ({source})\n",

@@ -1,4 +1,4 @@
-use a2amx::prefix::{Action, Command, PrefixMachine, parse_prefix};
+use a2amx::prefix::{Action, Command, PrefixMachine, format_prefix, parse_prefix};
 
 fn normalized(actions: impl IntoIterator<Item = Action>) -> Vec<Action> {
     let mut out = Vec::new();
@@ -32,6 +32,24 @@ fn parses_the_complete_accepted_prefix_set() {
     for (spec, expected) in accepted {
         assert_eq!(parse_prefix(spec).ok(), Some(expected), "{spec}");
     }
+}
+
+#[test]
+fn formats_prefixes_and_round_trips() {
+    for spec in [
+        "C-space", "C-a", "C-b", "C-c", "C-d", "C-e", "C-f", "C-g", "C-h", "C-k", "C-l", "C-n",
+        "C-o", "C-p", "C-q", "C-r", "C-s", "C-t", "C-u", "C-v", "C-w", "C-x", "C-y", "C-z", "C-\\",
+        "C-]", "C-^", "C-_", "C-B",
+    ] {
+        let byte = parse_prefix(spec).unwrap();
+        assert_eq!(parse_prefix(&format_prefix(byte)).unwrap(), byte, "{spec}");
+    }
+    assert_eq!(format_prefix(0), "C-space");
+    assert_eq!(format_prefix(2), "C-b");
+    assert_eq!(format_prefix(0x1c), "C-\\");
+    assert_eq!(format_prefix(0x1f), "C-_");
+    assert_eq!(format_prefix(27), "0x1b");
+    assert_eq!(format_prefix(9), "0x09");
 }
 
 #[test]
