@@ -209,6 +209,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         }
         _ => {}
     }
+    let explicit_home = home_arg.is_some();
     let home = resolve_home(home_arg)?;
     let client_overrides = a2amx::config::ClientOverrides {
         prefix: cli.prefix,
@@ -226,8 +227,10 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
     };
     let result = match cli.command {
         Command::Gateway { action } => match action {
-            GatewayAction::Token => run_gateway_token(&home).await,
-            GatewayAction::Up { pair, foreground } => run_gateway_up(home, pair, foreground).await,
+            GatewayAction::Token => run_gateway_token(&home, explicit_home).await,
+            GatewayAction::Up { pair, foreground } => {
+                run_gateway_up(home, pair, foreground, explicit_home).await
+            }
             GatewayAction::Stop => return run_gateway_stop(&home).await,
             GatewayAction::Status => return run_gateway_status(&home).await,
             GatewayAction::Run { pair, pair_only } => run_gateway(home, pair, pair_only).await,
@@ -265,9 +268,10 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 owner_away_secs,
             } => {
                 if foreground {
-                    run_daemon(home, listen, host_name, owner_away_secs).await
+                    run_daemon(home, listen, host_name, owner_away_secs, explicit_home).await
                 } else {
-                    run_daemon_background(home, listen, host_name, owner_away_secs).await
+                    run_daemon_background(home, listen, host_name, owner_away_secs, explicit_home)
+                        .await
                 }
             }
             DaemonAction::Status => return run_daemon_status(home).await,
@@ -335,8 +339,73 @@ fn resolve_home(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
 
 const MAX_GATEWAY_TOKEN_BYTES: usize = 64 * 1024;
 
-async fn run_gateway_token(home: &Path) -> anyhow::Result<()> {
-    a2amx::layout::Layout::new(home.to_owned()).ensure()?;
+async fn migrate_old_state(
+    explicit_home: bool,
+    layout: &a2amx::layout::Layout,
+) -> anyhow::Result<()> {
+    if explicit_home {
+        return Ok(());
+    }
+    let user_home = std::env::var_os("HOME").map(PathBuf::from);
+    let old = a2amx::migrate::old_dir(
+        std::env::var_os("XDG_STATE_HOME").as_deref(),
+        user_home.as_deref(),
+    );
+    let Some(old) = old else { return Ok(()) };
+    let layout_for_task = layout.clone();
+    let old_for_task = old.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        a2amx::migrate::migrate(&layout_for_task, &old_for_task)
+    })
+    .await??;
+    if let a2amx::migrate::Outcome::Migrated(report) = outcome {
+        for (old, new) in report.moved {
+            eprintln!("moved {} -> {}", old.display(), new.display());
+        }
+        for warning in report.warnings {
+            eprintln!("{warning}");
+        }
+        eprintln!(
+            "a2amx now uses {}; {} is no longer used and can be deleted: rm -r {}",
+            layout.root().display(),
+            old.display(),
+            shell_quote(&old)
+        );
+    }
+    Ok(())
+}
+
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
+fn warn_explicit_old_layout(home: &Path) {
+    let mut names = Vec::new();
+    if home.join("messages.db").exists() {
+        names.push("messages.db");
+    }
+    if home.join("team.toml").exists() {
+        names.push("team.toml");
+    }
+    if home.join("gateway").exists() {
+        names.push("gateway/");
+    }
+    if !names.is_empty() {
+        eprintln!(
+            "{} holds files in the old layout ({}); a2amx now reads {}/state, {}/config and {}/log; see docs/install.md",
+            home.display(),
+            names.join(", "),
+            home.display(),
+            home.display(),
+            home.display()
+        );
+    }
+}
+
+async fn run_gateway_token(home: &Path, explicit_home: bool) -> anyhow::Result<()> {
+    let layout = a2amx::layout::Layout::new(home.to_owned());
+    migrate_old_state(explicit_home, &layout).await?;
+    layout.ensure()?;
     let token = tokio::task::spawn_blocking(read_gateway_token).await??;
     let home = home.to_owned();
     tokio::task::spawn_blocking(move || {
@@ -385,7 +454,14 @@ fn read_gateway_token_line() -> anyhow::Result<String> {
     Ok(String::from_utf8(bytes)?)
 }
 
-async fn run_gateway_up(home: PathBuf, pair: bool, foreground: bool) -> anyhow::Result<()> {
+async fn run_gateway_up(
+    home: PathBuf,
+    pair: bool,
+    foreground: bool,
+    explicit_home: bool,
+) -> anyhow::Result<()> {
+    let layout = a2amx::layout::Layout::new(home.clone());
+    migrate_old_state(explicit_home, &layout).await?;
     tokio::task::spawn_blocking(move || a2amx::gateway_launch::up(&home, pair, foreground))
         .await??;
     Ok(())
@@ -482,7 +558,13 @@ async fn run_daemon(
     listen: Vec<std::net::SocketAddr>,
     host_name: Option<String>,
     owner_away_secs: Option<u64>,
+    explicit_home: bool,
 ) -> anyhow::Result<()> {
+    let migration_layout = a2amx::layout::Layout::new(home.clone());
+    migrate_old_state(explicit_home, &migration_layout).await?;
+    if explicit_home {
+        warn_explicit_old_layout(&home);
+    }
     let overrides = a2amx::config::Overrides {
         listen,
         host_name,
@@ -523,6 +605,7 @@ async fn run_daemon_background(
     listen: Vec<std::net::SocketAddr>,
     host_name: Option<String>,
     owner_away_secs: Option<u64>,
+    explicit_home: bool,
 ) -> anyhow::Result<()> {
     if Client::connect(&home).await.is_ok() {
         let running = read_addrs(&home).await.unwrap_or_default();
@@ -530,6 +613,11 @@ async fn run_daemon_background(
             "a2amx daemon is already running (listening on {})",
             running.lines().next().unwrap_or("unknown address")
         ));
+    }
+    let migration_layout = a2amx::layout::Layout::new(home.clone());
+    migrate_old_state(explicit_home, &migration_layout).await?;
+    if explicit_home {
+        warn_explicit_old_layout(&home);
     }
     let log_path = a2amx::layout::Layout::new(home.clone()).daemon_log();
     let (log, exe) = {

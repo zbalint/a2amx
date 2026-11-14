@@ -36,6 +36,14 @@ older packaged versions, for example 2.46). Without it, the `cosign` checks abov
 signatures and workflow identity. The build-from-source route above is unchanged. Start the installed
 `~/.a2amx/bin/a2amx`, not from `target/`.
 
+### Upgrading from the old state directory
+
+Stop the daemon and gateway before installing the new binary; the installer replaces the old
+binary. On the first start, A2AMX automatically moves the old state from
+`~/.local/state/a2amx` (or `$XDG_STATE_HOME/a2amx`) into `~/.a2amx`, converting the team and
+gateway settings as needed. It refuses to overwrite data already in either location. After the
+start succeeds, delete the old directory when the stderr hint says it is no longer used.
+
 a2amx and its daemon refuse to run as root or under `sudo`; install and run them as an ordinary
 user. There is no override, and containers must use a non-root user too.
 

@@ -27,6 +27,7 @@ pub mod hook;
 pub mod layout;
 pub mod mcp;
 pub mod messaging;
+pub mod migrate;
 pub mod mouse;
 pub mod names;
 pub mod omp;

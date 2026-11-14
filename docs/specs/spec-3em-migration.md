@@ -227,3 +227,19 @@ Raised by the developer (BLOCKED, verified by reading 3.2.1, 3.2.5 and 3.2.6 aga
 ### Amendment 2 (report warnings)
 
 `Report` gains `pub warnings: Vec<String>`; the line `{new}: could not convert keys automatically; ...` (2.1, 2.2) is pushed there, and test 3b asserts `report.warnings` contains it. The caller (3.3, section 4) prints the `moved` lines, then every warning, then the delete hint, each on its own stderr line. The struct is `pub struct Report { pub moved: Vec<(PathBuf, PathBuf)>, pub warnings: Vec<String> }`.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the Claude harness (model not recorded); developer OMP, openai-codex/gpt-5.6-luna; tester OMP, opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 2 (amendments 1 and 2).
+
+| Found | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Implementation | developer | Journal definition of "done" did not fit a converted entry and rollback could not restore a deleted converted original (3.2.1, 3.2.5, 3.2.6 contradicted each other); the architect and the consultant had missed it at the lock because no concrete crash instance was walked through every rule | Amendment 1 (two phases, commit point, forward-only resume) |
+| Implementation | developer | `Report` had no field for the conversion warnings the caller must print | Amendment 2 (`Report.warnings`) |
+| Tester pass | tester | BLOCKER: the empty `gateway/` left after a successful move counted as old data, so the second start refused with the both-hold-data error (3.2.2); test 11 used an old directory without `gateway/` and missed it | Fixed in fix round 1, regression test 11 |
+| Tester pass | tester | The lexical scanner reset bracket depth per line, so a nested-array continuation line cleared the session context and a later session `allow` stayed unconverted (2.1) | Fixed in fix round 1, test 2 case |
+| Tester pass | tester | 3.2.6 undo failures were swallowed instead of reported as paths left in the wrong place | Fixed in fix round 1, test 12e |
+| Tester pass | tester | Tests 1, 3b and 7 asserted counts or messages only (no moved pairs, no converted-file mode, no pid, no nothing-moved check, no unparseable-text case); the cross-filesystem `shortcut:` comment was missing | Fixed in fix round 1 |
+| Architect review | architect, Sonnet 5.5 | A mutant that drops the stored warnings on resume survived all tests | Test 12f added in fix round 2 |
+| Architect review | architect | Spec 7 predicted `src/main.rs` in the acceptance `rg` output; the lookup lives in `migrate::old_dir` | Record only: `rg` matches `src/migrate.rs` and `docs/install.md`; behaviour is as 3.1 and 4 require |
+| Accepted as is | architect | Journal is one JSON line, not one line per pair (3.2.5); conversion warnings can be lost on a crash between prepare and the journal rewrite; table paths are not checked to be regular files; `migrate_cli` temp dirs are under `/tmp` | Documented here, no change: none loses data |

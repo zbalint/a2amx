@@ -4,6 +4,8 @@ A2AMX stores operator configuration under the root directory (`~/.a2amx`, `A2AMX
 `--home`). The `config/` directory is owner-only; its layout is described in
 [Architecture](architecture.md#directory-layout). Confined sessions see `config/` read-only.
 
+For upgrades from the previous state directory, see [Installation and live builds](install.md#upgrading-from-the-old-state-directory).
+
 ## `daemon.toml`
 
 The daemon creates this file once on a foreground or background start when it is absent. It
