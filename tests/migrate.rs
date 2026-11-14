@@ -122,6 +122,11 @@ fn test_2_convert_team_lexical_cases() {
     let continuation = "[[session]]\ncommand = [\n  [\"a\"],\n]\nallow = [\"x\"]\n";
     assert!(migrate::convert_team(continuation).contains("allow_agents = [\"x\"]"));
     assert!(converted.contains("\"allow\" = [\"d\"]"));
+    let quoted_header = "[[\"session\"]]\nallow = [\"x\"]\n";
+    assert_eq!(
+        migrate::convert_team(quoted_header),
+        "[[\"session\"]]\nallow_agents = [\"x\"]\n"
+    );
 }
 
 #[test]

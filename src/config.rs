@@ -296,7 +296,7 @@ fn read_config(path: &Path) -> anyhow::Result<Option<String>> {
     };
     let file_name = path
         .file_name()
-        .and_then(|name| name.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or("configuration");
     let metadata = file
         .metadata()

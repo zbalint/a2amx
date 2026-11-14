@@ -575,17 +575,214 @@ fn rename_team_values(value: &mut toml::Value) {
 }
 
 pub fn convert_team(text: &str) -> String {
-    lexical_convert(text, |key, session, depth| {
-        if depth == 0 && key == "allow" {
-            Some(if session {
-                "allow_agents"
-            } else {
-                "allow_teams"
+    lexical_convert(text)
+}
+
+struct Replacement {
+    start: usize,
+    end: usize,
+    text: &'static str,
+}
+
+struct TomlScanner {
+    in_session: bool,
+    convert_here: bool,
+    multiline: Option<char>,
+    depth: usize,
+}
+
+impl TomlScanner {
+    fn enter_table(&mut self, line: &str) {
+        if self.multiline.is_some() || self.depth != 0 {
+            return;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("[[") {
+            let header = trimmed.trim_start_matches('[').trim_start();
+            self.in_session = header.starts_with("session") || header.starts_with("\"session\"");
+            self.convert_here = self.in_session;
+        } else if trimmed.starts_with('[') {
+            self.in_session = false;
+            self.convert_here = false;
+        }
+    }
+
+    fn scan_line(&mut self, line: &str) -> Option<Replacement> {
+        let mut chars = line.char_indices().peekable();
+        let mut quote = None;
+        let mut replacement = None;
+        while let Some((i, c)) = chars.next() {
+            if let Some(delim) = self.multiline {
+                self.skip_multiline(c, &mut chars, delim);
+                continue;
+            }
+            if let Some(q) = quote {
+                if !Self::skip_quoted(q, c, &mut chars) {
+                    quote = None;
+                }
+                continue;
+            }
+            if c == '#' {
+                break;
+            }
+            if c == '"' || c == '\'' {
+                if let Some(found) = self.start_string(line, i, c, &mut chars) {
+                    replacement = Some(found);
+                }
+                if self.multiline.is_none() {
+                    quote = Some(c);
+                }
+                continue;
+            }
+            self.track_depth(c);
+            if self.depth == 0 && (c.is_ascii_alphabetic() || c == '_') {
+                let start = i;
+                let end = Self::read_bare_key(&mut chars, start, c);
+                if self.convert_here && line[end..].trim_start().starts_with('=') {
+                    replacement = self.bare_key_replacement(line, start, end);
+                }
+            }
+        }
+        replacement
+    }
+
+    fn skip_quoted(
+        quote: char,
+        c: char,
+        chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    ) -> bool {
+        if quote == '"' && c == '\\' {
+            chars.next();
+            true
+        } else {
+            c != quote
+        }
+    }
+
+    fn start_string(
+        &mut self,
+        line: &str,
+        i: usize,
+        c: char,
+        chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    ) -> Option<Replacement> {
+        let replacement = if self.depth == 0 {
+            line[i + 1..]
+                .find(c)
+                .and_then(|end_rel| self.quoted_key_replacement(line, i, i + 1 + end_rel, c))
+        } else {
+            None
+        };
+        if chars.peek().is_some_and(|(_, next)| *next == c)
+            && chars.clone().nth(1).is_some_and(|(_, next)| next == c)
+        {
+            chars.next();
+            chars.next();
+            self.multiline = Some(c);
+        }
+        replacement
+    }
+
+    fn read_bare_key(
+        chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+        start: usize,
+        c: char,
+    ) -> usize {
+        let mut end = start + c.len_utf8();
+        while chars
+            .peek()
+            .is_some_and(|(_, next)| next.is_ascii_alphanumeric() || *next == '_')
+        {
+            end = chars.next().map(|(j, n)| j + n.len_utf8()).unwrap_or(end);
+        }
+        end
+    }
+
+    fn track_depth(&mut self, c: char) {
+        if c == '[' {
+            self.depth += 1;
+        }
+        if c == ']' {
+            self.depth = self.depth.saturating_sub(1);
+        }
+    }
+
+    fn skip_multiline(
+        &mut self,
+        c: char,
+        chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+        delim: char,
+    ) {
+        if c == delim && chars.peek().is_some_and(|(_, next)| *next == delim) {
+            chars.next();
+            if chars.peek().is_some_and(|(_, next)| *next == delim) {
+                chars.next();
+                self.multiline = None;
+            }
+        }
+    }
+
+    fn quoted_key_replacement(
+        &self,
+        line: &str,
+        start: usize,
+        end: usize,
+        quote: char,
+    ) -> Option<Replacement> {
+        let key = &line[start + 1..end];
+        if self.convert_here && key == "allow" && line[end + 1..].trim_start().starts_with('=') {
+            let text = match (quote, self.in_session) {
+                ('"', true) => "\"allow_agents\"",
+                ('"', false) => "\"allow_teams\"",
+                ('\'', true) => "'allow_agents'",
+                ('\'', false) => "'allow_teams'",
+                _ => return None,
+            };
+            Some(Replacement {
+                start,
+                end: end + 1,
+                text,
             })
         } else {
             None
         }
-    })
+    }
+
+    fn bare_key_replacement(&self, line: &str, start: usize, end: usize) -> Option<Replacement> {
+        if &line[start..end] != "allow" {
+            return None;
+        }
+        Some(Replacement {
+            start,
+            end,
+            text: if self.in_session {
+                "allow_agents"
+            } else {
+                "allow_teams"
+            },
+        })
+    }
+}
+
+fn lexical_convert(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut scanner = TomlScanner {
+        in_session: false,
+        convert_here: true,
+        multiline: None,
+        depth: 0,
+    };
+    for line in text.split_inclusive('\n') {
+        scanner.enter_table(line);
+        if let Some(replacement) = scanner.scan_line(line) {
+            output.push_str(&line[..replacement.start]);
+            output.push_str(replacement.text);
+            output.push_str(&line[replacement.end..]);
+        } else {
+            output.push_str(line);
+        }
+    }
+    output
 }
 
 fn convert_gateway_checked(text: &str, path: &Path) -> (String, bool) {
@@ -657,120 +854,5 @@ fn convert_gateway_line(line: &str) -> String {
     output.push_str("ms\"");
     output.push_str(&after_eq[value_end..]);
     output.push_str(&line[body_end..]);
-    output
-}
-
-fn lexical_convert(
-    text: &str,
-    rename: impl Fn(&str, bool, usize) -> Option<&'static str>,
-) -> String {
-    let mut output = String::with_capacity(text.len());
-    let mut session = false;
-    let mut enabled = true;
-    let mut multiline: Option<char> = None;
-    let mut depth = 0usize;
-    for line in text.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        if multiline.is_none() && depth == 0 && trimmed.starts_with("[[") {
-            let header = trimmed.trim_start_matches('[').trim_start();
-            session = header.starts_with("session") || header.starts_with("\"session\"");
-            enabled = session;
-        } else if multiline.is_none() && depth == 0 && trimmed.starts_with('[') {
-            session = false;
-            enabled = false;
-        }
-        let mut chars = line.char_indices().peekable();
-        let mut quote = None;
-        let mut replacement = None;
-        while let Some((i, c)) = chars.next() {
-            if let Some(delim) = multiline {
-                if c == delim && chars.peek().is_some_and(|(_, next)| *next == delim) {
-                    chars.next();
-                    if chars.peek().is_some_and(|(_, next)| *next == delim) {
-                        chars.next();
-                        multiline = None;
-                    }
-                }
-                continue;
-            }
-            if let Some(q) = quote {
-                if q == '"' && c == '\\' {
-                    chars.next();
-                    continue;
-                }
-                if c == q {
-                    quote = None;
-                }
-                continue;
-            }
-            if c == '#' {
-                break;
-            }
-            if c == '"' || c == '\'' {
-                if depth == 0
-                    && let Some(end_rel) = line[i + 1..].find(c)
-                {
-                    let end = i + 1 + end_rel;
-                    let key = &line[i + 1..end];
-                    if enabled
-                        && key == "allow"
-                        && line[end + 1..].trim_start().starts_with('=')
-                        && let Some(value) = rename(key, session, depth)
-                    {
-                        let replacement_value = if c == '"' {
-                            if value == "allow_teams" {
-                                "\"allow_teams\""
-                            } else {
-                                "\"allow_agents\""
-                            }
-                        } else if value == "allow_teams" {
-                            "'allow_teams'"
-                        } else {
-                            "'allow_agents'"
-                        };
-                        replacement = Some((i, end + 1, replacement_value));
-                    }
-                }
-                if chars.peek().is_some_and(|(_, next)| *next == c)
-                    && chars.clone().nth(1).is_some_and(|(_, next)| next == c)
-                {
-                    chars.next();
-                    chars.next();
-                    multiline = Some(c);
-                } else {
-                    quote = Some(c);
-                }
-                continue;
-            }
-            if c == '[' {
-                depth += 1;
-            }
-            if c == ']' {
-                depth = depth.saturating_sub(1);
-            }
-            if depth == 0 && (c.is_ascii_alphabetic() || c == '_') {
-                let start = i;
-                let mut end = i + c.len_utf8();
-                while chars
-                    .peek()
-                    .is_some_and(|(_, next)| next.is_ascii_alphanumeric() || *next == '_')
-                {
-                    end = chars.next().map(|(j, n)| j + n.len_utf8()).unwrap_or(end);
-                }
-                let key = &line[start..end];
-                let rest = &line[end..];
-                if enabled && rest.trim_start().starts_with('=') {
-                    replacement = rename(key, session, depth).map(|value| (start, end, value));
-                }
-            }
-        }
-        if let Some((start, end, value)) = replacement {
-            output.push_str(&line[..start]);
-            output.push_str(value);
-            output.push_str(&line[end..]);
-        } else {
-            output.push_str(line);
-        }
-    }
     output
 }
