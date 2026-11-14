@@ -11,7 +11,8 @@ readiness) and spec 4 (docs, team file, `new` surface) follow.
 
 - `src/harness.rs`, `src/quota.rs`, `src/statusline.rs`, `src/cli.rs`, `src/main.rs`
 - `src/daemon.rs`, `src/session.rs`, `src/confine.rs` (match arms only, section 8)
-- `tests/harness_infer.rs`, `tests/quota.rs`, `tests/statusline.rs`, `tests/agy_wiring.rs` (new)
+- `tests/harness_infer.rs`, `tests/quota.rs`, `tests/statusline.rs`, `tests/agy_wiring.rs` (new),
+  `tests/daemon_cli.rs` (one test, Amendment 1)
 
 Does not touch: `docs/`, `README.md`, `CHANGELOG.md`, `AGENTS.md` (the architect updates them,
 including the Modules table), `Cargo.toml`, `Cargo.lock` (no new dependency), `src/delivery.rs`,
@@ -178,9 +179,16 @@ status-line command is exact).
 5. `session.rs:589` (`starting()`): `!matches!(self.harness, Harness::Generic)` becomes
    `!matches!(self.harness, Harness::Generic | Harness::Agy)`: an `agy` session is not shown as "starting"
    until spec 3 knows its ready signal (it is not known that `agy` sets bracketed-paste mode).
-6. `session.rs:1252` (`kill`): `self.harness != Harness::Generic && self.graceful_exit().await` becomes
-   `!matches!(self.harness, Harness::Generic | Harness::Agy) && ..`: no Ctrl-D (0x04) is sent to `agy` (its
-   effect is unprobed and could land in a draft); a stop sends `HUP` as for `generic` until spec 3.
+6. (Amendment 1) `session.rs:1252` (`kill`) is unchanged: `agy` gets the graceful exit like Claude, OMP
+   and Codex. In `graceful_exit` (`session.rs:1304`) the second Ctrl-D is sent for `agy` too: `if
+   self.harness == Harness::Claude` (1330) becomes `if matches!(self.harness, Harness::Claude |
+   Harness::Agy)`, and the constant `CLAUDE_EXIT_KEY_GAP` (`session.rs:35`, used at 1333) is renamed
+   `EXIT_KEY_GAP` with its `// shortcut:` comment reworded to "fixed 300 ms against the pending-exit window
+   of Claude and agy; use a screen-based wait if a release shortens that window". The owner tested
+   2026-11-14 that `agy` exits on Ctrl-D sent twice, as Claude does; the 300 ms gap for `agy` is unprobed.
+   The existing gate (`reset_gate_decision`: a recorded human draft, a screen that is not ready by
+   `harness::ready`, a native hold) still skips the graceful exit, and a timeout still falls back to
+   `HUP`.
 7. `quota.rs:107` (`read`): add `Harness::Agy` to the `Generic` arm (`None`).
 
 ## 7. `src/main.rs`: launch wiring
@@ -237,6 +245,11 @@ that, and does not add a refusal.
    daemon; `Request::List` then shows the quota. The size bound and the fail-open behaviour are covered by
    the existing Claude tests and are not repeated.
 
+6. (Amendment 1) `tests/daemon_cli.rs`: `kill_sends_agy_two_key_exit_sequence`, a copy of
+   `kill_sends_claude_two_key_exit_sequence` (`tests/daemon_cli.rs:1437`) with
+   `ExitFixture::start("two", "agy")`: it asserts the recorded bytes are exactly `\x04\x04` and the log shows
+   `outcome="exited"`. The fixture's screen sets bracketed-paste mode, which is what `harness::ready` checks
+   for `agy`, so the gate passes. It fails before the change (one Ctrl-D, then the 10 s timeout).
 5. `tests/statusline.rs` (Claude, a contract test that passes on the old code): one test calls
    `harness::wire_claude_argv` with a user `--settings` that has an inline status line, a fixed `exe`
    (`/x/a2amx`), a fixed `cwd` and an empty config directory, and asserts the whole `statusLine.command`
@@ -302,7 +315,19 @@ path is created, so no abuse case is added; the reuse of the token check is cove
 | the global settings path is `~/.gemini/antigravity-cli/settings.json` with a `statusLine` key | section 3 | the path was seen by the tester (stat only); the key name is **recall** from the docs |
 | `agy` compares `trustedWorkspaces` against the literal cwd string, not a canonical path | section 3 | **recall**, not probed; the owner check (acceptance 6) covers a symlinked cwd |
 | `--settings` takes inline JSON or a file path; the last `--settings` wins when repeated | section 3 | file-path form read in `agy --help` ("inline or as a file path"); last-wins is **recall** (Claude semantics) |
-| `harness::ready` has the arms `Generic | Omp | Codex` and `Claude`; `starting()` excludes only `Generic`; `kill` skips graceful exit only for `Generic`; `append_system_prompt` returns early only for `Generic` | `src/harness.rs:281`, `src/session.rs:589`, `src/session.rs:1252`, `src/harness.rs:678` | read (consultant finding, re-read by the architect) |
+| `harness::ready` has the arms `Generic | Omp | Codex` and `Claude`; `starting()` excludes only `Generic`; `kill` skips graceful exit only for `Generic` (it stays so: Amendment 1); `graceful_exit` sends the second Ctrl-D only for `Claude` (`session.rs:1330`); `append_system_prompt` returns early only for `Generic` | `src/harness.rs:281`, `src/session.rs:589`, `src/session.rs:1252`, `src/harness.rs:678` | read (consultant finding, re-read by the architect) |
 | `daemon.rs:421` runs `confine::preflight_env` only for `Harness::Generic` | `src/daemon.rs:421` | read |
 | no test pins the `Statusline` help text | `tests/` | consultant grep, not re-run |
 | exact `claude_argv` JSON is pinned by `tests/messaging.rs` and the status-line chain by `tests/statusline.rs` | as stated | consultant read, not re-run |
+
+## Amendment 1 (2026-11-14, architect, before the developer's first production edit)
+
+The owner tested that `agy` exits on Ctrl-D sent twice, the same as Claude Code. Section 6 item 6
+therefore no longer excludes `agy` from the graceful exit: `kill` is unchanged, `graceful_exit` sends the
+second Ctrl-D for `agy`, the gap constant is renamed `EXIT_KEY_GAP`, and one test is added in
+`tests/daemon_cli.rs` (scope list in section 0 and the claims table updated; section 9 item 6). The
+decision to keep `agy` out of `starting()` (item 5) stands. Rejected: leaving `HUP` as the stop for `agy`
+(it works but skips the clean exit that preserves the resume line and closes the conversation); typing
+`/exit` (needs the idle detection of spec 3). Reconciled against the rest of the spec: no other section
+mentions Ctrl-D for `agy`; acceptance step 4 (`rg -l "Agy" src`) is unchanged because `session.rs` and
+`daemon_cli.rs` already appear (`daemon_cli.rs` is a test file and not in that `src` list).
