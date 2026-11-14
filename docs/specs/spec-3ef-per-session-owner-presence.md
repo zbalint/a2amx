@@ -115,9 +115,8 @@ literal; text at 438); `:910` `away_notice_body_matches_the_fixed_operator_messa
 attached, so its owner state is now `away`: red, update it); `:969`
 `exited_session_attach_does_not_make_owner_present` and `:1045`
 `exited_attach_does_not_drop_another_interactive_count` (they attach an exited, non-remote session and
-check another session's state; they become vacuous, so rewrite them to assert that an exited attach
-creates no entry and leaves the sender's own state `away` / its count unchanged, and show a mutant that
-counts an exited attach red); `:729` (see the remote-only notice test below); `:682` (force takeover)
+check another session's state; they become contract tests under the per-session rule; see
+amendment 1); `:729` (see the remote-only notice test below); `:682` (force takeover)
 stays valid. Add at the daemon seam, with two remote-enabled sessions A and B of
 one team:
 
@@ -181,3 +180,7 @@ sending to `human:owner` today; the spec adds none).
 | Session ids are monotonic `s{number}` | `src/daemon.rs:558` | read (consultant) |
 | A session has one attachment; a second needs `--force` | `src/daemon.rs` attach flow ("is attached elsewhere") | read |
 | The owner's refusal on 2026-11-13 came from an interactive window on another session | `a2amx list`: s1 `yes`, s6 `viewer` | observed |
+
+## 10. Amendment 1
+
+The developer reported (BLOCKED, verified by reading `src/daemon.rs:366-379` and `2735-2745`): an exited session cannot authenticate and a previously authenticated connection of it is refused once it has exited, so no public seam can observe an exited session's presence entry, and the mutant section 6 asked for (an exited attach counted) cannot be killed. Ruling: the tests at `:969` and `:1045` stay, adjusted only as the per-session rule needs, and are named in the report as **contract tests** that pass on the old and the new code: they assert that attaching an exited session leaves every other live session's owner state `away` (and, for `:1045`, that another session's interactive attachment still counts for that session). No mutant is required for them. The entry lifecycle of section 4.7 (only `attach_started` creates an entry; `mode_changed` and `attach_ended` never create one; the poll tick prunes exited and gone sessions) is not observable through a public seam either: the developer implements it as written, and the architect verifies it by reading the code at review and records that in the Review record. Section 6 and section 8 otherwise stand. Nothing else changes.
