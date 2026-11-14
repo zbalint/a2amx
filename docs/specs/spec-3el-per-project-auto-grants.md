@@ -15,7 +15,7 @@ Public test seams: `a2amx::grant` (`parse_accepted`, `render_accepted`, `consent
 - `src/grant.rs`, `src/team.rs`, `src/layout.rs`, `src/main.rs`.
 - `tests/grant.rs`, `tests/team.rs`, `tests/auto_confine.rs`, `tests/layout.rs`, `tests/confine.rs` (only if it
   pins a changed message), `tests/docs_examples.rs` (only if a doc block changes).
-- `docs/confinement.md`, `docs/teams.md`, `docs/getting-started.md`, `docs/cli.md`, `docs/architecture.md` (lines 388 and 422
+- `docs/confinement.md`, `docs/teams.md`, `docs/getting-started.md`, `docs/cli.md`, `docs/philosophy.md` (lines 51-54 only), `docs/roadmap.md` (line 28 only), `docs/architecture.md` (lines 388 and 422
   only: the `auto_grants()` row and the paragraph on accepted names), `a2amx.toml.example`.
 
 Does **not** touch: `src/confine.rs`, `src/suggest.rs`, `src/daemon.rs`, `src/config.rs`, migration (spec 6),
@@ -101,10 +101,10 @@ to project B: **removed** by the per-project key.
 
 ## 4. Docs
 
-`docs/confinement.md` (every sentence about auto being global-only or acceptance being by name for all projects: lines 55, 89-139, 155-164, 219-225, 247-262, 274-284, 343, 717; also: unknown grant names are dropped when the file is rewritten, so an older binary forgets a newer grant's acceptance and asks again; the same global file run from two directories asks twice; a session `cwd` outside the project directory is recorded under the project): auto in any file, acceptance per project in
+`docs/confinement.md` (every sentence about auto being global-only or acceptance being by name for all projects: lines 55, 89-139, 155-164, 219-225, 247-262, 274-284, 343, 560, 717; also: unknown grant names are dropped when the file is rewritten, so an older binary forgets a newer grant's acceptance and asks again; the same global file run from two directories asks twice; a session `cwd` outside the project directory is recorded under the project): auto in any file, acceptance per project in
 `state/auto-grants.toml`, the format, how to revoke (delete the project's table), the old file is ignored, the
 per-project consent question. `docs/getting-started.md:59-60,174-178` and `docs/teams.md:134-143,231`, `a2amx.toml.example:46`,
-`docs/cli.md:160`: the same facts; the example error text at `getting-started.md:178` is removed (the error no
+`docs/cli.md:160`: the same facts; `docs/philosophy.md:51-54` (principle 4: the tool-picked grant is no longer "only global auto mode"; the yes is remembered per project, not by grant name) and `docs/roadmap.md:28` ("global auto mode"): the same, in their own words; the example error text at `getting-started.md:178` is removed (the error no
 longer exists).
 
 ## 5. Tests
@@ -161,9 +161,13 @@ cargo test --test grant
 cargo test --test auto_confine
 cargo test --test team
 cargo test --test layout
-rg -n "all projects|auto-grants\b[^.]|only read from the global" src a2amx.toml.example README.md docs/*.md
+rg -n "all projects|auto-grants\b[^.]|only read from the global|only global auto|global auto mode" src a2amx.toml.example README.md docs/*.md
 ```
 
 The `rg` command (no `docs/specs`, which are history) matches only lines that say the old file is ignored or dropped (the architect reads them at review). Test 8 and the existing auto tests with renamed file names fail first; the contract tests are
 those that do not touch the file (`dry_run` without seeds). In a confined session rerun the known read-only-HOME tests
 with `HOME` under `target/scratch/3el/`.
+
+## 8. Amendment 1
+
+The developer reported (BLOCKED) that `docs/philosophy.md:51-54` and `docs/roadmap.md:28` state the old rule (only global auto; acceptance by grant name). Both are added to the scope and to section 4, and the acceptance `rg` gains `only global auto|global auto mode`. Nothing else changes.
