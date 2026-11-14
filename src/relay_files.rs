@@ -8,46 +8,14 @@ use rustix::fs::OFlags;
 use serde::{Deserialize, Serialize};
 
 const MAX_FILE_BYTES: usize = 64 * 1024;
-const DEFAULT_CONTROL_CATEGORY: &str = "a2amx";
-const DEFAULT_CONTROL_CHANNEL: &str = "control";
-const DEFAULT_MAX_MEMBERS: u64 = 2;
-const DEFAULT_SYNC_MS: u64 = 15_000;
-const DEFAULT_IDLE_MS: u64 = 1_000;
-const DEFAULT_MEMBER_CHECK_MS: u64 = 60_000;
-const DEFAULT_RECONNECT_MS: u64 = 5_000;
-const DEFAULT_API_BASE: &str = "https://discord.com/api/v10";
-const DEFAULT_GATEWAY_URL: &str = "wss://gateway.discord.gg";
 
 #[derive(Debug, Clone)]
 pub struct Loaded {
     pub layout: crate::layout::Layout,
     pub token: String,
-    pub config: GatewayConfig,
-    pub pairing: Option<Pairing>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GatewayConfig {
     pub guild_id: String,
-    #[serde(default = "default_control_category")]
-    pub control_category: String,
-    #[serde(default = "default_control_channel")]
-    pub control_channel: String,
-    #[serde(default = "default_max_members")]
-    pub max_members: u64,
-    #[serde(default = "default_sync_ms")]
-    pub sync_ms: u64,
-    #[serde(default = "default_idle_ms")]
-    pub idle_ms: u64,
-    #[serde(default = "default_member_check_ms")]
-    pub member_check_ms: u64,
-    #[serde(default = "default_reconnect_ms")]
-    pub reconnect_ms: u64,
-    #[serde(default = "default_api_base")]
-    pub api_base: String,
-    #[serde(default = "default_gateway_url")]
-    pub gateway_url: String,
+    pub config: crate::config::GatewaySettings,
+    pub pairing: Option<Pairing>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,42 +23,6 @@ pub struct GatewayConfig {
 pub struct Pairing {
     pub guild_id: String,
     pub user_id: String,
-}
-
-fn default_control_category() -> String {
-    DEFAULT_CONTROL_CATEGORY.into()
-}
-
-fn default_control_channel() -> String {
-    DEFAULT_CONTROL_CHANNEL.into()
-}
-
-fn default_max_members() -> u64 {
-    DEFAULT_MAX_MEMBERS
-}
-
-fn default_sync_ms() -> u64 {
-    DEFAULT_SYNC_MS
-}
-
-fn default_idle_ms() -> u64 {
-    DEFAULT_IDLE_MS
-}
-
-fn default_member_check_ms() -> u64 {
-    DEFAULT_MEMBER_CHECK_MS
-}
-
-fn default_reconnect_ms() -> u64 {
-    DEFAULT_RECONNECT_MS
-}
-
-fn default_api_base() -> String {
-    DEFAULT_API_BASE.into()
-}
-
-fn default_gateway_url() -> String {
-    DEFAULT_GATEWAY_URL.into()
 }
 
 pub fn load(home: &Path) -> anyhow::Result<Loaded> {
@@ -105,7 +37,6 @@ pub fn load(home: &Path) -> anyhow::Result<Loaded> {
         );
     }
     let token_path = layout.discord_token();
-    let config_path = layout.gateway_config();
     let token = read_secure(&token_path)?;
     let token = String::from_utf8(token)
         .with_context(|| format!("{} is not UTF-8", token_path.display()))?
@@ -114,13 +45,15 @@ pub fn load(home: &Path) -> anyhow::Result<Loaded> {
     if token.is_empty() {
         bail!("{} is empty", token_path.display());
     }
-    let config_bytes = read_secure(&config_path)?;
-    let config_text = std::str::from_utf8(&config_bytes)
-        .with_context(|| format!("{} is not UTF-8", config_path.display()))?;
-    let config: GatewayConfig = toml::from_str(config_text).map_err(|error| {
-        anyhow::anyhow!("invalid gateway config {}: {error}", config_path.display())
+    let loaded_config = crate::config::load_gateway(&layout)?;
+    let config_path = layout.gateway_config();
+    let guild_id = loaded_config.guild_id.clone().ok_or_else(|| {
+        crate::config::file_error(
+            &config_path,
+            "guild_id",
+            "not set; add guild_id = \"<your Discord server id>\"",
+        )
     })?;
-    validate_config(&config)?;
 
     let pairing_path = layout.pairing();
     let pairing = match fs::symlink_metadata(&pairing_path) {
@@ -128,7 +61,7 @@ pub fn load(home: &Path) -> anyhow::Result<Loaded> {
             let bytes = read_secure(&pairing_path)?;
             let pairing: Pairing = serde_json::from_slice(&bytes)
                 .with_context(|| format!("invalid pairing file {}", pairing_path.display()))?;
-            validate_pairing(&pairing, &config.guild_id, &pairing_path)?;
+            validate_pairing(&pairing, &guild_id, &pairing_path)?;
             Some(pairing)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -137,12 +70,11 @@ pub fn load(home: &Path) -> anyhow::Result<Loaded> {
                 .with_context(|| format!("cannot inspect {}", pairing_path.display()));
         }
     };
-
-    let layout = crate::layout::Layout::new(home.to_owned());
     Ok(Loaded {
         layout,
         token,
-        config,
+        guild_id,
+        config: loaded_config.settings,
         pairing,
     })
 }
@@ -164,31 +96,6 @@ pub fn write_pairing(home: &Path, pairing: &Pairing) -> anyhow::Result<()> {
     atomic_write(&layout.pairing(), &payload, 0o600)
 }
 
-fn validate_config(config: &GatewayConfig) -> anyhow::Result<()> {
-    if !valid_id(&config.guild_id) {
-        bail!("invalid guild_id in config.toml");
-    }
-    for (name, value) in [
-        ("control_category", config.control_category.as_str()),
-        ("control_channel", config.control_channel.as_str()),
-    ] {
-        if !valid_name(value) {
-            bail!("invalid {name} in config.toml");
-        }
-    }
-    for (name, value) in [
-        ("sync_ms", config.sync_ms),
-        ("idle_ms", config.idle_ms),
-        ("member_check_ms", config.member_check_ms),
-        ("reconnect_ms", config.reconnect_ms),
-    ] {
-        if value == 0 {
-            bail!("{name} must be at least 1");
-        }
-    }
-    Ok(())
-}
-
 fn validate_pairing(pairing: &Pairing, guild_id: &str, path: &Path) -> anyhow::Result<()> {
     if !valid_id(&pairing.guild_id) || !valid_id(&pairing.user_id) {
         bail!("invalid ids in {}", path.display());
@@ -203,7 +110,7 @@ pub(crate) fn valid_id(value: &str) -> bool {
     (1..=20).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-fn valid_name(value: &str) -> bool {
+pub(crate) fn valid_name(value: &str) -> bool {
     if value.is_empty() || value.len() > 100 {
         return false;
     }
@@ -214,7 +121,7 @@ fn valid_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
 }
 
-fn read_secure(path: &Path) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn read_secure(path: &Path) -> anyhow::Result<Vec<u8>> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags((OFlags::NOFOLLOW | OFlags::CLOEXEC).bits() as i32)

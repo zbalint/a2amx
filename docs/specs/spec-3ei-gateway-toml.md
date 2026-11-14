@@ -339,3 +339,16 @@ loader produce. `format_duration` of a value with a sub-second part prints `dura
 returns the same value for every whole-millisecond duration." Nothing else in the spec changes; section 8 item 7
 already uses whole-millisecond literals only. Gate re-run: `rg -n "round trip|same value" docs/specs/spec-3ei-gateway-toml.md`
 shows only section 2.1, section 8 items 3 and 7, and this amendment, all consistent with this decision.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review; the exact model was not recorded); developer OMP harness, default model openai-codex/gpt-5.6-luna, smol model and advisor not exposed; tester OMP harness, models not stated in its report. BLOCKED/amend cycles: 1 (Amendment 1). Fix rounds after the tester pass: 1.
+
+| Found at | By (role, model) | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Nine findings in the first draft; the worst: acceptance said a contract test passes unmodified while the spec's own rename list changed it, and a test called new already existed | verified and applied before locking |
+| Implementation | developer, gpt-5.6-luna | BLOCKED: section 2.1 claimed the duration round trip for every sub-second value, but `Duration` holds sub-millisecond values | Amendment 1 (`d0203b9`): whole-millisecond round trip, sub-millisecond truncated |
+| Tester pass | tester | Nine test gaps against section 8 (exact show text, missing-`guild_id` cases, broad-mode show, template through `load`, parser table cases, `lease = "0ms"`, empty-file ensure, vacuous `sources` assertion, `not set` in the up test) and six surviving mutants | fix round 1: tests added, six mutants killed by named tests |
+| Tester pass | tester | `max_members` used an inline zero check instead of the shared `parse_counter` | fixed in round 1 (`parse_counter` made generic) |
+| Architect review | architect, Sonnet 5.5 | `validate_duration` repeated rule matches; `docs/configuration.md` duration paragraph lacked the `ms` unit | fixed in round 1 |
+| Architect review | architect, Sonnet 5.5 | Environment: three tests fail in the architect's confined session only (`$HOME` read-only: `confine::real_bwrap_confined_tree_hides_state_run_and_secrets`, `gateway_up::sandbox_hides_state_host_and_limits_writes_to_gateway`, `human_inbound::queued_human_message_rechecks_recipient_eligibility_before_delivery`); the tester and developer ran the first two green with `HOME` redirected | recorded as environment, not code |

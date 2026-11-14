@@ -81,39 +81,31 @@ nothing; when standard input is a terminal, A2AMX disables echo while reading it
 a2amx gateway token
 ```
 
-It stores the value as `<root>/config/secrets/discord.token` with mode `0600`.
-Create `<root>/config/gateway.toml` yourself. The gateway state tree under `<root>/state/gateway/` is created by the
-token command. Replace `<root>` with the directory selected above; when invoking A2AMX with an
-explicit `--home`, use that same directory:
+It stores the value as `<root>/config/secrets/discord.token` with mode `0600` and creates a
+commented `<root>/config/gateway.toml` template once. Set `guild_id` in that file:
 
-```sh
-install -d -m 700 "<root>/config/secrets"
-install -m 600 /dev/null "<root>/config/gateway.toml"
+```toml
+guild_id = "123456789012345678"
 ```
 
-Put the server ID and, optionally, names and timing overrides in the file:
+The template is owner-only (`0600`) and is never rewritten. The gateway file must be a regular,
+owner-only file no larger than 64 KiB; symlinks and broad permissions are refused.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `guild_id` | required | Discord server ID: 1–20 ASCII digits |
 | `control_category` | `a2amx` | Category containing the control channel |
 | `control_channel` | `control` | Channel for pairing and lease codes |
-| `max_members` | `2` | Maximum approximate Discord member count |
-| `sync_ms` | `15000` | Agent/channel synchronization interval |
-| `idle_ms` | `1000` | Outbound queue polling interval |
-| `member_check_ms` | `60000` | Member-count check interval |
-| `reconnect_ms` | `5000` | Daemon reconnect interval after a later outage |
-| `api_base` | `https://discord.com/api/v10` | Discord REST base; leave unset for a real server |
-| `gateway_url` | `wss://gateway.discord.gg` | Discord websocket base; leave unset for a real server |
+| `max_members` | `2` | Maximum approximate Discord member count; at least 1 |
+| `sync` | `15s` | Agent/channel synchronization interval |
+| `idle` | `1s` | Outbound queue polling interval |
+| `member_check` | `1m` | Member-count check interval |
+| `reconnect` | `5s` | Daemon reconnect interval after a later outage |
 
-`control_category` and `control_channel` must be 1–100 characters, start with a lowercase
-letter or digit, and then contain only lowercase letters, digits, or `-`. Every `*_ms` value
-must be at least 1. Unknown keys are rejected. The token and config files must be regular files,
-owned by the current user, without group or other permission bits, and no larger than 64 KiB;
-symlinks are refused. Create them with mode `0600`.
-
-`api_base` and `gateway_url` are test overrides. Leave both unset when connecting to Discord;
-the defaults in the table are used.
+Intervals are duration strings using `ms`, `s`, `m`, `h`, or `d`, from `1ms` through `3650d`.
+Unknown keys and malformed values are rejected. `api_base` and `gateway_url` are accepted as
+test-only overrides and are hidden from the template and `config show`; leave them unset for a
+real Discord server.
 
 ## Pair your Discord account
 
@@ -136,7 +128,7 @@ paired, then asks `replace Discord account <old-id> with <new-id>? [y/N]`. Confi
 new pairing, prints `paired with Discord account <new-id>; starting the gateway in the background`,
 and then hands the lock to the background gateway. `up --pair` returns after this hand-over.
 Moving to a different Discord server requires deleting `<root>/state/gateway/pairing.json` first,
-because the gateway refuses a pairing whose server differs from `config.toml`.
+because the gateway refuses a pairing whose server differs from `gateway.toml`.
 
 The pairing confirmation is read from standard input; answer `y` or `yes` at the terminal. The
 gateway accepts control and agent-channel messages only from the paired Discord account. After
@@ -159,11 +151,11 @@ Those files can be stale after a daemon crash. The relay's first daemon connecti
 so a stale address causes the relay to exit with a connection error at startup. Once the first
 connection succeeds, a later daemon outage leaves the relay running: it answers the paired
 account with `a2amx is not reachable right now` and reconnects through `<root>/run/link/` every
-`reconnect_ms`.
+`reconnect`.
 
 The control category and channel appear at startup. Team categories and agent channels appear
 only after the lease has started; synchronization lists only agents that have `remote` set, are
-confined, and are covered by a valid lease. They appear within `sync_ms` (15 seconds by default).
+confined, and are covered by a valid lease. They appear within `sync` (15 seconds by default).
 A category represents a team, and each enabled agent gets one channel in that category.
 
 `a2amx gateway up` starts the confined gateway in the background and prints its pid and log path.
@@ -311,7 +303,7 @@ yet tested with A2AMX.
 | `server has N members, the limit is M` | The approximate Discord member count is above `max_members`; at startup the relay exits. | Remove extra members or raise `max_members` deliberately, then restart the gateway. During a later check, wait for the count to fall; the relay pauses while it is above the limit. |
 | `that code is not valid` | The lease code is wrong, expired, already used, or all pending codes were cleared after five wrong attempts. | Run `a2amx team up` at the computer and post its new code. |
 | `send the code that a2amx team up printed` | The control-channel text is not a 12-character lowercase hexadecimal lease code. | Copy the exact code printed by `a2amx team up`. |
-| `a2amx is not reachable right now` | The gateway was connected, but the daemon is currently unreachable. | Check the daemon and `<root>/run/link/`; the relay retries through `link/` every `reconnect_ms`. |
+| `a2amx is not reachable right now` | The gateway was connected, but the daemon is currently unreachable. | Check the daemon and `<root>/run/link/`; the relay retries through `link/` every `reconnect`. |
 | `cannot resolve /etc/resolv.conf; the gateway needs DNS` | The resolver path has another stat error, or it is a symlink whose target cannot be resolved or stat-ed or is not a regular file. A missing or non-symlink path starts without a resolver bind; targets under `/etc` or `/usr` need no extra bind. | Repair the path or target, then run `gateway up` again. |
 | `secure file permissions are too broad` | A token, config, or pairing file has group or other permission bits. | Make the file a regular, owner-only `0600` file; do not replace it with a symlink. |
 | `pairing not confirmed` | The interactive pairing prompt was declined or did not receive `y`/`yes`. | Run `a2amx gateway up --pair` in a terminal and confirm the paired account. |
@@ -325,7 +317,7 @@ yet tested with A2AMX.
 
 ## Files
 
-The gateway reads `discord.token`, `config.toml`, and `pairing.json` only when each is a regular
+The gateway reads `discord.token`, `gateway.toml`, and `pairing.json` only when each is a regular
 file, not a symlink, owned by the current user, with no group or other permission bits, and no
 larger than 64 KiB. This `read_secure` check applies to all three files. The gateway token and
 pairing writes use mode `0600`; the daemon's state files and dedup file use the same mode.

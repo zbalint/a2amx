@@ -418,6 +418,128 @@ fn sandbox_keeps_inner_arguments_after_separator() {
 }
 
 #[test]
+fn gateway_token_and_up_create_gateway_template_once() {
+    let home = tempfile::tempdir().unwrap();
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    layout.ensure().unwrap();
+    let mut token = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .args(["--home"])
+        .arg(home.path())
+        .args(["gateway", "token"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    token
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"bot-token\n")
+        .unwrap();
+    let output = token.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let template = fs::read_to_string(layout.gateway_config()).unwrap();
+    assert!(template.contains("# guild_id ="));
+    assert_eq!(
+        fs::metadata(layout.gateway_config())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let original = template.clone();
+    let output = run_gateway_up(home.path(), false, "");
+    assert_error_contains(output.clone(), "guild_id");
+    assert_error_contains(output, "not set");
+    assert_eq!(
+        fs::read_to_string(layout.gateway_config()).unwrap(),
+        original
+    );
+}
+#[test]
+fn empty_gateway_token_does_not_create_template() {
+    let home = tempfile::tempdir().unwrap();
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    layout.ensure().unwrap();
+    let mut token = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .args(["--home"])
+        .arg(home.path())
+        .args(["gateway", "token"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    token.stdin.take().unwrap().write_all(b"\n").unwrap();
+    let output = token.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert!(!layout.gateway_config().exists());
+}
+#[test]
+fn failed_gateway_token_write_does_not_create_template() {
+    let home = tempfile::tempdir().unwrap();
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    layout.ensure().unwrap();
+    fs::create_dir(layout.discord_token()).unwrap();
+    let mut token = Command::new(env!("CARGO_BIN_EXE_a2amx"))
+        .args(["--home"])
+        .arg(home.path())
+        .args(["gateway", "token"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    token
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"bot-token\n")
+        .unwrap();
+    let output = token.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert!(!layout.gateway_config().exists());
+}
+
+#[test]
+fn gateway_up_on_token_only_root_writes_template_then_reports_missing_guild() {
+    let home = tempfile::tempdir().unwrap();
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    layout.ensure().unwrap();
+    fs::write(layout.discord_token(), "bot-token\n").unwrap();
+    fs::set_permissions(layout.discord_token(), fs::Permissions::from_mode(0o600)).unwrap();
+    let output = run_gateway_up(home.path(), false, "");
+    assert_error_contains(output.clone(), "guild_id");
+    assert_error_contains(output, "not set");
+    assert!(
+        fs::read_to_string(layout.gateway_config())
+            .unwrap()
+            .contains("# guild_id =")
+    );
+}
+
+#[test]
+fn ensure_gateway_file_preserves_dangling_symlink() {
+    let home = tempfile::tempdir().unwrap();
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    layout.ensure().unwrap();
+    let target = home.path().join("missing-target");
+    std::os::unix::fs::symlink(&target, layout.gateway_config()).unwrap();
+    a2amx::config::ensure_gateway_file(&layout).unwrap();
+    assert!(layout.gateway_config().read_link().is_ok());
+    assert!(!target.exists());
+}
+
+#[test]
 fn gateway_up_refuses_missing_inputs_and_symlinked_link() {
     let home = tempfile::tempdir().unwrap();
     prepare_state(home.path());

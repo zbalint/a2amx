@@ -64,6 +64,40 @@ struct FileLimits {
     lease: Option<String>,
     code_ttl: Option<String>,
 }
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct GatewayFile {
+    guild_id: Option<String>,
+    control_category: Option<String>,
+    control_channel: Option<String>,
+    max_members: Option<u64>,
+    sync: Option<String>,
+    idle: Option<String>,
+    member_check: Option<String>,
+    reconnect: Option<String>,
+    api_base: Option<String>,
+    gateway_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GatewaySettings {
+    pub control_category: String,
+    pub control_channel: String,
+    pub max_members: u64,
+    pub sync: Duration,
+    pub idle: Duration,
+    pub member_check: Duration,
+    pub reconnect: Duration,
+    pub api_base: String,
+    pub gateway_url: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadedGateway {
+    pub guild_id: Option<String>,
+    pub settings: GatewaySettings,
+    pub sources: Vec<(&'static str, Source)>,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Key {
@@ -218,7 +252,7 @@ fn resolve<T: Clone>(default: T, file: Option<T>, override_value: Option<T>) -> 
     }
 }
 
-fn file_error(path: &Path, key: &str, message: impl std::fmt::Display) -> anyhow::Error {
+pub(crate) fn file_error(path: &Path, key: &str, message: impl std::fmt::Display) -> anyhow::Error {
     anyhow!("{}: key {}: {}", path.display(), key, message)
 }
 
@@ -254,8 +288,11 @@ fn parse_file(path: &Path, text: &str) -> anyhow::Result<FileConfig> {
     toml::from_str(text).map_err(|error| anyhow!("{}: {error}", path.display()))
 }
 
-fn parse_counter(path: &Path, key: &'static str, value: u32) -> anyhow::Result<u32> {
-    if value == 0 {
+fn parse_counter<T>(path: &Path, key: &'static str, value: T) -> anyhow::Result<T>
+where
+    T: PartialEq + From<u8>,
+{
+    if value == T::from(0) {
         bail!(
             "{}: key {}: 0 is not allowed; use 1 or more",
             path.display(),
@@ -265,34 +302,62 @@ fn parse_counter(path: &Path, key: &'static str, value: u32) -> anyhow::Result<u
     Ok(value)
 }
 
-fn validate_duration_secs(
+#[derive(Debug, Clone, Copy)]
+enum DurationRule {
+    WholeSeconds,
+    WholeSecondsOrZero,
+    Millis,
+}
+
+impl DurationRule {
+    fn bounds(self) -> (Duration, bool, &'static str) {
+        match self {
+            Self::WholeSeconds => (Duration::from_secs(1), true, "1s"),
+            Self::WholeSecondsOrZero => (Duration::ZERO, true, "0s"),
+            Self::Millis => (Duration::from_millis(1), false, "1ms"),
+        }
+    }
+}
+
+fn validate_duration(
     path: &Path,
     key: &'static str,
-    seconds: u64,
-    allow_zero: bool,
-) -> anyhow::Result<u64> {
-    if (!allow_zero && seconds == 0) || seconds > MAX_DURATION_SECS {
-        let minimum = if allow_zero { "0s" } else { "1s" };
-        bail!(
+    duration: Duration,
+    rule: DurationRule,
+) -> anyhow::Result<Duration> {
+    let (minimum, whole_seconds, minimum_text) = rule.bounds();
+    let range_error = || {
+        anyhow!(
             "{}: key {}: duration must be between {} and 3650d",
             path.display(),
             key,
-            minimum
+            minimum_text
+        )
+    };
+    if duration > Duration::from_secs(MAX_DURATION_SECS) {
+        return Err(range_error());
+    }
+    if whole_seconds && duration.subsec_nanos() != 0 {
+        bail!(
+            "{}: key {}: duration must be a whole number of seconds",
+            path.display(),
+            key
         );
     }
-    Ok(seconds)
+    if duration < minimum {
+        return Err(range_error());
+    }
+    Ok(duration)
 }
 
 fn parse_limited_duration(
     path: &Path,
     key: &'static str,
     text: &str,
-    allow_zero: bool,
-) -> anyhow::Result<u64> {
-    let seconds = parse_duration(text)
-        .map_err(|error| file_error(path, key, error))?
-        .as_secs();
-    validate_duration_secs(path, key, seconds, allow_zero)
+    rule: DurationRule,
+) -> anyhow::Result<Duration> {
+    let duration = parse_duration(text).map_err(|error| file_error(path, key, error))?;
+    validate_duration(path, key, duration, rule)
 }
 
 fn default_listen() -> Vec<SocketAddr> {
@@ -384,8 +449,16 @@ pub fn load_daemon(layout: &Layout, overrides: &Overrides) -> anyhow::Result<Loa
     let file_listen = parse_listen(&path, file_listen)?;
     let file_host_name = validate_host(&path, file_host_name)?;
     let file_owner_away = file_owner_away
-        .map(|value| parse_limited_duration(&path, "owner_away", &value, true))
-        .transpose()?;
+        .map(|value| {
+            parse_limited_duration(
+                &path,
+                "owner_away",
+                &value,
+                DurationRule::WholeSecondsOrZero,
+            )
+        })
+        .transpose()?
+        .map(|value| value.as_secs());
     let override_host_name = validate_host(&path, overrides.host_name.clone())?;
     let file_max_pending = file_limits
         .max_pending_per_recipient
@@ -410,18 +483,27 @@ pub fn load_daemon(layout: &Layout, overrides: &Overrides) -> anyhow::Result<Loa
     let file_retention = file_limits
         .retention
         .as_deref()
-        .map(|value| parse_limited_duration(&path, "limits.retention", value, false))
-        .transpose()?;
+        .map(|value| {
+            parse_limited_duration(&path, "limits.retention", value, DurationRule::WholeSeconds)
+        })
+        .transpose()?
+        .map(|value| value.as_secs());
     let file_lease = file_limits
         .lease
         .as_deref()
-        .map(|value| parse_limited_duration(&path, "limits.lease", value, false))
-        .transpose()?;
+        .map(|value| {
+            parse_limited_duration(&path, "limits.lease", value, DurationRule::WholeSeconds)
+        })
+        .transpose()?
+        .map(|value| value.as_secs());
     let file_code_ttl = file_limits
         .code_ttl
         .as_deref()
-        .map(|value| parse_limited_duration(&path, "limits.code_ttl", value, false))
-        .transpose()?;
+        .map(|value| {
+            parse_limited_duration(&path, "limits.code_ttl", value, DurationRule::WholeSeconds)
+        })
+        .transpose()?
+        .map(|value| value.as_secs());
     let defaults = Limits::default();
     let (listen, listen_source) = resolve(
         default_listen(),
@@ -435,7 +517,15 @@ pub fn load_daemon(layout: &Layout, overrides: &Overrides) -> anyhow::Result<Loa
         file_owner_away,
         overrides
             .owner_away_secs
-            .map(|value| validate_duration_secs(&path, "owner_away", value, true))
+            .map(|value| {
+                validate_duration(
+                    &path,
+                    "owner_away",
+                    Duration::from_secs(value),
+                    DurationRule::WholeSecondsOrZero,
+                )
+                .map(|value| value.as_secs())
+            })
             .transpose()?,
     );
     let (max_pending_per_recipient, pending_source) =
@@ -492,13 +582,12 @@ pub fn load_daemon(layout: &Layout, overrides: &Overrides) -> anyhow::Result<Loa
     })
 }
 
-pub fn ensure_daemon_file(layout: &Layout) -> anyhow::Result<()> {
-    let path = layout.daemon_config();
+fn ensure_file(path: &Path, text: &str) -> anyhow::Result<()> {
     let mut file = match OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(&path)
+        .open(path)
     {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
@@ -507,13 +596,17 @@ pub fn ensure_daemon_file(layout: &Layout) -> anyhow::Result<()> {
         }
     };
     if let Err(error) = file
-        .write_all(daemon_template().as_bytes())
+        .write_all(text.as_bytes())
         .and_then(|_| file.sync_all())
     {
-        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path);
         return Err(error).with_context(|| format!("cannot write {}", path.display()));
     }
     Ok(())
+}
+
+pub fn ensure_daemon_file(layout: &Layout) -> anyhow::Result<()> {
+    ensure_file(&layout.daemon_config(), &daemon_template())
 }
 
 pub fn show_daemon(layout: &Layout, env_owner_away_secs: Option<u64>) -> anyhow::Result<String> {
@@ -541,6 +634,263 @@ pub fn show_daemon(layout: &Layout, env_owner_away_secs: Option<u64>) -> anyhow:
             "{} = {}  ({source})\n",
             key.name,
             (key.display)(&loaded.settings)
+        ));
+    }
+    Ok(out)
+}
+#[derive(Clone, Copy)]
+struct GatewayKey {
+    name: &'static str,
+    description: &'static str,
+    example: &'static str,
+    display: fn(&LoadedGateway) -> String,
+}
+
+fn gateway_source(source: Source) -> &'static str {
+    match source {
+        Source::Default => "default",
+        Source::File => "file",
+        Source::Override => "override",
+    }
+}
+
+fn gateway_display_guild(loaded: &LoadedGateway) -> String {
+    loaded
+        .guild_id
+        .as_deref()
+        .map(|value| format!("\"{value}\""))
+        .unwrap_or_else(|| "(unset)".into())
+}
+fn gateway_display_category(loaded: &LoadedGateway) -> String {
+    format!("\"{}\"", loaded.settings.control_category)
+}
+fn gateway_display_channel(loaded: &LoadedGateway) -> String {
+    format!("\"{}\"", loaded.settings.control_channel)
+}
+fn gateway_display_members(loaded: &LoadedGateway) -> String {
+    loaded.settings.max_members.to_string()
+}
+fn gateway_display_sync(loaded: &LoadedGateway) -> String {
+    format!("\"{}\"", format_duration(loaded.settings.sync))
+}
+fn gateway_display_idle(loaded: &LoadedGateway) -> String {
+    format!("\"{}\"", format_duration(loaded.settings.idle))
+}
+fn gateway_display_member_check(loaded: &LoadedGateway) -> String {
+    format!("\"{}\"", format_duration(loaded.settings.member_check))
+}
+fn gateway_display_reconnect(loaded: &LoadedGateway) -> String {
+    format!("\"{}\"", format_duration(loaded.settings.reconnect))
+}
+
+const GATEWAY_KEYS: &[GatewayKey] = &[
+    GatewayKey {
+        name: "guild_id",
+        description: "Discord server ID (required to run the gateway).",
+        example: "\"123456789012345678\"",
+        display: gateway_display_guild,
+    },
+    GatewayKey {
+        name: "control_category",
+        description: "Discord category for the control channel.",
+        example: "\"a2amx\"",
+        display: gateway_display_category,
+    },
+    GatewayKey {
+        name: "control_channel",
+        description: "Discord channel used for control messages.",
+        example: "\"control\"",
+        display: gateway_display_channel,
+    },
+    GatewayKey {
+        name: "max_members",
+        description: "Pause the gateway when the server exceeds this member count.",
+        example: "2",
+        display: gateway_display_members,
+    },
+    GatewayKey {
+        name: "sync",
+        description: "Interval between Discord synchronization checks.",
+        example: "\"15s\"",
+        display: gateway_display_sync,
+    },
+    GatewayKey {
+        name: "idle",
+        description: "Interval between idle gateway checks.",
+        example: "\"1s\"",
+        display: gateway_display_idle,
+    },
+    GatewayKey {
+        name: "member_check",
+        description: "Interval between member-count checks.",
+        example: "\"1m\"",
+        display: gateway_display_member_check,
+    },
+    GatewayKey {
+        name: "reconnect",
+        description: "Delay before reconnecting after a gateway failure.",
+        example: "\"5s\"",
+        display: gateway_display_reconnect,
+    },
+];
+
+pub fn load_gateway(layout: &Layout) -> anyhow::Result<LoadedGateway> {
+    let path = layout.gateway_config();
+    let text = match fs::symlink_metadata(&path) {
+        Ok(_) => {
+            let bytes = crate::relay_files::read_secure(&path)?;
+            Some(
+                String::from_utf8(bytes)
+                    .map_err(|_| anyhow!("{}: gateway.toml is not UTF-8", path.display()))?,
+            )
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| format!("cannot inspect {}", path.display()));
+        }
+    };
+    let file: GatewayFile = text
+        .as_deref()
+        .map(|text| toml::from_str(text).map_err(|error| anyhow!("{}: {error}", path.display())))
+        .transpose()?
+        .unwrap_or_default();
+    if let Some(value) = &file.guild_id
+        && !crate::relay_files::valid_id(value)
+    {
+        bail!(
+            "{}",
+            file_error(&path, "guild_id", "must be 1 to 20 digits")
+        );
+    }
+    for (key, value) in [
+        ("control_category", file.control_category.as_deref()),
+        ("control_channel", file.control_channel.as_deref()),
+    ] {
+        if let Some(value) = value
+            && !crate::relay_files::valid_name(value)
+        {
+            bail!(
+                "{}",
+                file_error(
+                    &path,
+                    key,
+                    "must start with a lowercase letter or digit and contain only lowercase letters, digits, or '-'"
+                )
+            );
+        }
+    }
+    let max_members = file
+        .max_members
+        .map(|value| parse_counter(&path, "max_members", value))
+        .transpose()?;
+    let sync = file
+        .sync
+        .as_deref()
+        .map(|value| parse_limited_duration(&path, "sync", value, DurationRule::Millis))
+        .transpose()?;
+    let idle = file
+        .idle
+        .as_deref()
+        .map(|value| parse_limited_duration(&path, "idle", value, DurationRule::Millis))
+        .transpose()?;
+    let member_check = file
+        .member_check
+        .as_deref()
+        .map(|value| parse_limited_duration(&path, "member_check", value, DurationRule::Millis))
+        .transpose()?;
+    let reconnect = file
+        .reconnect
+        .as_deref()
+        .map(|value| parse_limited_duration(&path, "reconnect", value, DurationRule::Millis))
+        .transpose()?;
+    let guild_source = if file.guild_id.is_some() {
+        Source::File
+    } else {
+        Source::Default
+    };
+    let guild_id = file.guild_id;
+    let (control_category, category_source) =
+        resolve("a2amx".to_owned(), file.control_category, None);
+    let (control_channel, channel_source) =
+        resolve("control".to_owned(), file.control_channel, None);
+    let (max_members, members_source) = resolve(2, max_members, None);
+    let (sync, sync_source) = resolve(Duration::from_secs(15), sync, None);
+    let (idle, idle_source) = resolve(Duration::from_secs(1), idle, None);
+    let (member_check, member_source) = resolve(Duration::from_secs(60), member_check, None);
+    let (reconnect, reconnect_source) = resolve(Duration::from_secs(5), reconnect, None);
+    let (api_base, _) = resolve(
+        "https://discord.com/api/v10".to_owned(),
+        file.api_base,
+        None,
+    );
+    let (gateway_url, _) = resolve(
+        "wss://gateway.discord.gg".to_owned(),
+        file.gateway_url,
+        None,
+    );
+    let settings = GatewaySettings {
+        control_category,
+        control_channel,
+        max_members,
+        sync,
+        idle,
+        member_check,
+        reconnect,
+        api_base,
+        gateway_url,
+    };
+    Ok(LoadedGateway {
+        guild_id,
+        settings,
+        sources: vec![
+            ("guild_id", guild_source),
+            ("control_category", category_source),
+            ("control_channel", channel_source),
+            ("max_members", members_source),
+            ("sync", sync_source),
+            ("idle", idle_source),
+            ("member_check", member_source),
+            ("reconnect", reconnect_source),
+        ],
+    })
+}
+
+pub fn gateway_template() -> String {
+    let mut text = String::from(
+        "# A2AMX gateway settings. Restart the gateway to apply changes. a2amx writes this file once and never rewrites it.\n",
+    );
+    for key in GATEWAY_KEYS {
+        text.push_str(&format!(
+            "# {}: {}\n# {} = {}\n",
+            key.name, key.description, key.name, key.example
+        ));
+    }
+    text
+}
+
+pub fn ensure_gateway_file(layout: &Layout) -> anyhow::Result<()> {
+    ensure_file(&layout.gateway_config(), &gateway_template())
+}
+
+pub fn show_gateway(layout: &Layout) -> anyhow::Result<String> {
+    let loaded = load_gateway(layout)?;
+    let path = layout.gateway_config();
+    let mut out = format!(
+        "gateway.toml: {} ({})\n",
+        path.display(),
+        if path.exists() { "present" } else { "absent" }
+    );
+    for key in GATEWAY_KEYS {
+        let source = loaded
+            .sources
+            .iter()
+            .find(|(name, _)| *name == key.name)
+            .map(|(_, source)| gateway_source(*source))
+            .unwrap_or("default");
+        out.push_str(&format!(
+            "{} = {}  ({source})\n",
+            key.name,
+            (key.display)(&loaded)
         ));
     }
     Ok(out)
@@ -593,36 +943,40 @@ pub fn daemon_template() -> String {
 }
 
 pub fn parse_duration(text: &str) -> Result<Duration, String> {
-    let (digits, unit) = ["s", "m", "h", "d"]
+    let (digits, unit) = ["ms", "s", "m", "h", "d"]
         .iter()
         .find_map(|unit| text.strip_suffix(unit).map(|digits| (digits, *unit)))
         .unwrap_or((text, ""));
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(format!(
-            "{text:?} is not a duration; use digits followed by s, m, h or d"
+            "{text:?} is not a duration; use digits followed by ms, s, m, h or d"
         ));
     }
     let multiplier = match unit {
-        "s" => 1,
-        "m" => 60,
-        "h" => 3600,
-        "d" => 86400,
+        "ms" => 1,
+        "s" => 1000,
+        "m" => 60 * 1000,
+        "h" => 3600 * 1000,
+        "d" => 86400 * 1000,
         _ => {
             return Err(format!(
-                "{text:?} is not a duration; use digits followed by s, m, h or d"
+                "{text:?} is not a duration; use digits followed by ms, s, m, h or d"
             ));
         }
     };
     let value = digits
         .parse::<u64>()
         .map_err(|_| format!("{text:?} overflows u64"))?;
-    let seconds = value
+    let milliseconds = value
         .checked_mul(multiplier)
         .ok_or_else(|| format!("{text:?} overflows u64"))?;
-    Ok(Duration::from_secs(seconds))
+    Ok(Duration::from_millis(milliseconds))
 }
 
 pub fn format_duration(duration: Duration) -> String {
+    if duration.subsec_nanos() != 0 {
+        return format!("{}ms", duration.as_millis());
+    }
     let seconds = duration.as_secs();
     if seconds == 0 {
         return "0s".into();

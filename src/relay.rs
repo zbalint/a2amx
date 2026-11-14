@@ -69,9 +69,9 @@ pub async fn run(loaded: Loaded, discord_config: DiscordConfig, mut io: Io) -> a
     // The launcher waits for this exact plain line before reporting a background gateway ready.
     eprintln!("gateway ready");
 
-    let mut sync_tick = time::interval(Duration::from_millis(relay.config.sync_ms));
-    let mut idle_tick = time::interval(Duration::from_millis(relay.config.idle_ms));
-    let mut member_tick = time::interval(Duration::from_millis(relay.config.member_check_ms));
+    let mut sync_tick = time::interval(relay.config.sync);
+    let mut idle_tick = time::interval(relay.config.idle);
+    let mut member_tick = time::interval(relay.config.member_check);
     sync_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     idle_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     member_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -167,7 +167,7 @@ struct Relay {
     daemon: Client,
     discord: Discord,
     gateway: Gateway,
-    config: relay_files::GatewayConfig,
+    config: crate::config::GatewaySettings,
     category_ids: HashMap<String, String>,
     channel_ids: HashMap<String, String>,
     paused: bool,
@@ -178,7 +178,7 @@ struct Relay {
 impl Relay {
     fn mark_broken(&mut self) {
         self.broken = true;
-        self.next_reconnect = Instant::now() + Duration::from_millis(self.config.reconnect_ms);
+        self.next_reconnect = Instant::now() + self.config.reconnect;
     }
 
     async fn reconnect_if_due(&mut self) {
@@ -192,8 +192,7 @@ impl Relay {
             }
             Err(error) => {
                 tracing::warn!(%error, "a2amx daemon reconnect failed");
-                self.next_reconnect =
-                    Instant::now() + Duration::from_millis(self.config.reconnect_ms);
+                self.next_reconnect = Instant::now() + self.config.reconnect;
             }
         }
     }
@@ -375,7 +374,7 @@ async fn pair(
         bail!("pairing not confirmed");
     }
     let pairing = Pairing {
-        guild_id: loaded.config.guild_id.clone(),
+        guild_id: loaded.guild_id.clone(),
         user_id: event.author,
     };
     relay_files::write_pairing(loaded.layout.root(), &pairing)?;

@@ -482,7 +482,7 @@ fn load_reads_defaults_and_pairing() {
         0o600,
     );
     let loaded = relay_files::load(home.path()).unwrap();
-    assert_eq!(loaded.config.guild_id, "123");
+    assert_eq!(loaded.guild_id, "123");
     assert_eq!(loaded.config.control_category, "a2amx");
     assert_eq!(loaded.config.control_channel, "control");
     assert_eq!(loaded.config.max_members, 2);
@@ -490,6 +490,49 @@ fn load_reads_defaults_and_pairing() {
     assert_eq!(loaded.token, "bot-token");
 }
 
+#[test]
+fn load_rejects_missing_or_comments_only_gateway_guild() {
+    for comments in [None, Some("# gateway settings only\n")] {
+        let home = tempdir().unwrap();
+        let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+        layout.ensure().unwrap();
+        write_file(&layout.discord_token(), "bot-token\n", 0o600);
+        if let Some(comments) = comments {
+            write_file(&layout.gateway_config(), comments, 0o600);
+        }
+        let error = relay_files::load(home.path()).unwrap_err().to_string();
+        assert!(
+            error.contains("gateway.toml")
+                && error.contains("guild_id")
+                && error.contains("not set"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn gateway_template_with_guild_id_loads_through_relay() {
+    let home = tempdir().unwrap();
+    let layout = a2amx::layout::Layout::new(home.path().to_path_buf());
+    layout.ensure().unwrap();
+    write_file(&layout.discord_token(), "bot-token\n", 0o600);
+    a2amx::config::ensure_gateway_file(&layout).unwrap();
+    let template = fs::read_to_string(layout.gateway_config()).unwrap();
+    let template = template
+        .lines()
+        .map(|line| {
+            line.strip_prefix("# guild_id = ")
+                .map(|value| format!("guild_id = {value}"))
+                .unwrap_or_else(|| line.to_owned())
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    write_file(&layout.gateway_config(), &format!("{template}\n"), 0o600);
+    assert_eq!(
+        relay_files::load(home.path()).unwrap().guild_id,
+        "123456789012345678"
+    );
+}
 #[test]
 fn load_rejects_unknown_config_key() {
     let home = tempdir().unwrap();
@@ -557,7 +600,7 @@ fn load_rejects_bad_values_and_oversized_config() {
     for config in [
         "guild_id = \"not-numeric\"\n",
         "guild_id = \"123\"\ncontrol_channel = \"a_BAD\"\n",
-        "guild_id = \"123\"\nidle_ms = 0\n",
+        "guild_id = \"123\"\nidle = \"0ms\"\n",
     ] {
         let home = tempdir().unwrap();
         valid_gateway(home.path());
@@ -897,7 +940,7 @@ async fn member_limit_pauses_inbound_and_resumes_at_limit() {
     valid_gateway(home.path());
     write_file(
         &home.path().join("config/gateway.toml"),
-        "guild_id = \"123\"\nmember_check_ms = 10\nsync_ms = 10\nidle_ms = 10\n",
+        "guild_id = \"123\"\nmember_check = \"10ms\"\nsync = \"10ms\"\nidle = \"10ms\"\n",
         0o600,
     );
     write_file(
@@ -970,7 +1013,7 @@ async fn member_pause_holds_agent_delivery_and_channels() {
     valid_gateway(home.path());
     write_file(
         &home.path().join("config/gateway.toml"),
-        "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 20\nreconnect_ms = 50\n",
+        "guild_id = \"123\"\nsync = \"10ms\"\nidle = \"10ms\"\nmember_check = \"20ms\"\nreconnect = \"50ms\"\n",
         0o600,
     );
     write_file(
@@ -1146,7 +1189,7 @@ async fn failed_outbound_post_reports_undeliverable() {
     valid_gateway(home.path());
     write_file(
         &home.path().join("config/gateway.toml"),
-        "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 50\n",
+        "guild_id = \"123\"\nsync = \"10ms\"\nidle = \"10ms\"\nmember_check = \"50ms\"\nreconnect = \"50ms\"\n",
         0o600,
     );
     write_file(
@@ -1236,7 +1279,7 @@ async fn failed_channel_creation_reports_undeliverable() {
     valid_gateway(home.path());
     write_file(
         &home.path().join("config/gateway.toml"),
-        "guild_id = \"123\"\nsync_ms = 60000\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 50\n",
+        "guild_id = \"123\"\nsync = \"60s\"\nidle = \"10ms\"\nmember_check = \"50ms\"\nreconnect = \"50ms\"\n",
         0o600,
     );
     write_file(
@@ -1381,7 +1424,7 @@ async fn unlisted_agent_channel_is_unbound() {
     valid_gateway(home.path());
     write_file(
         &home.path().join("config/gateway.toml"),
-        "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 50\n",
+        "guild_id = \"123\"\nsync = \"10ms\"\nidle = \"10ms\"\nmember_check = \"50ms\"\nreconnect = \"50ms\"\n",
         0o600,
     );
     write_file(
@@ -1456,7 +1499,7 @@ async fn daemon_down_answers_only_the_paired_author_and_reconnects_after_restart
     valid_gateway(home.path());
     write_file(
         &home.path().join("config/gateway.toml"),
-        "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 50\n",
+        "guild_id = \"123\"\nsync = \"10ms\"\nidle = \"10ms\"\nmember_check = \"50ms\"\nreconnect = \"50ms\"\n",
         0o600,
     );
     write_file(
@@ -1548,7 +1591,7 @@ async fn reconnect_waits_for_configured_interval() {
     valid_gateway(home.path());
     write_file(
         &home.path().join("config/gateway.toml"),
-        "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 50\nreconnect_ms = 400\n",
+        "guild_id = \"123\"\nsync = \"10ms\"\nidle = \"10ms\"\nmember_check = \"50ms\"\nreconnect = \"400ms\"\n",
         0o600,
     );
     write_file(
@@ -1954,7 +1997,7 @@ async fn relay_end_to_end_confined_both_and_send_agents() {
     valid_gateway(home.path());
     write_file(
         &home.path().join("config/gateway.toml"),
-        "guild_id = \"123\"\nsync_ms = 10\nidle_ms = 10\nmember_check_ms = 20\n",
+        "guild_id = \"123\"\nsync = \"10ms\"\nidle = \"10ms\"\nmember_check = \"20ms\"\n",
         0o600,
     );
     write_file(

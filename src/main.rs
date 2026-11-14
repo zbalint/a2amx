@@ -219,9 +219,13 @@ async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 Err(error) => return Err(anyhow!("cannot read A2AMX_OWNER_AWAY_SECS: {error}")),
             };
             let layout = a2amx::layout::Layout::new(home.clone());
-            let output =
-                tokio::task::spawn_blocking(move || a2amx::config::show_daemon(&layout, env_value))
-                    .await??;
+            let output = tokio::task::spawn_blocking(move || {
+                let mut output = a2amx::config::show_daemon(&layout, env_value)?;
+                output.push('\n');
+                output.push_str(&a2amx::config::show_gateway(&layout)?);
+                Ok::<_, anyhow::Error>(output)
+            })
+            .await??;
             write_stdout(output.into_bytes()).await
         }
         Command::Daemon { action } => match action {
@@ -305,7 +309,14 @@ const MAX_GATEWAY_TOKEN_BYTES: usize = 64 * 1024;
 async fn run_gateway_token(home: &Path) -> anyhow::Result<()> {
     a2amx::layout::Layout::new(home.to_owned()).ensure()?;
     let token = tokio::task::spawn_blocking(read_gateway_token).await??;
-    relay_files::write_token(home, &token)
+    let home = home.to_owned();
+    tokio::task::spawn_blocking(move || {
+        relay_files::write_token(&home, &token)?;
+        a2amx::config::ensure_gateway_file(&a2amx::layout::Layout::new(home))?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    Ok(())
 }
 
 fn read_gateway_token() -> anyhow::Result<String> {
@@ -389,7 +400,7 @@ async fn run_gateway_stop(home: &Path) -> anyhow::Result<std::process::ExitCode>
 
 async fn run_gateway(home: PathBuf, pair: bool, pair_only: bool) -> anyhow::Result<()> {
     let loaded = a2amx::relay::load(&home)?;
-    let mut discord = DiscordConfig::new(loaded.token.clone(), loaded.config.guild_id.clone());
+    let mut discord = DiscordConfig::new(loaded.token.clone(), loaded.guild_id.clone());
     discord.api_base = loaded.config.api_base.clone();
     discord.gateway_url = loaded.config.gateway_url.clone();
     let pair_io = (pair || pair_only).then(|| PairIo {

@@ -2879,12 +2879,37 @@ fn config_show_is_read_only_on_fresh_root() {
     command.env_remove("A2AMX_OWNER_AWAY_SECS");
     let output = command.output().unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
-    let expected_first_line = format!(
-        "daemon.toml: {} (absent)\n",
-        home.join("config/daemon.toml").display()
+    let expected = format!(
+        "daemon.toml: {} (absent)\n\
+listen = [\"127.0.0.1:0\"]  (default)\n\
+host_name = (unset)  (default)\n\
+owner_away = \"1m\"  (default)\n\
+limits.max_pending_per_recipient = 50  (default)\n\
+limits.rate_per_minute = 20  (default)\n\
+limits.human_inbound_per_minute = 20  (default)\n\
+limits.human_outbound_per_minute = 30  (default)\n\
+limits.max_stored_messages = 10000  (default)\n\
+limits.retention = \"7d\"  (default)\n\
+limits.lease = \"1d\"  (default)\n\
+limits.code_ttl = \"10m\"  (default)\n\
+\n\
+gateway.toml: {} (absent)\n\
+guild_id = (unset)  (default)\n\
+control_category = \"a2amx\"  (default)\n\
+control_channel = \"control\"  (default)\n\
+max_members = 2  (default)\n\
+sync = \"15s\"  (default)\n\
+idle = \"1s\"  (default)\n\
+member_check = \"1m\"  (default)\n\
+reconnect = \"5s\"  (default)\n",
+        home.join("config/daemon.toml").display(),
+        home.join("config/gateway.toml").display(),
     );
-    assert!(stdout(&output).starts_with(&expected_first_line));
+    let text = stdout(&output);
+    assert_eq!(text, expected);
+    assert_eq!(text.lines().count(), 22);
     assert!(!home.join("config/daemon.toml").exists());
+    assert!(!home.join("config/gateway.toml").exists());
     assert!(!home.join("config").exists());
     assert!(!home.exists());
 }

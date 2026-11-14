@@ -8,7 +8,7 @@ The brackets below describe optional arguments; angle brackets name required val
 
 ```text
 a2amx daemon start [--foreground] [--owner-away-secs SECONDS] # start the daemon; detached by default
-a2amx config show                    # show daemon configuration and value sources
+a2amx config show                    # show daemon and gateway configuration and value sources
 a2amx daemon status                  # show daemon state, build version and session counts
 a2amx daemon stop [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx new --watch developer --heartbeat 30m -- sh # digest watched peers after idle
@@ -181,6 +181,9 @@ because direct invocation is unconfined. Remote-enabled sessions must be confine
 gateway they must also belong to a named team.
 With `--pair`, pairing stays in the foreground until confirmation and then hands the lock to the
 background gateway; `--pair --foreground` keeps the gateway in this terminal until Ctrl-C.
+
+`gateway token` also creates the commented `config/gateway.toml` template once when absent.
+`config show` prints the gateway section after the daemon section without creating either file.
 
 ## State directory and attachment
 

@@ -94,6 +94,7 @@ pub fn sandbox_argv(layout: &LaunchPlan, inner: &[String]) -> Vec<String> {
 
 pub fn up(home: &Path, pair: bool, foreground: bool) -> Result<()> {
     crate::layout::Layout::new(home.to_owned()).ensure()?;
+    crate::config::ensure_gateway_file(&crate::layout::Layout::new(home.to_owned()))?;
     let loaded = crate::relay_files::load(home)?;
     if !pair && loaded.pairing.is_none() {
         bail!("not paired; run with --pair");
