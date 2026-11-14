@@ -66,7 +66,7 @@ to project B: **removed** by the per-project key.
    acceptance is written, by the existing write path (`omp::write_if_changed`), and only when the set changes.
 4. Reading: first `std::fs::metadata(path)?.is_file()` (follows symlinks, so a FIFO is refused before `open`
    would block; a symlinked file is allowed, the directory is owner-only), then at most 65,536 bytes (a larger
-   file is the error `accepted auto-grants file {path} is larger than 65536 bytes`), UTF-8, valid TOML of exactly this shape (unknown top-level or
+   file is the error `accepted auto-grants.toml file {path} is larger than 65536 bytes`), UTF-8, valid TOML of exactly this shape (unknown top-level or
    project keys, a non-list `grants`, or a non-string entry are errors naming the file). Grant names that are not
    in the grant table are ignored, so a grant removed in a later release does not break the file. A missing file
    is an empty acceptance. `write_if_changed` replaces a symlinked file by a regular one on the first write; this
@@ -171,3 +171,7 @@ with `HOME` under `target/scratch/3el/`.
 ## 8. Amendment 1
 
 The developer reported (BLOCKED) that `docs/philosophy.md:51-54` and `docs/roadmap.md:28` state the old rule (only global auto; acceptance by grant name). Both are added to the scope and to section 4, and the acceptance `rg` gains `only global auto|global auto mode`. Nothing else changes.
+
+### Amendment 2
+
+Section 2.4's size error text conflicted with section 3.3 and the acceptance `rg` (`accepted auto-grants file` matches `auto-grants\b[^.]`). Ruling: every diagnostic about the accepted file says `accepted auto-grants.toml file ...`, so the size error is exactly `accepted auto-grants.toml file {path} is larger than 65536 bytes` and test 6 asserts the text `larger than 65536 bytes` as before. The developer's wording is correct. Nothing else changes.
