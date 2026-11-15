@@ -993,12 +993,21 @@ impl Session {
                 state.emulator.is_scrolled(),
             )
     }
+    fn stale_agy_draft(state: &State) -> bool {
+        state.hold == Some(Hold::HumanDraft)
+            && state.restore.is_none()
+            && state
+                .last_human_input
+                .is_none_or(|input| input.elapsed() >= STALE_DRAFT_MARGIN)
+            && harness::agy_composer_idle(&state.emulator.screen(), state.emulator.is_scrolled())
+    }
 
     fn draft_is_stale(&self, state: &State) -> bool {
         match self.harness {
             Harness::Omp => Self::stale_omp_draft(state),
             Harness::Claude => Self::stale_claude_draft(state),
-            Harness::Generic | Harness::Codex | Harness::Agy => false,
+            Harness::Agy => Self::stale_agy_draft(state),
+            Harness::Generic | Harness::Codex => false,
         }
     }
 
@@ -1148,7 +1157,10 @@ impl Session {
 
     pub(crate) async fn begin_delivery(&self) -> Option<Delivery<'_>> {
         let gate = self.input_gate.lock().await;
-        let state = self.lock();
+        let mut state = self.lock();
+        if self.harness == Harness::Agy && self.draft_is_stale(&state) {
+            state.hold = None;
+        }
         if state.exit_code.is_some()
             || state.hold.is_some()
             || !harness::ready(

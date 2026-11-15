@@ -240,3 +240,20 @@ as typing in `input_is_typing` (all harnesses, unchanged, backlog). Acceptance a
 keystroke is followed by an idle empty composer for longer than the margin and a message then submits with no
 Release; a `> draft` composer stays held; mutation: remove the release in `begin_delivery`, a test fails. Process
 lesson: a spec that adds a release predicate must name every path (reset, delivery) that consults it.
+
+## Review record
+
+Models: architect and tester pass as recorded below; architect Claude Sonnet 5.5, consultant Claude (pre-lock review), developer OMP openai-codex/gpt-5.6-luna, tester OMP deepseek-v4.1-flash.
+BLOCKED/amend cycles: 2 (Amendment 1 ExitFixture, Amendment 2 begin_delivery).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | `ready` as an emptiness test would break `Delivery::recheck` (pasted text) | spec redesigned: shape test for `ready`, separate `agy_composer_idle` |
+| Implementation | developer | `kill` gate uses `ready`; `ExitFixture` drew the Claude composer | Amendment 1 |
+| Tester pass | tester | spinner/queued test cases vacuous (ESC[2J erased their rows); wrapped-envelope, /clear-menu and working-draft cases missing | fix round 1 |
+| Tester pass | tester | 40-row band and space-after-glyph mutants survived | two negative tests |
+| Tester pass (live) | tester | a stale draft released only on reset, so a message stayed held after a keystroke or Esc | Amendment 2, agy-only release in `begin_delivery` |
+| Tester pass | tester | spec 7.2 said four files after Amendment 1 | corrected |
+| Architect | architect | spec section 3 named only the reset path for the release predicate (spec miss) | Amendment 2 |
+
+Open, not fixed here: reset on a non-empty agy composer merges `/clear` into agy's queued text (backlog); a lone Esc counts as typing for every harness (backlog).

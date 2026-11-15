@@ -1335,10 +1335,14 @@ impl ExitFixture {
 tty.setraw(0)
 record = open(sys.argv[1], "wb", buffering=0)
 mode = sys.argv[2]
+harness = sys.argv[3]
 cols = os.get_terminal_size().columns
 sys.stdout.write("\x1b[?2004h\x1b[?25h\x1b[2J\x1b[1;1Hfixture-ready")
 if mode != "not-ready":
-    sys.stdout.write("\x1b[3;1H" + "─" * cols + "\x1b[5;1H" + "─" * cols + "\x1b[4;1H❯\u00a0")
+    if harness == "agy":
+        sys.stdout.write("\x1b[3;1H" + "─" * cols + "\x1b[5;1H" + "─" * cols + "\x1b[4;1H> \x1b[4;3H")
+    else:
+        sys.stdout.write("\x1b[3;1H" + "─" * cols + "\x1b[5;1H" + "─" * cols + "\x1b[4;1H❯\u00a0")
 sys.stdout.flush()
 first = None
 while True:
@@ -1403,11 +1407,12 @@ while True:
             "--",
             "sh",
             "-c",
-            "exec python3 -u \"$1\" \"$2\" \"$3\"",
+            "exec python3 -u \"$1\" \"$2\" \"$3\" \"$4\"",
             "fixture",
             script.to_str().unwrap(),
             fixture.record.to_str().unwrap(),
             mode,
+            harness,
         ];
         let mut create = a2amx(&fixture.home, &args);
         if let Some(path) = &path {

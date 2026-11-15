@@ -1702,6 +1702,43 @@ async fn claude_reset_target(admin: &mut Client, composer: &str) -> String {
         response => panic!("unexpected target response: {response:?}"),
     }
 }
+async fn agy_reset_target(admin: &mut Client, composer: &str, post_input: Option<&str>) -> String {
+    let rules = "─".repeat(40);
+    let redraw = post_input.unwrap_or("");
+    let command = format!(
+        "stty raw -echo; printf '\\033[2J\\033[?2004h\\033[2;1H{rules}\\033[3;1H> {composer}\\033[4;1H{rules}\\033[3;3H\\033[?25h'; {} exec cat >/dev/null",
+        if redraw.is_empty() {
+            String::new()
+        } else {
+            format!("head -c 1 >/dev/null; printf '{redraw}';")
+        }
+    );
+    match admin
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), command],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("agy-target".into()),
+            harness: Harness::Agy,
+            deliver: Some(Deliver::Auto),
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected target response: {response:?}"),
+    }
+}
 
 async fn reset_rejection(
     address: SocketAddr,
@@ -1818,6 +1855,29 @@ async fn wait_claude_ready(home: &Path, target: &str) {
             return None;
         };
         (info.ready == Some(true)).then_some(())
+    })
+    .await;
+}
+async fn wait_screen_contains(home: &Path, target: &str, marker: &str) {
+    let target = target.to_owned();
+    let marker = marker.to_owned();
+    common::eventually(|| {
+        let target = target.clone();
+        let marker = marker.clone();
+        async move {
+            let mut client = Client::connect(home).await.ok()?;
+            let Response::Screen { lines } = client
+                .request(Request::Screen { session: target })
+                .await
+                .ok()?
+            else {
+                return None;
+            };
+            lines
+                .iter()
+                .any(|line| line.contains(&marker))
+                .then_some(())
+        }
     })
     .await;
 }
@@ -2290,6 +2350,191 @@ async fn reset_nonempty_claude_composer_stays_held_after_margin() {
     reset_rejection_admin(dir.path(), &target, "draft_present", "hold human_draft").await;
     tokio::time::sleep(Duration::from_millis(2200)).await;
     reset_rejection_admin(dir.path(), &target, "draft_present", "hold human_draft").await;
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_stale_agy_draft_hold_clears_after_margin() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = agy_reset_target(&mut admin, "", None).await;
+    wait_claude_ready(dir.path(), &target).await;
+
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    wait_claude_hold(dir.path(), &target).await;
+    reset_rejection_admin(dir.path(), &target, "draft_present", "hold human_draft").await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(reset_success_admin(dir.path(), &target).await, 1);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stale_agy_hold_releases_before_delivery_without_manual_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_, _, mut sender) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let target = agy_reset_target(&mut admin, "", None).await;
+    wait_claude_ready(dir.path(), &target).await;
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    wait_claude_hold(dir.path(), &target).await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    let id = match send(&mut sender, "agy-target@host-a", "subject", "body").await {
+        Response::Accepted { id, .. } => id,
+        response => panic!("unexpected send response: {response:?}"),
+    };
+    let message = wait_status(&mut sender, &id, |message| message.state == "submitted").await;
+    assert_eq!(message.state, "submitted");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stale_agy_hold_keeps_nonempty_composer_held_for_delivery() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_, _, mut sender) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let target = agy_reset_target(&mut admin, "draft", None).await;
+    wait_claude_ready(dir.path(), &target).await;
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    wait_claude_hold(dir.path(), &target).await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    let id = match send(&mut sender, "agy-target@host-a", "subject", "body").await {
+        Response::Accepted {
+            id,
+            recipient_hold: Some(hold),
+            ..
+        } => {
+            assert_eq!(hold, "human_draft");
+            id
+        }
+        response => panic!("unexpected send response: {response:?}"),
+    };
+    let message = wait_status(&mut sender, &id, |message| {
+        message.state == "pending" && message.hold_reason.as_deref() == Some("human_draft")
+    })
+    .await;
+    assert_eq!(message.hold_reason.as_deref(), Some("human_draft"));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_nonempty_agy_composer_stays_held_after_margin() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = agy_reset_target(&mut admin, "draft", None).await;
+    wait_claude_ready(dir.path(), &target).await;
+
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&target, false, 40, 10)
+        .await
+        .unwrap();
+    attachment
+        .send(ClientFrame::Input(b"x".to_vec()))
+        .await
+        .unwrap();
+    wait_claude_hold(dir.path(), &target).await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    reset_rejection_admin(dir.path(), &target, "draft_present", "hold human_draft").await;
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn agy_delivery_recheck_with_pasted_composer_is_submitted() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_, _, mut sender) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let redraw = "\\033[3;3Hpasted envelope\\033[3;18H";
+    let target = agy_reset_target(&mut admin, "", Some(redraw)).await;
+    wait_claude_ready(dir.path(), &target).await;
+    accepted(
+        send(&mut sender, "agy-target@host-a", "subject", "body").await,
+        "m_1",
+        None,
+    );
+    wait_screen_contains(dir.path(), &target, "pasted envelope").await;
+    let message = wait_status(&mut sender, "m_1", |message| message.state == "submitted").await;
+    assert_eq!(message.state, "submitted");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn agy_delivery_recheck_without_composer_is_unsubmitted() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_, _, mut sender) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let redraw = "\\033[2J\\033[?25l\\033[2;1HMCP\\033[3;1H> 1. Yes, allow tool call";
+    let target = agy_reset_target(&mut admin, "", Some(redraw)).await;
+    wait_claude_ready(dir.path(), &target).await;
+    accepted(
+        send(&mut sender, "agy-target@host-a", "subject", "body").await,
+        "m_1",
+        None,
+    );
+    wait_screen_contains(dir.path(), &target, "MCP").await;
+    let message = wait_status(&mut sender, "m_1", |message| message.state == "unsubmitted").await;
+    assert_eq!(message.detail.as_deref(), Some("screen_not_ready"));
     daemon.shutdown().await.unwrap();
 }
 

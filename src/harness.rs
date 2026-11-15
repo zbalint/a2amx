@@ -216,6 +216,73 @@ pub fn channel_dialog_visible(screen: &Screen) -> bool {
         .any(|row| row_contains_marker(screen, row, "I am using this for local development"))
 }
 
+// shortcut: a card that appears between delivery recheck and Enter can still
+// pass this shape check; add the status-line `tool_confirmation_pending` signal
+// if it becomes available while idle. Only the two known placeholders count as
+// empty, and a hidden cursor remains not ready even when the composer is idle.
+fn agy_composer(screen: &Screen) -> Option<(u16, u16)> {
+    if !screen.cursor.visible {
+        return None;
+    }
+    let row = screen.cursor.row;
+    let top = (0..row)
+        .rev()
+        .find(|&candidate| row_is_rule(screen, candidate))?;
+    let bottom = ((row + 1)..screen.size.rows).find(|&candidate| row_is_rule(screen, candidate))?;
+    if bottom - top > 40 || cell_char(screen, top + 1, 0) != Some('>') {
+        return None;
+    }
+    if cell_char(screen, top + 1, 1) != Some(' ') {
+        return None;
+    }
+    if !(top + 2..bottom).all(|candidate| {
+        cell_char(screen, candidate, 0) == Some(' ') && cell_char(screen, candidate, 1) == Some(' ')
+    }) {
+        return None;
+    }
+    Some((top, bottom))
+}
+
+fn row_matches_text_then_blank(screen: &Screen, row: u16, start: u16, text: &str) -> bool {
+    let Ok(text_len) = u16::try_from(text.chars().count()) else {
+        return false;
+    };
+    let Some(end) = start.checked_add(text_len) else {
+        return false;
+    };
+    if end > screen.size.cols {
+        return false;
+    }
+    if !text
+        .chars()
+        .enumerate()
+        .all(|(offset, expected)| cell_char(screen, row, start + offset as u16) == Some(expected))
+    {
+        return false;
+    }
+    row_is_blank_from(screen, row, end)
+}
+
+/// Returns whether an Agy composer is visibly empty and safe to release as a stale draft.
+pub fn agy_composer_idle(screen: &Screen, scrolled: bool) -> bool {
+    if !ready(Harness::Agy, screen, scrolled) {
+        return false;
+    }
+    let Some((top, bottom)) = agy_composer(screen) else {
+        return false;
+    };
+    if bottom != top + 2 || screen.cursor.row != top + 1 || screen.cursor.col != 2 {
+        return false;
+    }
+    row_is_blank_from(screen, screen.cursor.row, 2)
+        || [
+            "Auto mode: edits & safe commands auto-approved (shift+tab to cycle)",
+            "Plan mode: research & plan only (shift+tab to cycle)",
+        ]
+        .into_iter()
+        .any(|placeholder| row_matches_text_then_blank(screen, screen.cursor.row, 2, placeholder))
+}
+
 fn claude_ready(screen: &Screen, scrolled: bool) -> bool {
     if !screen.modes.bracketed_paste || scrolled || !claude_cursor_shown(screen) {
         return false;
@@ -284,9 +351,10 @@ pub fn claude_composer_empty(screen: &Screen, scrolled: bool) -> bool {
 
 pub fn ready(harness: Harness, screen: &Screen, scrolled: bool) -> bool {
     match harness {
-        Harness::Generic | Harness::Omp | Harness::Codex | Harness::Agy => {
+        Harness::Generic | Harness::Omp | Harness::Codex => {
             screen.modes.bracketed_paste && !scrolled
         }
+        Harness::Agy => screen.modes.bracketed_paste && !scrolled && agy_composer(screen).is_some(),
         Harness::Claude => claude_ready(screen, scrolled),
     }
 }
