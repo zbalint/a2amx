@@ -22,7 +22,7 @@ fn names_agy_by_exact_executable_file_name() {
     assert_eq!(Harness::Agy.as_str(), "agy");
     assert_eq!(
         Harness::Agy.default_deliver(),
-        a2amx::harness::Deliver::Hold
+        a2amx::harness::Deliver::Auto
     );
 }
 

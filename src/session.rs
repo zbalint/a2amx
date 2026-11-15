@@ -1053,6 +1053,16 @@ impl Session {
                 state.emulator.is_scrolled(),
             ) {
                 Some((messaging::code::NOT_READY, "screen not ready".to_owned()))
+            } else if self.harness == Harness::Agy
+                && !harness::agy_composer_idle(
+                    &state.emulator.screen(),
+                    state.emulator.is_scrolled(),
+                )
+            {
+                Some((
+                    messaging::code::DRAFT_PRESENT,
+                    "composer not empty".to_owned(),
+                ))
             } else {
                 None
             }
@@ -1168,6 +1178,11 @@ impl Session {
                 &state.emulator.screen(),
                 state.emulator.is_scrolled(),
             )
+            || (self.harness == Harness::Agy
+                && !harness::agy_composer_idle(
+                    &state.emulator.screen(),
+                    state.emulator.is_scrolled(),
+                ))
         {
             return None;
         }

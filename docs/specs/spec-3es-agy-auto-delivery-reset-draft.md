@@ -85,3 +85,18 @@ Mutation: remove the reset branch, test 2 fails; remove the `begin_delivery` con
    answered; reset with queued or typed text in the composer is rejected `draft_present`; record which agy screen, if
    any, leaves queued text in the composer (Esc after a turn, a stopped turn) and what delivery does there.
    Residual: the first delivery can arrive before the plugin's tools are connected (Claude has the same race).
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review); developer OMP openai-codex/gpt-5.6-luna; tester OMP opencode-go/deepseek-v4.1-flash.
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | the tightened reset gate also changes graceful `kill`, `explain` and the wait after `/clear`; not stated | stated in the spec, live check added |
+| Draft review | consultant | test seams wrong (`agy_reset_target` hard-coded `Deliver::Auto`, child is `cat`, helper width too small for the placeholder) | spec text corrected |
+| Draft review | consultant | a composer holding agy's own text would also merge with an auto delivery (not only reset) | `begin_delivery` agy condition added |
+| Implementation | developer | delivery regression asserted `pending` immediately and could pass before the retry loop ran | test waits 1100 ms first |
+| Tester pass (live) | tester | collapsed `▸` queue rows above an empty composer let `reset` run; `/clear` cancels the in-flight turn and queued messages | not fixed here, backlog G15 |
+
+Not a second consult after the `begin_delivery` addition: it reuses the 3er predicate and is covered by the live and broker tests.

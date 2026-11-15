@@ -67,8 +67,8 @@ impl Harness {
 
     pub fn default_deliver(self) -> Deliver {
         match self {
-            Self::Claude | Self::Omp | Self::Codex => Deliver::Auto,
-            Self::Generic | Self::Agy => Deliver::Hold,
+            Self::Claude | Self::Omp | Self::Codex | Self::Agy => Deliver::Auto,
+            Self::Generic => Deliver::Hold,
         }
     }
 }

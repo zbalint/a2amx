@@ -29,6 +29,7 @@ lag the code.
 | G12 | A lone Esc counts as typing for every harness and sets `human_draft`; for `agy` the stale-draft release frees it after two seconds. Excluding it would change Claude, OMP and Codex | spec 3es |
 | G13 | `a2amx new --help` text for `--harness` does not name `agy` among the inferred harnesses (`src/cli.rs`) | review of spec 3es |
 | G14 | `agy`: scroll keys, the file-edit permission card and a probe of agy's behaviour after Esc interrupts (queued text restored to the composer) are not measured | tester probes |
+| G15 | `agy`: when a tool call runs, queued messages show as collapsed `▸` rows above an empty composer, so `reset` is allowed and its `/clear` cancels the in-flight turn and the queued messages while they stay recorded `submitted` (tester, live, spec 3es). Gate reset on the collapsed queue or an in-flight turn | spec 3es |
 
 ## Untested or unverified
 
