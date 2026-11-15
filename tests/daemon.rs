@@ -874,6 +874,44 @@ async fn attach_status_reports_starting_latch_and_generic_never_starting() {
 }
 
 #[tokio::test]
+async fn agy_never_reports_starting_before_ready() {
+    use a2amx::harness::{Deliver, Harness};
+
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let team = TeamScope {
+        name: "agy-starting".into(),
+        private: false,
+        allow: Vec::new(),
+        agents: Vec::new(),
+    };
+    let agy = common::new_team_agent(
+        &mut admin,
+        dir.path(),
+        Some("agy"),
+        Harness::Agy,
+        Deliver::Auto,
+        Some(team),
+        &[],
+        &[],
+    )
+    .await
+    .0;
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&agy, false, 40, 5, 0)
+        .await
+        .unwrap();
+    assert!(matches!(next(&mut attachment).await, ServerFrame::Data(_)));
+    let ServerFrame::Status(status) = next(&mut attachment).await else {
+        panic!("initial Agy status frame");
+    };
+    assert!(!status.starting);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn exited_never_ready_team_member_is_not_starting() {
     use a2amx::harness::{Deliver, Harness};
 

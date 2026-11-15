@@ -167,6 +167,27 @@ fn global_status_line_is_used_and_disabled_user_line_becomes_report_only() {
 }
 
 #[test]
+fn empty_status_line_commands_become_report_only() {
+    for command in ["", "   ", "\t", "\n", " \t\n "] {
+        let argv = wire_agy_argv(
+            vec![
+                "agy".into(),
+                "--settings".into(),
+                json!({"statusLine": {"command": command, "enabled": true, "padding": 2, "stack_with_default": true}}).to_string(),
+            ],
+            Path::new("/x/a2amx"),
+            Path::new("/work"),
+            Path::new(""),
+        )
+        .unwrap();
+        assert_eq!(
+            settings(&argv)["statusLine"],
+            json!({"command": "'/x/a2amx' statusline --harness agy --report", "enabled": true})
+        );
+    }
+}
+
+#[test]
 fn malformed_status_line_and_trusted_workspaces_are_preserved_or_rejected() {
     let dir = tempdir().unwrap();
     let malformed = wire_agy_argv(

@@ -2153,12 +2153,14 @@ fn default_hide_names_and_sources_match_the_literal_sets() {
         "~/.claude/ide",
         "~/.claude/.credentials.json",
         "~/.codex/auth.json",
+        "~/.gemini/antigravity-cli/antigravity-oauth-token",
+        "~/.config/antigravity",
         "/run/dbus",
     ]
     .into_iter()
     .map(str::to_owned)
     .collect::<Vec<_>>();
-    assert_eq!(generic.len(), 31);
+    assert_eq!(generic.len(), 33);
     assert_eq!(confine::default_hide_names(Harness::Generic), generic);
 
     let claude = vec![
@@ -2191,12 +2193,14 @@ fn default_hide_names_and_sources_match_the_literal_sets() {
         "~/.s3cfg",
         "~/.claude/ide",
         "~/.codex/auth.json",
+        "~/.gemini/antigravity-cli/antigravity-oauth-token",
+        "~/.config/antigravity",
         "/run/dbus",
     ]
     .into_iter()
     .map(str::to_owned)
     .collect::<Vec<_>>();
-    assert_eq!(claude.len(), 30);
+    assert_eq!(claude.len(), 32);
     assert_eq!(confine::default_hide_names(Harness::Claude), claude);
 
     let codex = vec![
@@ -2229,30 +2233,64 @@ fn default_hide_names_and_sources_match_the_literal_sets() {
         "~/.s3cfg",
         "~/.claude/ide",
         "~/.claude/.credentials.json",
+        "~/.gemini/antigravity-cli/antigravity-oauth-token",
+        "~/.config/antigravity",
         "/run/dbus",
     ]
     .into_iter()
     .map(str::to_owned)
     .collect::<Vec<_>>();
-    assert_eq!(codex.len(), 30);
+    assert_eq!(codex.len(), 32);
     assert_eq!(confine::default_hide_names(Harness::Codex), codex);
+
+    let agy = generic
+        .iter()
+        .filter(|name| {
+            !matches!(
+                name.as_str(),
+                "~/.gemini/antigravity-cli/antigravity-oauth-token" | "~/.config/antigravity"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(agy.len(), 31);
+    assert_eq!(confine::default_hide_names(Harness::Agy), agy);
 
     let fixture = Fixture::new();
     let claude_credentials = fixture.home.join(".claude/.credentials.json");
     let codex_credentials = fixture.home.join(".codex/auth.json");
+    let agy_token = fixture
+        .home
+        .join(".gemini/antigravity-cli/antigravity-oauth-token");
+    let agy_scope = fixture.home.join(".config/antigravity");
     std::fs::create_dir_all(claude_credentials.parent().expect("Claude parent"))
         .expect("Claude directory");
     std::fs::create_dir_all(codex_credentials.parent().expect("Codex parent"))
         .expect("Codex directory");
+    std::fs::create_dir_all(agy_token.parent().expect("agy token parent")).expect("agy directory");
+    std::fs::create_dir_all(&agy_scope).expect("agy scope directory");
     std::fs::write(&claude_credentials, "fixture").expect("Claude credentials");
     std::fs::write(&codex_credentials, "fixture").expect("Codex credentials");
+    std::fs::write(&agy_token, "fixture").expect("agy token");
 
     let dbus = std::fs::canonicalize("/run/dbus").ok();
     for (harness, expected_credentials) in [
-        (Harness::Claude, vec![&codex_credentials]),
+        (
+            Harness::Claude,
+            vec![&codex_credentials, &agy_token, &agy_scope],
+        ),
         (
             Harness::Generic,
-            vec![&claude_credentials, &codex_credentials],
+            vec![
+                &claude_credentials,
+                &codex_credentials,
+                &agy_token,
+                &agy_scope,
+            ],
+        ),
+        (
+            Harness::Codex,
+            vec![&claude_credentials, &agy_token, &agy_scope],
         ),
     ] {
         let plan = confine::plan(
@@ -3425,6 +3463,103 @@ fn codex_launch_argv_matches_plan_wrap() {
     let expected = plan
         .wrap(vec!["codex".into(), "--remote".into()])
         .expect("expected wrapped Codex argv");
+    assert_eq!(argv, expected);
+}
+
+#[test]
+fn agy_plan_binds_only_antigravity_data_by_default() {
+    let fixture = Fixture::new();
+    let gemini = fixture.home.join(".gemini");
+    let antigravity = gemini.join("antigravity-cli");
+    let config = gemini.join("config");
+    let token = antigravity.join("antigravity-oauth-token");
+    let scope = fixture.home.join(".config/antigravity");
+    std::fs::create_dir_all(&config).expect("Gemini config");
+    std::fs::create_dir_all(&antigravity).expect("Antigravity data");
+    std::fs::create_dir_all(&scope).expect("credential scope");
+    std::fs::write(&token, "fixture").expect("OAuth token");
+
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Agy,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("Agy confinement");
+    let antigravity = std::fs::canonicalize(antigravity).expect("data canonical");
+    let gemini = std::fs::canonicalize(gemini).expect("root canonical");
+    let config = std::fs::canonicalize(config).expect("config canonical");
+    let token = std::fs::canonicalize(token).expect("token canonical");
+    let scope = std::fs::canonicalize(scope).expect("scope canonical");
+    assert!(plan.writable.contains(&antigravity));
+    assert!(
+        !plan
+            .writable
+            .iter()
+            .any(|path| path == &gemini || config.starts_with(path))
+    );
+    assert!(!plan.hidden_paths().contains(&token));
+    assert!(!plan.hidden_paths().contains(&scope));
+    assert!(!plan.skipped_paths().contains(&token));
+    assert!(!plan.skipped_paths().contains(&scope));
+
+    let granted = confine::plan(
+        &ConfineRequest {
+            grants: vec!["harness-config".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Agy,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("Agy harness-config grant");
+    assert!(granted.writable.contains(&gemini));
+    assert!(!granted.writable.contains(&antigravity));
+}
+
+#[test]
+fn ensure_data_dirs_creates_agy_data_only_when_root_exists() {
+    let fixture = Fixture::new();
+    let gemini = fixture.home.join(".gemini");
+    std::fs::create_dir_all(&gemini).expect("Gemini root");
+    confine::ensure_data_dirs(Harness::Agy, &fixture.home).expect("Agy data dirs");
+    let antigravity = gemini.join("antigravity-cli");
+    assert!(antigravity.is_dir());
+    assert_eq!(
+        std::fs::metadata(&antigravity)
+            .expect("data metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+
+    let absent = Fixture::new();
+    confine::ensure_data_dirs(Harness::Agy, &absent.home).expect("absent Gemini root");
+    assert!(!absent.home.join(".gemini/antigravity-cli").exists());
+}
+
+#[test]
+fn agy_launch_argv_matches_plan_wrap() {
+    let fixture = Fixture::new();
+    let plan = confine::plan(
+        &ConfineRequest::default(),
+        Harness::Agy,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("Agy plan")
+    .with_bwrap(PathBuf::from("bwrap"));
+    let argv = confine::launch_argv(
+        &plan,
+        "confinement notice",
+        vec!["agy".into(), "--remote".into()],
+        Harness::Agy,
+    )
+    .expect("Agy launch argv");
+    let expected = plan
+        .wrap(vec!["agy".into(), "--remote".into()])
+        .expect("expected wrapped Agy argv");
     assert_eq!(argv, expected);
 }
 
@@ -6702,7 +6837,7 @@ fn harness_config_grant_refuses_generic_hide_and_unhide() {
     };
     assert_eq!(
         error.to_string(),
-        "confinement grant \"harness-config\" needs a Claude, OMP, or Codex session"
+        "confinement grant \"harness-config\" needs a Claude, OMP, Codex, or Agy session"
     );
 
     let claude = Fixture::new();

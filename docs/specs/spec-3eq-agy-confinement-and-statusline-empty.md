@@ -150,3 +150,17 @@ documented by spec 4); self-update; docs.
 | `launch_argv` Agy arm is `plan.wrap(argv)` | `src/confine.rs:2557` | read |
 | `starting()` excludes `Agy`; the generic never-starting test | `src/session.rs:586-590`, `tests/daemon.rs:796` | read |
 | Empty user command yields `(\n)` | `src/harness.rs` `chained_command` | read; dash error reproduced by the tester (m_7492 point 8) |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review); developer OMP
+openai-codex/gpt-5.6-luna with advisor (identity not exposed); tester OMP opencode-go/deepseek-v4.1-flash.
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Review findings on the draft (fixture must create hide sources, truncate-vs-error wording, daemon test placement) | Applied before locking |
+| Tester pass | tester | Empty-command test input covered only `""` and spaces and had no `padding`/`stack_with_default`, so a narrowed trim and a passthrough mutant could survive | Test inputs extended by the architect (test-only); trim mutant now killed |
+| Tester pass | tester | Live probe infrastructure: a fixture HOME under /tmp is writable inside the confinement (tmpfs on /tmp) | Probe-only; not a product defect |
+
+Open follow-ups (not defects of this diff): `docs/confinement.md` harness-config default list omits Agy (spec 4); no repo test for the Agy data-path symlink escape or 0700 tightening of an existing data dir. Final gates (architect, fresh): cargo fmt --check and clippy -D warnings clean; cargo test 0 failed.

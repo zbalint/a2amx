@@ -524,6 +524,12 @@ fn build_agy_status_line(resolved: &Option<serde_json::Value>, exe: &Path) -> se
     if command.as_bytes().contains(&0) {
         return status_line.clone();
     }
+    if command.trim().is_empty() {
+        return serde_json::json!({
+            "command": format!("{executable} statusline --harness agy --report"),
+            "enabled": true,
+        });
+    }
     if object.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) {
         return serde_json::json!({
             "command": format!("{executable} statusline --harness agy --report"),

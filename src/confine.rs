@@ -485,7 +485,10 @@ fn harness_data(harness: Harness, home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
                 ]);
             }
         }
-        Harness::Generic | Harness::Codex | Harness::Agy => {}
+        Harness::Agy => {
+            dirs.push(home.join(".gemini/antigravity-cli"));
+        }
+        Harness::Generic | Harness::Codex => {}
     }
     (dirs, files)
 }
@@ -603,7 +606,8 @@ fn validate_harness_data_paths(
     let expected_sources = match harness {
         Harness::Claude => vec![home.join(".claude")],
         Harness::Omp => vec![home.join(".omp/agent"), home.join(".omp")],
-        Harness::Generic | Harness::Codex | Harness::Agy => Vec::new(),
+        Harness::Agy => vec![home.join(".gemini")],
+        Harness::Generic | Harness::Codex => Vec::new(),
     };
     let expected_roots = expected_sources
         .iter()
@@ -658,7 +662,8 @@ pub fn ensure_data_dirs(harness: Harness, home: &Path) -> Result<()> {
     let root = match harness {
         Harness::Claude => home.join(".claude"),
         Harness::Omp => home.join(".omp"),
-        Harness::Generic | Harness::Codex | Harness::Agy => return Ok(()),
+        Harness::Agy => home.join(".gemini"),
+        Harness::Generic | Harness::Codex => return Ok(()),
     };
     if !root.is_dir() {
         return Ok(());
@@ -1033,13 +1038,14 @@ fn add_harness_data_mounts(
     writable: &mut Vec<PathBuf>,
     skipped: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    if harness == Harness::Generic || harness == Harness::Codex || harness == Harness::Agy {
+    if harness == Harness::Generic || harness == Harness::Codex {
         return Ok(());
     }
     let root = match harness {
         Harness::Claude => home.join(".claude"),
         Harness::Omp => home.join(".omp"),
-        Harness::Generic | Harness::Codex | Harness::Agy => unreachable!(),
+        Harness::Agy => home.join(".gemini"),
+        Harness::Generic | Harness::Codex => unreachable!(),
     };
     if !root.is_dir() {
         return Ok(());
@@ -1281,6 +1287,10 @@ pub fn default_hide_names(harness: Harness) -> Vec<String> {
     if harness != Harness::Codex {
         names.push("~/.codex/auth.json".to_owned());
     }
+    if harness != Harness::Agy {
+        names.push("~/.gemini/antigravity-cli/antigravity-oauth-token".to_owned());
+        names.push("~/.config/antigravity".to_owned());
+    }
     names.push("/run/dbus".to_owned());
     names
 }
@@ -1323,7 +1333,8 @@ impl<'a> PlanBuilder<'a> {
             Harness::Claude => Some(self.home.join(".claude")),
             Harness::Omp => Some(self.home.join(".omp")),
             Harness::Codex => Some(self.home.join(".codex")),
-            Harness::Generic | Harness::Agy => None,
+            Harness::Agy => Some(self.home.join(".gemini")),
+            Harness::Generic => None,
         }
     }
 
@@ -1398,7 +1409,7 @@ impl<'a> PlanBuilder<'a> {
             return Ok(());
         }
         let Some(root) = self.session_harness_root() else {
-            bail!("confinement grant \"harness-config\" needs a Claude, OMP, or Codex session")
+            bail!("confinement grant \"harness-config\" needs a Claude, OMP, Codex, or Agy session")
         };
         let Some(root) = add_canonical_existing(&root, "harness config", &mut self.skipped) else {
             return Ok(());
