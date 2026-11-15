@@ -9,6 +9,7 @@ Shared task `context_id`: `agy-harness`. Spec 3 of the `agy` work; spec 4 (docs,
 - `src/harness.rs` (`ready`, one new public function `agy_composer_idle` and its private helpers)
 - `src/session.rs` (`draft_is_stale` and one new private `stale_agy_draft`)
 - `tests/messaging.rs` (screen tests), `tests/broker.rs` (stale-draft and delivery tests, and the `claude_reset_target` helper signature)
+- `tests/daemon_cli.rs` (Amendment 1: only the `ExitFixture` script and its argv)
 
 Does not touch: `docs/`, `README.md`, `CHANGELOG.md`, `AGENTS.md`, `Cargo.toml`, `Cargo.lock`, `src/daemon.rs`,
 `src/delivery.rs`, `src/confine.rs`, `src/main.rs`, `src/statusline.rs`, every other file and spec. Do not
@@ -214,3 +215,14 @@ documentation (spec 4: the idle-composer rule, the placeholder limit, `submitted
 | Card text, composer rows, rules, spinner, queued row, cursor visibility | tester round 2 and 3 reports (live `agy` 1.5.9, replay through `a2amx::emulator::Emulator` at 120x40) | tester measurement, not rerun by the architect |
 | Auto delivery over a card approves it | tester round 2 (m_2 on card, `messages` shows `submitted`, body absent) | tester measurement |
 | `claude_composer_empty` tests and `screen_from` live in `tests/messaging.rs`; the stale-draft test is in `tests/broker.rs` | `tests/messaging.rs:707, 876`, `tests/broker.rs:2247` | read |
+
+## Amendment 1 (architect, after the developer's BLOCKED on the full suite)
+
+The graceful-kill gate (`kill`, `tests/daemon_cli.rs` `ExitFixture`) uses `ready`; section 5 and the consultant review
+wrongly said it does not. `kill_sends_agy_two_key_exit_sequence` failed because the fixture draws the Claude
+composer (`❯` plus NBSP) for the agy case. Amendment: scope adds `tests/daemon_cli.rs`, limited to the `ExitFixture`
+script and its argv. For harness `agy` the fixture draws the agy composer: the same rules at rows 3 and 5, row 4 is
+`> ` (ASCII `>`, a space), cursor at column 3 (1-based), visible; other harnesses unchanged byte for byte; the
+`not-ready` mode still draws no composer. Acceptance adds: that test passes and the other `ExitFixture` tests stay
+green and unchanged. Lesson: grep tests for every caller of the changed predicate, including fixtures that draw a
+screen for `--harness agy`, before locking.
