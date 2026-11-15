@@ -203,3 +203,34 @@ docs; uninstall; marketplace install; a `--no-plugin` switch; per-session plugin
 | Tool name `<plugin>_<server>/<tool>` and the allow rule `mcp(<plugin>_<server>/*)` | earlier tester probe L | one observation; section 8.7 rechecks live |
 | `File::lock` exists on the pinned toolchain | `rust-toolchain.toml` 1.98.1, `Cargo.toml` rust-version 1.89 | read (consultant); stable since 1.89 |
 | No other test launches an agy session | `rg -n "harness agy" tests` | grep (consultant) |
+
+## Amendment 1 (2026-11-15, architect, after the tester's pass on the first implementation)
+
+Not contradictions of the locked text; the tester measured gaps the text implied but did not state. They bind the
+fix round.
+
+1. **Pipes and timeout.** After the child exits, the reader threads are waited for at most 1 s; a pipe still
+   open after that is the error `agy command left its output pipe open`. The 30 s timeout still kills a child that
+   does not exit. The readers keep draining their pipe after the limit (a full pipe must never block the child):
+   stderr keeps the first 2 KiB and drops the rest with no error; stdout of `validate` and `install` keeps the
+   first 64 KiB and drops the rest with no error (it is only passed through on failure); only `plugin list`
+   stdout over 64 KiB is an error, `agy plugin list output exceeds 64 KiB`. A non-zero exit therefore always
+   reports `agy plugin <step> failed: <first 2 KiB of stderr>`.
+2. **List entries.** `version` is optional in a `plugin list --json` entry; an entry without it, or with a
+   version that does not parse, takes the "install" branch; an unrelated entry without `version` no longer
+   fails the whole list.
+3. **Environment.** Every `agy` subprocess (`validate`, `list`, `install`) runs with `A2AMX_TOKEN`,
+   `A2AMX_ADDR` and `A2AMX_SESSION` removed (`env_remove`); the support probe of the installed binary keeps
+   `env_clear()`. Reason: a launcher started inside an a2amx session holds that session's token, and `agy` plugin
+   commands do not need it.
+4. **Tests added** (`tests/agy_plugin.rs`): a stub whose `list` reports a wrong version or different files after
+   `install` makes the call fail (post-install verification); a 100 KiB `list` stdout is the named error with no
+   `install` recorded; the support-probe stub records its argv (exactly `mcp --optional`) and its environment (no
+   `A2AMX_TOKEN` and no `PATH` with `env_clear`); the `agy` stubs record their environment names and none of the
+   three session variables appear even when the test process sets them; a `validate` stub that exits 0 but leaves
+   a background `sleep 5` holding its pipes fails within 3 s at a 300 ms timeout; a failing `validate` with 3000
+   bytes of stderr reports exactly the first 2048 bytes; a 100 KiB `validate` stdout with exit 0 succeeds; a
+   list entry for `a2amx` without `version` installs; the PATH-modifying test restores `PATH` with a drop guard.
+5. **Known limit (comment, no code):** a relative `command[0]` such as `./agy` is resolved against the
+   launcher's directory, not the session's `cwd`; the installer notes this with a `shortcut:` comment in
+   `src/main.rs`.
