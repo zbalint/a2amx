@@ -108,10 +108,23 @@ two sessions can already see each other. Mutual session-level `allow_agents` let
 architect reset the other when the target lists that architect in `control_from`.
 
 `role` is an optional label of at most 64 characters, shown only to that session in
-its system prompt for Claude, OMP, and Codex. It grants no authority, is ignored for
+its system prompt for Claude, OMP, and Codex. An `agy` session receives no operator text, so a role is not shown to it (agy has no system-prompt flag that a2amx wires). It grants no authority, is ignored for
 other commands, and is not visible to peers or in `list`. When set, it is appended
 to the same injected operator text as the peer-authorization line, including when
 `--no-authorize-peers` is used.
+
+An `agy` session is a normal `[[session]]` whose command is `agy`; the harness is inferred. Delivery is
+automatic by default. Example:
+
+```toml
+[[session]]
+command = ["agy"]
+role = "developer"   # a label for the team file; agy itself receives no role text
+cwd = "."
+control_from = ["architect"]
+```
+
+A confined `agy` session writes only `~/.gemini/antigravity-cli`; see [Confinement](confinement.md).
 
 Within a `[[session]]` table, `name` may be omitted when `role` is set; the role is then used as the name and must itself be a valid name (otherwise set `name` explicitly). An explicit `name` always wins.
 

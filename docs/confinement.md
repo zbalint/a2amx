@@ -50,7 +50,7 @@ a2amx new --confine --confine-grant cargo --confine-grant cache -- omp
 When confinement is enabled by `a2amx new --confine` or a team file, no cache grant is
 implicit. `cache` opens `~/.cache`; marker-specific toolchain grants open their literal
 tool directories only when listed. Claude, OMP, and Codex sessions always open their own harness
-config root read-write and persistent by default. Use `a2amx confine suggest` to print a
+config root read-write and persistent by default. An `agy` session opens only `~/.gemini/antigravity-cli` (its data, logs and `settings.json`) read-write; the rest of `~/.gemini`, including the installed plugins, stays read-only unless the `harness-config` grant is named. Use `a2amx confine suggest` to print a
 copyable grants fragment, or add grants explicitly to the team/session table.
 Auto detection covers the marker-based grants listed in [the detection table](#automatic-grant-detection), adds `ssh`, `gh`, or `git-credentials` from supported git remotes, and always adds `cache`; explicit confinement still has no implicit cache grant. Paths relocated by environment variables still need an explicit `write` entry.
 
@@ -337,6 +337,11 @@ Once accepted, that grant opens every path described by its row; the prompt expl
 what those paths expose but does not change the confinement plan.
 
 ## Harness login and state files
+
+For `agy`, `~/.gemini/antigravity-cli` is writable in a confined session, so the agent can edit agy's own
+`settings.json` there (including the global status line and permissions) and its token file is hidden from every
+other harness. Confined sessions of other harnesses do not see agy's OAuth token (`antigravity-oauth-token`) or
+`~/.config/antigravity`. A read-only warning about `~/.config/antigravity` in an agy session is harmless.
 
 Claude, OMP, and Codex sessions bind their real harness configuration root read-write and persistent
 by default, so the harness can renew its token and save settings, hooks, skills and new

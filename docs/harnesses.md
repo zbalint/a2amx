@@ -45,6 +45,32 @@ typing into the terminal.
 
 `--harness codex` hosts a private app-server and delivers through it, rather than typing into the terminal.
 
+`--harness agy` (inferred from a command named `agy`) hosts Google's Antigravity CLI. a2amx adds one
+`--settings` argument to the command: a status line that reports quota (chained in front of your own
+status line, which keeps running), `queuedMessages: "queue"`, the working directory as a trusted workspace,
+and a permission rule that allows only the a2amx tools without a card. Everything else follows your global agy
+settings (`~/.gemini/antigravity-cli/settings.json`), so a permission card for any other tool still waits for you.
+The a2amx tools come from a global Antigravity plugin named `a2amx` that the launcher installs or updates
+from `~/.a2amx/bin/a2amx`; the launch fails with a clear error when that installed binary is too old, so run
+`scripts/install.sh` first. Delivery is typed into the visible composer; the rules are in
+[Delivery](delivery.md#implemented-typed-delivery-agy). The quota column shows the five-hour and weekly percent
+left of the bucket group of the session's model. Stopping an `agy` session sends Ctrl-D twice. A role or the
+peer-authorization line is not delivered to `agy`: a2amx wires no system prompt for it.
+
+Limits to know about `agy`:
+
+- The plugin is global to your user. Two a2amx homes on one machine share it and the last launcher's binary wins.
+  A home you delete leaves the plugin pointing at a missing binary until another launch repairs it. A plugin you
+  disabled stays disabled (a2amx never changes `enabled`), so that agy has no a2amx tools.
+- The plugin's tool server starts in every `agy` session you run, and does nothing outside an a2amx session.
+  A plain `agy` started by an agent inside an a2amx session inherits that session's address and token, so its
+  tools act as the parent session.
+- agy runs the status-line command with the full launch environment, `A2AMX_TOKEN` included. The chained command
+  of yours therefore sees the session's token; do not put a command there that you do not trust.
+- A model chosen with `/model` inside agy is saved by agy to your global settings, unlike `--settings`.
+- A relative command such as `./agy` is resolved from the launcher's directory when the plugin is installed.
+- agy keeps its own logs, conversations and annotations under `~/.gemini`; a2amx does not clean them.
+
 For input arbitration and failure semantics, see [Delivery](delivery.md).
 
 ## Confinement and harness boundaries

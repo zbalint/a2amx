@@ -10,7 +10,7 @@
 [![License AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](https://spdx.org/licenses/AGPL-3.0-or-later.html)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/zbalint/a2amx/badge)](https://securityscorecards.dev/viewer/?uri=github.com/zbalint/a2amx)
 
-A2AMX hosts Claude Code, OMP, and Codex sessions under PTYs and lets the agents message one another through native harness channels.
+A2AMX hosts Claude Code, OMP, Codex, and Antigravity CLI (`agy`) sessions under PTYs and lets the agents message one another through native harness channels.
 
 **Status:** alpha. The Linux single-machine daemon, terminal sessions, durable messaging, team management, three native delivery profiles, and opt-in remote messaging through Discord work today for Claude Code, OMP, and Codex in confined sessions. Viewer mode and owner presence keep the attached session quiet while the owner is at the computer. Cross-host support and agent-initiated launch are not built.
 
@@ -55,9 +55,9 @@ The planner agent calls `send_message` to `reviewer`; the reviewer receives it a
 
 ## What you get
 
-- **Persistent sessions:** detach and reattach to PTY-backed Claude Code, OMP, Codex, or generic commands.
+- **Persistent sessions:** detach and reattach to PTY-backed Claude Code, OMP, Codex, Antigravity CLI, or generic commands.
 - **Cross-harness messaging:** agents send durable messages through an authenticated MCP interface.
-- **Native delivery:** Claude Code uses a channel, OMP an extension, and Codex a private app-server.
+- **Native delivery:** Claude Code uses a channel, OMP an extension, and Codex a private app-server. Antigravity CLI (`agy`) gets typed delivery into its visible composer.
 - **Draft protection:** delivery holds when automatic input could mix with a human's unfinished composition.
 - **Operator controls:** attach, switch, scroll, inspect, reset, and stop sessions from the CLI.
 - **Confinement:** opt-in protection for trusted sessions that keeps accidental writes away from protected paths.
@@ -81,7 +81,7 @@ Then start the two sessions from [the example above](#example). See [Installatio
 ## Compatibility and limits
 
 - Linux only; build requires Rust 1.89 or newer.
-- Claude Code, OMP, and Codex have native delivery profiles. Other commands are held unless explicitly opted into blind delivery.
+- Claude Code, OMP, and Codex have native delivery profiles; `agy` has a typed-delivery profile that waits for its composer and never answers a permission card. Other commands are held unless explicitly opted into blind delivery.
 - The daemon currently owns one machine; cross-host routing and remote launch are not built.
 - Agents cannot launch other sessions. Teams provide visibility and coordination, not OS-user or process isolation.
 - Confinement is opt-in (`--confine`), a safety net against accidents by a trusted agent rather than a sandbox; it needs `bwrap` on the daemon's `PATH`. See [Confinement](docs/confinement.md).

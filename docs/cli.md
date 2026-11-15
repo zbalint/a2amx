@@ -18,12 +18,12 @@ a2amx [--prefix PREFIX] [--viewer-after SECONDS] attach <id|name> [--force]
 a2amx kill <id|name> [--yes] [--now] # graceful by default; --now skips Ctrl-D
 a2amx kill --exited              # remove every exited session without prompting
 a2amx reset <id|name>               # type the configured reset sequence
-a2amx statusline [--report]         # Claude status-line command, injected by a2amx; not run by hand
+a2amx statusline [--harness agy] [--report]  # status-line command (Claude Code, or agy with --harness agy), injected by a2amx; not run by hand
 a2amx screen <id|name> [--rows N]   # read visible screen text without attaching
 a2amx explain <id|name>              # explain state, readiness, holds and reset gate
 a2amx confine show [<id|name>]  # show recorded confinement mode and grants
 a2amx daemon start --host-name host-a  # names this host in addresses (name@host-a)
-# --harness is inferred from the command name when omitted (claude, codex, omp)
+# --harness is inferred from the command name when omitted (claude, codex, omp, agy)
 a2amx new --name agent-plan --harness claude -- claude
 a2amx new --name agent-review --harness omp -- omp
 a2amx messages [--session <id>] [--state pending]

@@ -25,6 +25,10 @@ lag the code.
 | G8 | Apply stale-human-draft clearing to OMP message delivery; reset-only clearing intentionally does not call `begin_delivery` | docs |
 | G9 | Show OMP `human_draft` in `list`: `NativeChannel::hold_reason()` is always empty, so the current list and picker cannot expose that hold. `a2amx explain` (spec 3cp) reports only the reset verdict for a stale draft, not the raw hold; still open | code |
 | G10 | Deliberate limitation (external review, 2026-11-10): when a long agent message is split into several Discord posts and a later post fails, `send_pieces` returns false and the daemon records the whole message `undeliverable` although the human saw part of it. The no-retry policy avoids duplicate sends and stays; the open work is clearer partial-delivery reporting and sequence markers such as `1/3` | code (`src/relay.rs:255-291`, `src/daemon.rs:1658-1694`; not re-read by the architect) |
+| G11 | `agy`: a permission card that appears between the pre-Enter recheck and Enter is not seen; a second signal (status-line `tool_confirmation_pending`) would close it | spec 3er |
+| G12 | A lone Esc counts as typing for every harness and sets `human_draft`; for `agy` the stale-draft release frees it after two seconds. Excluding it would change Claude, OMP and Codex | spec 3es |
+| G13 | `a2amx new --help` text for `--harness` does not name `agy` among the inferred harnesses (`src/cli.rs`) | review of spec 3es |
+| G14 | `agy`: scroll keys, the file-edit permission card and a probe of agy's behaviour after Esc interrupts (queued text restored to the composer) are not measured | tester probes |
 
 ## Untested or unverified
 

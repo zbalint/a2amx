@@ -70,6 +70,8 @@ a running daemon using its old image. Restart deliberately to pick up the new ve
 because restarting the daemon ends all sessions. The script leaves PATH, aliases, services,
 and daemon start or stop to the operator.
 
+An `agy` session installs a global Antigravity plugin from `~/.a2amx/bin/a2amx` and refuses to start when that binary is too old to serve it (it lacks `mcp --optional`): run `scripts/install.sh` again after updating.
+
 Each build carries its git description (`a2amx --version`), and the running daemon reports
 the same value in `a2amx daemon status`. A `-dirty` suffix marks a build from a modified
 source tree. Status writes a warning to stderr when the daemon was built from a different

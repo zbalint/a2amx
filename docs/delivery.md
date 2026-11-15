@@ -366,6 +366,29 @@ watches can loop and should be avoided.
 Native in-harness delivery exists for Claude Code (channel), OMP (extension) and Codex
 (app-server).
 
+## Implemented: typed delivery (agy)
+
+Antigravity CLI (`agy`) has no native channel, so a2amx types into its terminal like a generic session, with a
+stricter readiness rule, because agy answers a permission card with the Enter that submits a message.
+The default is automatic delivery (`--deliver hold` opts out).
+
+- **Ready.** A delivery starts only when the screen shows agy's composer: a visible cursor between two
+  full-width rules, a first row starting with `>` and a space, and continuation rows starting with two spaces.
+  A permission or shell card, the trust dialog, the slash menu, a blank screen and a scrolled view are not ready,
+  and the message stays pending (`not_ready`). A message is never typed over a card.
+- **Empty composer.** A delivery also needs the composer to be empty: only the cursor after `> `, or one of agy's
+  two mode hints (the placeholders it shows on a fresh start). Text in the composer that a2amx did not hold (a
+  restored or queued message) keeps the message pending instead of merging with it. While the model works,
+  the composer is empty and the message is typed and queued by agy, which submits it after the turn.
+- **Recheck.** After the paste a2amx checks the shape again before Enter, tolerating the pasted text. A card
+  that appears in the few milliseconds between that check and Enter is not seen; the evidence for such a
+  delivery is only that the bytes were typed (`submitted` means typed, not that agy accepted a prompt).
+- **Human drafts.** A keystroke from an attached human holds delivery (`human_draft`). The hold is released
+  automatically two seconds after the last input once the composer is empty again, so Esc over a card does not
+  hold delivery for good; a draft keeps it, and `r` releases it by hand.
+- **Reset and stop.** `a2amx reset` and the graceful stop use the same gate: with text in agy's composer they
+  refuse (`draft_present`) or fall back to the non-graceful stop, never typing after the text.
+
 ## Implemented: session reset
 
 `a2amx reset <id|name>` reuses the PTY delivery gate and bracketed-paste submission
