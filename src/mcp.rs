@@ -26,13 +26,24 @@ const SUPPORTED_PROTOCOL_VERSIONS: [&str; 4] =
 
 /// Run the newline-delimited JSON-RPC MCP server on stdin/stdout.
 ///
-/// Environment validation happens before any stdio worker is started. The
-/// caller (the binary's `main`) owns presentation of this error on stderr.
-pub async fn run(channel: bool) -> Result<()> {
-    let (address, token) = configuration()?;
+/// Environment validation happens before any stdio worker is started. Optional mode
+/// uses an inert server only when both session variables are absent.
+pub async fn run(channel: bool, optional: bool) -> Result<()> {
+    let inert = optional
+        && std::env::var_os("A2AMX_ADDR").is_none()
+        && std::env::var_os("A2AMX_TOKEN").is_none();
+    let (address, token) = if inert {
+        (SocketAddr::from(([127, 0, 0, 1], 0)), String::new())
+    } else {
+        configuration()?
+    };
     let mut lines = spawn_stdin_reader();
-    let mut server = McpServer::new(address, token.clone());
-    if channel {
+    let mut server = if inert {
+        McpServer::new_inert()
+    } else {
+        McpServer::new(address, token.clone())
+    };
+    if channel && !inert {
         server.set_channel();
     }
 
@@ -47,7 +58,7 @@ pub async fn run(channel: bool) -> Result<()> {
                             && let Err(error) = write_response(response).await {
                                 break Err(error);
                             }
-                        if channel && server.initialized() && task.is_none() {
+                        if channel && !inert && server.initialized() && task.is_none() {
                             let token = token.clone();
                             let version = server.client_version().map(str::to_owned);
                             let deliveries = deliveries.clone();
@@ -207,6 +218,7 @@ pub(crate) struct McpServer {
     channel: bool,
     initialized: bool,
     client_version: Option<String>,
+    inert: bool,
 }
 
 impl McpServer {
@@ -218,6 +230,19 @@ impl McpServer {
             channel: false,
             initialized: false,
             client_version: None,
+            inert: false,
+        }
+    }
+
+    pub(crate) fn new_inert() -> Self {
+        Self {
+            address: SocketAddr::from(([127, 0, 0, 1], 0)),
+            token: String::new(),
+            client: None,
+            channel: false,
+            initialized: false,
+            client_version: None,
+            inert: true,
         }
     }
 
@@ -266,8 +291,17 @@ impl McpServer {
             }
             "ping" if has_id => Some(success_response(id, json!({}))),
             "ping" => None,
-            "tools/list" if has_id => Some(success_response(id, json!({"tools": tool_schemas()}))),
+            "tools/list" if has_id => {
+                if self.inert {
+                    Some(success_response(id, json!({"tools": []})))
+                } else {
+                    Some(success_response(id, json!({"tools": tool_schemas()})))
+                }
+            }
             "tools/list" => None,
+            "tools/call" if self.inert => {
+                has_id.then(|| error_response(id, -32602, "a2amx is not attached to this session"))
+            }
             "tools/call" => {
                 let result = match parse_tool_call(params) {
                     Ok(call) => {

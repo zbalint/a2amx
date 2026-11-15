@@ -166,8 +166,8 @@ struct AttachOptions {
 async fn dispatch(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
     let home_arg = cli.home;
     match &cli.command {
-        Command::Mcp { channel } => {
-            return mcp::run(*channel)
+        Command::Mcp { channel, optional } => {
+            return mcp::run(*channel, *optional)
                 .await
                 .map(|_| std::process::ExitCode::SUCCESS);
         }
@@ -1071,6 +1071,18 @@ async fn wired_command(
             let gemini_dir = std::env::var_os("HOME")
                 .map(|home| PathBuf::from(home).join(".gemini"))
                 .unwrap_or_default();
+            if install_omp {
+                let layout = a2amx::layout::Layout::new(home.to_owned());
+                // shortcut: relative command[0] resolves from the launcher's directory; canonicalizing against cwd would change the install API.
+                let agy_program = std::ffi::OsString::from(
+                    command
+                        .first()
+                        .cloned()
+                        .ok_or_else(|| anyhow!("empty command"))?,
+                );
+                tokio::task::spawn_blocking(move || a2amx::agy::install(&layout, &agy_program))
+                    .await??;
+            }
             Ok(tokio::task::spawn_blocking(move || {
                 a2amx::harness::wire_agy_argv(command, &exe, &wire_cwd, &gemini_dir)
             })

@@ -1355,32 +1355,65 @@ while True:
 "#,
         )
         .unwrap();
-        let started = a2amx(&fixture.home, &["daemon", "start"])
-            .env("RUST_LOG", "info")
-            .env("NO_COLOR", "1")
-            .output()
+        let path = if harness == "agy" {
+            let bin = fixture.home.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let installed = bin.join("a2amx");
+            std::fs::write(&installed, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let agy_dir = fixture._dir.path().join("agy-bin");
+            std::fs::create_dir(&agy_dir).unwrap();
+            let agy = agy_dir.join("agy");
+            let state = fixture._dir.path().join("agy-installed");
+            std::fs::write(
+                &agy,
+                format!(
+                    "#!/bin/sh\ncase \"$1 $2\" in\n'plugin validate') exit 0;;\n'plugin list') if test -f '{}'; then printf '[{{\"name\":\"a2amx\",\"version\":\"{}\",\"path\":\"%s\"}}]' \"$(cat '{}')\"; else printf '[]'; fi;;\n'plugin install') printf '%s' \"$3\" > '{}';;\nesac\n",
+                    state.display(),
+                    env!("CARGO_PKG_VERSION"),
+                    state.display(),
+                    state.display()
+                ),
+            )
             .unwrap();
+            std::fs::set_permissions(&agy, std::fs::Permissions::from_mode(0o700)).unwrap();
+            Some(format!(
+                "{}:{}",
+                agy_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ))
+        } else {
+            None
+        };
+        let mut started = a2amx(&fixture.home, &["daemon", "start"]);
+        started.env("RUST_LOG", "info").env("NO_COLOR", "1");
+        if let Some(path) = &path {
+            started.env("PATH", path);
+        }
+        let started = started.output().unwrap();
         assert!(started.status.success(), "{}", stderr(&started));
-        let created = run(
-            &fixture.home,
-            &[
-                "new",
-                "--detach",
-                "--name",
-                "worker",
-                "--harness",
-                harness,
-                "--no-channel",
-                "--",
-                "sh",
-                "-c",
-                "exec python3 -u \"$1\" \"$2\" \"$3\"",
-                "fixture",
-                script.to_str().unwrap(),
-                fixture.record.to_str().unwrap(),
-                mode,
-            ],
-        );
+        let args = [
+            "new",
+            "--detach",
+            "--name",
+            "worker",
+            "--harness",
+            harness,
+            "--no-channel",
+            "--",
+            "sh",
+            "-c",
+            "exec python3 -u \"$1\" \"$2\" \"$3\"",
+            "fixture",
+            script.to_str().unwrap(),
+            fixture.record.to_str().unwrap(),
+            mode,
+        ];
+        let mut create = a2amx(&fixture.home, &args);
+        if let Some(path) = &path {
+            create.env("PATH", path);
+        }
+        let created = create.stdin(Stdio::null()).output().unwrap();
         assert!(created.status.success(), "{}", stderr(&created));
         let screen = screen_contains_until(&fixture.home, &["screen", "worker"], "fixture-ready");
         assert!(

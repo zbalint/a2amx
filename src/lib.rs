@@ -7,6 +7,7 @@
 pub const VERSION: &str = env!("A2AMX_VERSION");
 
 pub mod activity;
+pub mod agy;
 pub mod bridge;
 mod channel;
 pub mod cli;

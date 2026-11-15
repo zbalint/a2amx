@@ -56,6 +56,12 @@ impl Layout {
     pub fn omp_dir(&self) -> PathBuf {
         self.run_dir().join("omp")
     }
+    pub fn agy_dir(&self) -> PathBuf {
+        self.run_dir().join("agy")
+    }
+    pub fn installed_binary(&self) -> PathBuf {
+        self.root.join("bin/a2amx")
+    }
     pub fn log_dir(&self) -> PathBuf {
         self.root.join("log")
     }

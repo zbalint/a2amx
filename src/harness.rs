@@ -568,6 +568,25 @@ pub fn wire_agy_argv(
         "queuedMessages".to_owned(),
         serde_json::Value::String("queue".to_owned()),
     );
+    let permissions = object
+        .entry("permissions".to_owned())
+        .or_insert_with(|| serde_json::json!({}));
+    let permissions = permissions
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("--settings permissions.allow must be an array"))?;
+    let allow = permissions
+        .entry("allow".to_owned())
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let allow = allow
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("--settings permissions.allow must be an array"))?;
+    let rule = crate::agy::tool_rule();
+    if !allow
+        .iter()
+        .any(|value| value.as_str() == Some(rule.as_str()))
+    {
+        allow.push(serde_json::Value::String(rule));
+    }
     let trusted = object
         .entry("trustedWorkspaces")
         .or_insert_with(|| serde_json::Value::Array(Vec::new()));

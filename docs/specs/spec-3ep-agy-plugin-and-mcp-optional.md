@@ -234,3 +234,22 @@ fix round.
 5. **Known limit (comment, no code):** a relative `command[0]` such as `./agy` is resolved against the
    launcher's directory, not the session's `cwd`; the installer notes this with a `shortcut:` comment in
    `src/main.rs`.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, two rounds); developer OMP
+openai-codex/gpt-5.6-luna with advisor; tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 1
+(Amendment 1).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Blocker: `tests/daemon_cli.rs` launches `agy` stubs that the new install step would hit; pipe semantics of the runner unclear | Spec amended before lock; ExitFixture stub agy and `bin/a2amx` |
+| Implementation handoff 1 | architect, tester | Pipe deadline, stderr masking validate failure, validate stdout cap, required version in list, untested behaviours, env inheritance | Amendment 1, fix round 1 |
+| Tester pass, round 1 | tester | Support-failure case did not assert that no `agy` subcommand ran | Assertion added |
+| Fix round 1 | developer's advisor | Equal parsed versions with different raw strings skipped the install | `install_needed` compares the raw version; test case added |
+| Tester pass, round 2 | tester | `list` checked stdout overflow before the exit status (spec: non-zero exit always reports the step failure) | Order fixed, test added |
+| Tester pass, round 2 | tester | Drain test did not detect a reader that stops at the limit (short write); post-install content check unpinned; 300 ms flaky timeout; `EnvGuard` raced with spawning tests; timeout text "0 seconds" | Looping writers, content-mismatch test, 1 s timeout with error chain, stub-owned `ENV_LOCK`, `{:.3}` seconds |
+| Architect review | architect | Install exit-status check survived all mutants (no failing-install fixture) | `INSTALL_FAIL` knob and `install_failure_reports_the_step_and_stderr`, written by the architect as a tiny test-only change; mutant killed |
+| Review misses | tester over developer, architect over tester | Items above found after the developer's handoff, the last by the architect | Logged as #review-miss; loop guard: 2 fix rounds used |
+
+Final gates (architect, fresh): cargo test 1324 passed, 0 failed, 3 ignored; clippy -D warnings and fmt --check clean.

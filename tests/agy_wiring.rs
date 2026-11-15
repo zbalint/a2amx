@@ -29,11 +29,17 @@ fn default_settings_are_injected_once() {
     )
     .unwrap();
     assert_eq!(
+        settings(&argv)["permissions"]["allow"],
+        json!(["mcp(a2amx_tools/*)"])
+    );
+    assert_eq!(settings(&argv)["toolPermission"], Value::Null);
+    assert_eq!(
         settings(&argv),
         json!({
             "statusLine": {"command": "'/x/a2amx' statusline --harness agy", "enabled": true},
             "queuedMessages": "queue",
-            "trustedWorkspaces": ["/work/project"]
+            "trustedWorkspaces": ["/work/project"],
+            "permissions": {"allow": ["mcp(a2amx_tools/*)"]}
         })
     );
     assert_eq!(
@@ -80,6 +86,41 @@ fn user_settings_keep_other_keys_and_override_queue_and_trust() {
     assert_eq!(status["stack_with_default"], false);
     assert!(status.get("type").is_none());
     assert!(status.get("refreshInterval").is_none());
+}
+
+#[test]
+fn user_permissions_are_merged_and_non_array_rejected() {
+    let dir = tempdir().unwrap();
+    let argv = wire_agy_argv(
+        vec![
+            "agy".into(),
+            "--settings".into(),
+            json!({"permissions": {"allow": ["mcp(other/*)"]}}).to_string(),
+        ],
+        Path::new("/x/a2amx"),
+        Path::new("/work"),
+        dir.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        settings(&argv)["permissions"]["allow"],
+        json!(["mcp(other/*)", "mcp(a2amx_tools/*)"])
+    );
+    let error = wire_agy_argv(
+        vec![
+            "agy".into(),
+            "--settings".into(),
+            json!({"permissions": {"allow": "bad"}}).to_string(),
+        ],
+        Path::new("/x/a2amx"),
+        Path::new("/work"),
+        dir.path(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "--settings permissions.allow must be an array"
+    );
 }
 
 #[test]

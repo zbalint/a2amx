@@ -186,6 +186,9 @@ pub enum Command {
     Mcp {
         #[arg(long)]
         channel: bool,
+        /// Serve no tools when this process was not started by an a2amx session.
+        #[arg(long)]
+        optional: bool,
     },
     /// Render Claude Code or Antigravity's status line and optionally report its quota.
     Statusline {
