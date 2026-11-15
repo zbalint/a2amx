@@ -33,7 +33,8 @@ jobs:
           rustup toolchain install "$msrv" --profile minimal
           cargo "+$msrv" check --locked --all-targets
   # The same fast checks as scripts/prepush-fast.sh: secrets in history, dependency policy,
-  # workflow lint and audit, and repository Semgrep rules. Versions are pinned; bump on purpose.
+  # workflow lint and audit, repository Semgrep rules and an advisory CodeScene report. Versions
+  # are pinned; bump on purpose.
   hygiene:
     permissions:
       contents: read
@@ -46,6 +47,10 @@ jobs:
       CARGO_DENY_VERSION: 0.20.2
       ZIZMOR_VERSION: 1.30.1
       SEMGREP_VERSION: 1.181.0
+      # CodeScene cs 1.0.58. It publishes no checksum, so the zip's SHA-256 is our own. To bump: read
+      # the build id from https://devtools.codescene.io/api/cli/cs?version=<new> and hash the zip.
+      CODESCENE_BUILD: b2580d71be8fbfd6a496d7a007062c0c81cd2b60
+      CODESCENE_ZIP_SHA256: e358b332230f06ac81f9ca119c787860e25d86176d344fc06be1dffe2affb352
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,6 +72,17 @@ jobs:
           grep "linux_amd64.tar.gz" "actionlint_${ACTIONLINT_VERSION}_checksums.txt" | sha256sum -c -
           tar xzf "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -C "$bin" actionlint
           echo "$bin" >> "$GITHUB_PATH"
+      - name: Install CodeScene CLI
+        run: |
+          bin="$HOME/.local/bin"
+          mkdir -p "$bin" "$RUNNER_TEMP/tools"
+          cd "$RUNNER_TEMP/tools"
+          zip="cs-linux-amd64-${CODESCENE_BUILD}.zip"
+          curl --proto '=https' --tlsv1.2 -fsSLO "https://downloads.codescene.io/enterprise/cli/${zip}"
+          echo "${CODESCENE_ZIP_SHA256}  ${zip}" | sha256sum -c -
+          unzip -q "$zip" -d "$bin"
+          chmod +x "$bin/cs"
+          echo "$bin" >> "$GITHUB_PATH"
       - name: Install zizmor
         run: pipx install "zizmor==${ZIZMOR_VERSION}"
       - name: Install semgrep
@@ -79,7 +95,13 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"
-      - run: scripts/prepush-fast.sh
+      # The token is set on this step only, so every tool the script runs can see it. A pull request
+      # from a fork gets none, and the CodeScene part then reports itself skipped without failing.
+      - name: Run fast checks
+        env:
+          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
+          CODESCENE_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: scripts/prepush-fast.sh
   check:
     permissions:
       contents: read

@@ -64,6 +64,14 @@ not shrink when files are deleted, and a full host disk has crashed the VM befor
 - Never send input that destroys human work. In particular, never send Ctrl-C to
   clear a composer draft.
 
+## CodeScene
+
+`scripts/prepush-fast.sh` also runs `cs delta` (CodeScene code health) over the commits being pushed and prints
+the findings they introduced or made worse. It is advisory: it never fails the script or CI, because the
+existing large files would fail every change. A missing `cs` or `jq` is still an error; a failing or timed-out
+`cs delta` (no token, bad base) prints a "skipped" line. The code-health goal is no file over 1,000 lines, tests
+included; the report flags a file that grows past it.
+
 ## Semgrep rules
 
 Rules live in `.semgrep/rules/`, one per invariant, with a same-named fixture in `.semgrep/tests/`;
