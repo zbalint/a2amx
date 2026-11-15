@@ -7,7 +7,7 @@ Shared task `context_id`: `agy-harness`. Spec 3 of the `agy` work; spec 4 (docs,
 
 **Scope.** May edit exactly these files and no others.
 - `src/harness.rs` (`ready`, one new public function `agy_composer_idle` and its private helpers)
-- `src/session.rs` (`draft_is_stale` and one new private `stale_agy_draft`)
+- `src/session.rs` (`draft_is_stale`, one new private `stale_agy_draft`, and Amendment 2: the stale-draft check at the start of `begin_delivery`, `agy` only)
 - `tests/messaging.rs` (screen tests), `tests/broker.rs` (stale-draft and delivery tests, and the `claude_reset_target` helper signature)
 - `tests/daemon_cli.rs` (Amendment 1: only the `ExitFixture` script and its argv)
 
@@ -190,7 +190,7 @@ documentation (spec 4: the idle-composer rule, the placeholder limit, `submitted
 ## 7. Acceptance
 
 1. `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` pass.
-2. `git status --short` lists exactly the four scoped files.
+2. `git status --short` lists exactly the five scoped files (Amendment 1 added `tests/daemon_cli.rs`).
 3. Red and contract tests as classified in section 5; the mutation check names a failing test per mutant (the
    tester reruns it and adds its own).
 4. Trust boundary (abuse-case tests, red on the old code): the card, shell-card, trust-dialog and card-header cases
@@ -226,3 +226,17 @@ script and its argv. For harness `agy` the fixture draws the agy composer: the s
 `not-ready` mode still draws no composer. Acceptance adds: that test passes and the other `ExitFixture` tests stay
 green and unchanged. Lesson: grep tests for every caller of the changed predicate, including fixtures that draw a
 screen for `--harness agy`, before locking.
+
+## Amendment 2 (architect, after the tester's BLOCKED and live finding F1)
+
+Section 3 released a stale draft only on the reset path (`reset_gate_reason`), so a pending message stayed held
+(`human_draft`) after one human keystroke, or an Esc that dismissed a card, even once the agy composer was idle and
+empty past `STALE_DRAFT_MARGIN`; only a manual Release delivered it. This contradicted section 4 ("the stale release
+now applies to `agy`") and the live acceptance check. Amendment: scope adds the start of `begin_delivery`
+(`src/session.rs`): under the existing state lock, when `self.harness == Harness::Agy` and
+`self.draft_is_stale(&state)`, set `state.hold = None` before the hold test. Other harnesses are unchanged (their
+delivery path does not consult the stale predicate; making it do so is a separate decision). A lone Esc still counts
+as typing in `input_is_typing` (all harnesses, unchanged, backlog). Acceptance adds: a broker test where one attached
+keystroke is followed by an idle empty composer for longer than the margin and a message then submits with no
+Release; a `> draft` composer stays held; mutation: remove the release in `begin_delivery`, a test fails. Process
+lesson: a spec that adds a release predicate must name every path (reset, delivery) that consults it.
