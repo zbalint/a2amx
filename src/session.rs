@@ -1063,6 +1063,10 @@ impl Session {
                     messaging::code::DRAFT_PRESENT,
                     "composer not empty".to_owned(),
                 ))
+            } else if self.harness == Harness::Agy
+                && harness::agy_turn_in_flight(&state.emulator.screen())
+            {
+                Some((messaging::code::BUSY, "turn in flight".to_owned()))
             } else {
                 None
             }

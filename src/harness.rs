@@ -283,6 +283,26 @@ pub fn agy_composer_idle(screen: &Screen, scrolled: bool) -> bool {
         .any(|placeholder| row_matches_text_then_blank(screen, screen.cursor.row, 2, placeholder))
 }
 
+// shortcut: only the row directly above the composer's top rule is read, so a spinner
+// shape agy draws elsewhere is not seen; widen it if a capture shows one (the
+// permission card, narrow and scrolled screens were not captured). The matcher fails
+// safe: a false positive refuses a reset with `busy`, never types.
+/// Returns whether an Agy turn is in flight: the row directly above the composer's top rule is a spinner row
+/// (a Braille-pattern glyph, U+2800..=U+28FF, then a space) or a queued-message row (`▸ `).
+pub fn agy_turn_in_flight(screen: &Screen) -> bool {
+    let Some((top, _)) = agy_composer(screen) else {
+        return false;
+    };
+    let Some(row) = top.checked_sub(1) else {
+        return false;
+    };
+    cell_char(screen, row, 1) == Some(' ')
+        && matches!(
+            cell_char(screen, row, 0),
+            Some('\u{2800}'..='\u{28ff}' | '▸')
+        )
+}
+
 fn claude_ready(screen: &Screen, scrolled: bool) -> bool {
     if !screen.modes.bracketed_paste || scrolled || !claude_cursor_shown(screen) {
         return false;

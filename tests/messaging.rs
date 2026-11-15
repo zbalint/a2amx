@@ -1047,6 +1047,76 @@ fn agy_composer_idle_only_accepts_empty_known_modes() {
     ));
 }
 
+#[test]
+fn agy_turn_in_flight_detects_spinner_and_queued_rows_above_composer() {
+    // 1. Spinner row directly above the rule.
+    let spinner = agy_composer_with_rows(3, &[""], 2, &[(2, "⣷  Working...")]);
+    assert!(harness::agy_turn_in_flight(&agy_screen_from(&spinner)));
+
+    // 2. Queued row directly above the rule, and two queued rows with spinner above them.
+    let queued =
+        agy_composer_with_rows(3, &[""], 2, &[(2, "▸ queued (alt+m to send immediately)")]);
+    assert!(harness::agy_turn_in_flight(&agy_screen_from(&queued)));
+
+    let queued_stack = agy_composer_with_rows(
+        3,
+        &[""],
+        2,
+        &[
+            (0, "⣷  Working..."),
+            (1, "▸ first (alt+m to send immediately)"),
+            (2, "▸ second (alt+m to send immediately)"),
+        ],
+    );
+    assert!(harness::agy_turn_in_flight(&agy_screen_from(&queued_stack)));
+
+    // 3. Blank row, transcript text row, or spinner two rows above with blank row between.
+    let blank = agy_composer_with_rows(3, &[""], 2, &[]);
+    assert!(!harness::agy_turn_in_flight(&agy_screen_from(&blank)));
+
+    let transcript = agy_composer_with_rows(3, &[""], 2, &[(2, "  some text")]);
+    assert!(!harness::agy_turn_in_flight(&agy_screen_from(&transcript)));
+
+    let spinner_too_high = agy_composer_with_rows(3, &[""], 2, &[(1, "⣷  Working...")]);
+    assert!(!harness::agy_turn_in_flight(&agy_screen_from(
+        &spinner_too_high
+    )));
+
+    // 4. Non-matching prefixes and Braille block edges.
+    for row in ["⣷x", "*  Working...", "▸queued"] {
+        let bytes = agy_composer_with_rows(3, &[""], 2, &[(2, row)]);
+        assert!(
+            !harness::agy_turn_in_flight(&agy_screen_from(&bytes)),
+            "row {row:?} should not match"
+        );
+    }
+    for (ch, expected) in [
+        ('\u{2800}', true),
+        ('\u{28ff}', true),
+        ('\u{27ff}', false),
+        ('\u{2900}', false),
+    ] {
+        let row = format!("{ch} edge");
+        let bytes = agy_composer_with_rows(3, &[""], 2, &[(2, &row)]);
+        assert_eq!(
+            harness::agy_turn_in_flight(&agy_screen_from(&bytes)),
+            expected,
+            "block edge U+{:04X}",
+            ch as u32
+        );
+    }
+
+    // 5. No composer (cursor hidden) and composer top rule on row 0.
+    let mut no_composer = agy_composer_bytes(3, &[""], 2, false);
+    no_composer.extend_from_slice("\x1b[3;1H⣷  Working...\x1b[5;3H".as_bytes());
+    assert!(!harness::agy_turn_in_flight(&agy_screen_from(&no_composer)));
+
+    let top_row_zero = agy_composer_with_rows(0, &[""], 2, &[]);
+    assert!(!harness::agy_turn_in_flight(&agy_screen_from(
+        &top_row_zero
+    )));
+}
+
 fn f1_bytes() -> Vec<u8> {
     let rules = "─".repeat(40);
     format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;3H\x1b[?25h")

@@ -1704,6 +1704,8 @@ async fn claude_reset_target(admin: &mut Client, composer: &str) -> String {
 }
 async fn agy_reset_target(
     admin: &mut Client,
+    harness: Harness,
+    above: &str,
     composer: &str,
     deliver: Option<Deliver>,
     post_input: Option<&str>,
@@ -1711,7 +1713,7 @@ async fn agy_reset_target(
     let rules = "─".repeat(40);
     let redraw = post_input.unwrap_or("");
     let command = format!(
-        "stty raw -echo; printf '\\033[2J\\033[?2004h\\033[2;1H{rules}\\033[3;1H> {composer}\\033[4;1H{rules}\\033[3;3H\\033[?25h'; {} exec cat >/dev/null",
+        "stty raw -echo; printf '\\033[2J\\033[?2004h\\033[1;1H{above}\\033[2;1H{rules}\\033[3;1H> {composer}\\033[4;1H{rules}\\033[3;3H\\033[?25h'; {} exec cat >/dev/null",
         if redraw.is_empty() {
             String::new()
         } else {
@@ -1729,7 +1731,7 @@ async fn agy_reset_target(
             control_from: vec![],
             watch: vec![],
             name: Some("agy-target".into()),
-            harness: Harness::Agy,
+            harness,
             deliver,
             heartbeat: None,
             activity: None,
@@ -2371,7 +2373,7 @@ async fn agy_default_delivery_is_auto() {
         Deliver::Hold,
     )
     .await;
-    let target = agy_reset_target(&mut admin, "", None, None).await;
+    let target = agy_reset_target(&mut admin, Harness::Agy, "", "", None, None).await;
     wait_claude_ready(dir.path(), &target).await;
     let Response::Explain { info } = admin
         .request(Request::Explain {
@@ -2400,7 +2402,15 @@ async fn reset_nonempty_agy_composer_without_hold_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
     let mut admin = Client::connect(dir.path()).await.unwrap();
-    let target = agy_reset_target(&mut admin, "draft", Some(Deliver::Auto), None).await;
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "",
+        "draft",
+        Some(Deliver::Auto),
+        None,
+    )
+    .await;
     wait_claude_ready(dir.path(), &target).await;
     reset_rejection_admin(dir.path(), &target, "draft_present", "composer not empty").await;
     daemon.shutdown().await.unwrap();
@@ -2419,7 +2429,15 @@ async fn agy_delivery_nonempty_composer_without_hold_stays_pending() {
         Deliver::Hold,
     )
     .await;
-    let target = agy_reset_target(&mut admin, "draft", Some(Deliver::Auto), None).await;
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "",
+        "draft",
+        Some(Deliver::Auto),
+        None,
+    )
+    .await;
     wait_claude_ready(dir.path(), &target).await;
     let id = match send(&mut sender, "agy-target@host-a", "subject", "body").await {
         Response::Accepted { id, .. } => id,
@@ -2439,7 +2457,8 @@ async fn reset_stale_agy_draft_hold_clears_after_margin() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
     let mut admin = Client::connect(dir.path()).await.unwrap();
-    let target = agy_reset_target(&mut admin, "", Some(Deliver::Auto), None).await;
+    let target =
+        agy_reset_target(&mut admin, Harness::Agy, "", "", Some(Deliver::Auto), None).await;
     wait_claude_ready(dir.path(), &target).await;
 
     let mut attachment = Client::connect(dir.path())
@@ -2472,7 +2491,8 @@ async fn stale_agy_hold_releases_before_delivery_without_manual_release() {
         Deliver::Hold,
     )
     .await;
-    let target = agy_reset_target(&mut admin, "", Some(Deliver::Auto), None).await;
+    let target =
+        agy_reset_target(&mut admin, Harness::Agy, "", "", Some(Deliver::Auto), None).await;
     wait_claude_ready(dir.path(), &target).await;
     let mut attachment = Client::connect(dir.path())
         .await
@@ -2508,7 +2528,15 @@ async fn stale_agy_hold_keeps_nonempty_composer_held_for_delivery() {
         Deliver::Hold,
     )
     .await;
-    let target = agy_reset_target(&mut admin, "draft", Some(Deliver::Auto), None).await;
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "",
+        "draft",
+        Some(Deliver::Auto),
+        None,
+    )
+    .await;
     wait_claude_ready(dir.path(), &target).await;
     let mut attachment = Client::connect(dir.path())
         .await
@@ -2546,7 +2574,15 @@ async fn reset_nonempty_agy_composer_stays_held_after_margin() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
     let mut admin = Client::connect(dir.path()).await.unwrap();
-    let target = agy_reset_target(&mut admin, "draft", Some(Deliver::Auto), None).await;
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "",
+        "draft",
+        Some(Deliver::Auto),
+        None,
+    )
+    .await;
     wait_claude_ready(dir.path(), &target).await;
 
     let mut attachment = Client::connect(dir.path())
@@ -2579,7 +2615,15 @@ async fn agy_delivery_recheck_with_pasted_composer_is_submitted() {
     )
     .await;
     let redraw = "\\033[3;3Hpasted envelope\\033[3;18H";
-    let target = agy_reset_target(&mut admin, "", Some(Deliver::Auto), Some(redraw)).await;
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "",
+        "",
+        Some(Deliver::Auto),
+        Some(redraw),
+    )
+    .await;
     wait_claude_ready(dir.path(), &target).await;
     accepted(
         send(&mut sender, "agy-target@host-a", "subject", "body").await,
@@ -2606,7 +2650,15 @@ async fn agy_delivery_recheck_without_composer_is_unsubmitted() {
     )
     .await;
     let redraw = "\\033[2J\\033[?25l\\033[2;1HMCP\\033[3;1H> 1. Yes, allow tool call";
-    let target = agy_reset_target(&mut admin, "", Some(Deliver::Auto), Some(redraw)).await;
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "",
+        "",
+        Some(Deliver::Auto),
+        Some(redraw),
+    )
+    .await;
     wait_claude_ready(dir.path(), &target).await;
     accepted(
         send(&mut sender, "agy-target@host-a", "subject", "body").await,
@@ -2616,6 +2668,135 @@ async fn agy_delivery_recheck_without_composer_is_unsubmitted() {
     wait_screen_contains(dir.path(), &target, "MCP").await;
     let message = wait_status(&mut sender, "m_1", |message| message.state == "unsubmitted").await;
     assert_eq!(message.detail.as_deref(), Some("screen_not_ready"));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn agy_delivery_while_turn_in_flight_is_submitted() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_, _, mut sender) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "⣷  Working...",
+        "",
+        Some(Deliver::Auto),
+        None,
+    )
+    .await;
+    wait_claude_ready(dir.path(), &target).await;
+    accepted(
+        send(&mut sender, "agy-target@host-a", "subject", "body").await,
+        "m_1",
+        None,
+    );
+    let message = wait_status(&mut sender, "m_1", |message| message.state == "submitted").await;
+    assert_eq!(message.state, "submitted");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_agy_turn_in_flight_spinner_is_rejected_busy() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "⣷  Working...",
+        "",
+        Some(Deliver::Auto),
+        None,
+    )
+    .await;
+    wait_claude_ready(dir.path(), &target).await;
+    reset_rejection_admin(dir.path(), &target, "busy", "turn in flight").await;
+    let Response::Explain { info } = admin
+        .request(Request::Explain { session: target })
+        .await
+        .unwrap()
+    else {
+        panic!("expected explain response");
+    };
+    assert!(!info.reset.allowed);
+    assert_eq!(info.reset.code.as_deref(), Some("busy"));
+    assert_eq!(info.reset.reason.as_deref(), Some("turn in flight"));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_agy_turn_in_flight_queued_row_is_rejected_busy() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "▸ queued (alt+m to send immediately)",
+        "",
+        Some(Deliver::Auto),
+        None,
+    )
+    .await;
+    wait_claude_ready(dir.path(), &target).await;
+    reset_rejection_admin(dir.path(), &target, "busy", "turn in flight").await;
+    let Response::Explain { info } = admin
+        .request(Request::Explain { session: target })
+        .await
+        .unwrap()
+    else {
+        panic!("expected explain response");
+    };
+    assert!(!info.reset.allowed);
+    assert_eq!(info.reset.code.as_deref(), Some("busy"));
+    assert_eq!(info.reset.reason.as_deref(), Some("turn in flight"));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_agy_turn_in_flight_with_draft_is_rejected_draft_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Agy,
+        "⣷  Working...",
+        "draft",
+        Some(Deliver::Auto),
+        None,
+    )
+    .await;
+    wait_claude_ready(dir.path(), &target).await;
+    reset_rejection_admin(dir.path(), &target, "draft_present", "composer not empty").await;
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_non_agy_with_spinner_above_composer_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = agy_reset_target(
+        &mut admin,
+        Harness::Generic,
+        "⣷  Working...",
+        "",
+        Some(Deliver::Auto),
+        None,
+    )
+    .await;
+    wait_claude_ready(dir.path(), &target).await;
+    assert_eq!(reset_success_admin(dir.path(), &target).await, 1);
     daemon.shutdown().await.unwrap();
 }
 

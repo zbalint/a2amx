@@ -163,3 +163,30 @@ the row `top` instead of `top - 1`: tests 1 and 2 fail. Name the failing test pe
 
 Baseline: CI passed for `3436861` (run 43754526774) and the Sonar gate on `develop` is OK. The suite was not rerun
 locally for this draft; the machine runs one build at a time.
+
+## Amendment 1 (tester pass, recorded at acceptance)
+
+The tester's mutation pass found two weaknesses in the tests of section 4; the developer fixed them, tests only, scope unchanged.
+
+1. Test 10 (`tests/broker.rs`): a session of a harness other than `agy` (`Generic`) with the same composer shape and a spinner row above it is not refused `busy`: `Request::Reset` succeeds. It kills the mutant that drops the `Harness::Agy` condition of section 3. `agy_reset_target` takes the harness as a parameter for this.
+2. Test 5 (`tests/messaging.rs`): the "no composer" fixture carries a spinner row directly above where the top rule would be, so it is `false` only because the composer is missing. It kills the mutant that removes the cursor-visible guard in `agy_composer`.
+
+Section 4 test 9 stays as written; its wait lesson concerns asserting a state that has not happened yet, and `submitted` is polled by `wait_status`.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (OMP openai-codex/gpt-6.1-terra for the blocked probe assignment).
+BLOCKED/amend cycles: 0 on the spec. The evidence-probe assignment ended BLOCKED (see the first row); the owner captured the screens instead.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Evidence probe | tester | confinement hides agy's credentials, so a confined tester cannot run live agy | owner ran a capture script against a live agy session; section 6.4 stays owner-run |
+| Draft review | consultant | the mutant "delete the new branch fails test 8" was false (the composer branch answers `draft_present`) | reorder mutant added, test 8 named for it only |
+| Draft review | consultant | the wait after each reset step polls the gate, so a reset step that starts a model turn now times out; not stated | stated as an accepted consequence |
+| Draft review | consultant | live acceptance contradicted an earlier tester observation (queued text inside the composer during plain generation) | expected code per case written, success counts as failure |
+| Draft review | consultant | test 5 helper leaves the cursor visible; helper printf order would erase the new row; gate order omitted the exit and stale-draft steps; mutant list incomplete | spec text corrected |
+| Tester pass | tester | the `Harness::Agy` condition on the new branch was untested (mutant survived the whole broker suite) | test 10 added (Amendment 1) |
+| Tester pass | tester | the no-composer fixture was vacuous (blank row above the rule made it false anyway) | fixture carries the spinner row (Amendment 1) |
+| Tester pass | tester | test 9 does not wait before asserting `submitted` | no change: the assertion is polled and terminal; spec wording ambiguity |
+| Tester pass | tester | the `checked_sub` guard for a rule on row 0 is unobservable (equivalent mutant) | accepted |
+| Architect review | architect | `AGENTS.md` says the suite passes in a confined session; three tests fail with `Read-only file system` when `$HOME` is read-only | backlog G18 |
