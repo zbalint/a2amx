@@ -2,6 +2,7 @@
 //! composer cells independently of terminal damage and paste-mode support.
 
 use std::ffi::OsStr;
+use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, anyhow};
@@ -573,12 +574,23 @@ pub fn wire_agy_argv(
     let trusted = trusted
         .as_array_mut()
         .ok_or_else(|| anyhow!("--settings trustedWorkspaces must be an array"))?;
-    let cwd = cwd.to_string_lossy();
-    if !trusted
-        .iter()
-        .any(|value| value.as_str() == Some(cwd.as_ref()))
-    {
-        trusted.push(serde_json::Value::String(cwd.into_owned()));
+    let cwd_path = cwd;
+    let cwd = cwd_path.to_string_lossy().into_owned();
+    let mut workspace_paths = vec![cwd.clone()];
+    // shortcut: resolve once at wiring; resolve at spawn if renames, re-links, or mount namespaces ever diverge.
+    if let Ok(canonical) = fs::canonicalize(cwd_path) {
+        let canonical = canonical.to_string_lossy().into_owned();
+        if canonical != cwd {
+            workspace_paths.push(canonical);
+        }
+    }
+    for workspace in workspace_paths {
+        if !trusted
+            .iter()
+            .any(|value| value.as_str() == Some(workspace.as_str()))
+        {
+            trusted.push(serde_json::Value::String(workspace));
+        }
     }
     Ok(insert_extras(
         argv,

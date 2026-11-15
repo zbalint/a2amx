@@ -103,3 +103,16 @@ them); `src/confine.rs`.
 | `default_settings_are_injected_once` uses a nonexistent cwd; `user_settings_keep_other_keys_...` uses an existing one | `tests/agy_wiring.rs:19-45`, `48-85` | read (consultant) |
 | Quota windows of the five-bucket payload per group | `tests/quota.rs:1290-1316` | read; expected values derived by hand from `now = 1000` and the payload's `reset_in_seconds` (100, 200, 300, 400, 500) and fractions |
 | `take_user_settings` already keeps only the last `--settings` | `src/harness.rs:589-615` | read (matches probe P4) |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (one spec-review round); developer OMP
+openai-codex/gpt-5.6-luna (advisor not exposed); tester none for this spec (the tester's probes P1-P9 were
+the source evidence; the architect reran all gates). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Spec 3en review (after commit) | tester probes P5, P6 | Spec 3en matched slug-style model ids only and injected a non-canonical cwd; both false on real `agy` | This spec |
+| Draft review | consultant | Shortcut comment named a false ceiling; new quota tests not guaranteed red; team-file cwd source and `..` case missing; `pure` wording; one existing test fragile under a symlinked `TMPDIR` | Applied before locking |
+| Implementation | developer's advisor | `canonicalize` ran on a lossy `String`, losing non-UTF-8 paths | `fs::canonicalize` now takes the original `Path`; mutation rerun |
+| Architect review | architect | My first full-suite run showed one failure while the developer was mutating the shared checkout | Not a defect; rerun on the final tree: 1301 passed, 0 failed, 3 ignored. Rule: no cargo run in the checkout while the developer runs mutants |

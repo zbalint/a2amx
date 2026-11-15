@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::Command;
 
@@ -47,7 +48,8 @@ fn default_settings_are_injected_once() {
 #[test]
 fn user_settings_keep_other_keys_and_override_queue_and_trust() {
     let dir = tempdir().unwrap();
-    let cwd = dir.path().join("project");
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let cwd = root.join("project");
     fs::create_dir(&cwd).unwrap();
     let input = json!({
         "other": 7,
@@ -152,6 +154,47 @@ fn malformed_status_line_and_trusted_workspaces_are_preserved_or_rejected() {
     assert_eq!(
         error.to_string(),
         "--settings trustedWorkspaces must be an array"
+    );
+}
+
+#[test]
+fn trusted_workspaces_include_symlink_and_canonical_paths() {
+    let dir = tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let target = root.join("sub");
+    fs::create_dir(&target).unwrap();
+    let link = root.join("link");
+    symlink(&target, &link).unwrap();
+    let argv = wire_agy_argv(
+        vec!["agy".into()],
+        Path::new("/x/a2amx"),
+        &link,
+        root.join("gemini").as_path(),
+    )
+    .unwrap();
+    assert_eq!(
+        settings(&argv)["trustedWorkspaces"],
+        json!([link.to_string_lossy(), target.to_string_lossy()])
+    );
+}
+
+#[test]
+fn trusted_workspaces_include_canonical_dot_paths() {
+    let dir = tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let target = root.join("sub");
+    fs::create_dir(&target).unwrap();
+    let cwd = root.join("sub").join("..").join("sub");
+    let argv = wire_agy_argv(
+        vec!["agy".into()],
+        Path::new("/x/a2amx"),
+        &cwd,
+        root.join("gemini").as_path(),
+    )
+    .unwrap();
+    assert_eq!(
+        settings(&argv)["trustedWorkspaces"],
+        json!([cwd.to_string_lossy(), target.to_string_lossy()])
     );
 }
 

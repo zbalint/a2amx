@@ -69,7 +69,8 @@ fn agy_window(value: &Value, now_unix: u64) -> Option<ClaudeWindow> {
 }
 
 fn model_group(model: Option<&str>) -> Option<&'static str> {
-    let model = model?;
+    // `model.id` is a display name or a slug, so match case-insensitively.
+    let model = model?.to_ascii_lowercase();
     if model.starts_with("claude") || model.starts_with("gpt") {
         Some("3p")
     } else if model.contains("argon") {

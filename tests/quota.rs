@@ -1315,6 +1315,115 @@ fn agy_status_selects_model_group_windows() {
 }
 
 #[test]
+fn agy_status_display_claude_selects_model_group_windows() {
+    let input = serde_json::json!({
+        "model": {"id": "Claude Opus 5.5 (Low)"},
+        "quota": {
+            "3p-5h": {"remaining_fraction": 0.4, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 100},
+            "3p-weekly": {"remaining_fraction": 0.9, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 200},
+            "gemini-5h": {"remaining_fraction": 0.763, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 300},
+            "gemini-weekly": {"remaining_fraction": 0.9, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 400},
+            "gemini-argon-wtu-weekly": {"remaining_fraction": 0.8, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 500},
+            "ignored": {"remaining_fraction": 0.01, "reset_in_seconds": 1}
+        }
+    });
+    assert_eq!(
+        quota::from_agy_status(&input, 1000),
+        Some(quota::ClaudeRateLimits {
+            five_hour: Some(quota::ClaudeWindow {
+                left: 40,
+                resets_at: 1100
+            }),
+            weekly: Some(quota::ClaudeWindow {
+                left: 90,
+                resets_at: 1200
+            }),
+        })
+    );
+}
+
+#[test]
+fn agy_status_display_gpt_selects_model_group_windows() {
+    let input = serde_json::json!({
+        "model": {"id": "GPT-OSS 120B (Medium)"},
+        "quota": {
+            "3p-5h": {"remaining_fraction": 0.4, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 100},
+            "3p-weekly": {"remaining_fraction": 0.9, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 200},
+            "gemini-5h": {"remaining_fraction": 0.763, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 300},
+            "gemini-weekly": {"remaining_fraction": 0.9, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 400},
+            "gemini-argon-wtu-weekly": {"remaining_fraction": 0.8, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 500},
+            "ignored": {"remaining_fraction": 0.01, "reset_in_seconds": 1}
+        }
+    });
+    assert_eq!(
+        quota::from_agy_status(&input, 1000),
+        Some(quota::ClaudeRateLimits {
+            five_hour: Some(quota::ClaudeWindow {
+                left: 40,
+                resets_at: 1100
+            }),
+            weekly: Some(quota::ClaudeWindow {
+                left: 90,
+                resets_at: 1200
+            }),
+        })
+    );
+}
+
+#[test]
+fn agy_status_display_argon_selects_model_group_windows() {
+    let input = serde_json::json!({
+        "model": {"id": "Gemini 4 Argon (Medium)"},
+        "quota": {
+            "3p-5h": {"remaining_fraction": 0.4, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 100},
+            "3p-weekly": {"remaining_fraction": 0.9, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 200},
+            "gemini-5h": {"remaining_fraction": 0.763, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 300},
+            "gemini-weekly": {"remaining_fraction": 0.9, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 400},
+            "gemini-argon-wtu-weekly": {"remaining_fraction": 0.8, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 500},
+            "ignored": {"remaining_fraction": 0.01, "reset_in_seconds": 1}
+        }
+    });
+    assert_eq!(
+        quota::from_agy_status(&input, 1000),
+        Some(quota::ClaudeRateLimits {
+            five_hour: None,
+            weekly: Some(quota::ClaudeWindow {
+                left: 80,
+                resets_at: 1500
+            }),
+        })
+    );
+}
+
+#[test]
+fn agy_status_display_gemini_selects_model_group_windows() {
+    let input = serde_json::json!({
+        "model": {"id": "Gemini 3.8 Flash (Medium)"},
+        "quota": {
+            "3p-5h": {"remaining_fraction": 0.4, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 100},
+            "3p-weekly": {"remaining_fraction": 0.9, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 200},
+            "gemini-5h": {"remaining_fraction": 0.763, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 300},
+            "gemini-weekly": {"remaining_fraction": 0.9, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 400},
+            "gemini-argon-wtu-weekly": {"remaining_fraction": 0.8, "reset_time": "2026-11-14T20:00:00Z", "reset_in_seconds": 500},
+            "ignored": {"remaining_fraction": 0.01, "reset_in_seconds": 1}
+        }
+    });
+    assert_eq!(
+        quota::from_agy_status(&input, 1000),
+        Some(quota::ClaudeRateLimits {
+            five_hour: Some(quota::ClaudeWindow {
+                left: 77,
+                resets_at: 1300
+            }),
+            weekly: Some(quota::ClaudeWindow {
+                left: 90,
+                resets_at: 1400
+            }),
+        })
+    );
+}
+
+#[test]
 fn agy_status_unknown_models_choose_pessimistic_windows_and_known_missing_stays_missing() {
     let input = serde_json::json!({
         "model": {"id": "foo"},
