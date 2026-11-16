@@ -85,3 +85,17 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 4. Before editing, run `rg -n -e 'current_exe\|--exact' tests/daemon.rs` and confirm this test is the only hit (the architect found the hits at old lines 2360 and 2363-2364, all in this test).
 The tester repeats 1 to 3 (item 3 on a scratch copy of the one file under `target/scratch/3fc-tester/`, or in the checkout with the same checksum restore).
 
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review and design read, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 1 (Amendment 1).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | no problem that would cause a BLOCKED; three small gaps: two seams with no blank line between items not stated, the `main.rs` line estimate, HEAD not named | seam sentence, estimate and HEAD fixed before locking |
+| Draft review | architect, consultant (both missed) | `newly_created_parents_are_private_even_with_a_restrictive_umask` re-executes the test binary with `--exact` and its bare name; in the module the name has a prefix, so the child ran zero tests and the parent still passed (the spec's claims table had no row for self re-execution) | found later by the tester, see below |
+| Implementation | developer | no problems found at the first report; the byte-for-byte rule was followed literally, so the test kept its bare name | none until the tester's finding |
+| Tester pass | tester | BLOCKED: the self-spawning test above; invisible to acceptance 1 (module prefix stripped) and 2 (bytes) | Amendment 1: one string literal qualified with `daemon_lifecycle::`, acceptance 7 (exact two-line diff, qualified filter matches one test, mutation `0o700` to `0o755` in the child branch fails and the restored file passes) |
+| Design read | consultant | the amended test and `tests/agy_wiring.rs::agy_empty_gemini_dir_ignores_cwd_decoy` assert only that the child exited successfully, so a later rename or module move would make them pass silently; no other test under `tests/` depends on its own name or module path | left for backlog F95 (a hardening change to test bodies, outside a pure-move spec) |
+| Architect review | architect | no problems found after Amendment 1; ordered rebuild from the ranges identical except the one literal, exactly the two amendment lines in the normalized diff, file checksum equal to the developer's after the mutation, fmt, clippy and full `cargo test` (61 suites, 1347 passed, 3 ignored) | none |
