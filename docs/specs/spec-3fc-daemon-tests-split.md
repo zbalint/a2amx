@@ -39,7 +39,7 @@ Module names are fixed; test and helper names do not change. The `#[path = "../c
 
 ## 3. What must not change
 
-- Every test body, attribute and helper body is moved byte-for-byte. The only allowed edits are the `mod` lines and `#[path]` in `main.rs` and the one `use super::*;` line in each module.
+- Every test body, attribute and helper body is moved byte-for-byte. The only allowed edits are the `mod` lines and `#[path]` in `main.rs`, the one `use super::*;` line in each module, and the one string literal of Amendment 1.
 - Comments, `// SAFETY:` and `// shortcut:` comments move with their code. No new `#[allow]`, `#[cfg]` or suppression. No test is renamed, merged, split, skipped or newly ignored.
 
 ## 4. Out of scope
@@ -51,11 +51,12 @@ Shortening large tests or extracting shared setup; `tests/common/`; other test f
 From the main checkout, as an ordinary user, with the environment form in `AGENTS.md`.
 
 1. **Same tests, same names.** (The module of each test is checked by the architect and the tester against the table in section 2, because the sed and the sorted-line check hide it.) Create `target/scratch/3fc` first; delete it before reporting. Before editing, save `cargo test --test daemon -- --list 2>/dev/null | rg ': test$' | sort > target/scratch/3fc/before.txt` (48 lines expected). After, the same command with `sed -E 's/^(attach_streams|confine|daemon_lifecycle|serve_protocol|session_creation|status_reporting)::(.*)$/\2/'` applied (the `common::fake_discord::tests::...` line is left alone), then sorted, equals `before.txt` (`diff` exit 0). Check that `before.txt` has the expected number of lines first: `2>/dev/null` hides a build failure and would leave it empty.
-2. **Same code.** `old` = `git show HEAD:tests/daemon.rs`, `new` = `cat tests/daemon/*.rs`. Delete blank lines and lines that start at column 0 with `mod `, `use ` or `#[path` (an indented `use` inside a function is kept on both sides, so losing one fails the check), then `sort`; `diff` exit 0. For example `sed '/^$/d; /^\(mod \|use \|#\[path\)/d' | sort`. The eleven indented `use` lines inside tests are untouched.
+2. **Same code.** `old` = `git show HEAD:tests/daemon.rs`, `new` = `cat tests/daemon/*.rs`. Delete blank lines and lines that start at column 0 with `mod `, `use ` or `#[path` (an indented `use` inside a function is kept on both sides, so losing one fails the check), then `sort`; `diff` shows only the one changed line of Amendment 1 (see acceptance 7 for the exact form). For example `sed '/^$/d; /^\(mod \|use \|#\[path\)/d' | sort`. The eleven indented `use` lines inside tests are untouched.
 3. `wc -l tests/daemon/*.rs`: every file under 1,000 lines. `cs check` on each new file: report the scores and the old file's score (save `git show HEAD:tests/daemon.rs` under `target/scratch/3fc/` before editing and run `cs check` on that copy); every new score at least the old one.
 4. Before editing, run `cargo test --test daemon` once and record its passed/ignored counts (48 passed, 0 ignored expected on a quiet machine; it needs no other test run in parallel). After the split `cargo test --test daemon` has the same counts; `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`.
 5. `git status --short` shows only the deletion of `tests/daemon.rs`, the new `tests/daemon/` files and nothing else from you.
 6. Fresh full gate by the architect.
+7. Amendment 1 (see below): the exact normalized diff, the qualified filter and the mutation check.
 
 Known flaky tests: none open for this file (checked in `docs/backlog.md` by path and by every test name: F37, which named `exited_claude_session_never_reports_needs_input`, is closed; F30 is a test-hardening idea, not a flake). A failure is rerun once; a second failure is reported.
 
@@ -68,4 +69,19 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 | Every module uses at least one preamble item, so `use super::*;` is not unused | name counts over each module's ranges (`Client`, `Request`, `Response`, `ServerFrame` or `Daemon`) | script |
 | Known flakes naming this file | `docs/backlog.md` searched by path and by each of the 47 test names: F37 (Closed section) and F30 (idea) only | grep |
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works, and `common::` paths (52 uses) resolve through `super::*` | specs 3ev to 3fb accepted (latest d5170e7) | built |
+| One test re-executes the test binary by its bare name (`newly_created_parents_are_private_even_with_a_restrictive_umask`, old lines 2317-2396, `--exact` at 2363-2364); no other test in `tests/daemon.rs` or in the earlier split directories does (`rg -n -e 'current_exe\|--exact' tests`) | tester pass, verified by the architect (Amendment 1) | read and run |
 | Baseline test list | `cargo test --test daemon -- --list` on HEAD d5170e7, 48 lines (47 tests plus the `common::fake_discord` line) | run |
+
+## Amendment 1 (tester BLOCKED, adjudicated by the architect)
+
+**Finding (verified by the architect).** `newly_created_parents_are_private_even_with_a_restrictive_umask` (old lines 2317-2396) runs itself in a child process: it spawns `std::env::current_exe()` with `["--exact", "newly_created_parents_are_private_even_with_a_restrictive_umask"]` and the environment variable `A2AMX_TEST_PRIVATE_STATE`, and its only parent assertion is that the child exited successfully. In a one-binary directory target the test's name is `daemon_lifecycle::newly_created_parents_are_private_even_with_a_restrictive_umask`; the bare name matches no test, the child runs zero tests and exits 0, and the parent passes without the child's 0700 and 0600 checks ever running. Acceptance 1 (module prefix stripped) and acceptance 2 (bytes) cannot see this, and the earlier split directories contain no such test.
+
+**Decision.** One edit is allowed to a test body: in `tests/daemon/daemon_lifecycle.rs`, in the `.args([...])` call of that test, change the string literal `"newly_created_parents_are_private_even_with_a_restrictive_umask",` to `"daemon_lifecycle::newly_created_parents_are_private_even_with_a_restrictive_umask",`. Nothing else in the body changes, and no other test is edited. The `--exact` flag stays (dropping it would also work but removes a line and loosens the match). The rest of section 3 stands.
+
+**Acceptance 7 (new).**
+1. Exact normalized diff: `diff <(git show HEAD:tests/daemon.rs | sed '/^$/d; /^\(mod \|use \|#\[path\)/d' | sort) <(cat tests/daemon/*.rs | sed '/^$/d; /^\(mod \|use \|#\[path\)/d' | sort) | rg '^[<>]'` prints exactly two lines: the removed `<             "newly_created_parents_are_private_even_with_a_restrictive_umask",` and the added `>             "daemon_lifecycle::newly_created_parents_are_private_even_with_a_restrictive_umask",`, and nothing else (the whitespace is the 12 spaces of the old line).
+2. The child filter matches exactly one test: `cargo test --test daemon -- --list --exact daemon_lifecycle::newly_created_parents_are_private_even_with_a_restrictive_umask 2>/dev/null | rg ': test$'` prints exactly one line.
+3. The child really runs (mutation check, in the assigned checkout; the developer records the file's `sha256sum` first, restores the file by that checksum afterwards and says so in the report): in the child branch of that test in `tests/daemon/daemon_lifecycle.rs`, change the expected mode `0o700` inside its `for directory in [path.clone(), path.parent().unwrap().to_owned()]` loop (old line 2342; not the `0o700` of `partial_bind_failure_releases_addresses_and_lock_and_parents_are_private`, old line 2042) to `0o755`, run `cargo test --test daemon -- --exact daemon_lifecycle::newly_created_parents_are_private_even_with_a_restrictive_umask`; it must fail (the parent prints the child's output). Restore the file, rerun, and it passes.
+4. Before editing, run `rg -n -e 'current_exe\|--exact' tests/daemon.rs` and confirm this test is the only hit (the architect found the hits at old lines 2360 and 2363-2364, all in this test).
+The tester repeats 1 to 3 (item 3 on a scratch copy of the one file under `target/scratch/3fc-tester/`, or in the checkout with the same checksum restore).
+
