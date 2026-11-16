@@ -70,10 +70,10 @@ do not change `src/` or the assertions.
 
 ## 3. `tests/human_inbound.rs`: no OMP data directories
 
-Change `Harness::Omp,` at line 216 to `Harness::Generic,`. The test asserts that a queued human message whose lease
-expired becomes `undeliverable` with a given detail; its siblings use `Harness::Generic` with the same helper and the
-same `RemoteMode`/`team_scope` arguments. If the test fails with `Generic` (the assertion on the detail text, or a
-harness-specific eligibility rule), stop and report `BLOCKED`; do not add a production seam.
+Change the harness and deliver arguments at lines 216-217 from `Harness::Omp,` and `None,` to `Harness::Generic,` and
+`Some(Deliver::Auto),` (Amendment 1; `Deliver` is already imported in this file). The test asserts that a queued human
+message whose lease expired becomes `undeliverable` with a given detail. If the test still fails with this pair,
+stop and report `BLOCKED`; do not add a production seam.
 
 ## 4. Claims checked
 
@@ -112,3 +112,29 @@ so for it the check is a contract test and the developer reports which case appl
 
 Known flakiness: none recorded for these three tests. If any other test fails, rerun it once; a repeat failure is
 reported as pre-existing with the output, not fixed.
+
+## Amendment 1: section 3 needs `Some(Deliver::Auto)`, not `Generic` alone
+
+The developer reported `BLOCKED — SPEC ADJUDICATION REQUIRED`: with `Harness::Generic` and `deliver: None` the
+`human_inbound` test fails at line 252 (`message did not fail after lease expiry`). The report is right that section 3
+as first written does not work. Its explanation (the PTY channel submits the message at once) is not what the code
+does; the cause is the default delivery mode.
+
+- `Harness::default_deliver` returns `Deliver::Hold` for `Generic` and `Deliver::Auto` for `Omp`
+  (`src/harness.rs:68-71`); `src/daemon.rs:599` applies it when the request's `deliver` is `None`.
+- `delivery::run` returns as soon as `channel.deliver() == Deliver::Hold` (`src/delivery.rs:410-413`), before the
+  human-message lease recheck (`:424-437`). A held session's message is never rechecked, so it never expires.
+- With `Deliver::Auto` on `Generic`, the recheck runs first; the lease is valid on the first pass, then
+  `channel.begin()` returns `None` because `harness::ready` for `Generic` needs `bracketed_paste` mode
+  (`src/harness.rs:372-376`), which `sleep 90` never enables. The message stays pending, the loop's next ticks run the
+  recheck after the 1 s lease expires, and it is marked `undeliverable` with the expected detail. This is the path the
+  `Omp` native channel took, where no bridge ever attached.
+
+Section 3 now says `Harness::Generic` with `Some(Deliver::Auto)`. The claims table gains these rows:
+
+| Claim | Where | Verified how |
+| --- | --- | --- |
+| `Generic` defaults to `Hold`, `Omp` to `Auto` | `src/harness.rs:68-71`, `src/daemon.rs:599` | read |
+| Hold returns before the lease recheck | `src/delivery.rs:410-413` vs `:424-437` | read |
+| `Generic` with `Auto` is not ready without bracketed paste | `src/harness.rs:372-376`, `src/emulator.rs:385` | read; the mode is set only by the program running in the PTY |
+| `Generic` plus `Some(Deliver::Auto)` makes the test pass | not run | post-implementation acceptance; `BLOCKED` again if it fails |
