@@ -71,3 +71,16 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works, `env!("CARGO_BIN_EXE_a2amx")` resolves in module files, and `common::` paths resolve through `super::*` | specs 3ev to 3fc accepted (latest 402c8a5); `rg -n 'CARGO_BIN_EXE' tests/*/*.rs` | built |
 | Baseline | on 0559046: `cargo test --test auto_confine -- --list` 33 `: test` lines (32 tests plus the `common::fake_discord` line); `cargo test --test auto_confine` 33 passed, 0 ignored, 4.58 s | run |
 | No script, workflow or doc names `tests/auto_confine.rs` or `--test auto_confine` | `rg -n 'auto_confine' --glob '!target' --glob '!docs/specs/*'` hits are `src/` method names, `tests/status.rs:198` (a test name) and the backlog rows only | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review and design read, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | three minor wording points: the claims table's grep carried Markdown-escaped pipes that match nothing when copied, `cargo fmt` must be run once because two modules end on a blank line, and the spec said LOCKED while the draft was in review | table note added, fmt sentence added in section 2, status kept LOCKED at commit |
+| Implementation | developer | no problems found at the first report | none |
+| Tester pass | tester | no problems found; noted the old file's `cs check` score as 4.86 on its copy against 4.59 recorded by the developer (unexplained, every new score is at least either) | none |
+| Design read | consultant | `global_without_auto_has_no_automatic_grants` is a pure dry-run assertion and fits `dry_run_reports` better than `daemon_use` | not moved (section 4 sends misplaced tests to backlog F94); recorded there |
+| Architect review | architect | no problems found: ordered rebuild from the ranges exact for all six files, normalized diff empty, fmt, clippy and full `cargo test` (61 suites, all ok) | none |
