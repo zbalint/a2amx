@@ -138,3 +138,18 @@ Section 3 now says `Harness::Generic` with `Some(Deliver::Auto)`. The claims tab
 | Hold returns before the lease recheck | `src/delivery.rs:410-413` vs `:424-437` | read |
 | `Generic` with `Auto` is not ready without bracketed paste | `src/harness.rs:372-376`, `src/emulator.rs:385` | read; the mode is set only by the program running in the PTY |
 | `Generic` plus `Some(Deliver::Auto)` makes the test pass | not run | post-implementation acceptance; `BLOCKED` again if it fails |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor automatic, model not exposed).
+BLOCKED/amend cycles: 1 (Amendment 1).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | the red-to-green claim failed for a developer on the OMP harness (`human_inbound` is already green there) | section 6 now says contract test in an OMP session |
+| Draft review | consultant | moving the `confine.rs` fixture under `target/tmp` turns on the `git_common_dir` bind of the real `.git`, which the environment probe never exercised | stated in section 2, with a BLOCKED rule |
+| Draft review | consultant | the list of `Harness::Generic` lines was incomplete | replaced by an `rg` claim |
+| Implementation | developer | section 3 (`Generic` alone) fails: `Generic` defaults to `Deliver::Hold`, which returns before the lease recheck, so the message never expires; the spec claim was false and the consultant had also missed `default_deliver` | Amendment 1: `Generic` with `Some(Deliver::Auto)` |
+| Implementation | developer | its BLOCKED report explained the failure as the PTY channel submitting at once; the code shows the Hold default | architect corrected it in Amendment 1 |
+| Tester pass | tester | no problems found; three mutants (lease recheck, state hide, gateway run/link write limit) killed | none |
+| Architect review | architect | no problems found; two mutants (recheck disabled, `Generic` readiness forced true) killed by the same assertion | none |

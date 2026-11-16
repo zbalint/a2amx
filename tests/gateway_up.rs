@@ -243,10 +243,7 @@ fn sandbox_hides_state_host_and_limits_writes_to_gateway() {
     let Some(bwrap) = bwrap_for_test() else {
         return;
     };
-    let parent = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .expect("HOME is set for the real-bubblewrap state probe");
-    let home = tempfile::tempdir_in(parent).unwrap();
+    let home = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     prepare_state(home.path());
     let (layout, shell) = shell_layout(home.path(), &bwrap, None);
     let state = layout.layout.root().to_string_lossy().into_owned();

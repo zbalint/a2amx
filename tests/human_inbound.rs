@@ -213,8 +213,8 @@ async fn queued_human_message_rechecks_recipient_eligibility_before_delivery() {
         "expiring-inbound",
         Some(RemoteMode::Both),
         Some(team_scope("expiring-inbound-team")),
-        Harness::Omp,
-        None,
+        Harness::Generic,
+        Some(Deliver::Auto),
     )
     .await;
     let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;

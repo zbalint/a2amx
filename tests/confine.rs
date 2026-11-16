@@ -7012,8 +7012,7 @@ fn populate_omp_overlay(fixture: &Fixture) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_bwrap_confined_tree_hides_state_run_and_secrets() -> anyhow::Result<()> {
-    let home = std::env::var_os("HOME").map(PathBuf::from).expect("HOME");
-    let base = tempfile::tempdir_in(home)?;
+    let base = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
     let root = tempfile::tempdir_in(base.path())?;
     let cwd_dir = tempfile::tempdir_in(base.path())?;
     let cwd = cwd_dir.path().to_path_buf();
