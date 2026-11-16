@@ -71,3 +71,18 @@ Known flaky tests: backlog I24 names `queued_human_message_rechecks_recipient_el
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works, `env!("CARGO_BIN_EXE_a2amx")` resolves in module files, and `common::` paths and the `use common::{...}` names resolve through `super::*` | specs 3ev to 3fd accepted (latest 402c8a5 for 3fc); `rg -n 'CARGO_BIN_EXE' tests/*/*.rs` | built |
 | Baseline | on 0559046 (`tests/human_inbound.rs` unchanged through f634a95): `cargo test --test human_inbound -- --list` 34 `: test` lines (33 tests plus the `common::fake_discord` line); `cargo test --test human_inbound` 34 passed, 0 ignored, 65.32 s, in the architect's confined session | run |
 | No script, workflow or doc names `tests/human_inbound.rs` or `--test human_inbound` | `rg -n 'human_inbound' --glob '!target' --glob '!docs/specs/*'` hits are the config key `human_inbound_per_minute`, the daemon method `human_inbound`, `Request::HumanInbound` and the backlog rows only | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review and design read, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | `remote_mode_wire_shape_is_stable_and_backward_compatible` is a serde test of the `remote` field and sat in `gateway_capability`; it belongs with the other `RemoteMode` tests | moved to `remote_mode` before locking (counts 10/5/4/6/8) |
+| Draft review | consultant | the seam at lines 21/22 (preamble to `run_binary`) was not listed, so "three seams" could make a careful developer stop | fourth seam stated in section 2 before locking |
+| Draft review | architect | the draft's HEAD and baseline references still pointed at 0559046 and "the commit that accepts 3fd" | fixed to f634a95 before locking |
+| Implementation | developer | no problems found at the first report | none |
+| Tester pass | tester | no problems found; baseline list was source-derived because the developer's scratch (including `before.txt`) was already deleted | none |
+| Design read | consultant | `rate_limits` also holds the body-size and queue-limit tests (`limits` would be exact); `main.rs` keeps single-module imports and has no blank line before the `mod` lines (the byte-for-byte rule forbids moving them) | left in backlog F94 |
+| Architect review | architect | no problems found: ordered rebuild from the ranges exact for all six files, normalized diff empty, fmt, clippy and full `cargo test` (61 suites, all ok, exit 0) | none |
