@@ -71,3 +71,17 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 | A directory target with `use super::*;` and no `mod common;` works | specs 3ev to 3ff accepted (latest 8a61b20); `tests/messaging/main.rs` (spec 3ez) has no `mod common;` and its modules start with `use super::*;` (`rg -c '^mod common;' tests/*/main.rs` shows `tests/messaging/main.rs` as the only one without) | built |
 | Baseline | on 78ed06d (`tests/wire.rs` unchanged through 8a61b20): `cargo test --test wire -- --list` 39 `: test` lines; `cargo test --test wire` 39 passed, 0 ignored, 0.01 s | run |
 | No script, workflow or doc names `tests/wire.rs` or `--test wire` | `rg -n 'tests/wire\|--test wire\|wire\.rs' --glob '!target' --glob '!docs/specs/*'` hits are `src/wire.rs` in backlog I12 and the F94 row only | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review and design read, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | `attach_top_rows_preserves_old_wire_and_acknowledges_new_wire` (only `Request::Attach` and `Response::Attached*` shapes, in `visibility`) and `screen_response_json_uses_exact_shape` (only `Response::Screen` JSON, in `summaries`) were in the wrong module | both moved to `requests` before locking (counts 6/13/10/4/6) |
+| Draft review | consultant | acceptance 2 named two lines of the multi-line `use a2amx::wire::{` block that stay on both sides; there are four (lines 3-6) | wording fixed before locking |
+| Draft review | architect, consultant (both missed) | `confine_request_round_trips_and_defaults_missing_fields` and `team_fields_round_trip_and_old_new_session_defaults_are_compatible` assert only `Request` shapes and sit in `visibility`; the draft review walked only some tests' asserted types | found by the consultant's design read; not moved (a post-implementation amendment would re-open developer and tester for a theme-only gain); recorded in backlog F94 |
+| Implementation | developer | no problems found at the first report | none |
+| Tester pass | tester | no problems found; the old file's `cs check` score read 4.99 on its copies against 5.59 reported by the developer (unexplained, every new score is at least either) | none |
+| Architect review | architect | no problems found: ordered rebuild from the ranges exact for all six files, normalized diff empty, fmt, clippy and full `cargo test` (61 suites, all ok, exit 0) | none |
