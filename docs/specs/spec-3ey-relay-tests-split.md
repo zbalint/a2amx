@@ -66,3 +66,16 @@ Known flaky tests: none recorded for this file. A failure is rerun once; a secon
 | 36 tests; one indented `use` inside a function (line 1828); `env!` uses: `CARGO_BIN_EXE_a2amx` at lines 680, 714, 1690, 1767, 1859 | `rg -c '^#\[(tokio::)?test' tests/relay.rs`, `rg -n '^\s+use '`, `rg -n 'env!'` | grep |
 | Helper use sites by module and the partition of all 2181 lines | `plan.py` run by the architect over the file (every line covered once) | script |
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works | specs 3ev, 3ew, 3ex accepted (aad8a9a, 81d9a1a, 2cf2d65) | built |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0. No consultant design read of the diff (the method was reviewed on specs 3ev to 3ex; consultant quota was low).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | the normalization of acceptance 2 deleted indented `use` lines too, so losing the in-test `use std::io::Write as _;` (line 1828) would pass | deletes anchored at column 0, in this and the later specs; a guard that `before.txt` is not empty |
+| Draft review | consultant | `unlisted_agent_channel_is_unbound` is a binding and sync test, not an outbound or reconnect test | moved to `sync_and_members` |
+| Implementation | developer | no problems found; acceptance 1-5 pass, scores 6.19 to 10.00 | none |
+| Tester pass | tester | no problems found: 42 items byte-identical and placed as the table says, 37 passed | none |
+| Architect review | architect | no problems found; rebuilt each file from the spec's ranges and compared (all six identical), sorted-line diff, fmt, clippy, `cargo test --test relay` (37 passed) | none |
