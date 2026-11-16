@@ -67,3 +67,16 @@ Known flaky tests: none recorded for this file. A failure is rerun once; a secon
 | 72 tests; five indented `use` lines inside tests (2134-2136, 2610-2611); `env!` uses: `CARGO_BIN_EXE_a2amx` at line 9, `CARGO_PKG_VERSION` at line 1377 | `rg -c '^#\[(tokio::)?test' tests/daemon_cli.rs`, `rg -n '^\s+use '`, `rg -n 'env!'` | grep |
 | Helper use sites by module and the partition of all 2946 lines | `plan.py` run by the architect over the file (every line covered once) | script |
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works | specs 3ev, 3ew, 3ex accepted (aad8a9a, 81d9a1a, 2cf2d65) | built |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (combined pre-lock review of 3ez and 3fa, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0. No consultant design read of the diff (method reviewed on earlier specs; consultant quota low).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | §1 said the five indented `use` lines are deleted by the normalization, contradicting the column-0 form of acceptance 2 | wording changed to "kept on both sides" |
+| Draft review | consultant | `new_rejects_the_daemon_sender_name` is a validation test of `new`, not a peer-exit test | moved to `daemon_lifecycle` |
+| Implementation | developer | no problems found; acceptance 1-5 pass, scores 5.97 to 10.00 | none |
+| Tester pass | tester | no problems found: 162 items byte-identical and placed as the table says, 73 passed | none |
+| Architect review | architect | no problems found; rebuilt each file from the spec's ranges (all seven identical), sorted-line diff, fmt, clippy, `cargo test --test daemon_cli` (73 passed) | none |
