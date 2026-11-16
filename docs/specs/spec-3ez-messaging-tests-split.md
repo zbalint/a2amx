@@ -66,3 +66,17 @@ Known flaky tests: none recorded for this file. A failure is rerun once; a secon
 | 43 tests; six indented `use` lines inside tests (1606, 1641, 1673, 1700, 1707, 1910); `env!` uses: none (`rg -n 'env!' tests/messaging.rs` finds nothing) | `rg -c '^#\[(tokio::)?test' tests/messaging.rs`, `rg -n '^\s+use '`, `rg -n 'env!'` | grep |
 | Helper use sites by module and the partition of all 2088 lines | `plan.py` run by the architect over the file (every line covered once) | script |
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works | specs 3ev, 3ew, 3ex accepted (aad8a9a, 81d9a1a, 2cf2d65) | built |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (combined pre-lock review of 3ez and 3fa, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0. No consultant design read of the diff (method reviewed on earlier specs; consultant quota low).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | `paste_and_teams` uses nothing from the preamble, so `use super::*;` there would fail `clippy -D warnings`; the spec left it to a fallback rule | spec states that module has no glob line |
+| Draft review | consultant | stale text carried from earlier specs: a `mod common` / `#[path]` instruction and a `common::fake_discord` remark, though this file has no `mod common;` | removed |
+| Draft review | consultant | the spec counted five indented `use` lines in tests; there are six (adds 1910) | corrected |
+| Implementation | developer | no problems found; acceptance 1-5 pass, scores 6.23 to 10.00 | none |
+| Tester pass | tester | no problems found: 54 items byte-identical and placed as the table says, 43 passed | none |
+| Architect review | architect | no problems found; rebuilt each file from the spec's ranges (all six identical), sorted-line diff, fmt, clippy, `cargo test --test messaging` (43 passed) | none |
