@@ -80,3 +80,4 @@ BLOCKED/amend cycles: 0. No consultant design read of the diff (method reviewed 
 | Implementation | developer | no problems found; acceptance 1-5 pass, scores 5.97 to 10.00 | none |
 | Tester pass | tester | no problems found: 162 items byte-identical and placed as the table says, 73 passed | none |
 | Architect review | architect | no problems found; rebuilt each file from the spec's ranges (all seven identical), sorted-line diff, fmt, clippy, `cargo test --test daemon_cli` (73 passed) | none |
+| After the push (found in the 3fb pre-lock review) | consultant, then architect | section 5 said no known flaky tests, but backlog row I18 names `reset_runs_configured_steps_in_order` and `reset_times_out_when_second_step_stays_not_ready` of this file | not a code defect; backlog I18 now names `tests/daemon_cli/reset.rs`; this spec's line stays as locked; no other split spec's file has a flake row (checked in `docs/backlog.md`) |

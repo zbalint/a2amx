@@ -70,3 +70,19 @@ Known flaky tests (backlog rows I7 and I18, both open): `attach_does_not_capture
 | Every module uses at least one preamble item, so `use super::*;` is not unused | `rg -o` of preamble names over each module's ranges (all six use `WAIT`, `cli_args`, `run_cli`, `run_binary`, `PtyHarness` or `Client`) | grep |
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works | specs 3ev to 3fa accepted (latest 2c79340) | built |
 | Baseline test list | `cargo test --test attach_cli -- --list` on HEAD 2c79340, 49 lines (48 tests plus the `common::fake_discord` line) | run |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review and design read, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | section 5 said no known flaky tests, but backlog rows I7 and I18 are open for this file (the line was copied from 3fa without grepping `docs/backlog.md` for the file name) | I7 and I18 named with the rerun-once rule |
+| Draft review | consultant | the order of the `mod` lines was not stated; `cargo fmt` sorts them | alphabetical order stated |
+| Draft review | consultant | acceptance 4 compared with a baseline that was never recorded | a pre-edit `cargo test --test attach_cli` run required |
+| Draft review | consultant | `claude_new_wires_mcp_and_optional_peer_authorization` was a theme misfit and `attach_and_switch` too wide a name | the test and its only helper `wait_for_file` moved to the module, renamed `attach_session` |
+| Implementation | developer | no problems found; acceptance 1 to 5 pass, scores 8.65 to 9.38 (old file 5.51) | none |
+| Tester pass | tester | no problems found: 7 files identical to the spec's ranges, 49 passed | none |
+| Design read | consultant | `switch_waits_for_old_attachment_eof_with_delayed_fake_daemon` switches by a team-line click and could sit in `status_and_team_line`; `start_fake_daemon` is viewer-private while two modules repeat its setup inline | left for backlog F94 (a range change would need an amendment for a placement preference) |
+| Architect review | architect | no problems found; rebuilt all files from the spec's ranges (identical), sorted-line diff, test list, `cs check`, fmt, clippy, full `cargo test` (61 suites, 1347 passed, 3 ignored) | none |
