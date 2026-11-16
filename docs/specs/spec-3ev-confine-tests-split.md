@@ -135,3 +135,21 @@ Known flaky tests: none known in this file. A failure is rerun once; a second fa
 | No file depends on the path `tests/confine.rs`; `sonar.coverage.exclusions=tests/**` is recursive | greps above, `sonar-project.properties:24` | read |
 | `tests/<name>/main.rs` is one target `<name>` | Cargo's documented target auto-discovery | **docs, not yet probed in this repo**: the developer confirms with `cargo test --test confine -- --list` after the first module is split |
 | `mod common;` needs `#[path = "../common/mod.rs"]` from `tests/confine/main.rs` | module path resolution relative to the file's directory | to confirm at build time |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock and design read, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | acceptance 1 expected 146 lines, but `tests/common/fake_discord.rs` has a test that every binary with `mod common;` lists, so a correct split gave 147 and the module-prefix `sed` also mangled the `common::` line | the filter names the 12 modules; 147 expected |
+| Draft review | consultant | acceptance 2 told the developer to write each `use` on one line, which `rustfmt` can rewrap, so the code diff could fail on a correct split | modules start with exactly `use super::*;`; the old file has no multi-line `use` |
+| Draft review | consultant | the helper rule ("used by one module moves there") contradicted the preamble list for three helpers only `real_bwrap` uses | the preamble stays whole in `main.rs`; the one-module rule applies only to helpers after it |
+| Draft review | consultant | `pub(crate)` on shared items was needless edit surface | no visibility changes |
+| Draft review | consultant | line anchors off by one (7,086 lines, preamble 1-171); four modules mixed concerns by file order | anchors fixed; named moves added for the launch/preflight, bwrap-lookup, real-bwrap and limit tests |
+| Draft | architect | the draft called `populate_*` private to one module; they are called from two | moved to `main.rs` |
+| Design read | consultant | six tests still sit next to a neighbour of another theme (two harness-config tests in `harnesses`, two harness-data tests in `git_dirs_and_roots`, one git test in `limits_and_hides`), and `grants_runtime` is a weak name | not fixed here (the ranges were locked); backlog F94 |
+| Implementation | developer | no problems found; acceptance 1-5 pass, scores 5.90 to 9.60 | none |
+| Tester pass | tester | no problems found: 159 functions byte-identical, names and attributes equal, 147 passed | none |
+| Architect review | architect | no problems found; own run of acceptance 1 and 2, fmt, clippy, `cargo test --test confine`; one of my own comparison scripts was wrong (empty old-names list) and was redone | none |
