@@ -73,3 +73,16 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works, and `common::` paths (16 uses) resolve through `super::*` | specs 3ev to 3fe accepted (latest 78ed06d) | built |
 | Baseline | on 78ed06d: `cargo test --test quota -- --list` 49 `: test` lines (48 tests plus the `common::fake_discord` line); `cargo test --test quota` 49 passed, 0 ignored, 29.6 s | run |
 | No script, workflow or doc names `tests/quota.rs` or `--test quota` | `rg -n 'tests/quota\|--test quota\|quota\.rs' --glob '!target' --glob '!docs/specs/*'` hits are `src/quota.rs` in backlog F80 and the F94 row (its list of files still over 1,000 lines) only | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review and design read, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | no problem that would cause a BLOCKED; partition, helper use sites, counts and groupings all confirmed | none |
+| Implementation | developer | no problems found at the first report | none |
+| Tester pass | tester | no problems found; the old file's `cs check` score read 5.47 on its copy against 5.63 reported by the developer (unexplained, every new score is at least either) | none |
+| Design read | consultant | `daemon_limits` does not say its quota comes from the screen, next to `omp_usage_daemon` which covers the polled `omp usage` source (optional naming nit) | module names are locked; left in backlog F94 |
+| Architect review | architect | no problems found: ordered rebuild from the ranges exact for all eight files, normalized diff empty, fmt, clippy and full `cargo test` (61 suites, all ok, exit 0) | none |
