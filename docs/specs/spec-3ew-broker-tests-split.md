@@ -91,3 +91,18 @@ Known flaky tests: none recorded for this file. A failure is rerun once; a secon
 | Preamble is lines 1-205; 47 tests; no `use` inside functions; `env!` uses are `CARGO_BIN_EXE_a2amx` (21) and `CARGO_MANIFEST_DIR` (3255) | `rg -c`, `rg -n '^\s+use '`, `rg -n 'env!'` on `tests/broker.rs` | grep |
 | Helpers at 1598-1917 are `async fn`/`fn` without a test attribute | function list | read |
 | A directory target works with `#[path = "../common/mod.rs"] mod common;` and a glob `use super::*;` | spec 3ev, accepted: same shape built and run (147 tests passed) | built |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0. No consultant design read of the diff (the method was reviewed on spec 3ev; consultant quota was low), recorded here as the skill asks.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | the preamble end was off by one (`1-206` took the first test's attribute; the real end is 205) and so was the helper block (1598-1917) | anchors fixed |
+| Draft review | consultant | the spec listed all eleven reset helpers as candidates for `main.rs`; four have one user module each | the single-use helpers are named per module; shared ones stay in `main.rs` |
+| Draft review | consultant | the estimated sizes were wrong, and no check covered which module a test lands in | sizes recomputed; the architect and the tester check module placement against the table |
+| Draft review | consultant | three tests sit in a module of another theme (`reset_real_omp_draft_hold_survives_margin_then_clears`, `abrupt_binary_restart_recovers_pending_as_daemon_restarted`, `message_status_visibility_and_hold_reason`) | left for backlog F94 |
+| Implementation | developer | no problems found; acceptance 1-5 pass, scores 6.72 to 10.00 | none |
+| Tester pass | tester | no problems found: 69 functions byte-identical and placed as the table says, 48 passed | none |
+| Architect review | architect | no problems found; own run of acceptance 1 and 2, placement counts, fmt, clippy, `cargo test --test broker` (48 passed) | none |
