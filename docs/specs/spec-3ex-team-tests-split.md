@@ -86,3 +86,17 @@ Known flaky tests: none recorded for this file. A failure is rerun once; a secon
 | 117 tests (`rg -c '^#\[(tokio::)?test' tests/team.rs`); one indented `use` inside a function (line 568); `env!` uses are `CARGO_BIN_EXE_a2amx` and `CARGO_MANIFEST_DIR` (1874) | `rg -c`, `rg -n '^\s+use '`, `rg -n 'env!'` | grep |
 | Helper use sites by module: `summary` 571-577 and 1571-1685 (`plan_and_status`); `run_binary_in` 636-845 and `run_binary_in_with_home` 781-888 (`team_file_lookup`); `LIVE_TEAM` 2484-2582 (`lifecycle`); `run_binary` 1744-3248 (four modules); `run_binary_in_with_home_and_runtime` 187 and 2118-2256 (two modules); `start_fake_claude` 1914; `assert_validation_error` 3033-3171 | `rg -n` per helper | grep |
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works | spec 3ev accepted (aad8a9a): same shape built and run | built |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed).
+BLOCKED/amend cycles: 0. No consultant design read of the diff (the method was reviewed on spec 3ev; consultant quota was low).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | four of the six helpers the draft kept in `main.rs` have one user module each (`summary`, `run_binary_in`, `run_binary_in_with_home`, `LIVE_TEAM`) | moved into their module in the locked table |
+| Draft review | consultant | the rule "up to the next test attribute" would have swallowed helpers that sit between tests, and `LIVE_TEAM` was off by one | the table gives explicit line ranges that partition the file; the architect checked the partition with a script |
+| Draft review | consultant | no scratch directory step in acceptance 1; a status test in `lifecycle` and a reset test in `plan_and_status` sit in another theme | scratch step added; the two tests left for backlog F94 |
+| Tester pass | tester | section 2 says each file is the concatenation of its ranges, but seven modules lack the one trailing blank line of their last range, because `rustfmt` removes it (`cargo fmt --check` is part of acceptance) | accepted; no code effect, acceptance 2 ignores blank lines; wording only |
+| Implementation | developer | no problems found; acceptance 1-5 pass, scores 7.76 to 10.00 | none |
+| Architect review | architect | no problems found; rebuilt each file from the spec's ranges and compared it in order after dropping blank, `mod`, `use` and `#[path` lines (all nine identical); fmt, clippy, `cargo test --test team` (118 passed) | none |
