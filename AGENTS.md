@@ -48,7 +48,7 @@ not shrink when files are deleted, and a full host disk has crashed the VM befor
 - Launch commands as argument vectors, never shell-interpolated strings.
 - Terminal-emulation types (`alacritty_terminal::term`, `vte`, `grid`, `event`) are
   named only in `src/emulator.rs`; its `tty` module (PTY spawning) only in
-  `src/session.rs`.
+  `src/session/spawn.rs`.
 - When cutting a corner on purpose, leave a `// shortcut:` comment naming the
   ceiling and the upgrade trigger.
 - Comments explain why, not what. Match the density of the surrounding code.

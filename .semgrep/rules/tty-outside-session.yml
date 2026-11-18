@@ -2,9 +2,9 @@ rules:
   - id: tty-outside-session
     languages: [rust]
     severity: ERROR
-    message: The alacritty PTY module belongs only in src/session.rs; use the session boundary elsewhere.
+    message: The alacritty PTY module belongs only in src/session/spawn.rs; use the session boundary elsewhere.
     metadata:
       source: AGENTS.md
     pattern-regex: '\balacritty_terminal::tty\b'
     paths:
-      exclude: ["src/session.rs"]
+      exclude: ["src/session/spawn.rs"]
