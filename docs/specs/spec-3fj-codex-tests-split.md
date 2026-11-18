@@ -73,3 +73,15 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 ## Amendment 1 (architect, after the developer report)
 
 Acceptance 4 says every new score is at least the old file's. The developer found `tests/codex/confined_socket.rs` at 6.58 against the old file's 6.63. The spec's claim was a prediction, not a requirement of the split: the old file's score averages the confined tests with 15 short ones, and `confined_socket.rs` collects the five longest bodies (a 239-line test and three of 80 to 128 lines, all flagged Large Method, one Complex Method), plus a Low Cohesion note, none of which a byte-for-byte move can change. Shortening the tests is out of scope (section 4); moving them again would only chase the number. Decision: acceptance 4 for this spec reads "every new file under 1,000 lines; every new score at least the old one, except `confined_socket.rs`, which may score down to 6.50 and whose warnings are reported". The tester reports the scores; `main.rs`, `app_server_launch.rs` and `delivery.rs` must be at least the old score.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed). No consultant design read of the diff (byte-exact move).
+BLOCKED/amend cycles: 0 (one architect amendment after the developer report, below).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | acceptance 8 said the `current_exe` hit stays on "exactly that one line" although the line number changes | reworded before locking |
+| Implementation | developer | acceptance 4 ("every new score at least the old") was false for `confined_socket.rs`, 6.58 against 6.63: the module holds the five longest tests (Large Method x4, Complex Method, Low Cohesion); a byte move cannot change that. The architect's draft predicted the scores without scoring the modules | Amendment 1: floor 6.50 for that file, others at least the old score; shortening the tests stays out of scope |
+| Tester pass | tester | `main.rs` has one blank line before the `mod` block that the section 2 rebuild text did not state; first reported, then reclassified as the layout of every earlier split main | none, whitespace only |
+| Architect review | architect | no problems found: ordered rebuild from the ranges exact for all four files (modulo the separator blank), fmt, clippy and full `cargo test` (61 suites, all ok, exit 0) | none |
