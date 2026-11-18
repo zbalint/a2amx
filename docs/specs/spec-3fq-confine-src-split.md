@@ -161,3 +161,18 @@ Known flaky tests: `tests/team/reset_and_validation.rs::team_up_forwards_reset_c
 | Baseline at HEAD: full `cargo test --no-fail-fast` result | architect run at `a9f7415`, output in `target/scratch/3fq/baseline-full.txt`: 61 suites, 1347 passed, 0 failed, 3 ignored | probed |
 
 Trust boundaries: the change moves code and widens visibility only inside the crate, so it creates no attack path; the allow checks that enforce the confinement's limits stay in one place in the root and are called by the same callers, as section 3 says. The existing `tests/confine/*` abuse-case tests (they reject writes and unhides outside the allowed areas) are the contract tests; all pass on the old code and must pass unchanged.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review and design read; model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots. No tester pass: the tester's weekly quota was 6%, so the architect ran six mutants of its own on the checkout (restored by checksum).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | `MountKind`, `Mount` and `path_depth`, used only by `wrap.rs`, sat in the root | moved to `wrap.rs`; no visibility change, expected diff unchanged |
+| Draft review | consultant | the claim about external users of `confine::` omitted `src/codex.rs`; section 1 called `ensure_empty_file` a probe; backlog pointers beyond U9 were stale | claim and wording corrected, pointers updated by the architect |
+| Draft review | consultant | a wrapped test-only `use` block inside `mod tests` would leave continuation lines in the normalized diff | rule added: keep test-only `use` lines on one line |
+| Implementation | developer | no problems found | none |
+| Architect review | architect | six mutants on moved code: five killed (oversized git config limit, Codex harness data, `ALWAYS_UNSET`, `paths_overlap` in the hide rules, `NOTICE_LIMIT`); one survivor in committed code: `PROBE_TIMEOUT` 5 s to 1 ms in `bwrap.rs`, which the confine, daemon and team tests do not catch | recorded in backlog F94, not fixed (out of scope for a move) |
+| Design read | consultant | three optional follow-ups: `ensure_empty_file` sits in `bwrap.rs` but belongs next to `plan_empty_file`; `finish` pulls four `harness_data` functions only for overlay state; the `PlanBuilder` doc comment could name its impl locations | recorded in backlog F94, not changed |
+| Architect review | architect | no problems found in the diff: code bodies equal the scripted rebuild of the section 2 ranges; the sorted unit-test list differs only in the six renamed tests; fmt, clippy `-D warnings`, full `cargo test` (61 suites, 1347 passed, 3 ignored) pass; `cs check` old file 2.65, root 8.67, builder 7.36, hides 8.24, harness_data 7.07, grant_dirs 8.28, git 8.52, wrap 8.45, bwrap 8.67, launch 9.07 | none |
