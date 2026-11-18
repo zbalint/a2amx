@@ -71,3 +71,15 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works, and `common::` paths resolve through `super::*` | specs 3ev to 3fg accepted (latest bfeeb5b) | built |
 | Baseline | on 3ac9b25: `cargo test --test discord -- --list` 31 `: test` lines (30 tests plus the `common::fake_discord` line); `cargo test --test discord` 31 passed, 0 ignored | run |
 | No script, workflow or doc names `tests/discord.rs` or `--test discord` | `rg -n 'tests/discord\|--test discord\|discord\.rs' --glob '!target' --glob '!docs/specs/*'` hits are the F94 row only | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed). No consultant design read of the diff (byte-exact move).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | the draft listed 29 tests; the file has 30. The architect's item scan counted a `"{"` string literal as an open brace and swallowed the last test, `close_classification_and_url_defaults_are_independent_of_network`, into the previous item; the attribute count (4 + 26) disagreed with the draft's own count in the same sentence | scan fixed (string and char literals stripped before brace counting, and the scan asserts attribute count equals item count); the test went to `config` (it only builds a `DiscordConfig` and a `Fatal`) and `gateway_queue` ends at 1187; counts and the blank-line list fixed before locking |
+| Implementation | developer | no problems found at the first report | none |
+| Tester pass | tester | `cs check` scores the same bytes differently by path: 7.24 under `target/scratch/3fk/discord.rs`, 6.41 under a directory whose name contains `test` (CodeScene appears to apply test rules by path). This explains the 4.33 against 4.45 gap seen in 3fh. Every new score is at least 7.24 | later specs tell the tester to save the old copy under a path without `test` in its name |
+| Architect review | architect | no problems found in the diff: ordered rebuild from the ranges exact for all six files, fmt and clippy clean. The first full `cargo test` stopped at a failure in an untouched suite (`tests/team`, `team_up_forwards_reset_configuration_and_consent`, `screen not ready`); the rerun with `--no-fail-fast` passed all 61 suites | recorded as backlog I28 (flaky test, not part of this diff) |
