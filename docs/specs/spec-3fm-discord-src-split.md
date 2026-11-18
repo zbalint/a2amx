@@ -66,3 +66,17 @@ From the main checkout, as an ordinary user, with the environment form in `AGENT
 7. `rg -n 'discord::' src tests --glob '!src/discord*'` and the imports `use a2amx::discord::...` still resolve: `cargo build --all-targets` succeeds with no edit outside scope.
 
 Known flaky tests: `tests/team/reset_and_validation.rs::team_up_forwards_reset_configuration_and_consent` ("screen not ready", backlog I28, an unrelated test). A failure of it is rerun once and recorded as pre-existing if it passes.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed). No separate consultant design read of the diff: the consultant attacked the target shape before locking and the diff is the mechanical move plus the one constructor change it reviewed.
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | the spec did not say where `Watch::start` goes relative to the existing `impl Watch` block, so the in-order rebuild check was not reproducible | placement fixed (first item of the existing `impl Watch`), placement of `mod`/`pub use`/constants/`use` lines added |
+| Draft review | consultant | acceptance 2 ("shows exactly the constructor lines") was left to judgment | the expected 2 removed and 4 added lines are listed verbatim |
+| Draft review | consultant | wording: "is not needed" for the deleted `let config` line, and a visibility sentence that suggested a crossing that does not exist | both reworded |
+| Implementation | developer | no problems found at the first report | none |
+| Tester pass | tester | no problems found; one mutant survived: `config.queue.max(1)` to `config.queue` (no test sets `queue` to 0), a coverage gap in the moved guard that exists on the old code too | recorded, not fixed (out of scope for a move) |
+| Architect review | architect | no problems found: normalized diff exactly the six listed lines, fmt, clippy, full `cargo test` | none |

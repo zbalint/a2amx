@@ -157,7 +157,7 @@ specs showing it found nothing.
 | `bridge` | The `omp-bridge` relay between an OMP extension and the daemon |
 | `channel` | The `a2amx mcp --channel` process that relays daemon deliveries to Claude Code as channel events |
 | `delivery` | Ordered delivery attempts and the PTY, native, and Codex delivery channels |
-| `discord` | The Discord side of the gateway: REST calls (channels, messages), the gateway websocket connection and its reconnect rules; names no a2amx policy |
+| `discord` | The Discord side of the gateway: REST calls (channels, messages), the gateway websocket connection and its reconnect rules (`discord/watch.rs`, behind `Watch`); names no a2amx policy |
 | `gateway` | The chat-independent core of the remote messaging gateway: author check, channel mapping, dedup file, fixed reply lines, message splitting |
 | `relay` | The `a2amx gateway run` loop: pairing, channel sync from the daemon, relay of inbound and outbound messages, member-count pause, reconnect to the daemon; uses `gateway` and `discord` |
 | `relay_files` | The gateway's secure files (`config/gateway.toml`, `config/secrets/discord.token`, `state/gateway/pairing.json`): the strict owner-only read, the token and pairing writes, atomic writes; it creates no directory |
