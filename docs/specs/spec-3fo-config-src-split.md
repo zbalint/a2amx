@@ -62,3 +62,18 @@ From the main checkout, as an ordinary user, with the environment form in `AGENT
 6. `git status --short` shows only ` M src/config.rs` and `?? src/config/`.
 
 Known flaky tests: `tests/team/reset_and_validation.rs::team_up_forwards_reset_configuration_and_consent` ("screen not ready", backlog I28, unrelated). A failure of it is rerun once and recorded as pre-existing if it passes.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed). No separate consultant design read of the diff: the consultant attacked the target shape before locking and the diff is the mechanical move it reviewed.
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | the Why said the code "is already laid out per file", but the halves are interleaved (the reason for twelve ranges) | wording corrected |
+| Draft review | consultant | the root probably drops none of its imports, which the spec said it drops; the children's expected imports were not listed | import expectations corrected and listed |
+| Draft review | consultant | the module names `gateway` and `client` would be namesakes of `crate::gateway` and `crate::client` | renamed `gateway_file` and `client_file` |
+| Draft review | consultant | the public test seam listed `src/daemon.rs`, which does not use `config`, and missed `relay_files.rs` and `gateway_launch.rs`; acceptance 5 had no pass or fail | seam list corrected; acceptance 5 became a before and after diff of the use sites |
+| Implementation | developer | no problems found; the root had no blank line after its `pub use` block | the architect added the blank line (whitespace only), tester told |
+| Tester pass | tester | no problems found; seven mutants killed, none survived | none |
+| Architect review | architect | no problems found: normalized diff empty, fmt, clippy; the full `cargo test` failed once on an unrelated flaky test (`tests/agy_plugin.rs`, backlog I29) and passed on the rerun (61 suites, exit 0); `cs check` root 8.10, `gateway_file` 9.34, `client_file` 10.00 against 7.58 for the old file | none |
