@@ -69,3 +69,16 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works, and `common::` paths resolve through `super::*` | specs 3ev to 3fg accepted (latest bfeeb5b) | built |
 | Baseline | on 120ff4c: `cargo test --test teams -- --list` 16 `: test` lines (15 tests plus the `common::fake_discord` line); `cargo test --test teams` 16 passed, 0 ignored | run |
 | No script, workflow or doc names `tests/teams.rs` or `--test teams` | `rg -n 'tests/teams\|--test teams\|teams\.rs' --glob '!target' --glob '!docs/specs/*'` hits are the F91 row (the historical hang, see above) and the F94 row | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed). No consultant design read of the diff (byte-exact move).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | architect (own review of asserted types) | `live_team_settings_are_consistent_until_the_first_member_exits` sat in `team_visibility` by neighbourhood; it asserts the new-session team-settings error | moved to `team_validation` before locking |
+| Draft review | consultant | no problems found | none |
+| Implementation | developer | no problems found at the first report | none |
+| Tester pass | tester | no problems found; the old file's `cs check` score matched the developer's (6.72) | none |
+| Architect review | architect | no problems found: ordered rebuild from the ranges exact for all four files, fmt, clippy and full `cargo test` (61 suites, all ok, exit 0) | none |
