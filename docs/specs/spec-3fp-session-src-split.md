@@ -70,3 +70,20 @@ From the main checkout, as an ordinary user, with the environment form in `AGENT
 6. `git status --short` shows only ` M src/session.rs` and `?? src/session/`.
 
 Known flaky tests: `tests/team/reset_and_validation.rs::team_up_forwards_reset_configuration_and_consent` (backlog I28) and `tests/agy_plugin.rs::descendant_pipe_holder_fails_with_pipe_error` (backlog I29), both unrelated. A failure of either is rerun once and recorded as pre-existing if it passes.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed). No separate consultant design read of the diff: the consultant attacked the target shape before locking and the diff is the mechanical move it reviewed.
+BLOCKED/amend cycles: 1 (Amendment 1).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | the exit range ended at old line 1396, but the `impl Session` block closes at 1395; the architect's multiset check could not see a misplaced line | range corrected to 1278-1394 |
+| Draft review | consultant | a claim about which modules use `session::` items was false | claim corrected |
+| Draft review | consultant | the PTY boundary wording named the whole `src/session.rs`, but only `spawn.rs` now spawns the PTY | semgrep rule `tty-outside-session`, its message and the `AGENTS.md` sentence narrowed to `src/session/spawn.rs` |
+| Draft review | consultant | acceptance 2 (sorted comparison) cannot detect a line in the wrong file or position | added acceptance 3: one `impl Session {` per file and an ordered rebuild |
+| Tester pass | tester | BLOCKED: events moved into `spawn` and `exit` get the tracing targets `a2amx::session::spawn` and `::exit`, a change the spec did not mention | architect checked that no test, `RUST_LOG` use or `log_target_allowed` depends on it; Amendment 1 (`00d6c0b`) accepts it |
+| Implementation | developer | no problems found | none |
+| Tester pass | tester | mutation pass: 11 mutants killed (the tester's first `CLOSE_RANGE_CLOEXEC=0` probe was invalid, and its corrected probe, skipping `mark_inherited_fds_cloexec`, was killed by `real_bwrap_confines_the_session_process`); one survivor outside the move, a redundant stale-hold check in `reset_gate_decision` | recorded in backlog F94, not fixed (out of scope for a move) |
+| Tester pass | tester | acceptance 6 ("status shows only the assigned files") did not hold because the architect edited `docs/how-this-is-built.md` during the pass | architect's own file, not part of the diff; noted |
+| Architect review | architect | no problems found: normalized diff exactly the three signatures, four `impl Session {` and four `}` the spec lists, fmt, clippy, full `cargo test` (61 suites, exit 0); `cs check` old file 4.60, root 8.81, spawn 8.38, native 9.68, reset 7.86, exit 9.09 | none |
