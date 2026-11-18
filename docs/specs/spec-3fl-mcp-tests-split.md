@@ -70,3 +70,16 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works, and `common::` paths resolve through `super::*` | specs 3ev to 3fg accepted (latest bfeeb5b) | built |
 | Baseline | on 7da4436: `cargo test --test mcp -- --list` 22 `: test` lines (21 tests plus the `common::fake_discord` line); `cargo test --test mcp` 22 passed, 0 ignored | run |
 | No script, workflow or doc names `tests/mcp.rs` or `--test mcp` | `rg -n 'tests/mcp\|--test mcp\|mcp\.rs' --glob '!target' --glob '!docs/specs/*'` hits are `src/mcp.rs` in `docs/architecture.md`, the I15 row (which names `tests/mcp.rs`; the architect updates that name in the accepting commit) and the F94 row | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed). No consultant design read of the diff (byte-exact move).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | section 1 said the file has one `env!` use (line 118) while the claims table listed six (70, 118, 202, 830, 896, 931) | section 1 corrected before locking |
+| Draft review | architect | `write_raw_frame` was kept in `main.rs` although only one `transport_retry` test uses it, against the single-user-helper rule | moved to `transport_retry` before locking |
+| Implementation | developer | no problems found at the first report | none |
+| Tester pass | tester | no problems found; the old file's `cs check` score, saved under a path without "test", was 5.82, matching the developer's | none |
+| Architect review | architect | no problems found: ordered rebuild from the ranges exact for all five files, fmt, clippy and full `cargo test` (61 suites, all ok, exit 0) | none |
