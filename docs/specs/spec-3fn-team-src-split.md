@@ -61,3 +61,17 @@ From the main checkout, as an ordinary user, with the environment form in `AGENT
 6. `git status --short` shows only ` M src/team.rs` and `?? src/team/`.
 
 Known flaky tests: `tests/team/reset_and_validation.rs::team_up_forwards_reset_configuration_and_consent` ("screen not ready", backlog I28, unrelated). A failure of it is rerun once and recorded as pre-existing if it passes.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed). No separate consultant design read of the diff: the consultant attacked the target shape before locking and the diff is the mechanical move it reviewed.
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | acceptance 2 showed five differences, not three: dropping the now-unused names made rustfmt collapse the root's multi-line `use crate::messaging::{...}`, and the sed deleted only the first line of a multi-line `use` | sed extended to delete the multi-line `use` block; the architect's scripted rebuild had kept the old header and so missed it |
+| Draft review | consultant | edit 3's import example named `TeamActivity` and `Grant` for the moved files, which would be unused imports | exact imports listed per file |
+| Draft review | consultant | the module name `global` was wrong for `team_name_for`, which `parse` calls for every team file | renamed `directory`, Why paragraph corrected |
+| Implementation | developer | no problems found; the listed `validate_prompt_options` import was not needed (the function is named by full path) and was dropped, as the spec's clean-build rule allows | none |
+| Tester pass | tester | no problems found; four mutants (directory guard, `validate_sessions` call, heartbeat guard, team-name separator) all killed | none |
+| Architect review | architect | no problems found: normalized diff exactly the three listed lines, fmt, clippy, full `cargo test` (61 suites, exit 0); `cs check` root 6.26 against 6.33 for the old file (content, not path, as the tester showed), the new files 8.95, 8.95 and 10.00 | none |
