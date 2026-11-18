@@ -71,3 +71,17 @@ Known flaky tests: none open for this file (checked in `docs/backlog.md` by path
 | A directory target with `#[path = "../common/mod.rs"] mod common;` and `use super::*;` works, and `common::` paths resolve through `super::*` | specs 3ev to 3fg accepted (latest bfeeb5b) | built |
 | Baseline | on bfeeb5b: `cargo test --test presence -- --list` 23 `: test` lines (22 tests plus the `common::fake_discord` line); `cargo test --test presence` 23 passed, 0 ignored | run |
 | No script, workflow or doc names `tests/presence.rs` or `--test presence` | `rg -n 'tests/presence\|--test presence\|presence\.rs' --glob '!target' --glob '!docs/specs/*'` hits are the F94 row only | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (pre-lock review, model slot not reported); developer Antigravity (agy), Gemini 4 Hydrogen (Medium), one model for all slots; tester OMP opencode-go/deepseek-v4.1-flash (advisor model not exposed). No consultant design read of the diff (the spec's target shape was reviewed before lock; the diff is a byte-exact move).
+BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | module `owner_send_gate` held three tests that only assert owner state, so its name invited a later move of them out; `presence_state` and it were two similar "presence" names | renamed `owner_presence` and `presence_clock` before locking |
+| Draft review | consultant | the sentence "every range boundary is a blank-line seam" was false (two range ends, 393 and 1432, have no blank line before the next item) | wording fixed before locking |
+| Draft review | consultant | the `viewers` row did not say it also holds the Release/hold test | row text widened before locking |
+| Implementation | developer | no problems found at the first report | none |
+| Tester pass | tester | developer deleted `before.txt` before the tester ran, so acceptance 1 could not be rerun literally; the tester used the test names of `HEAD:tests/presence.rs` plus the common line as the oracle (equal). The old file's `cs check` score read 4.33 (developer) against 4.45 (tester, identical bytes, same filename); unexplained, every new score is at least either | process note: a later spec should have the developer keep `before.txt` until the tester has finished; no change to the diff |
+| Architect review | architect | no problems found: ordered rebuild from the ranges exact for all six files, fmt, clippy and full `cargo test` (61 suites, all ok, exit 0) | none |
