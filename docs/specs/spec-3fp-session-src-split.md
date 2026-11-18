@@ -51,6 +51,8 @@ The edits, and the only edits besides the moves:
 - Every public and `pub(crate)` path and signature, and every behavior. No renames, no new `#[allow]`, `#[cfg]` or suppression. The `unsafe` blocks and their `// SAFETY:` comments move unchanged.
 - No test file changes.
 
+- **Amendment 1 (tester BLOCKED, tracing targets).** `tracing` events default their target to the module path, so the events that move into `spawn` and `exit` now carry the targets `a2amx::session::spawn` and `a2amx::session::exit` instead of `a2amx::session`. This is accepted and is not a behavior change under this section: the repository's public interface (`AGENTS.md`, Versioning) is the CLI, the config and team file formats, the wire protocol, the message database and the MCP tools, and log target text is not part of it; a `RUST_LOG` directive for `a2amx::session` still matches every child by prefix; the only filter in the code (`log_target_allowed` in `src/main.rs`) names dependency crates only; no test asserts on a target. No explicit `target:` is added, and no event line changes. The same applies to specs 3fm to 3fo, which moved events into child modules too.
+
 ## 4. Out of scope
 
 Shortening `spawn`, `reset_sequence`, `reset_gate_decision`, `monitor_loop` or `graceful_exit` (a later step if `cs check` still flags them); other `src/` files; the backlog, review record and changelog (the architect).
