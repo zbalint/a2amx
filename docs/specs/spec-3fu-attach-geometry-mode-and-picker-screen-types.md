@@ -8,7 +8,7 @@ commit that adds this file. Context `a2amx-main-daemon-redesign-2026-11-20`. Pub
 `tests/attach_cli/`.
 
 Scope (edit): `src/attach.rs`, `src/attach/state.rs`, `src/attach/event_loop.rs`, `src/attach/picker.rs`,
-new `src/attach/model.rs`, new `tests/attach_model.rs`.
+`src/attach/input.rs` (amendment 1: delete only `ScrollParser::clear`), new `src/attach/model.rs`, new `tests/attach_model.rs`.
 Does not touch: `src/main.rs`, `src/lib.rs`, every other file under `src/` and `tests/`, `Cargo.toml`, `Cargo.lock`,
 `CHANGELOG.md`, `AGENTS.md`, docs (the architect updates the AGENTS.md module row and the changelog when
 committing).
@@ -62,7 +62,7 @@ impl Geometry {
 }
 
 /// Exactly one input mode at a time.
-pub(super) enum Mode { Live, Scroll(ScrollParser), Picker(PickerScreen) }
+pub(super) enum Mode { Live, Scroll(ScrollParser), Picker(Box<PickerScreen>) }
 impl Mode { pub(super) fn is_live(&self) -> bool { matches!(self, Mode::Live) } }
 ```
 
@@ -115,7 +115,11 @@ restored-after-failed-switch path sets nothing more. Differences are not unified
 `switch_session` cannot run in scroll mode (its callers, prefix commands and the team click, run only in live
 view), so the successful switch's `mode = Mode::Live` is equivalent to today's `picker = None`.
 
-`src/attach/input.rs`: `ScrollParser` is already `pub(super)`; the file is not edited.
+`src/attach/input.rs`: `ScrollParser` is already `pub(super)`. Amendment 1: after the move nothing calls
+`ScrollParser::clear` (entering scroll mode builds a fresh `ScrollParser::default()`, leaving it drops it), and
+clippy `dead_code` fails on it, so delete that one method; no other edit to the file. Amendment 2: clippy
+`large_enum_variant` fails on an unboxed `PickerScreen` (about 280 bytes against 24), so `Mode::Picker` holds
+`Box<PickerScreen>`; no lint suppression (AGENTS.md forbids one without the owner's approval).
 
 ## 3. Behaviour that must not change
 
