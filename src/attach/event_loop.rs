@@ -28,15 +28,7 @@ pub(super) async fn run_attachment_loop(
         let has_attachment = state.attachment.is_some();
         tokio::select! {
             input = input_rx.recv() => {
-                let Some(input) = input else {
-                    if let Some(attached) = state.attachment.as_mut() {
-                        let _ = attached.send(ClientFrame::Detach).await;
-                    }
-                    return Ok(AttachOutcome {
-                        message: format!("[detached from {}]", state.session),
-                    });
-                };
-                let Some(bytes) = input else {
+                let Some(bytes) = input.flatten() else {
                     if let Some(attached) = state.attachment.as_mut() {
                         let _ = attached.send(ClientFrame::Detach).await;
                     }

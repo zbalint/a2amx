@@ -6,7 +6,6 @@ use anyhow::anyhow;
 
 use crate::client::{Attachment, Client};
 use crate::emulator::Scroll;
-use crate::lookup::session_in_team;
 use crate::mouse::{self, MouseReport, Shifted};
 use crate::picker::Outcome;
 use crate::prefix::{Action, Command as PrefixCommand, PrefixMachine};
@@ -16,7 +15,8 @@ use crate::wire::ClientFrame;
 
 use super::input::{ScrollKey, ScrollParser, find_mouse_report, is_focus_report, parse_decimal};
 use super::{
-    AttachOutcome, AttachmentConfig, AttachmentState, MousePress, PickerState, pty_rows, team_rows,
+    AttachOutcome, AttachmentConfig, AttachmentState, Geometry, MousePress, PickerState,
+    open_attachment, pty_rows, team_rows,
 };
 
 impl AttachmentState {
@@ -120,16 +120,13 @@ impl AttachmentState {
         let mut offset = 0;
         while offset < bytes.len() {
             let session_mouse = self.session_mouse && !self.viewer.is_viewer();
-            let report = if self.picker.is_some() || self.scroll_mode {
-                (!session_mouse)
-                    .then(|| find_mouse_report(bytes, offset))
-                    .flatten()
+            // Only live view with session mouse on and no team rows hands the raw bytes to the session.
             // shortcut: with top_rows > 0 and session_mouse, split input remains unshifted until a complete report is found.
-            } else if self.top_rows > 0 || !session_mouse {
-                find_mouse_report(bytes, offset)
-            } else {
-                None
-            };
+            let live = self.picker.is_none() && !self.scroll_mode;
+            let pass_through = live && session_mouse && self.top_rows == 0;
+            let report = (!pass_through)
+                .then(|| find_mouse_report(bytes, offset))
+                .flatten();
             if let Some((start, end)) = report
                 && start == offset
             {
@@ -531,41 +528,21 @@ impl AttachmentState {
     }
 
     async fn attach_session(&self, session: &str) -> anyhow::Result<(Attachment, u16, bool)> {
-        let in_team = session_in_team(&self.home, session).await?;
-        let requested_top = team_rows(self.rows, self.status_visible, in_team);
         let client = Client::connect(&self.home).await?;
-        let viewer = self.viewer.is_viewer();
-        let mut attachment = if viewer {
-            client
-                .attach_viewer(
-                    session,
-                    false,
-                    self.cols,
-                    pty_rows(self.rows, self.status_visible, requested_top),
-                    requested_top,
-                )
-                .await?
-        } else {
-            client
-                .attach_status(
-                    session,
-                    false,
-                    self.cols,
-                    pty_rows(self.rows, self.status_visible, requested_top),
-                    requested_top,
-                )
-                .await?
-        };
-        let top_rows = attachment.top_rows();
-        if requested_top > 0 && top_rows == 0 {
-            attachment
-                .send(ClientFrame::Resize {
-                    cols: self.cols,
-                    rows: pty_rows(self.rows, self.status_visible, 0),
-                })
-                .await?;
-        }
-        Ok((attachment, top_rows, in_team))
+        let opened = open_attachment(
+            client,
+            &self.home,
+            session,
+            false,
+            self.viewer.is_viewer(),
+            Geometry {
+                cols: self.cols,
+                rows: self.rows,
+                status_visible: self.status_visible,
+            },
+        )
+        .await?;
+        Ok((opened.attachment, opened.top_rows, opened.in_team))
     }
 
     async fn restore_current(&mut self) -> anyhow::Result<bool> {

@@ -222,3 +222,54 @@ async fn mouse_wheel_is_dropped_while_session_picker_is_open() -> anyhow::Result
     assert_eq!(attached.wait_exit(WAIT)?, 0);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn typed_filter_is_not_polluted_by_a_wheel_report_with_session_mouse_on() -> anyhow::Result<()>
+{
+    let (dir, _daemon) = common::start_daemon().await;
+    let script = "printf '\\033[?1000h'; printf '\\033[?1006h'; printf ready; sleep 30";
+    let (_, code) = run_cli(dir.path(), &["new", "--detach", "--", "sh", "-c", script])?;
+    assert_eq!(code, 0);
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("ready", WAIT)?;
+    attached.send(&[2, b'w'])?;
+    attached.wait_for_text("a2amx sessions:", WAIT)?;
+    attached.send(b"/")?;
+    attached.send(b"\x1b[<64;10;5M")?;
+    // The marker proves the report bytes were consumed before the absence check.
+    attached.send(b"zq")?;
+    attached.wait_for_text("zq", WAIT)?;
+    attached.expect_screen_lacks("4;10;5M")?;
+    attached.send(&[0x1b])?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    attached.send(&[0x1b])?;
+    attached.wait_for_text("ready", WAIT)?;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wheel_scrolls_in_scroll_mode_with_session_mouse_on() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let script = "printf '\\033[?1000h'; printf '\\033[?1006h'; i=1; while [ $i -le 100 ]; do printf 'line-%03d\\r\\n' $i; i=$((i+1)); done; sleep 30";
+    let (_, code) = run_cli(dir.path(), &["new", "--detach", "--", "sh", "-c", script])?;
+    assert_eq!(code, 0);
+
+    let mut attached = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    attached.wait_for_text("line-100", WAIT)?;
+    attached.send(&[2, b'['])?;
+    attached.wait_for_text("[scroll: q to exit]", WAIT)?;
+    attached.expect_screen_lacks("line-077")?;
+    attached.send(b"\x1b[<64;10;5M")?;
+    attached.wait_for_text("line-077", WAIT)?;
+    attached.send(b"q")?;
+    attached.wait_for_text("@host-a", WAIT)?;
+    attached.expect_screen_lacks("[scroll: q to exit]")?;
+    attached.send(&[2, b'd'])?;
+    attached.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(attached.wait_exit(WAIT)?, 0);
+    Ok(())
+}

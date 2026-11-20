@@ -142,4 +142,22 @@ review record.
 
 ## Review record
 
-(Appended by the architect at acceptance.)
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant a Claude Code session (model not reported to the
+architect); developer OMP, openai-codex/gpt-5.6-luna (advisor model not exposed); tester OMP,
+opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0 (one tester BLOCKED that was a shared-checkout overlap, below).
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| Draft review | architect | the draft's item 3.1 (mode lists in `scan_session_mouse`) was written from a belief about what the client receives | consultant read `emulator.rs` and `daemon.rs`: Data frames are emulator renders with one private mode per sequence, so a list never reaches the client; item dropped before the lock |
+| Draft review | consultant | both 3.2 tests would pass on the old code (picker filter off ignores the tail; scroll-mode test only checked the status line) | rewritten: filter on, and wheel scrolling in scroll mode with session mouse on; both red before the fix |
+| Draft review | consultant | the section 6 `rg` expectations were wrong in three places; `run` must attach before the alternate screen was unstated; `attach_session` connect-before-lookup error order unstated | corrected in the locked spec |
+| Implementation | developer | deleted the `// shortcut:` comment above the merged mouse-report condition | architect restored it |
+| Implementation | developer | applied an extra mutant to `src/attach/state.rs` after its REPORT, while the tester's pass was open; the tester saw the old guard mid-run and sent BLOCKED | HOLD to the developer; tester told it was the sole writer; the file was already restored. Assignment template: read-only after REPORT |
+| Tester pass | tester | `run`'s `force` argument was untested (mutant survived the whole `attach_cli` suite) | architect added `attach_force_takes_the_session_over_from_another_attachment` (`tests/attach_cli/attach_session.rs`, outside the section 0 file list); mutant killed |
+| Design read | consultant | the merged condition hid the single pass-through case; the filter test used a fixed sleep before an absence check (false-pass risk); the scroll test did not prove `line-077` absent first | architect rewrote the condition with `live` and `pass_through`, added a typed marker and `expect_screen_lacks`, added the absence precheck |
+
+Design read (accepted): S4 debts, ranked: geometry and granted top rows have several sources (`Opened.top_rows`
+duplicates `attachment.top_rows()`); mode is spread across `picker`, `scroll_mode` and the viewer flag; `Resize`
+sending is copied three times; the `force`/`viewer` bool pair; `attach_session` returning a tuple. Also for S4
+(from the draft review): the `switch_session` restore branch's `refresh().await?` ends the screen on a transient
+list failure; the status-toggle re-attach on a refused team row; `after_prefix` versus `PrefixMachine`.

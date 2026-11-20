@@ -489,3 +489,33 @@ async fn switch_waits_for_old_attachment_eof_with_delayed_fake_daemon() -> anyho
     let _ = server.await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn attach_force_takes_the_session_over_from_another_attachment() -> anyhow::Result<()> {
+    let (dir, _daemon) = common::start_daemon().await;
+    let (_, code) = run_cli(
+        dir.path(),
+        &["new", "--detach", "--", "sh", "-c", "printf ready; cat"],
+    )?;
+    assert_eq!(code, 0);
+
+    let mut holder = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    holder.wait_for_text("ready", WAIT)?;
+
+    let mut refused = PtyHarness::spawn(&cli_args(dir.path(), &["attach", "s1"]), dir.path())?;
+    refused.wait_for_text("attached elsewhere (use --force to take over)", WAIT)?;
+    assert_ne!(refused.wait_exit(WAIT)?, 0);
+
+    let mut forced = PtyHarness::spawn(
+        &cli_args(dir.path(), &["attach", "--force", "s1"]),
+        dir.path(),
+    )?;
+    forced.wait_for_text("ready", WAIT)?;
+    holder.wait_for_text("[detached: taken over by another attachment]", WAIT)?;
+    assert_eq!(holder.wait_exit(WAIT)?, 0);
+
+    forced.send(&[2, b'd'])?;
+    forced.wait_for_text("[detached from s1]", WAIT)?;
+    assert_eq!(forced.wait_exit(WAIT)?, 0);
+    Ok(())
+}

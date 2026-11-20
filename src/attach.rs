@@ -40,27 +40,23 @@ pub async fn run(
         prefix,
         viewer_after,
     } = attach_options;
-    let in_team = session_in_team(home, &session).await?;
-    let requested_top = team_rows(rows, true, in_team);
-    let mut attachment = client
-        .attach_status(
-            &session,
-            force,
+    let Opened {
+        attachment,
+        in_team,
+        ..
+    } = open_attachment(
+        client,
+        home,
+        &session,
+        force,
+        false,
+        Geometry {
             cols,
-            pty_rows(rows, true, requested_top),
-            requested_top,
-        )
-        .await?;
-    let top_rows = attachment.top_rows();
-    // shortcut: top_rows is fixed at attach, switch and toggle; resize keeps the negotiated origin until another attach.
-    if requested_top > 0 && top_rows == 0 {
-        attachment
-            .send(ClientFrame::Resize {
-                cols,
-                rows: pty_rows(rows, true, 0),
-            })
-            .await?;
-    }
+            rows,
+            status_visible: true,
+        },
+    )
+    .await?;
     let output = Output::start()?;
     let mut terminal = TerminalGuard::enter(output.handle()?)?;
     output.send(b"\x1b[?1049h".to_vec())?;
@@ -87,6 +83,67 @@ pub async fn run(
     finish_result?;
     let outcome = loop_result?;
     write_stderr(format!("{}\n", outcome.message).into_bytes()).await
+}
+
+#[derive(Clone, Copy)]
+struct Geometry {
+    cols: u16,
+    rows: u16,
+    status_visible: bool,
+}
+
+struct Opened {
+    attachment: Attachment,
+    top_rows: u16,
+    in_team: bool,
+}
+
+async fn open_attachment(
+    client: Client,
+    home: &Path,
+    session: &str,
+    force: bool,
+    viewer: bool,
+    geometry: Geometry,
+) -> anyhow::Result<Opened> {
+    let in_team = session_in_team(home, session).await?;
+    let requested_top = team_rows(geometry.rows, geometry.status_visible, in_team);
+    let mut attachment = if viewer {
+        client
+            .attach_viewer(
+                session,
+                force,
+                geometry.cols,
+                pty_rows(geometry.rows, geometry.status_visible, requested_top),
+                requested_top,
+            )
+            .await?
+    } else {
+        client
+            .attach_status(
+                session,
+                force,
+                geometry.cols,
+                pty_rows(geometry.rows, geometry.status_visible, requested_top),
+                requested_top,
+            )
+            .await?
+    };
+    let top_rows = attachment.top_rows();
+    // shortcut: top_rows is fixed at attach, switch and toggle; resize keeps the negotiated origin until another attach.
+    if requested_top > 0 && top_rows == 0 {
+        attachment
+            .send(ClientFrame::Resize {
+                cols: geometry.cols,
+                rows: pty_rows(geometry.rows, geometry.status_visible, 0),
+            })
+            .await?;
+    }
+    Ok(Opened {
+        attachment,
+        top_rows,
+        in_team,
+    })
 }
 
 fn pty_rows(rows: u16, visible: bool, top: u16) -> u16 {
