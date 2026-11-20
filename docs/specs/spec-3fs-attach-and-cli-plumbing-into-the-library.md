@@ -228,4 +228,20 @@ Run from the main checkout. Judge and command names are exact.
 
 ## Review record
 
-(Appended by the architect at acceptance.)
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant a Claude Code session (model not reported to the
+architect); developer Antigravity CLI, Gemini 4 Hydrogen (Medium); tester OMP, opencode-go/deepseek-v4.1-flash.
+BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | the judge failed a correct build: `mod x;` lines matched its item regex and counted as extra items | `mod` lines skipped; inner attributes (`#![...]`) now fail the judge |
+| Draft review | consultant | test 5's expected header text ("ends `SIZE  CWD  COMMAND`") was false for an 80x24 size cell | exact fixture and literal, hand computed and cross-checked by script |
+| Draft review | consultant | test 2's fixture allowed the swap-detail/hold-reason mutant to survive | four messages spelled out |
+| Draft review | consultant | duplicate-name case in test 7 would pin behaviour S4 may change; fixture source cited wrongly (`tests/attach_cli/main.rs`); visibility wording named the wrong callers; acceptance named `tests/daemon_cli` instead of the tests that cover the moved tables; `crate::picker` shadowing by the child not mentioned | all fixed in the locked spec |
+| Tester pass | tester | `Some("native_receipt")` arm of the DETAIL cell was not killed by `tests/table.rs` | architect added test `message_detail_shows_native_receipt_evidence_alone`, mutant killed |
+| Architect review | architect | the developer's full run showed one `tests/presence` failure under load (passes alone) | recorded as the known presence timing flake, not a regression |
+
+Design read (consultant, accepted as a pure move): debts for later specs, not fixed here: the attach and
+switch handshake is written twice (`attach::run` and `state.rs` switch path); data types sit in the attach root
+while impls are in children; `table` exposes positional row primitives to the picker; `handle_input` is about 400
+lines; two unrelated types named `Output`.
