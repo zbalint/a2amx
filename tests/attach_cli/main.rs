@@ -160,6 +160,7 @@ struct FakeDaemon {
     attach_viewers: Arc<Mutex<Vec<(String, bool)>>>,
     frames: Arc<Mutex<Vec<ClientFrame>>>,
     data_after: Arc<Mutex<Option<Duration>>>,
+    refuse_attach: Arc<Mutex<Option<String>>>,
     done: Arc<tokio::sync::Notify>,
 }
 
@@ -182,7 +183,15 @@ impl FakeDaemon {
             frames: Arc::new(Mutex::new(Vec::new())),
             sessions_have_team: Arc::new(AtomicBool::new(true)),
             data_after: Arc::new(Mutex::new(None)),
+            refuse_attach: Arc::new(Mutex::new(None)),
             done: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    fn set_refuse_attach(&self, session: Option<&str>) {
+        match self.refuse_attach.lock() {
+            Ok(mut value) => *value = session.map(str::to_owned),
+            Err(poisoned) => *poisoned.into_inner() = session.map(str::to_owned),
         }
     }
 
@@ -260,6 +269,17 @@ async fn fake_attach(
     viewer: bool,
     daemon: &FakeDaemon,
 ) -> anyhow::Result<()> {
+    let refused = match daemon.refuse_attach.lock() {
+        Ok(value) => value.as_deref() == Some(session),
+        Err(poisoned) => poisoned.into_inner().as_deref() == Some(session),
+    };
+    if refused {
+        let response = Response::Error {
+            message: "session refused".into(),
+        };
+        fake_send_frame(stream, &serde_json::to_vec(&response)?).await?;
+        return Ok(());
+    }
     match daemon.attach_viewers.lock() {
         Ok(mut values) => values.push((session.to_owned(), viewer)),
         Err(poisoned) => poisoned.into_inner().push((session.to_owned(), viewer)),
@@ -377,8 +397,29 @@ async fn run_fake_daemon(listener: TcpListener, daemon: FakeDaemon) -> anyhow::R
     }
 }
 
+async fn start_fake_daemon(
+    forced_top_rows: Option<u16>,
+) -> anyhow::Result<(
+    tempfile::TempDir,
+    FakeDaemon,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+)> {
+    let dir = tempfile::tempdir()?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    std::fs::create_dir_all(dir.path().join("run"))?;
+    std::fs::write(dir.path().join("run/addr"), format!("{address}\n"))?;
+    std::fs::write(dir.path().join("run/admin.token"), "fake-token\n")?;
+    let daemon = FakeDaemon::with_top_rows(fake_team(), forced_top_rows);
+    let server = tokio::spawn(run_fake_daemon(listener, daemon.clone()));
+    Ok((dir, daemon, server))
+}
+
 mod attach_session;
+mod chunked_input;
+mod failed_switch;
 mod list_and_messages;
+mod mouse_and_resize;
 mod picker;
 mod scroll_and_mouse;
 mod status_and_team_line;

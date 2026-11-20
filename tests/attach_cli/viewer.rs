@@ -1,23 +1,5 @@
 use super::*;
 
-async fn start_fake_daemon(
-    forced_top_rows: Option<u16>,
-) -> anyhow::Result<(
-    tempfile::TempDir,
-    FakeDaemon,
-    tokio::task::JoinHandle<anyhow::Result<()>>,
-)> {
-    let dir = tempfile::tempdir()?;
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
-    std::fs::create_dir_all(dir.path().join("run"))?;
-    std::fs::write(dir.path().join("run/addr"), format!("{address}\n"))?;
-    std::fs::write(dir.path().join("run/admin.token"), "fake-token\n")?;
-    let daemon = FakeDaemon::with_top_rows(fake_team(), forced_top_rows);
-    let server = tokio::spawn(run_fake_daemon(listener, daemon.clone()));
-    Ok((dir, daemon, server))
-}
-
 #[tokio::test]
 async fn attach_viewer_sends_no_resize_frame() -> anyhow::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;

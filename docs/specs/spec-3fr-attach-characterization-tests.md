@@ -203,4 +203,23 @@ Run from the main checkout; each judged by its own output.
 
 ## Review record
 
-(Appended by the architect at acceptance.)
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant a Claude Code session (its model is not
+reported to the architect); developer Antigravity CLI, Gemini 4 Hydrogen (Medium); tester OMP,
+opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0 (one FIX round after the tester pass).
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | `cat > FILE` in a canonical-mode PTY holds bytes without a newline, so tests 4 and 5 would fail and test 3 pass vacuously | sessions run `stty raw -echo`; positive file marker |
+| Draft review | consultant | test 7 asserted a per-connection frame record the fake daemon does not keep; "ALPHA visible" observed nothing | reworded to `attach_viewers` plus trailing Input bytes, "BETA never appears" |
+| Draft review | consultant | test 8 clicked the current member (`select_member` returns early), so it could not fail | click `demo-beta` |
+| Draft review | consultant | tests 9 and 10 were already covered in `status_and_team_line.rs` 237-247; the "untested" claim was false for them | test 10 dropped, test 9 sharpened to frame literals |
+| Draft review | consultant | four suggested mutants did not change the result on the tests' input; tests 7 and 9 had no mutant | table rewritten and walked per test |
+| Draft review | consultant | test 11 frames accumulated across cases; literals missing for the status toggle; `start_fake_daemon` private in `viewer.rs` conflicted with the edit scope; flaky list and line anchors incomplete | per-case widths, literals, helper moved into `main.rs`, list and anchors fixed |
+| Tester pass | tester | the developer's "mutant 3 survives, equivalent at every seam" claim was wrong: the full `attach_cli` module kills it through the fake daemon's `Detached` frame; only the single test cannot | mutation table corrected; classification KILLED |
+| Tester pass | tester | test 8 used a byte offset as the column, and its 200 ms assertions ran before a switch could complete (the kill was incidental to the final detach text) | FIX round: character column, assertions moved after `wait_exit` |
+| Tester pass | tester | test 10's picker wait was satisfied by the pre-resize screen | FIX round: `wait_for_raw_contains` on the 62-column text |
+| Tester pass | tester | the tester's own row-7 mutant duplicated a section 3 mutant | tester reran a distinct mutant (killed) |
+| Architect review | architect | my first full-suite run overlapped the tester's temporary mutation of `src/main.rs` (shared checkout) and was discarded | reran after the tester reported the restore and checksums matched; lesson: never run the suite while a mutation pass is open |
+
+Test 3 (`detach_drops_the_rest_of_the_write`) cannot fail from a client mutation on its own: neither daemon reads
+frames after a Detach, so it documents the end result and the existing suite carries the mutation kill.
