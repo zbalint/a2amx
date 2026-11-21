@@ -2,14 +2,13 @@
 
 use crate::attach::{self, AttachOptions};
 use crate::cli::Command;
-use crate::client::Client;
+use crate::client::{Client, NewSessionRequest};
 use crate::confine::ConfineRequest;
 use crate::daemon::{self};
 use crate::harness::{Deliver, Harness};
 use crate::messaging::{self, TeamScope};
 use crate::names;
 use crate::terminal::{stdin_is_terminal, terminal_size_with_default, write_stderr, write_stdout};
-use crate::wire::Request;
 use anyhow::anyhow;
 use std::path::{Path, PathBuf};
 
@@ -32,6 +31,24 @@ pub(super) fn parse_activity_watch(
             idle_after,
         }),
     })
+}
+
+/// A heartbeat or an activity watch needs a non-empty watch, and the heartbeat must be 1s to 24h.
+pub(super) fn validate_watch_options(
+    watch: &[String],
+    activity: Option<&crate::wire::ActivityWatch>,
+    heartbeat: Option<u64>,
+) -> anyhow::Result<()> {
+    if let Some(seconds) = heartbeat {
+        if watch.is_empty() {
+            return Err(anyhow!("heartbeat needs a non-empty watch"));
+        }
+        crate::messaging::parse_interval(&format!("{seconds}s"), "heartbeat")?;
+    }
+    if let Some(activity) = activity {
+        activity.validate(!watch.is_empty())?;
+    }
+    Ok(())
 }
 
 pub(super) async fn run_new(
@@ -92,17 +109,12 @@ pub(super) async fn run_new(
         activity_working_after.as_deref(),
         activity_idle_after.as_deref(),
     )?;
-    if let Some(activity) = &activity {
-        activity.validate(!watch.is_empty())?;
-    }
     let heartbeat = heartbeat
         .as_deref()
         .map(|value| crate::messaging::parse_interval(value, "heartbeat"))
         .transpose()?
         .map(|duration| duration.as_secs());
-    if heartbeat.is_some() && watch.is_empty() {
-        return Err(anyhow!("heartbeat needs a non-empty watch"));
-    }
+    validate_watch_options(&watch, activity.as_ref(), heartbeat)?;
     let mut client = Client::connect(&home).await?;
     let mut generated_name = None;
     let name = match name {
@@ -368,15 +380,7 @@ pub(super) async fn create_session(
     for name in &watch {
         crate::messaging::validate_name(name)?;
     }
-    if let Some(seconds) = heartbeat {
-        if watch.is_empty() {
-            return Err(anyhow!("heartbeat needs a non-empty watch"));
-        }
-        crate::messaging::parse_interval(&format!("{seconds}s"), "heartbeat")?;
-    }
-    if let Some(activity) = &activity {
-        activity.validate(!watch.is_empty())?;
-    }
+    validate_watch_options(&watch, activity.as_ref(), heartbeat)?;
     let harness = harness.unwrap_or_else(|| Harness::infer(&command));
     let command = wired_command(
         home,
@@ -409,7 +413,7 @@ pub(super) async fn create_session(
     if harness == Harness::Claude && !no_channel {
         env.push((crate::harness::CHANNEL_ENV.to_owned(), "1".to_owned()));
     }
-    let request = Request::NewSession {
+    let session = NewSessionRequest {
         argv: command,
         cols,
         rows,
@@ -419,20 +423,13 @@ pub(super) async fn create_session(
         control_from,
         watch,
         activity,
+        heartbeat,
         name,
         harness,
         deliver,
         team,
         role,
         remote,
-        heartbeat,
     };
-    let request = match confine {
-        Some(confine) => Request::Confine {
-            confine,
-            request: Box::new(request),
-        },
-        None => request,
-    };
-    client.create_session(request).await
+    client.create_session(session, confine).await
 }

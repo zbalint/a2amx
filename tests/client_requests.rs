@@ -1,31 +1,16 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+mod common;
+
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use a2amx::client::{Client, IssuedLeaseCode};
+use a2amx::client::{Client, IssuedLeaseCode, NewSessionRequest};
 use a2amx::confine::ConfineRequest;
-use a2amx::harness::Harness;
-use a2amx::wire::{ExplainInfo, MessageInfo, Request, ResetVerdict, Response};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-
-async fn fake_recv_frame(stream: &mut TcpStream) -> anyhow::Result<Option<Vec<u8>>> {
-    let mut header = [0; 4];
-    match stream.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error.into()),
-    }
-    let length = u32::from_be_bytes(header) as usize;
-    let mut payload = vec![0; length];
-    stream.read_exact(&mut payload).await?;
-    Ok(Some(payload))
-}
-
-async fn fake_send_frame(stream: &mut TcpStream, payload: &[u8]) -> anyhow::Result<()> {
-    stream.write_u32(payload.len() as u32).await?;
-    stream.write_all(payload).await?;
-    Ok(())
-}
+use a2amx::harness::{Deliver, Harness};
+use a2amx::messaging::{RemoteMode, TeamScope};
+use a2amx::wire::{ActivityWatch, ExplainInfo, MessageInfo, Request, ResetVerdict, Response};
+use tokio::net::TcpListener;
 
 async fn spawn_fake(
     replies: Vec<Response>,
@@ -42,7 +27,7 @@ async fn spawn_fake(
         let Ok((mut stream, _)) = listener.accept().await else {
             return;
         };
-        let Some(hello_bytes) = fake_recv_frame(&mut stream).await.ok().flatten() else {
+        let Some(hello_bytes) = common::fake_recv_frame(&mut stream).await.ok().flatten() else {
             return;
         };
         let Ok(Request::Hello { .. }) = serde_json::from_slice(&hello_bytes) else {
@@ -51,11 +36,14 @@ async fn spawn_fake(
         let Ok(ok_bytes) = serde_json::to_vec(&Response::Ok) else {
             return;
         };
-        if fake_send_frame(&mut stream, &ok_bytes).await.is_err() {
+        if common::fake_send_frame(&mut stream, &ok_bytes)
+            .await
+            .is_err()
+        {
             return;
         }
         for reply in replies {
-            let Some(req_bytes) = fake_recv_frame(&mut stream).await.ok().flatten() else {
+            let Some(req_bytes) = common::fake_recv_frame(&mut stream).await.ok().flatten() else {
                 break;
             };
             let Ok(req) = serde_json::from_slice::<Request>(&req_bytes) else {
@@ -67,7 +55,10 @@ async fn spawn_fake(
             let Ok(resp_bytes) = serde_json::to_vec(&reply) else {
                 break;
             };
-            if fake_send_frame(&mut stream, &resp_bytes).await.is_err() {
+            if common::fake_send_frame(&mut stream, &resp_bytes)
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -578,58 +569,148 @@ async fn issue_lease_code_success_error_and_unexpected() {
     handle.await.unwrap();
 }
 
-#[tokio::test]
-async fn create_session_confined_version_skew_unconfined_and_success() {
-    let confined = Request::Confine {
-        confine: ConfineRequest::default(),
-        request: Box::new(Request::List),
-    };
+fn new_session() -> NewSessionRequest {
+    NewSessionRequest {
+        argv: vec!["sleep".into(), "60".into()],
+        cols: 100,
+        rows: 30,
+        cwd: Some("/tmp/work".into()),
+        env: vec![("K".into(), "V".into())],
+        reset: vec!["a".into()],
+        control_from: vec!["c".into()],
+        watch: vec!["w".into()],
+        activity: Some(ActivityWatch {
+            working_after: Some(120),
+            idle_after: Some(600),
+        }),
+        heartbeat: Some(30),
+        name: Some("n1".into()),
+        harness: Harness::Claude,
+        deliver: Some(Deliver::Hold),
+        team: Some(TeamScope {
+            name: "team-a".into(),
+            private: true,
+            allow: vec!["agent-b".into()],
+            agents: vec!["agent-c".into()],
+        }),
+        role: Some("r".into()),
+        remote: Some(RemoteMode::Both),
+    }
+}
 
+fn recorded_json(recorded: &Mutex<Vec<Request>>) -> Vec<serde_json::Value> {
+    recorded
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| serde_json::to_value(request).unwrap())
+        .collect()
+}
+
+fn expected_new_session() -> serde_json::Value {
+    serde_json::json!({
+        "type": "new_session",
+        "argv": ["sleep", "60"],
+        "cols": 100,
+        "rows": 30,
+        "cwd": "/tmp/work",
+        "env": [["K", "V"]],
+        "reset": ["a"],
+        "control_from": ["c"],
+        "watch": ["w"],
+        "activity": {"working_after": 120, "idle_after": 600},
+        "heartbeat": 30,
+        "name": "n1",
+        "harness": "claude",
+        "deliver": "hold",
+        "team": {"name": "team-a", "private": true, "allow": ["agent-b"], "agents": ["agent-c"]},
+        "role": "r",
+        "remote": "both",
+    })
+}
+
+#[tokio::test]
+async fn create_session_unconfined_success_records_all_fields() {
+    let session = new_session();
+    let expected = expected_new_session();
     let (addr, recorded, handle) = spawn_fake(vec![Response::Created {
         session: "s9".into(),
     }])
     .await
     .unwrap();
     let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(client.create_session(confined.clone()).await.unwrap(), "s9");
-    assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        std::slice::from_ref(&confined)
-    );
+    assert_eq!(client.create_session(session, None).await.unwrap(), "s9");
+    assert_eq!(recorded_json(&recorded), vec![expected]);
     handle.await.unwrap();
+}
 
+#[tokio::test]
+async fn create_session_confined_success_wraps_all_fields() {
+    let session = new_session();
+    let confine = ConfineRequest {
+        grants: vec!["git".into()],
+        write: vec!["/tmp/w".into()],
+        ..Default::default()
+    };
+    let expected = serde_json::json!({
+        "type": "confine",
+        "confine": serde_json::to_value(&confine).unwrap(),
+        "request": expected_new_session(),
+    });
+    let (addr, recorded, handle) = spawn_fake(vec![Response::Created {
+        session: "s9".into(),
+    }])
+    .await
+    .unwrap();
+    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    assert_eq!(
+        client.create_session(session, Some(confine)).await.unwrap(),
+        "s9"
+    );
+    assert_eq!(recorded_json(&recorded), vec![expected]);
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn create_session_confined_version_skew_maps_error() {
     let (addr, _, handle) = spawn_fake(vec![Response::Error {
         message: "invalid control request: unknown variant".into(),
     }])
     .await
     .unwrap();
     let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let error = client
+        .create_session(new_session(), Some(ConfineRequest::default()))
+        .await
+        .unwrap_err();
     assert_eq!(
-        client
-            .create_session(confined.clone())
-            .await
-            .unwrap_err()
-            .to_string(),
+        error.to_string(),
         "the running daemon does not support --confine; restart it"
     );
     handle.await.unwrap();
+}
 
+#[tokio::test]
+async fn create_session_unconfined_version_skew_keeps_daemon_error() {
     let (addr, _, handle) = spawn_fake(vec![Response::Error {
         message: "invalid control request: unknown variant".into(),
     }])
     .await
     .unwrap();
     let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let error = client
+        .create_session(new_session(), None)
+        .await
+        .unwrap_err();
     assert_eq!(
-        client
-            .create_session(Request::List)
-            .await
-            .unwrap_err()
-            .to_string(),
+        error.to_string(),
         "invalid control request: unknown variant"
     );
     handle.await.unwrap();
+}
 
+#[tokio::test]
+async fn create_session_other_error_and_unexpected_reply() {
     let (addr, _, handle) = spawn_fake(vec![Response::Error {
         message: "other".into(),
     }])
@@ -638,7 +719,7 @@ async fn create_session_confined_version_skew_unconfined_and_success() {
     let mut client = Client::connect_addr(addr, "token").await.unwrap();
     assert_eq!(
         client
-            .create_session(confined)
+            .create_session(new_session(), Some(ConfineRequest::default()))
             .await
             .unwrap_err()
             .to_string(),
@@ -650,7 +731,7 @@ async fn create_session_confined_version_skew_unconfined_and_success() {
     let mut client = Client::connect_addr(addr, "token").await.unwrap();
     assert_eq!(
         client
-            .create_session(Request::List)
+            .create_session(new_session(), None)
             .await
             .unwrap_err()
             .to_string(),

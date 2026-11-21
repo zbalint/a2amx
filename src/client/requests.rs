@@ -2,7 +2,10 @@
 
 use anyhow::anyhow;
 
-use crate::wire::{ExplainInfo, MessageInfo, Request, Response, SessionSummary};
+use crate::confine::ConfineRequest;
+use crate::harness::{Deliver, Harness};
+use crate::messaging::{RemoteMode, TeamScope};
+use crate::wire::{ActivityWatch, ExplainInfo, MessageInfo, Request, Response, SessionSummary};
 
 use super::Client;
 
@@ -11,6 +14,26 @@ pub struct IssuedLeaseCode {
     pub code: String,
     pub agents: Vec<String>,
     pub valid_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewSessionRequest {
+    pub argv: Vec<String>,
+    pub cols: u16,
+    pub rows: u16,
+    pub cwd: Option<String>,
+    pub env: Vec<(String, String)>,
+    pub reset: Vec<String>,
+    pub control_from: Vec<String>,
+    pub watch: Vec<String>,
+    pub activity: Option<ActivityWatch>,
+    pub heartbeat: Option<u64>,
+    pub name: Option<String>,
+    pub harness: Harness,
+    pub deliver: Option<Deliver>,
+    pub team: Option<TeamScope>,
+    pub role: Option<String>,
+    pub remote: Option<RemoteMode>,
 }
 
 fn unexpected(response: Response) -> anyhow::Error {
@@ -119,8 +142,55 @@ impl Client {
         }
     }
 
-    pub async fn create_session(&mut self, request: Request) -> anyhow::Result<String> {
-        let confined = matches!(request, Request::Confine { .. });
+    pub async fn create_session(
+        &mut self,
+        session: NewSessionRequest,
+        confine: Option<ConfineRequest>,
+    ) -> anyhow::Result<String> {
+        let NewSessionRequest {
+            argv,
+            cols,
+            rows,
+            cwd,
+            env,
+            reset,
+            control_from,
+            watch,
+            activity,
+            heartbeat,
+            name,
+            harness,
+            deliver,
+            team,
+            role,
+            remote,
+        } = session;
+        let confined = confine.is_some();
+        let request = Request::NewSession {
+            argv,
+            cols,
+            rows,
+            cwd,
+            env,
+            reset,
+            control_from,
+            watch,
+            activity,
+            heartbeat,
+            name,
+            harness,
+            deliver,
+            team,
+            role,
+            remote,
+        };
+        let request = match confine {
+            Some(confine) => Request::Confine {
+                confine,
+                request: Box::new(request),
+            },
+            None => request,
+        };
         match self.request(request).await? {
             Response::Created { session } => Ok(session),
             Response::Error { message }

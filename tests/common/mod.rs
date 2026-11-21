@@ -19,6 +19,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 pub fn new_session_request(name: Option<&str>, argv: &[&str]) -> Request {
     new_session_request_with_remote(name, argv, None)
 }
@@ -447,4 +449,23 @@ pub async fn new_team_agent(
     })
     .await;
     (session, credentials.0, credentials.1)
+}
+
+pub async fn fake_recv_frame(stream: &mut TcpStream) -> anyhow::Result<Option<Vec<u8>>> {
+    let mut header = [0; 4];
+    match stream.read_exact(&mut header).await {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let length = u32::from_be_bytes(header) as usize;
+    let mut payload = vec![0; length];
+    stream.read_exact(&mut payload).await?;
+    Ok(Some(payload))
+}
+
+pub async fn fake_send_frame(stream: &mut TcpStream, payload: &[u8]) -> anyhow::Result<()> {
+    stream.write_u32(payload.len() as u32).await?;
+    stream.write_all(payload).await?;
+    Ok(())
 }

@@ -7,7 +7,7 @@ commit that adds this file. Context `a2amx-main-daemon-redesign-2026-11-20`. Pub
 through the scripted fake control daemon of `tests/client_requests.rs`; the binary suites judge the launch paths unchanged.
 
 Scope (edit): `src/client/requests.rs`, `src/client.rs` (one more name in its existing `pub use` line),
-`src/commands/launch.rs`, `tests/client_requests.rs`, `tests/daemon_cli/heartbeat_and_activity.rs` (one new test). `src/commands/team.rs` is read only: `launch::create_session` keeps its signature, so `start_planned_session` needs no edit.
+`src/commands/launch.rs`, `tests/client_requests.rs`. (Amendment 2, after the Sonar gate: also `tests/common/mod.rs` and `tests/attach_cli/main.rs`, see the review record. Amendment 1: `tests/daemon_cli/heartbeat_and_activity.rs` is not edited, see section 4.2.) `src/commands/team.rs` is read only: `launch::create_session` keeps its signature, so `start_planned_session` needs no edit.
 
 Does not touch: every other file under `src/` (`src/wire.rs`, `src/daemon.rs`, `src/team/validate.rs`, `src/commands/team.rs`,
 `src/commands/team/dry_run.rs` included), every other test, `Cargo.toml`, `Cargo.lock`, `AGENTS.md`, `CHANGELOG.md`, `docs/` other than this spec.
@@ -119,9 +119,7 @@ instead of `Request::NewSession` and the `match confine` wrapper, calls `client.
       `the running daemon does not support --confine; restart it`.
    d. unconfined, the same reply gives Err `invalid control request: unknown variant`.
    e. confined, reply `Error{message:"other"}` gives Err `other`; unconfined, reply `Ok` gives Err `unexpected daemon response: Ok`.
-2. `tests/daemon_cli/heartbeat_and_activity.rs`: new `new_heartbeat_validates_before_connecting_to_daemon`, the shape of
-   `new_activity_validates_before_connecting_to_daemon` (`:661`, no daemon started): `new --detach --harness generic --heartbeat 30m -- sleep 1`
-   without `--watch` fails with stderr containing `heartbeat needs a non-empty watch`. It passes on the base code (a contract test, no red phase) and is the only test that pins the client-side heartbeat check, because the daemon repeats the rule (`src/daemon.rs:511-517`) and the daemon-backed tests assert with `contains`.
+2. Amendment 1: no new heartbeat test. The client-side heartbeat check is already pinned by `new_heartbeat_validates_interval_and_requires_watch` in `tests/daemon_cli/heartbeat_and_activity.rs` (about line 484, no daemon started); the draft claimed otherwise and added a duplicate, which the design read found and the developer deleted.
 3. No test for `validate_watch_options` itself (it is private); the tests of rows 1 and 2 and the mutation check judge it.
 
 ## 5. Out of scope
@@ -136,12 +134,12 @@ the `Failed` code and `String` versus `&str` argument questions of 3fy; the test
 
 - `cargo test --test client_requests` passes (the five rows above are listed); `cargo test --no-fail-fast`: all pass.
   Baseline at the base commit `dfb986a` (architect, 2026-11-21): 66 suites, 1408 passed, 0 failed, 3 ignored; after:
-  66 suites; 1413 passed (rows a to e replace one test: net +4, plus the new heartbeat test: +1); the developer states the numbers.
+  66 suites; 1413 passed (rows a to e replace one test: net +4; amendment 2: `mod common;` adds the one test of `common::fake_discord` to the `client_requests` target); the developer states the numbers.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` pass.
 - `rg -n 'Request::NewSession|Request::Confine' src/commands` prints nothing; `rg -n 'use crate::wire::Request' src/commands/launch.rs` prints nothing;
-  `rg -n 'needs a non-empty watch' src/commands/launch.rs` prints exactly one match (inside `validate_watch_options`);
+  `rg -n 'needs a non-empty watch' src/commands/launch.rs` prints exactly two matches, the doc comment and the error (both inside `validate_watch_options`; amendment 1);
   `rg -n 'activity.validate' src/commands` prints exactly one match.
-- `git status --short` lists only the five files of section 0 (`src/client.rs`, `src/client/requests.rs`, `src/commands/launch.rs`, `tests/client_requests.rs`, `tests/daemon_cli/heartbeat_and_activity.rs`); `git diff --stat -- Cargo.toml Cargo.lock` is empty.
+- `git status --short` lists only the six files of section 0 (`src/client.rs`, `src/client/requests.rs`, `src/commands/launch.rs`, `tests/client_requests.rs`, `tests/common/mod.rs`, `tests/attach_cli/main.rs`); `git diff --stat -- Cargo.toml Cargo.lock` is empty.
 - The binary suites pass unchanged: `tests/daemon_cli` (heartbeat and activity, kill and down), `tests/team`, `tests/teams`,
   `tests/confine`, `tests/confine_show.rs`, `tests/auto_confine`, `tests/attach_cli`. Known flaky tests (rerun a failure once alone and record it as pre-existing if it passes):
   `tests/agy_plugin.rs::descendant_pipe_holder_fails_with_pipe_error`,
@@ -178,3 +176,19 @@ the `Failed` code and `String` versus `&str` argument questions of 3fy; the test
 | `Request::NewSession`/`Request::Confine` are named in 42 files of `src` and `tests`, so a wire struct refactor is far larger | `rg -c 'Request::NewSession\|Request::Confine' src tests` | run |
 | `parse_interval(&format!("{seconds}s"), "heartbeat")` accepts exactly what `run_new`'s parse accepted (it re-parses a validated value) | `launch.rs:98-102,375`, `src/messaging.rs` `parse_interval` | to check by the developer |
 | `src/commands/launch.rs` is 438 lines; `requests.rs` is 137; the edit grows `requests.rs` by about 60 | `wc -l` | run |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (fresh consultant sessions for the draft review and the design read); developer OMP openai-codex/gpt-5.6-luna; tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0 (one post-implementation amendment, below).
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | row a fixture used default values, so field-copy mutants (cols 80, remote None, harness default) survive by construction | every field of the fixture and of the confine request is non-default |
+| draft review | consultant | the mutant list named a daemon-backed test as killer of the client heartbeat check, but the daemon repeats the rule and the test asserts with `contains`; the daemon rule sits at `src/daemon.rs:500-525` and `src/team/validate.rs` | spec text corrected; daemon stays the enforcing point |
+| draft review | consultant | the spec said only one two-fault message changed; a second exists (1b: activity without watch plus unparseable heartbeat) | listed as 3.1b |
+| architect draft | architect | the claim "no test pins the client-side heartbeat check" was false (`new_heartbeat_validates_interval_and_requires_watch` starts no daemon); a duplicate test was added | design read found it; test deleted, amendment 1, count 1412; check that would have caught it: grep existing tests for the same argv before asking for a characterization test |
+| architect draft | architect | the merged validation had to name which check order survives; the two copies disagreed | heartbeat first, listed in 3 |
+| tester pass | tester | acceptance grep `needs a non-empty watch` printed two matches (new doc comment) | amendment 1: expects two |
+| tester pass | tester | the `role` field of the built request is observed by no test through a real launch (mutant `role: None` survives) | recorded in the backlog (F94), not blocking |
+| design read | consultant | `NewOptions` repeats 13 request fields; heartbeat range check should be numeric in `messaging`; `validate_reset_steps` and `validate_name` belong with `validate_watch_options` | later items in the backlog (F94), for the team-up plan spec |
+| Sonar gate | Sonar (architect ran it) | new-code duplication 24.2% (limit 3%): the fixture and expected-request literals of `tests/client_requests.rs` (26 identical lines) and its frame helpers, copied from `tests/attach_cli/main.rs` | amendment 2: frame helpers move to `tests/common/mod.rs` and both targets use them; the expected request is a `serde_json::json!` literal compared with the recorded request as JSON (pins the wire names too); lesson: a fixture-and-expected pair of the same shape trips the duplication gate, so pick a different representation for the expected side |

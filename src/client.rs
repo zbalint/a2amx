@@ -14,7 +14,7 @@ use crate::wire::{
 };
 
 mod requests;
-pub use requests::IssuedLeaseCode;
+pub use requests::{IssuedLeaseCode, NewSessionRequest};
 
 pub const UNREACHABLE: &str = "cannot reach the a2amx daemon: start it with `a2amx daemon start`";
 

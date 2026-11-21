@@ -19,8 +19,7 @@ use a2amx::wire::{
     Activity, ClientFrame, Request, Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
 };
 use common::pty::PtyHarness;
-use common::{eventually, new_agent};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use common::{eventually, fake_recv_frame, fake_send_frame, new_agent};
 use tokio::net::{TcpListener, TcpStream};
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -48,25 +47,6 @@ fn run_binary(
         .envs(environment.iter().copied())
         .stdin(Stdio::null());
     Ok(process.output()?)
-}
-
-async fn fake_recv_frame(stream: &mut TcpStream) -> anyhow::Result<Option<Vec<u8>>> {
-    let mut header = [0; 4];
-    match stream.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error.into()),
-    }
-    let length = u32::from_be_bytes(header) as usize;
-    let mut payload = vec![0; length];
-    stream.read_exact(&mut payload).await?;
-    Ok(Some(payload))
-}
-
-async fn fake_send_frame(stream: &mut TcpStream, payload: &[u8]) -> anyhow::Result<()> {
-    stream.write_u32(payload.len() as u32).await?;
-    stream.write_all(payload).await?;
-    Ok(())
 }
 
 fn fake_team() -> TeamScope {
