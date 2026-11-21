@@ -120,3 +120,19 @@ The tester found that deleting the creation gate (`let _gate = self.sessions.beg
 - The test count after this amendment is 1415.
 - Section 5's expectation for the `get` mutant is corrected: it dies on `messages_by_name_match_id_and_retained_messages_survive_kill` (`tests/refs_and_list.rs`), not on `kill_exited_removes_only_exited_sessions_and_frees_names` (tester, mutant 4).
 - Unpinned and left (backlog F94): `authenticate`'s `exit_code().is_none()` check (serve re-checks every request; only the Hello reply for an exited session's token would differ) and the `poll_transitions` order.
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (fresh consultant for the pre-lock review; no post-implementation design read, the tester pass and the architect's diff read covered it); developer OMP openai-codex/gpt-5.6-luna (advisor slot not exposed); tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 1 (amendment 1), plus amendment 2 from the tester pass.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the first acceptance grep (`\.sessions$`) matches the receiver lines rustfmt leaves behind, so it could not pass | replaced by compile-time privacy (`map` private to `registry.rs`) plus a multiline pcre2 grep |
+| draft review | consultant | the registry grep `lock\(\)` also matched `begin_creation`'s `creating.lock()` | narrowed to `map\.lock\(\)` (the tester notes rustfmt splits that too; the multiline form is the reliable one) |
+| draft review | consultant | claim "no path other than `poll_transitions` holds the map while taking presence" was false: `list_agents` does too (through `owner_cause`); "21 sites" was 19 plus gate and counter | claims row and Why corrected |
+| draft review | consultant | the `list_agents` row read as a second snapshot, which would break one-moment membership; `AtomicU64` import left unused | row rewritten, import edit added |
+| implementation | developer | `BTreeMap::clear`, `remove` and `insert` drop the last `Arc<Session>` under the map lock, and `Session::drop` signals the process group; the spec's leaf-lock rule forbade it | BLOCKED, amendment 1: values released by the map are dropped after the guard (`mem::take` for `clear`) |
+| architect draft | architect | the consultant's pre-lock review flagged `Session::drop` as unchecked; the architect did not follow it up before locking | read at adjudication; lesson: a spec that adds a "no call-out under the lock" rule must list what drops under the lock |
+| tester pass | tester | deleting the creation gate survives every test (no test creates sessions concurrently with one name) | amendment 2: new test `concurrent_new_session_with_one_name_creates_exactly_one` (red on the mutant 3 of 3) |
+| tester pass | tester | the spec named the wrong killer for the `get` mutant (`kill_exited_...` passes) | corrected to `messages_by_name_match_id_and_retained_messages_survive_kill` |
+| tester pass | tester | `authenticate`'s `exit_code().is_none()` check is unpinned (serve re-checks every request) and the `poll_transitions` order is unpinned | recorded in the backlog (F94) |

@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -37,7 +37,9 @@ use crate::wire::{
     TeamMember,
 };
 mod omp_usage;
+mod registry;
 use omp_usage::OmpUsage;
+use registry::Sessions;
 
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);
 const ACTIVITY_QUIET: Duration = Duration::from_secs(10);
@@ -73,8 +75,7 @@ pub struct Daemon {
 }
 
 struct Runtime {
-    sessions: Mutex<BTreeMap<u64, Arc<Session>>>,
-    next_id: AtomicU64,
+    sessions: Sessions,
     token: String,
     gateway_token: String,
     store: Store,
@@ -91,7 +92,6 @@ struct Runtime {
     presence: Arc<Mutex<HashMap<String, messaging::Presence>>>,
     leases: Mutex<PresenceLeases>,
     gateway_connections: AtomicUsize,
-    new_session_gate: tokio::sync::Mutex<()>,
     // shortcut: a stopped gateway leaves messages delivering until daemon restart;
     // each stuck message consumes the shared human queue limit, so add a timeout
     // when gateway flakiness proves this path needs recovery.
@@ -291,34 +291,25 @@ fn failed(code: &str, message: &str) -> Response {
 
 impl Runtime {
     fn omp_usage_command(&self) -> Option<(String, Option<PathBuf>)> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-            .find_map(|session| {
-                if session.exit_code().is_some() || session.harness() != Harness::Omp {
-                    return None;
-                }
-                let argv0 = session.argv.first()?;
-                if Path::new(argv0)
-                    .file_name()
-                    .and_then(std::ffi::OsStr::to_str)
-                    != Some("omp")
-                {
-                    return None;
-                }
-                Some((argv0.clone(), session.cwd().map(Path::to_owned)))
-            })
+        self.sessions.snapshot().iter().find_map(|session| {
+            if session.exit_code().is_some() || session.harness() != Harness::Omp {
+                return None;
+            }
+            let argv0 = session.argv.first()?;
+            if Path::new(argv0)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                != Some("omp")
+            {
+                return None;
+            }
+            Some((argv0.clone(), session.cwd().map(Path::to_owned)))
+        })
     }
 
     fn authenticate(&self, token: &str) -> Option<Role> {
         let mut role = constant_time_eq(token, &self.token).then_some(Role::Admin);
-        for session in self
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-        {
+        for session in self.sessions.snapshot() {
             if session.exit_code().is_none() {
                 let matches = constant_time_eq(token, session.token());
                 if matches && role.is_none() {
@@ -495,14 +486,14 @@ impl Runtime {
                 message: "confinement requires an explicit cwd".into(),
             });
         }
-        let _gate = self.new_session_gate.lock().await;
+        let _gate = self.sessions.begin_creation().await;
         if let Some(message) = self.check_team_and_name(team.as_ref(), name.as_deref()) {
             return Ok(Response::Error { message });
         }
         let number = self
-            .next_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .map_err(|_| anyhow::anyhow!("session id space exhausted"))?;
+            .sessions
+            .next_number()
+            .ok_or_else(|| anyhow::anyhow!("session id space exhausted"))?;
         let id = SessionId(format!("s{number}"));
         let address = self.address.clone();
         let token = tokio::task::spawn_blocking(random_hex::<32>).await??;
@@ -566,10 +557,7 @@ impl Runtime {
             Ok(session) => {
                 let session = Arc::new(session);
                 let id = session.id().0.clone();
-                self.sessions
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .insert(number, session.clone());
+                self.sessions.insert(number, session.clone());
                 self.start_session_tasks(session.clone(), channel);
                 Ok(Response::Created { session: id })
             }
@@ -649,19 +637,13 @@ impl Runtime {
         name: Option<&str>,
     ) -> Option<String> {
         if let Some(scope) = team {
-            let differs = self
-                .sessions
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .values()
-                .any(|session| {
-                    session.exit_code().is_none()
-                        && session.team().is_some_and(|existing| {
-                            existing.name == scope.name
-                                && (existing.private != scope.private
-                                    || existing.allow != scope.allow)
-                        })
-                });
+            let differs = self.sessions.snapshot().iter().any(|session| {
+                session.exit_code().is_none()
+                    && session.team().is_some_and(|existing| {
+                        existing.name == scope.name
+                            && (existing.private != scope.private || existing.allow != scope.allow)
+                    })
+            });
             if differs {
                 return Some(format!(
                     "team {} is already running with different settings",
@@ -675,9 +657,8 @@ impl Runtime {
             }
             if self
                 .sessions
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .values()
+                .snapshot()
+                .iter()
                 .any(|session| session.name() == Some(name))
             {
                 return Some(format!("session name {name} is already in use"));
@@ -786,16 +767,17 @@ impl Runtime {
     }
 
     fn poll_transitions(&self) -> Vec<Arc<Session>> {
-        let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
         let mut presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
+        // Hold presence before taking the leaf session snapshot so new attachments are retained.
+        let sessions = self.sessions.snapshot();
         let live_ids = sessions
-            .values()
+            .iter()
             .filter(|session| session.exit_code().is_none())
             .map(|session| session.id().0.clone())
             .collect::<HashSet<_>>();
         presence.retain(|id, _| live_ids.contains(id));
         sessions
-            .values()
+            .iter()
             .filter(|session| session.exit_code().is_none())
             .filter_map(|session| {
                 presence
@@ -895,9 +877,8 @@ impl Runtime {
         };
         let watchers = self
             .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
+            .snapshot()
+            .iter()
             .filter(|watcher| {
                 watcher.exit_code().is_none()
                     && watcher.watch().iter().any(|watched| watched == name)
@@ -1104,12 +1085,12 @@ impl Runtime {
 
     fn live_watched_peers(&self, session: &Arc<Session>) -> Vec<Arc<Session>> {
         let watched = session.watch().to_vec();
-        let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
+        let sessions = self.sessions.snapshot();
         watched
             .iter()
             .filter_map(|name| {
                 sessions
-                    .values()
+                    .iter()
                     .find(|peer| {
                         peer.exit_code().is_none()
                             && peer.name() == Some(name.as_str())
@@ -1267,9 +1248,8 @@ impl Runtime {
     fn recipient(&self, to: &str) -> Option<Arc<Session>> {
         let local = messaging::local_part(to, &self.host_name)?;
         self.sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
+            .snapshot()
+            .iter()
             .find(|session| session.name().unwrap_or(&session.id().0) == local)
             .cloned()
     }
@@ -1423,9 +1403,8 @@ impl Runtime {
 
     fn remote_members(&self, team: &str) -> Vec<(SessionId, String, messaging::RemoteMode)> {
         self.sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
+            .snapshot()
+            .iter()
             .filter_map(|session| {
                 (session.exit_code().is_none()
                     && session.team().is_some_and(|scope| scope.name == team))
@@ -1577,9 +1556,8 @@ impl Runtime {
         let now = Instant::now();
         let agents = self
             .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
+            .snapshot()
+            .iter()
             .filter_map(|session| {
                 if session.exit_code().is_some() || !session.confined() {
                     return None;
@@ -1816,9 +1794,8 @@ impl Runtime {
             return Some(session);
         }
         self.sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
+            .snapshot()
+            .iter()
             .find(|session| session.name() == Some(local))
             .cloned()
     }
@@ -2298,8 +2275,7 @@ impl Daemon {
         // a later lifecycle specification.
         let (shutdown, _) = watch::channel(false);
         let runtime = Arc::new(Runtime {
-            sessions: Mutex::new(BTreeMap::new()),
-            next_id: AtomicU64::new(1),
+            sessions: Sessions::new(),
             token,
             gateway_token,
             store,
@@ -2318,7 +2294,6 @@ impl Daemon {
             presence: Arc::new(Mutex::new(HashMap::new())),
             leases: Mutex::new(PresenceLeases::default()),
             gateway_connections: AtomicUsize::new(0),
-            new_session_gate: tokio::sync::Mutex::new(()),
             human_attempts: Mutex::new(HashMap::new()),
             deliveries: Mutex::new(Vec::new()),
             stop_requested: tokio::sync::Notify::new(),
@@ -2468,14 +2443,7 @@ impl Daemon {
                 failure.get_or_insert(anyhow::Error::new(error).context("message delivery task"));
             }
         }
-        let sessions = self
-            .runtime
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let sessions = self.runtime.sessions.snapshot();
         let graceful = !self.runtime.stop_now.load(Ordering::Relaxed);
         let mut kills = JoinSet::new();
         for session in sessions {
@@ -2489,11 +2457,7 @@ impl Daemon {
                 failure.get_or_insert(error);
             }
         }
-        self.runtime
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+        self.runtime.sessions.clear();
         if let Err(error) = self
             .runtime
             .store
@@ -2876,11 +2840,9 @@ async fn authenticate_hello(
 async fn list_sessions(runtime: &Runtime) -> anyhow::Result<Response> {
     let counts = runtime.store.open_counts(&runtime.boot).await?;
     let omp_usage = runtime.omp_usage.current();
-    let sessions = runtime
-        .sessions
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .values()
+    let sessions = runtime.sessions.snapshot();
+    let sessions = sessions
+        .iter()
         .map(|session| {
             let activity = session_activity(session);
             let activity_secs =
@@ -2933,13 +2895,10 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
         Role::Gateway => None,
         Role::Session(id) => Some(id.as_str()),
     };
-    let sessions = runtime
-        .sessions
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let sessions = runtime.sessions.snapshot();
     let viewer = viewer_id.and_then(|id| {
         sessions
-            .values()
+            .iter()
             .find(|session| session.id().0 == id)
             .cloned()
     });
@@ -2963,7 +2922,7 @@ fn list_agents(runtime: &Runtime, role: &Role) -> Response {
         });
     let omp_usage = runtime.omp_usage.current();
     let agents = sessions
-        .values()
+        .iter()
         .filter(|session| {
             admin
                 || viewer.as_ref().is_some_and(|viewer| {
@@ -3005,11 +2964,7 @@ async fn kill_session(runtime: &Runtime, id: &str, now: bool) -> Response {
     match lookup(runtime, id) {
         Some((number, session)) => match session.kill(!now).await {
             Ok(()) => {
-                runtime
-                    .sessions
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .remove(&number);
+                runtime.sessions.remove(number);
                 Response::Ok
             }
             Err(error) => Response::Error {
@@ -3399,11 +3354,9 @@ fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {
     let number = id.strip_prefix('s')?.parse::<u64>().ok()?;
     runtime
         .sessions
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(&number)
+        .get(number)
         .filter(|session| session.id().0 == id)
-        .map(|session| (number, session.clone()))
+        .map(|session| (number, session))
 }
 
 struct AttachmentGuard {
@@ -3452,9 +3405,8 @@ async fn attachment_status(
     let team_sessions = team_name.as_ref().map_or_else(Vec::new, |team_name| {
         runtime
             .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
+            .snapshot()
+            .iter()
             .filter(|candidate| candidate.team().is_some_and(|team| team.name == *team_name))
             .cloned()
             .collect::<Vec<_>>()

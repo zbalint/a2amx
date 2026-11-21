@@ -309,6 +309,69 @@ async fn ids_are_numerically_ordered_and_not_reused_after_kill() {
 }
 
 #[tokio::test]
+async fn concurrent_new_session_with_one_name_creates_exactly_one() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut first_client = Client::connect(dir.path()).await.unwrap();
+    let mut second_client = Client::connect(dir.path()).await.unwrap();
+    let (first_result, second_result) = tokio::join!(
+        first_client.request(Request::NewSession {
+            argv: vec!["sleep".into(), "60".into()],
+            cols: 40,
+            rows: 5,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("concurrent-name".into()),
+            harness: a2amx::harness::Harness::Generic,
+            deliver: None,
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        }),
+        second_client.request(Request::NewSession {
+            argv: vec!["sleep".into(), "60".into()],
+            cols: 40,
+            rows: 5,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("concurrent-name".into()),
+            harness: a2amx::harness::Harness::Generic,
+            deliver: None,
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        })
+    );
+    let first_response = first_result.unwrap();
+    let second_response = second_result.unwrap();
+    let (session, message) = match (first_response, second_response) {
+        (Response::Created { session }, Response::Error { message })
+        | (Response::Error { message }, Response::Created { session }) => (session, message),
+        responses => panic!("unexpected concurrent responses: {responses:?}"),
+    };
+    assert!(!session.is_empty());
+    assert_eq!(message, "session name concurrent-name is already in use");
+    let sessions = list(&mut first_client).await;
+    assert_eq!(
+        sessions
+            .iter()
+            .filter(|summary| summary.name.as_deref() == Some("concurrent-name"))
+            .count(),
+        1
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn cwd_environment_and_argument_boundaries_reach_the_child() {
     let (dir, daemon) = common::start_daemon().await;
     let mut client = Client::connect(dir.path()).await.unwrap();
