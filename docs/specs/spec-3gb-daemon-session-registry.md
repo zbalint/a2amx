@@ -38,7 +38,7 @@ Rejected: methods taking a predicate (`any`, `find`, `filter`) that run it under
 
 ### 2.1 New `src/daemon/registry.rs`
 
-The type above. `snapshot` is `self.map.lock().unwrap_or_else(PoisonError::into_inner).values().cloned().collect()`; `next_number` is the existing `fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1)).ok()`; the other methods are one lock and one map call. A doc comment states: the map lock is held only inside these methods, which call nothing else, so it is a leaf lock; hold no other lock's guard across `begin_creation().await`.
+The type above. `snapshot` is `self.map.lock().unwrap_or_else(PoisonError::into_inner).values().cloned().collect()`; `next_number` is the existing `fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1)).ok()`; the other methods are one lock and one map call, except that a value the map releases is dropped after the lock is released (amendment 1): `insert` binds the replaced value (`let replaced = self.map.lock()...insert(number, session);`, dropped at the end of the method), `remove` binds the removed value the same way, and `clear` moves the whole map out under the lock (`std::mem::take`) and drops it after the guard is gone. The reason: the last `Arc<Session>` runs `Session::drop` (`src/session.rs:602-611`: a process-group HUP signal and a `tracing::warn!`), which is a call out and, for the PTY, must not run under a lock. A doc comment states: the map lock is held only inside these methods, which call nothing else, so it is a leaf lock; hold no other lock's guard across `begin_creation().await`.
 
 The type has eight methods (`new`, `begin_creation`, `next_number`, `insert`, `remove`, `clear`, `get`, `snapshot`). Its value is that `map` is private to `registry.rs`: the compiler, not a grep, stops a future site from calling out under the lock. A `Runtime::snapshot` helper that kept the field would leave `.lock()` open to the next change (rejected).
 
@@ -107,3 +107,7 @@ No observable change. Membership seen by each site is the same as before (a snap
 | `next_id` increments with `fetch_update(.., checked_add(1))` and the error text is `session id space exhausted` | `src/daemon.rs:503-505` | read |
 | The only `daemon.rs` unit test is `heartbeat_body_matches_digest_example` and names none of these items | `src/daemon.rs` test module | read |
 | The creation gate is held across `plan_confinement`, `codex::start` and the spawn | `src/daemon.rs:498-580` | read: unchanged by this spec (`begin_creation` returns the same guard type) |
+
+## Amendment 1 (developer BLOCKED, m_8408)
+
+Verified against `src/session.rs:602-611`: `Drop for Session` calls `kill_process_group` and may log, so dropping the last `Arc<Session>` inside `BTreeMap::clear`, `remove` or `insert` (which drops a replaced value) would call out under the map lock, contradicting section 1. Resolution: section 2.1 now requires `insert`, `remove` and `clear` to release the lock before the dropped values are destroyed. `snapshot` and `get` only clone `Arc`s, and a clone's drop is not the last one while the map holds the original, so they need nothing. Acceptance addition: the tester's mutation list gains "`clear` drops under the lock" as a read-only review item (not a test; no test can observe it), and the architect checks the three bodies at review.
