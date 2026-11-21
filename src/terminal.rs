@@ -1,6 +1,6 @@
-//! The human's terminal: raw writes, the output thread, restore-on-exit guards, size and tty tests.
+//! The human's terminal: raw writes, the output thread, restore-on-exit guards, size and tty tests, and the yes/no prompt.
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::os::fd::AsFd;
 use std::sync::mpsc as std_mpsc;
 use std::thread;
@@ -293,4 +293,20 @@ fn run_cleanup(cleanup: impl FnOnce() + Send + 'static) {
         }
         Err(_) => cleanup(),
     }
+}
+
+pub(crate) async fn confirm(prompt: &str, refusal: &str) -> anyhow::Result<bool> {
+    if !io::stdin().is_terminal() {
+        return Err(anyhow!(refusal.to_owned()));
+    }
+    write_stderr(prompt.as_bytes().to_vec()).await?;
+    let answer = tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        io::stdin().read_line(&mut line).map(|_| line)
+    })
+    .await??;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }

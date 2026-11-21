@@ -215,3 +215,17 @@ Run from the main checkout. Judge and command names are exact.
 | Only one `tracing` macro is used in `src/main.rs` (line 515) and no test names it | `rg 'tracing::' src/main.rs`; `rg -n 'cannot install SIGTERM handler' tests` | run, no test match |
 | `Cargo.toml` has no `[features]`; lints (`unwrap`, `expect`, undocumented unsafe, ...) are package-wide, so a move does not change them | consultant read | read; clippy judges |
 | `docs/architecture.md:399` and the `team` row of `AGENTS.md` ("the commands live in `main`") name `src/main.rs` handing a result to `DaemonConfig` | `rg 'main.rs' docs/architecture.md` | run |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (fresh consultant sessions for the design consult, the draft
+review and the design read); junior developer OMP openai-codex/gpt-5.6-luna (automatic advisor); tester OMP
+opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the cross-file list named `confirm` as called by `gateway`, but `run_gateway` only has a struct field of that name (a word-boundary scan matches field names), so a developer would add an unused import | list corrected, scan results described as a superset |
+| draft review | consultant | the struct-field visibility rule was imprecise: `TeamSource` fields were said to be used in `grants.rs`; only `NewOptions` (18 fields) and `TeamOrigin.dir` cross files | the `pub(super)` set written as an exact counted list and audited by `rg -c` |
+| draft review | consultant | `resolve_auto_grants` made `grants` depend on `team`, and `resolve_home` sat in `commands.rs` away from the root preparation | `resolve_auto_grants` moved to `team.rs` (`TeamOrigin` private), `resolve_home` to `home.rs` |
+| draft review | consultant | prelude glob in `main.rs` contradicted the no-glob rule; the `mod daemon/gateway/team` names shadow crate modules in `commands.rs`; no row for the tracing-target claim; line count 2,480 was 2,437; `AGENTS.md:183` and the `terminal.rs` `//!` line missing from the doc/scope lists | each stated in the spec before the lock |
+| tester pass | tester (correction m_8272) | the new files had no blank line between items although section 3.1 promised one, and no acceptance check covered it | developer fix request (whitespace only); `rg -U` boundary audit run, prints nothing |

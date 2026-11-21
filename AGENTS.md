@@ -180,14 +180,15 @@ specs showing it found nothing.
 | `store` | SQLite message and delivery-attempt persistence |
 | `codex` | A session's private Codex app-server, its JSON-RPC client, and the poller behind the Codex channel |
 | `cli` | Command-line shape |
-| `team` | The team file and flag formats and the up-plan (pure; the commands live in `main`) |
+| `team` | The team file and flag formats and the up-plan (pure; the commands live in `commands`) |
 | `grant` | Named confinement grants: the table of what each one exposes (sockets and environment names), name validation, the closest-match error and the `confine list` text (pure) |
 | `suggest` | Grant detection from project markers and git remotes, and the `confine suggest` grants line (pure) |
 | `attach` | The interactive attach screen: `model` (the pure `Model`: all screen state, `step`/`on_output`/`on_status`/`on_tick`/`resize` turning events into `Intent`s, plus `Viewport`, `Geometry`; no I/O, no clock), `state` (the async driver that performs intents over the daemon connection and the terminal), `input` (byte parsing helpers), `event_loop` (the select loop), `picker` (the pure `PickerScreen`) |
-| `terminal` | The human's terminal: raw stdout/stderr writes, the output thread, restore-on-exit guards (`EchoGuard`, `TerminalGuard`), size and tty tests |
+| `terminal` | The human's terminal: raw stdout/stderr writes, the output thread, restore-on-exit guards (`EchoGuard`, `TerminalGuard`), size and tty tests, the yes/no prompt |
 | `table` | Aligned session and message tables for the list commands and the picker (pure) |
 | `lookup` | The session list request and resolving a user's session reference (name or id) |
-| `main` | CLI dispatch and daemon/session/team command execution |
+| `commands` | `commands::run`, the one public entry: dispatch over the parsed CLI to the command handlers, one file per responsibility (`home` root preparation, `daemon`, `gateway`, `launch` and `grants` for starting a session, `team` with its `dry_run`, `sessions` for commands on existing sessions and messages) |
+| `main` | The process entry: tracing setup, argument parsing, the root-user refusal, the final error line and exit code |
 
 ## Public repository rules
 

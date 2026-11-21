@@ -14,6 +14,7 @@ mod channel;
 pub mod cli;
 pub mod client;
 pub mod codex;
+pub mod commands;
 pub mod config;
 pub mod confine;
 pub mod daemon;

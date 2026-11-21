@@ -396,7 +396,7 @@ The resolved a2amx root is `<root>` (`--home`, then `A2AMX_HOME`, then `$HOME/.a
 | `gateway_log()` | `<root>/log/gateway.log` |
 
 The `config` module owns `config/daemon.toml`: it resolves each daemon key as flag or environment, then file,
-then the Rust default, and the binary (`src/main.rs`) hands the result to `DaemonConfig`. `a2amx config show`
+then the Rust default, and the daemon command (`src/commands/daemon.rs`) hands the result to `DaemonConfig`. `a2amx config show`
 prints the same resolution with each value's source. It also owns `config/gateway.toml`: eight public keys
 (`guild_id`, the control category and channel, `max_members` and four intervals as duration strings, with an `ms`
 unit) and two test-only endpoint keys; the gateway commands `gateway token` and `gateway up` write the commented
