@@ -22,6 +22,43 @@ fn kill_running_session_requires_confirmation_without_a_terminal() {
     assert!(listing.contains("running"));
     let forced = run(&home, &["kill", &id, "--yes"]);
     assert!(forced.status.success(), "stderr: {}", stderr(&forced));
+    assert_eq!(stdout(&forced), "");
+}
+
+#[test]
+fn kill_declined_at_the_prompt_leaves_the_session_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let created = run(&home, &["new", "--detach", "--", "sh", "-c", "sleep 30"]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let id = stdout(&created).trim().to_owned();
+
+    let args = vec![
+        "--home".to_owned(),
+        home.to_string_lossy().into_owned(),
+        "kill".to_owned(),
+        id.clone(),
+    ];
+    let mut terminal = PtyHarness::spawn(&args, &home).unwrap();
+    terminal
+        .wait_for_text(
+            &format!("Killing {id} ends a running session. Continue? [y/N]"),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+    terminal.send(b"n\n").unwrap();
+    terminal
+        .wait_for_text("not killed\n", Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(terminal.wait_exit(Duration::from_secs(10)).unwrap(), 0);
+
+    let listing = run(&home, &["list"]);
+    assert!(listing.status.success(), "stderr: {}", stderr(&listing));
+    let listing = stdout(&listing);
+    assert!(listing.contains(&id));
+    assert!(listing.contains("running"));
 }
 
 #[test]

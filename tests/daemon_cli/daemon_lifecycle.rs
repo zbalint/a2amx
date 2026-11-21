@@ -81,10 +81,49 @@ fn stop_refuses_to_end_sessions_without_a_terminal() {
     let refused = run(&home, &["daemon", "stop"]);
 
     assert!(!refused.status.success());
-    assert!(stderr(&refused).contains("1 running session"));
+    assert_eq!(
+        stderr(&refused),
+        "a2amx: refusing to stop: 1 running session(s); pass --yes to end them\n"
+    );
     assert!(run(&home, &["list"]).status.success());
     let forced = run(&home, &["daemon", "stop", "--yes"]);
     assert!(forced.status.success(), "stderr: {}", stderr(&forced));
+}
+
+#[test]
+fn daemon_stop_declined_at_the_prompt_leaves_the_daemon_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let created = run(&home, &["new", "--detach", "--", "sh"]);
+    assert!(created.status.success(), "stderr: {}", stderr(&created));
+    let id = stdout(&created).trim().to_owned();
+
+    let args = vec![
+        "--home".to_owned(),
+        home.to_string_lossy().into_owned(),
+        "daemon".to_owned(),
+        "stop".to_owned(),
+    ];
+    let mut terminal = PtyHarness::spawn(&args, &home).unwrap();
+    terminal
+        .wait_for_text(
+            "Stopping the daemon ends 1 running session(s). Continue? [y/N]",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+    terminal.send(b"n\n").unwrap();
+    terminal
+        .wait_for_text("not stopped\n", Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(terminal.wait_exit(Duration::from_secs(10)).unwrap(), 0);
+
+    let listing = run(&home, &["list"]);
+    assert!(listing.status.success(), "stderr: {}", stderr(&listing));
+    let listing = stdout(&listing);
+    assert!(listing.contains(&id));
+    assert!(listing.contains("running"));
 }
 
 #[test]

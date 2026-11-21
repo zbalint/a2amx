@@ -108,3 +108,16 @@ the `team reset` decline path.
 ## Amendment 1
 
 Mutant 7 of section 4 is redefined as above (equivalent for test 4, killed by `migrate_cli` test 14 only): the base has two empty-token guards (`gateway.rs:39` and `relay_files::write_token`). Nothing else changes.
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (fresh consultant session for the draft review); junior developer
+OMP openai-codex/gpt-5.6-luna; tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 1.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the `daemon stop` refusal without a terminal already had a test with a loose `contains` assertion; the draft's new test 1 would have duplicated it | test 1 became the tightening of the existing assertion; counts 1396 |
+| draft review | consultant | mutant 7 was said to fail exactly one test but `migrate_cli` test 14 also fails it; `layout.ensure()` creates the directories before the token read; line ranges off | text corrected; token test asserts the file only |
+| draft review | consultant | a successful `kill --yes` printing nothing was unpinned | `assert_eq!(stdout(&forced), "")` added |
+| implementation (BLOCKED m_8295) | developer | mutant 7 cannot be killed by the new test because `relay_files::write_token` has the same guard and text | amendment 1 (d8ed141): mutant 7 recorded as equivalent for test 4, killed by `migrate_cli` test 14 only |
+| tester pass | tester | the PTY decline tests waited only for `Continue? [y/N]`, so rewording the prompt prefix passed (mutants 12 and 13 survived); the stop-decline test did not assert `running` | tests wait for the full prompt text and assert `running`; mutants 12 and 13 now fail them |
