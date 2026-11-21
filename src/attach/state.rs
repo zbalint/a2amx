@@ -6,6 +6,7 @@ use anyhow::anyhow;
 
 use crate::client::{Attachment, Client};
 use crate::emulator::Scroll;
+use crate::lookup::request_sessions;
 use crate::mouse::{self, MouseReport, Shifted};
 use crate::picker::Outcome;
 use crate::prefix::{Action, Command as PrefixCommand, PrefixMachine};
@@ -14,9 +15,10 @@ use crate::viewer::{self, Viewer};
 use crate::wire::ClientFrame;
 
 use super::input::{ScrollKey, ScrollParser, find_mouse_report, is_focus_report, parse_decimal};
+use super::model::{Geometry, Mode, Viewport};
+use super::picker::PickerScreen;
 use super::{
-    AttachOutcome, AttachmentConfig, AttachmentState, Geometry, MousePress, PickerState,
-    open_attachment, pty_rows, team_rows,
+    AttachOutcome, AttachmentConfig, AttachmentState, MousePress, Opened, open_attachment,
 };
 
 impl AttachmentState {
@@ -36,21 +38,24 @@ impl AttachmentState {
             attachment: Some(attachment),
             home: home.to_owned(),
             session,
-            cols,
-            rows,
-            in_team,
-            top_rows,
+            geometry: Geometry {
+                viewport: Viewport {
+                    cols,
+                    rows,
+                    status_visible: true,
+                },
+                in_team,
+                granted_top: top_rows,
+            },
             team_regions: Vec::new(),
             mouse_press: None,
             prefix_machine: PrefixMachine::new(prefix),
             prefix_byte: prefix,
             after_prefix: false,
-            status_visible: true,
             status: None,
             session_mouse: false,
-            scroll_mode: false,
-            scroll_parser: ScrollParser::default(),
-            picker: None,
+            mode: Mode::Live,
+            picker_control: None,
             viewer: Viewer::new(Instant::now(), false),
             viewer_after,
             output,
@@ -58,23 +63,25 @@ impl AttachmentState {
     }
 
     pub(super) fn draw_status(&mut self) -> anyhow::Result<()> {
-        if !self.status_visible || self.picker.is_some() || self.scroll_mode {
+        if !self.geometry.viewport.status_visible || !self.mode.is_live() {
             self.team_regions.clear();
             return Ok(());
         }
+        let cols = self.geometry.viewport.cols;
+        let rows = self.geometry.viewport.rows;
         let mut bytes = Vec::new();
-        if self.top_rows > 0 {
+        if self.geometry.granted_top > 0 {
             let line = self.status.as_ref().and_then(|info| {
                 info.team.as_ref().map(|team| {
-                    status::render_team_line(&self.session, &team.name, &info.members, self.cols)
+                    status::render_team_line(&self.session, &team.name, &info.members, cols)
                 })
             });
             let line =
-                line.unwrap_or_else(|| status::render_team_line(&self.session, "", &[], self.cols));
+                line.unwrap_or_else(|| status::render_team_line(&self.session, "", &[], cols));
             self.team_regions = line.regions;
             bytes.extend(line.bytes);
-            if self.top_rows == 2 {
-                bytes.extend(status::render_team_rule(self.cols, true));
+            if self.geometry.granted_top == 2 {
+                bytes.extend(status::render_team_rule(cols, true));
             }
         } else {
             self.team_regions.clear();
@@ -83,26 +90,28 @@ impl AttachmentState {
             &self.session,
             self.status.as_ref(),
             self.prefix_byte,
-            self.cols,
-            self.rows,
+            cols,
+            rows,
         ));
         self.output.send(bytes)?;
         Ok(())
     }
     pub(super) fn draw_viewer_decorations(&mut self, now: Instant) -> anyhow::Result<()> {
         if !self.viewer.is_viewer()
-            || !self.status_visible
-            || self.picker.is_some()
-            || self.scroll_mode
+            || !self.geometry.viewport.status_visible
+            || !self.mode.is_live()
         {
             return Ok(());
         }
-        self.output.send(viewer::marker(self.cols, self.rows))?;
+        self.output.send(viewer::marker(
+            self.geometry.viewport.cols,
+            self.geometry.viewport.rows,
+        ))?;
         if self.viewer.overlay_active(now) {
             self.output.send(viewer::overlay(
-                self.cols,
-                pty_rows(self.rows, self.status_visible, self.top_rows),
-                self.top_rows,
+                self.geometry.viewport.cols,
+                self.geometry.pty_rows(),
+                self.geometry.granted_top,
                 self.prefix_byte,
             ))?;
         }
@@ -122,8 +131,8 @@ impl AttachmentState {
             let session_mouse = self.session_mouse && !self.viewer.is_viewer();
             // Only live view with session mouse on and no team rows hands the raw bytes to the session.
             // shortcut: with top_rows > 0 and session_mouse, split input remains unshifted until a complete report is found.
-            let live = self.picker.is_none() && !self.scroll_mode;
-            let pass_through = live && session_mouse && self.top_rows == 0;
+            let live = self.mode.is_live();
+            let pass_through = live && session_mouse && self.geometry.granted_top == 0;
             let report = (!pass_through)
                 .then(|| find_mouse_report(bytes, offset))
                 .flatten();
@@ -133,7 +142,7 @@ impl AttachmentState {
                 let Some(parsed) = mouse::parse_report(bytes, offset) else {
                     return Err(anyhow!("mouse report parser lost a report boundary"));
                 };
-                if self.top_rows > 0 && self.picker.is_none() && !self.scroll_mode {
+                if self.geometry.granted_top > 0 && self.mode.is_live() {
                     self.handle_mouse_report(parsed).await?;
                 } else {
                     self.handle_mouse_button(parsed.button).await?;
@@ -142,31 +151,38 @@ impl AttachmentState {
                 continue;
             }
             let segment_end = report.map_or(bytes.len(), |(start, _)| start);
-            if self.picker.is_some() {
-                if let Some(outcome) = self
-                    .handle_picker_input(&bytes[offset..offset + 1], bytes == [0x1b])
-                    .await?
-                {
-                    return Ok(Some(outcome));
+            match &mut self.mode {
+                Mode::Picker(_) => {
+                    if let Some(outcome) = self
+                        .handle_picker_input(&bytes[offset..offset + 1], bytes == [0x1b])
+                        .await?
+                    {
+                        return Ok(Some(outcome));
+                    }
+                    offset += 1;
                 }
-                offset += 1;
-            } else if self.scroll_mode {
-                self.feed_scroll_input(&bytes[offset..offset + 1]).await?;
-                offset += 1;
-            } else {
-                let count = self.prefix_batch_len(bytes, offset, segment_end);
-                let actions = self.prefix_machine.feed(&bytes[offset..offset + count]);
-                if let Some(outcome) = self.handle_prefix_actions(actions, now).await? {
-                    return Ok(Some(outcome));
+                Mode::Scroll(_) => {
+                    self.feed_scroll_input(&bytes[offset..offset + 1]).await?;
+                    offset += 1;
                 }
-                offset += count;
+                Mode::Live => {
+                    let count = self.prefix_batch_len(bytes, offset, segment_end);
+                    let actions = self.prefix_machine.feed(&bytes[offset..offset + count]);
+                    if let Some(outcome) = self.handle_prefix_actions(actions, now).await? {
+                        return Ok(Some(outcome));
+                    }
+                    offset += count;
+                }
             }
         }
         Ok(None)
     }
 
     async fn feed_scroll_input(&mut self, byte: &[u8]) -> anyhow::Result<()> {
-        for key in self.scroll_parser.feed(byte) {
+        let Mode::Scroll(parser) = &mut self.mode else {
+            return Ok(());
+        };
+        for key in parser.feed(byte) {
             match key {
                 ScrollKey::Scroll(scroll) => {
                     if let Some(attached) = self.attachment.as_mut() {
@@ -178,8 +194,7 @@ impl AttachmentState {
                         attached.send(ClientFrame::Scroll(Scroll::Bottom)).await?;
                         attached.send(ClientFrame::Redraw).await?;
                     }
-                    self.scroll_mode = false;
-                    self.scroll_parser.clear();
+                    self.mode = Mode::Live;
                 }
             }
         }
@@ -222,8 +237,8 @@ impl AttachmentState {
             if !viewer {
                 attached
                     .send(ClientFrame::Resize {
-                        cols: self.cols,
-                        rows: pty_rows(self.rows, self.status_visible, self.top_rows),
+                        cols: self.geometry.viewport.cols,
+                        rows: self.geometry.pty_rows(),
                     })
                     .await?;
                 attached.send(ClientFrame::Redraw).await?;
@@ -290,21 +305,38 @@ impl AttachmentState {
     }
 
     async fn open_picker(&mut self) -> anyhow::Result<()> {
-        let state = PickerState::open(
-            &self.home,
+        let mut control = Client::connect(&self.home).await?;
+        let sessions = request_sessions(&mut control).await?;
+        let screen = PickerScreen::new(
+            sessions,
             &self.session,
-            self.cols,
-            self.rows,
-            &self.output,
-        )
-        .await?;
+            self.geometry.viewport.cols,
+            self.geometry.viewport.rows,
+        );
+        self.output.send(screen.render())?;
         self.team_regions.clear();
-        self.picker = Some(state);
+        self.mode = Mode::Picker(Box::new(screen));
+        self.picker_control = Some(control);
+        Ok(())
+    }
+
+    fn close_picker(&mut self) {
+        self.mode = Mode::Live;
+        self.picker_control = None;
+    }
+
+    async fn refresh_picker(&mut self) -> anyhow::Result<()> {
+        let (Mode::Picker(screen), Some(control)) = (&mut self.mode, self.picker_control.as_mut())
+        else {
+            return Err(anyhow!("picker is not open"));
+        };
+        let sessions = request_sessions(control).await?;
+        screen.replace_sessions(sessions);
         Ok(())
     }
 
     fn member_by_number(&self, number: u8) -> Option<String> {
-        (self.top_rows > 0)
+        (self.geometry.granted_top > 0)
             .then(|| {
                 self.status
                     .as_ref()
@@ -315,7 +347,7 @@ impl AttachmentState {
     }
 
     fn next_member(&self, previous: bool) -> Option<String> {
-        if self.top_rows == 0 {
+        if self.geometry.granted_top == 0 {
             return None;
         }
         let members = &self.status.as_ref()?.members;
@@ -338,7 +370,7 @@ impl AttachmentState {
     }
 
     async fn select_member(&mut self, selected: String) -> anyhow::Result<()> {
-        if self.top_rows == 0
+        if self.geometry.granted_top == 0
             || selected == self.session
             || self
                 .status
@@ -354,31 +386,31 @@ impl AttachmentState {
     }
 
     async fn toggle_status_line(&mut self) -> anyhow::Result<()> {
-        let visible = !self.status_visible;
+        let visible = !self.geometry.viewport.status_visible;
+        let cols = self.geometry.viewport.cols;
+        let rows = self.geometry.viewport.rows;
         if !visible {
-            if self.top_rows > 0 {
-                let clear = status::render_team_line(&self.session, "", &[], self.cols);
+            if self.geometry.granted_top > 0 {
+                let clear = status::render_team_line(&self.session, "", &[], cols);
                 self.output.send(clear.bytes)?;
-                if self.top_rows == 2 {
-                    self.output
-                        .send(status::render_team_rule(self.cols, false))?;
+                if self.geometry.granted_top == 2 {
+                    self.output.send(status::render_team_rule(cols, false))?;
                 }
                 self.team_regions.clear();
             }
-            self.output
-                .send(status::clear_status(self.cols, self.rows))?;
+            self.output.send(status::clear_status(cols, rows))?;
         }
-        self.status_visible = visible;
-        let desired_top = team_rows(self.rows, visible, self.in_team);
-        if desired_top != self.top_rows {
+        self.geometry.viewport.status_visible = visible;
+        let desired_top = self.geometry.desired_top();
+        if desired_top != self.geometry.granted_top {
             self.mouse_press = None;
             let _ = self.switch_session(self.session.clone()).await?;
         } else if self.viewer.is_viewer() {
             if let Some(attached) = self.attachment.as_mut() {
                 attached
                     .send(ClientFrame::Resize {
-                        cols: self.cols,
-                        rows: pty_rows(self.rows, visible, self.top_rows),
+                        cols,
+                        rows: self.geometry.pty_rows(),
                     })
                     .await?;
             }
@@ -387,8 +419,8 @@ impl AttachmentState {
         } else if let Some(attached) = self.attachment.as_mut() {
             attached
                 .send(ClientFrame::Resize {
-                    cols: self.cols,
-                    rows: pty_rows(self.rows, visible, self.top_rows),
+                    cols,
+                    rows: self.geometry.pty_rows(),
                 })
                 .await?;
         }
@@ -396,8 +428,7 @@ impl AttachmentState {
     }
 
     async fn enter_scroll_mode(&mut self) -> anyhow::Result<()> {
-        self.scroll_mode = true;
-        self.scroll_parser.clear();
+        self.mode = Mode::Scroll(ScrollParser::default());
         if let Some(attached) = self.attachment.as_mut() {
             attached.send(ClientFrame::Redraw).await?;
         }
@@ -405,12 +436,12 @@ impl AttachmentState {
     }
 
     async fn handle_mouse_button(&mut self, button: u16) -> anyhow::Result<()> {
-        if self.picker.is_some() {
+        if matches!(self.mode, Mode::Picker(_)) {
             return Ok(());
         }
         match button {
             64 => {
-                if !self.scroll_mode {
+                if !matches!(self.mode, Mode::Scroll(_)) {
                     self.enter_scroll_mode().await?;
                 }
                 // shortcut: the wheel uses a fixed three-line step; make it configurable only if asked.
@@ -420,7 +451,7 @@ impl AttachmentState {
                     }
                 }
             }
-            65 if self.scroll_mode => {
+            65 if matches!(self.mode, Mode::Scroll(_)) => {
                 // shortcut: the wheel uses a fixed three-line step; make it configurable only if asked.
                 for _ in 0..3 {
                     if let Some(attached) = self.attachment.as_mut() {
@@ -435,7 +466,7 @@ impl AttachmentState {
 
     async fn handle_mouse_report(&mut self, report: MouseReport<'_>) -> anyhow::Result<()> {
         let session_mouse = self.session_mouse && !self.viewer.is_viewer();
-        match mouse::shift_row(&report, self.top_rows) {
+        match mouse::shift_row(&report, self.geometry.granted_top) {
             Shifted::Claimed(claimed) => {
                 if claimed.release {
                     match self.mouse_press.take() {
@@ -527,49 +558,25 @@ impl AttachmentState {
         found
     }
 
-    async fn attach_session(&self, session: &str) -> anyhow::Result<(Attachment, u16, bool)> {
+    async fn attach_session(&self, session: &str) -> anyhow::Result<Opened> {
         let client = Client::connect(&self.home).await?;
-        let opened = open_attachment(
+        open_attachment(
             client,
             &self.home,
             session,
             false,
             self.viewer.is_viewer(),
-            Geometry {
-                cols: self.cols,
-                rows: self.rows,
-                status_visible: self.status_visible,
-            },
+            self.geometry.viewport,
         )
-        .await?;
-        Ok((opened.attachment, opened.top_rows, opened.in_team))
+        .await
     }
 
-    async fn restore_current(&mut self) -> anyhow::Result<bool> {
-        if self.attachment.is_none() {
-            match self.attach_session(&self.session).await {
-                Ok((next, top_rows, in_team)) => {
-                    self.attachment = Some(next);
-                    self.top_rows = top_rows;
-                    self.in_team = in_team;
-                    self.session_mouse = false;
-                    self.mouse_press = None;
-                }
-                Err(error) => {
-                    if let Some(state) = self.picker.as_mut() {
-                        state.footer = Some(error.to_string());
-                        let _ = state.refresh().await;
-                        state.render(&self.output)?;
-                    }
-                    return Ok(false);
-                }
-            }
-        }
-        if let Some(attached) = self.attachment.as_mut() {
-            attached.send(ClientFrame::Redraw).await?;
-        }
-        self.picker = None;
-        Ok(true)
+    fn adopt(&mut self, opened: Opened) {
+        self.attachment = Some(opened.attachment);
+        self.geometry.in_team = opened.in_team;
+        self.geometry.granted_top = opened.top_rows;
+        self.session_mouse = false;
+        self.status = None;
     }
 
     async fn switch_session(&mut self, selected: String) -> anyhow::Result<bool> {
@@ -592,31 +599,25 @@ impl AttachmentState {
         self.mouse_press = None;
         let result = self.attach_session(&selected).await;
         match result {
-            Ok((next, top_rows, in_team)) => {
-                self.attachment = Some(next);
+            Ok(opened) => {
+                self.adopt(opened);
                 self.session = selected;
-                self.in_team = in_team;
-                self.top_rows = top_rows;
-                self.session_mouse = false;
-                self.status = None;
                 self.team_regions.clear();
                 self.output
                     .send(format!("\x1b]2;a2amx: {}\x07", self.session).into_bytes())?;
-                self.picker = None;
+                self.close_picker();
                 Ok(true)
             }
             // shortcut: a failed switch is not shown; add a bar notice if asked.
             Err(error) => match self.attach_session(&current).await {
-                Ok((restored, top_rows, in_team)) => {
-                    self.attachment = Some(restored);
-                    self.top_rows = top_rows;
-                    self.in_team = in_team;
-                    self.session_mouse = false;
-                    self.status = None;
-                    if let Some(state) = self.picker.as_mut() {
-                        state.footer = Some(error.to_string());
-                        state.refresh().await?;
-                        state.render(&self.output)?;
+                Ok(opened) => {
+                    self.adopt(opened);
+                    if let Mode::Picker(screen) = &mut self.mode {
+                        screen.footer = Some(error.to_string());
+                        self.refresh_picker().await?;
+                        if let Mode::Picker(screen) = &self.mode {
+                            self.output.send(screen.render())?;
+                        }
                     }
                     Ok(false)
                 }
@@ -633,44 +634,47 @@ impl AttachmentState {
         escape_alone: bool,
     ) -> anyhow::Result<Option<AttachOutcome>> {
         let had_footer = {
-            let Some(state) = self.picker.as_mut() else {
+            let Mode::Picker(screen) = &mut self.mode else {
                 return Ok(None);
             };
-            state.footer.take().is_some()
+            screen.footer.take().is_some()
         };
-        if had_footer && let Some(state) = self.picker.as_ref() {
-            state.render(&self.output)?;
+        if had_footer && let Mode::Picker(screen) = &self.mode {
+            self.output.send(screen.render())?;
         }
-        let actions = match self.picker.as_mut() {
-            Some(state) => state.feed(bytes, escape_alone),
-            None => return Ok(None),
+        let actions = match &mut self.mode {
+            Mode::Picker(screen) => screen.feed(bytes, escape_alone),
+            _ => return Ok(None),
         };
         for action in actions {
             let outcome = {
-                let Some(state) = self.picker.as_mut() else {
+                let Mode::Picker(screen) = &mut self.mode else {
                     return Ok(None);
                 };
-                let outcome = state.apply(action);
-                state.parser.set_filter_mode(state.view.filter_mode());
+                let outcome = screen.apply(action);
+                screen.parser.set_filter_mode(screen.view.filter_mode());
                 outcome
             };
             match outcome {
                 None => {
-                    if let Some(state) = self.picker.as_ref() {
-                        state.render(&self.output)?;
+                    if let Mode::Picker(screen) = &self.mode {
+                        self.output.send(screen.render())?;
                     }
                 }
                 Some(Outcome::Cancel) => {
-                    if self.restore_current().await? {
-                        return Ok(None);
+                    if let Some(attached) = self.attachment.as_mut() {
+                        attached.send(ClientFrame::Redraw).await?;
                     }
+                    self.close_picker();
+                    return Ok(None);
                 }
                 Some(Outcome::Attach(selected)) => {
                     if selected == self.session {
-                        if self.restore_current().await? {
-                            return Ok(None);
+                        if let Some(attached) = self.attachment.as_mut() {
+                            attached.send(ClientFrame::Redraw).await?;
                         }
-                        continue;
+                        self.close_picker();
+                        return Ok(None);
                     }
                     if self.switch_session(selected).await? {
                         return Ok(None);

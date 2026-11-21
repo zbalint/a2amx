@@ -1,17 +1,21 @@
-//! The session picker: `impl PickerState`, rendering, entries and row layout.
+//! The session picker: `PickerScreen`, rendering, entries and row layout.
 
-use std::path::Path;
-
-use crate::client::Client;
-use crate::lookup::request_sessions;
 use crate::picker::{
     EntryState, Outcome, PickerAction, PickerEntry, PickerParser, PickerView, scroll_into_view,
 };
 use crate::table::{column_widths, format_row, session_value_rows};
-use crate::terminal::OutputHandle;
 use crate::wire::{Activity, SessionSummary};
 
-use super::PickerState;
+pub(super) struct PickerScreen {
+    pub(super) sessions: Vec<SessionSummary>,
+    pub(super) current: String,
+    pub(super) view: PickerView,
+    pub(super) cols: u16,
+    pub(super) rows: u16,
+    pub(super) offset: usize,
+    pub(super) parser: PickerParser,
+    pub(super) footer: Option<String>,
+}
 
 const PICKER_HEADERS: [&str; 11] = [
     "ID", "NAME", "HARNESS", "STATE", "ACTIVITY", "ATTACHED", "PENDING", "HELD", "QUOTA", "SIZE",
@@ -50,19 +54,10 @@ fn picker_value_rows(sessions: &[SessionSummary]) -> Vec<[String; 11]> {
         })
         .collect()
 }
-impl PickerState {
-    pub(super) async fn open(
-        home: &Path,
-        current: &str,
-        cols: u16,
-        rows: u16,
-        output: &OutputHandle,
-    ) -> anyhow::Result<Self> {
-        let mut control = Client::connect(home).await?;
-        let sessions = request_sessions(&mut control).await?;
+impl PickerScreen {
+    pub(super) fn new(sessions: Vec<SessionSummary>, current: &str, cols: u16, rows: u16) -> Self {
         let view = PickerView::new(picker_entries(&sessions), current);
-        let mut state = Self {
-            control,
+        let mut screen = Self {
             sessions,
             current: current.to_owned(),
             view,
@@ -72,9 +67,8 @@ impl PickerState {
             parser: PickerParser::default(),
             footer: None,
         };
-        state.recompute_offset();
-        state.render(output)?;
-        Ok(state)
+        screen.recompute_offset();
+        screen
     }
 
     pub(super) fn feed(&mut self, bytes: &[u8], escape_alone: bool) -> Vec<PickerAction> {
@@ -100,14 +94,13 @@ impl PickerState {
         outcome
     }
 
-    pub(super) async fn refresh(&mut self) -> anyhow::Result<()> {
-        self.sessions = request_sessions(&mut self.control).await?;
+    pub(super) fn replace_sessions(&mut self, sessions: Vec<SessionSummary>) {
+        self.sessions = sessions;
         self.view.replace(picker_entries(&self.sessions));
         self.recompute_offset();
-        Ok(())
     }
 
-    pub(super) fn render(&self, output: &OutputHandle) -> anyhow::Result<()> {
+    pub(super) fn render(&self) -> Vec<u8> {
         let mut text = String::from("\x1b[2J\x1b[?25l");
         picker_line(
             &mut text,
@@ -161,7 +154,7 @@ impl PickerState {
             }
         });
         picker_line(&mut text, self.rows.max(1), &footer, self.cols);
-        output.send(text.into_bytes())
+        text.into_bytes()
     }
 }
 

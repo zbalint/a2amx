@@ -183,7 +183,7 @@ specs showing it found nothing.
 | `team` | The team file and flag formats and the up-plan (pure; the commands live in `main`) |
 | `grant` | Named confinement grants: the table of what each one exposes (sockets and environment names), name validation, the closest-match error and the `confine list` text (pure) |
 | `suggest` | Grant detection from project markers and git remotes, and the `confine suggest` grants line (pure) |
-| `attach` | The interactive attach screen: `AttachmentState` and its mode handling (`state`), input parsing (`input`), the select loop (`event_loop`), the session picker glue (`picker`) |
+| `attach` | The interactive attach screen: `AttachmentState` and its mode handling (`state`), input parsing (`input`), the select loop (`event_loop`), the session picker screen (`picker`: `PickerScreen`, pure), the geometry and mode types (`model`: `Viewport`, `Geometry`, `Mode`) |
 | `terminal` | The human's terminal: raw stdout/stderr writes, the output thread, restore-on-exit guards (`EchoGuard`, `TerminalGuard`), size and tty tests |
 | `table` | Aligned session and message tables for the list commands and the picker (pure) |
 | `lookup` | The session list request and resolving a user's session reference (name or id) |

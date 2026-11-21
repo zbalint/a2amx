@@ -67,9 +67,9 @@ impl Mode { pub(super) fn is_live(&self) -> bool { matches!(self, Mode::Live) } 
 ```
 
 Every "is it live" test in the code uses `mode.is_live()` (not `matches!`), so S4b can give `Live` a payload
-without touching those sites. Entering scroll mode builds `Mode::Scroll(ScrollParser::default())` only when the
-mode is not already `Scroll` (the wheel path in `handle_mouse_button` guards with `if !scroll`, as `if
-!self.scroll_mode` does today, so a half-parsed sequence is not lost); leaving it (`ScrollKey::Quit`) sets
+without touching those sites. Entering scroll mode builds `Mode::Scroll(ScrollParser::default())` unconditionally, as `scroll_mode = true` plus
+`scroll_parser.clear()` did (the wheel path in `handle_mouse_button` keeps its `if !scroll` guard before calling it,
+as today; the architect removed a duplicate inner guard at review); leaving it (`ScrollKey::Quit`) sets
 `Mode::Live` after the keys of that byte were handled.
 
 `Viewport::pty_rows` and `Viewport::desired_top` contain the bodies of today's free functions `pty_rows` and
@@ -221,4 +221,17 @@ renames. No behaviour fix of any kind.
 
 ## Review record
 
-(Appended by the architect at acceptance.)
+Models: architect and consultant Claude Sonnet 5.5 (consultant fresh session per review); senior developer
+Antigravity CLI, single slot Gemini 4 Hydrogen (Medium); tester OMP opencode-go/deepseek-v4.1-flash, single slot.
+BLOCKED/amend cycles: 1.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | `adopt(Opened)` contradicted section 5 (`attach_session` returned a tuple) | `attach_session` returns `Opened`, in scope |
+| draft review | consultant | `open_picker` steps dropped `team_regions.clear()` | listed in the steps |
+| draft review | consultant | two acceptance greps matched correct code (`fn pty_rows` in model.rs, `self.rows` in PickerScreen, `enter_scroll_mode`) | greps limited to the files that lose the names, with `\b` |
+| draft review | consultant | `Mode::Live` would change at 6-8 sites in S4b; `PickerScreen` "private" would not compile in `Mode`; dead-branch wording | `Mode::is_live()`; `pub(super)`; wording fixed |
+| implementation | developer (BLOCKED m_8196) | clippy `dead_code` on `ScrollParser::clear`; clippy `large_enum_variant` on `Mode::Picker` | amendments 1 and 2 (7b09511): delete `clear`; `Box<PickerScreen>`; the draft review and the architect both missed it (no clippy probe of the target shape) |
+| architect review (with consultant design read) | consultant | the inner scroll-entry guard was dead and changed reset semantics; `refresh_picker` returned `Ok` outside the picker | guard removed (unconditional rebuild); `refresh_picker` returns an error |
+| tester pass | tester | 8 of 18 mutants survived: adopt not resetting `session_mouse`/`status`/`granted_top`; switch and `open_picker` not clearing `team_regions`; `close_picker` keeping the control; `shift_row` using `desired_top`; scroll rebuilt per wheel | committed behaviour with no PTY pin (FakeDaemon lacks per-session mouse/team flags and delayed Status); named model tests in S4b, `shift_row` with granted 0 and desired 2 first |
+| tester pass | tester | report tally "9/9" wrong (18 mutants: 10 killed, 8 survived); an M7 restore failed once and was repaired before the final run | corrected by message m_8208 |

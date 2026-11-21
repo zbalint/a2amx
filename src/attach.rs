@@ -2,6 +2,7 @@
 
 mod event_loop;
 mod input;
+pub mod model;
 mod picker;
 mod state;
 
@@ -10,15 +11,14 @@ use std::time::Duration;
 
 use crate::client::{Attachment, Client};
 use crate::lookup::session_in_team;
-use crate::picker::{PickerParser, PickerView};
 use crate::prefix::PrefixMachine;
 use crate::status;
 use crate::terminal::{Output, OutputHandle, TerminalGuard, write_stderr};
 use crate::viewer::Viewer;
-use crate::wire::{ClientFrame, SessionSummary, StatusInfo};
+use crate::wire::{ClientFrame, StatusInfo};
 
 use self::event_loop::run_attachment_loop;
-use self::input::ScrollParser;
+use self::model::{Geometry, Mode, Viewport};
 
 const INPUT_CHUNK: usize = 8 * 1024;
 const MOUSE_CAPTURE: &[u8] = b"\x1b[?1000h\x1b[?1006h";
@@ -50,7 +50,7 @@ pub async fn run(
         &session,
         force,
         false,
-        Geometry {
+        Viewport {
             cols,
             rows,
             status_visible: true,
@@ -85,13 +85,6 @@ pub async fn run(
     write_stderr(format!("{}\n", outcome.message).into_bytes()).await
 }
 
-#[derive(Clone, Copy)]
-struct Geometry {
-    cols: u16,
-    rows: u16,
-    status_visible: bool,
-}
-
 struct Opened {
     attachment: Attachment,
     top_rows: u16,
@@ -104,17 +97,17 @@ async fn open_attachment(
     session: &str,
     force: bool,
     viewer: bool,
-    geometry: Geometry,
+    viewport: Viewport,
 ) -> anyhow::Result<Opened> {
     let in_team = session_in_team(home, session).await?;
-    let requested_top = team_rows(geometry.rows, geometry.status_visible, in_team);
+    let requested_top = viewport.desired_top(in_team);
     let mut attachment = if viewer {
         client
             .attach_viewer(
                 session,
                 force,
-                geometry.cols,
-                pty_rows(geometry.rows, geometry.status_visible, requested_top),
+                viewport.cols,
+                viewport.pty_rows(requested_top),
                 requested_top,
             )
             .await?
@@ -123,8 +116,8 @@ async fn open_attachment(
             .attach_status(
                 session,
                 force,
-                geometry.cols,
-                pty_rows(geometry.rows, geometry.status_visible, requested_top),
+                viewport.cols,
+                viewport.pty_rows(requested_top),
                 requested_top,
             )
             .await?
@@ -134,8 +127,8 @@ async fn open_attachment(
     if requested_top > 0 && top_rows == 0 {
         attachment
             .send(ClientFrame::Resize {
-                cols: geometry.cols,
-                rows: pty_rows(geometry.rows, geometry.status_visible, 0),
+                cols: viewport.cols,
+                rows: viewport.pty_rows(0),
             })
             .await?;
     }
@@ -144,32 +137,6 @@ async fn open_attachment(
         top_rows,
         in_team,
     })
-}
-
-fn pty_rows(rows: u16, visible: bool, top: u16) -> u16 {
-    let status_rows = if visible && rows >= 4 {
-        2
-    } else if visible && rows == 3 {
-        1
-    } else {
-        0
-    };
-    rows.saturating_sub(status_rows).saturating_sub(top).max(1)
-}
-
-/// Reserves two top rows for a visible team line and its rule at six rows or more,
-/// one row at exactly five rows, and no rows otherwise.
-fn team_rows(rows: u16, visible: bool, in_team: bool) -> u16 {
-    if !visible || !in_team {
-        return 0;
-    }
-    if rows >= 6 {
-        2
-    } else if rows == 5 {
-        1
-    } else {
-        0
-    }
 }
 
 struct AttachOutcome {
@@ -198,10 +165,7 @@ struct AttachmentState {
     attachment: Option<Attachment>,
     home: PathBuf,
     session: String,
-    cols: u16,
-    rows: u16,
-    in_team: bool,
-    top_rows: u16,
+    geometry: Geometry,
     team_regions: Vec<status::TeamRegion>,
     mouse_press: Option<MousePress>,
     prefix_machine: PrefixMachine,
@@ -209,22 +173,9 @@ struct AttachmentState {
     after_prefix: bool,
     viewer: Viewer,
     viewer_after: Option<Duration>,
-    status_visible: bool,
     status: Option<StatusInfo>,
     session_mouse: bool,
-    scroll_mode: bool,
-    scroll_parser: ScrollParser,
-    picker: Option<PickerState>,
+    mode: Mode,
+    picker_control: Option<Client>,
     output: OutputHandle,
-}
-struct PickerState {
-    control: Client,
-    sessions: Vec<SessionSummary>,
-    current: String,
-    view: PickerView,
-    cols: u16,
-    rows: u16,
-    offset: usize,
-    parser: PickerParser,
-    footer: Option<String>,
 }

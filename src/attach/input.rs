@@ -41,10 +41,6 @@ pub(super) enum ScrollKey {
 }
 
 impl ScrollParser {
-    pub(super) fn clear(&mut self) {
-        self.pending.clear();
-    }
-
     pub(super) fn feed(&mut self, bytes: &[u8]) -> Vec<ScrollKey> {
         let mut keys = Vec::new();
         for byte in bytes {

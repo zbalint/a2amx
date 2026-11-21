@@ -12,7 +12,8 @@ use crate::terminal::terminal_size_with_default;
 use crate::wire::{ClientFrame, ServerFrame};
 
 use super::input::scroll_status;
-use super::{AttachOutcome, AttachmentState, INPUT_CHUNK, MOUSE_CAPTURE, pty_rows};
+use super::model::Mode;
+use super::{AttachOutcome, AttachmentState, INPUT_CHUNK, MOUSE_CAPTURE};
 
 pub(super) async fn run_attachment_loop(
     mut state: AttachmentState,
@@ -42,19 +43,19 @@ pub(super) async fn run_attachment_loop(
             }
             _ = sigwinch.recv() => {
                 if let Ok((new_cols, new_rows)) = terminal_size_with_default() {
-                    state.cols = new_cols;
-                    state.rows = new_rows;
-                    if let Some(picker) = state.picker.as_mut() {
+                    state.geometry.viewport.cols = new_cols;
+                    state.geometry.viewport.rows = new_rows;
+                    if let Mode::Picker(picker) = &mut state.mode {
                         picker.cols = new_cols;
                         picker.rows = new_rows;
                         picker.recompute_offset();
-                        picker.render(&state.output)?;
+                        state.output.send(picker.render())?;
                     }
                     if let Some(attached) = state.attachment.as_mut() {
                         attached
                             .send(ClientFrame::Resize {
                                 cols: new_cols,
-                                rows: pty_rows(new_rows, state.status_visible, state.top_rows),
+                                rows: state.geometry.pty_rows(),
                             })
                             .await?;
                     }
@@ -92,14 +93,17 @@ pub(super) async fn run_attachment_loop(
                 match frame {
                     ServerFrame::Data(data) => {
                         let has_mouse_mode = state.scan_session_mouse(&data);
-                        if state.picker.is_none() {
+                        if !matches!(state.mode, Mode::Picker(_)) {
                             state.output.send(data)?;
                             if has_mouse_mode && !state.session_mouse {
                                 state.output.send(MOUSE_CAPTURE.to_vec())?;
                             }
                             state.draw_status()?;
-                            if state.scroll_mode {
-                                state.output.send(scroll_status(state.cols, state.rows))?;
+                            if matches!(state.mode, Mode::Scroll(_)) {
+                                state.output.send(scroll_status(
+                                    state.geometry.viewport.cols,
+                                    state.geometry.viewport.rows,
+                                ))?;
                             }
                             state.draw_viewer_decorations(Instant::now())?;
                         }
