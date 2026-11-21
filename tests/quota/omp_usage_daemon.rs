@@ -363,6 +363,43 @@ async fn omp_usage_poll_keeps_absolute_session_executable() {
 }
 
 #[tokio::test]
+async fn omp_usage_poll_runs_the_json_probe() {
+    let fake_dir = tempdir().unwrap();
+    let usage = format!("printf '%s\\n' \"$*\" > usage-args\nprintf '%s\\n' '{OMP_USAGE_FIXTURE}'");
+    let executable = fake_executable(fake_dir.path(), "omp", &usage);
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let _id = direct_omp_session(
+        &mut admin,
+        "agent-omp-json-probe",
+        &executable,
+        fake_dir.path(),
+    )
+    .await;
+
+    let expected = "usage --json --no-extensions --redact\n";
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fs::read_to_string(fake_dir.path().join("usage-args"))
+                .ok()
+                .as_deref()
+                == Some(expected)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("usage probe arguments were recorded");
+    assert_eq!(
+        fs::read_to_string(fake_dir.path().join("usage-args")).unwrap(),
+        expected
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn slow_omp_usage_poll_does_not_block_list() {
     let fake_dir = tempdir().unwrap();
     let executable = fake_executable(fake_dir.path(), "omp", "printf started > started\nsleep 60");

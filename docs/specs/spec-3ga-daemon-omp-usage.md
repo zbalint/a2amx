@@ -62,9 +62,9 @@ One new test, `omp_usage_poll_runs_the_json_probe` (a contract test: it passes o
 - `cargo test --no-fail-fast`: all pass. Baseline at `5b61dbc` (architect, 2026-11-21): 66 suites, 1413 passed, 0 failed, 3 ignored; after: 1414 passed (the one new test); the developer states the numbers.
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` pass.
 - `rg -n 'OMP_USAGE_(REFRESH|STALE|TIMEOUT|MAX_OUTPUT)|run_omp_usage|kill_omp_process_group|poll_omp_usage|omp_usage\(\)' src/daemon.rs` prints nothing.
-- `rg -n 'OmpUsage|omp_usage::' src/daemon.rs` prints exactly: `mod omp_usage;`, `use omp_usage::OmpUsage;`, the `Runtime` field `omp_usage: OmpUsage`, and `OmpUsage::new()`; `rg -n '\.omp_usage\.current\(\)' src/daemon.rs` prints exactly four lines (the former callers `:1436`, `:3003`, `:3089`, `:3623`) and `rg -n '\.omp_usage\.poll\(' src/daemon.rs` exactly one (the tick loop).
+- `rg -n 'OmpUsage|omp_usage::' src/daemon.rs` prints exactly three lines: `use omp_usage::OmpUsage;`, the `Runtime` field `omp_usage: OmpUsage`, and `OmpUsage::new()` (`mod omp_usage;` has no `::`, so it is not matched; amendment 1); `rg -n '\.omp_usage\.current\(\)' src/daemon.rs` prints exactly four lines (the former callers `:1436`, `:3003`, `:3089`, `:3623`) and `rg -n '\.omp_usage\.poll\(' src/daemon.rs` exactly one (the tick loop).
 - `git status --short` lists only the three files of section 0; `git diff --stat -- Cargo.toml Cargo.lock` is empty.
-- `src/daemon.rs` is shorter by about 140 lines (the tester reports the exact count).
+- `src/daemon.rs` is shorter by 125 lines net (3,918 to 3,793; the moved block is about 140 lines, partly offset by the new field, import and call lines; amendment 1).
 - Mutation check (tester, in the assigned checkout, restoring each file by checksum afterward): each of these makes a named repo test fail. `current()` returns `None`: `list_and_list_agents_report_omp_usage_percentages`. `poll` skips the attempt stamp: `failed_omp_usage_poll_is_not_retried_every_check`. `poll` ignores `cwd`: `omp_usage_poll_keeps_absolute_session_executable` and `omp_usage_poll_runs_the_json_probe` (both wait for a file the fake writes into the session cwd; under this mutant the fake runs in the package root, so the tester deletes the stray `usage-ran`, `usage-args` and `counter` files from the checkout before the status check). The timeout branch skips `kill_omp_process_group`: `omp_usage_timeout_kills_process_group`. `poll` stamps before the `None` command check: the poller's first tick runs at daemon start, before any session exists, so the stamp blocks the next 300 s and `omp_usage_poll_keeps_absolute_session_executable` (5 s wait) fails; `omp_wrapper_named_bun_is_not_polled` cannot fail on it (it expects no probe). An argument dropped from the probe: `omp_usage_poll_runs_the_json_probe`. The survivors of section 3 are reported, not fixed.
 - Known flaky tests: the OMP usage tests wait on timers; a failure is rerun once alone and recorded as pre-existing if it passes.
 
@@ -81,3 +81,18 @@ One new test, `omp_usage_poll_runs_the_json_probe` (a contract test: it passes o
 | `omp_usage_command` is reachable from the child module; the moved code needs no other private daemon item | `Runtime` is private in `daemon` (`:80`), descendants see ancestor-private items; the moved code uses `quota::parse_omp_usage`, `confine::find_executable`, tokio and rustix only | read (consultant m_8382) |
 | Seven tests cover the poller | `tests/quota/omp_usage_daemon.rs:145,212,302,336,366,393,425` | read |
 | `Daemon.omp_usage` handle is awaited in `shutdown` | `src/daemon.rs:2570-2572` | read |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (fresh consultant for the pre-lock review; no post-implementation design read, because the consultant had reviewed the target shape and the diff is a move); developer OMP openai-codex/gpt-5.6-luna (advisor slot not exposed); tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0 (one wording amendment, below).
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the second acceptance grep's line list was incomplete (`omp_usage` also matches the stay-behind `omp_usage_command`, locals, a parameter and the `Daemon` literal) | grep rewritten as exact-pattern checks; lesson: build an expected-lines list from a grep of the draft, not from the intended changes |
+| draft review | consultant | the wrong test was named for the "stamp before the None check" mutant | the absolute-executable test named; the bun test cannot fail on it |
+| draft review | consultant | the new test could read `usage-args` after the shell created it and before `printf` wrote it | wait on the content, not on existence |
+| draft review | consultant | the `cwd` mutant writes stray files into the checkout; the env_remove survivor note was wrong (a survivor even with the variables set) | tester told to delete them; wording fixed |
+| draft review | consultant | `spawn_poller(Arc<Runtime>)` left `OmpUsage` depending on `Runtime` | tick loop stays in `Daemon::start`; `OmpUsage` names no other daemon item |
+| architect review | architect | the developer added an explicit `target:` to the two moved log events (redundant: a module path is the default), put `mod omp_usage;` in the middle of the import list and left no blank line before the new test | fixed in a follow-up (m_8395); the spec said only that the target changes |
+| tester pass | tester | the audit `rg 'OmpUsage|omp_usage::'` prints three lines, not four, and the file shrinks by 125, not about 140 | amendment 1 (wording) |
+| tester pass | tester | three mutants survive: the 1 MiB output check, the staleness guard in `current()`, a success path that returns `true` (stops the tick loop) | not observable in a test run (300 s and 900 s timers); recorded in the backlog (F94) |
