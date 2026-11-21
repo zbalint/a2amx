@@ -4,7 +4,7 @@
 
 LOCKED. Location: main checkout `/home/zbalint/workspace/a2amx`, branch `develop`; the governing version is the commit that adds this file. Context `a2amx-main-daemon-redesign-2026-11-20`. Public test seam: the daemon protocol (every daemon-backed suite); `Sessions` is private to `daemon`, so it has no test of its own.
 
-Scope (edit): `src/daemon.rs`, new `src/daemon/registry.rs`.
+Scope (edit): `src/daemon.rs`, new `src/daemon/registry.rs`, `tests/daemon/session_creation.rs` (one new test, amendment 2).
 
 Does not touch: every other file under `src/`, every test, `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, `docs/` other than this spec. The architect updates the `daemon` row of `AGENTS.md` and the backlog when committing.
 
@@ -111,3 +111,12 @@ No observable change. Membership seen by each site is the same as before (a snap
 ## Amendment 1 (developer BLOCKED, m_8408)
 
 Verified against `src/session.rs:602-611`: `Drop for Session` calls `kill_process_group` and may log, so dropping the last `Arc<Session>` inside `BTreeMap::clear`, `remove` or `insert` (which drops a replaced value) would call out under the map lock, contradicting section 1. Resolution: section 2.1 now requires `insert`, `remove` and `clear` to release the lock before the dropped values are destroyed. `snapshot` and `get` only clone `Arc`s, and a clone's drop is not the last one while the map holds the original, so they need nothing. Acceptance addition: the tester's mutation list gains "`clear` drops under the lock" as a read-only review item (not a test; no test can observe it), and the architect checks the three bodies at review.
+
+## Amendment 2 (tester pass, m_8424)
+
+The tester found that deleting the creation gate (`let _gate = self.sessions.begin_creation().await;`) survives every test: no test creates sessions concurrently with one name, so the guarantee `begin_creation` exists for is unpinned, and this spec moves exactly that code. Addition to scope and acceptance:
+
+- New test `concurrent_new_session_with_one_name_creates_exactly_one` in `tests/daemon/session_creation.rs`: start the daemon (`common::start_daemon`), open two admin clients (`Client::connect`), and send a `Request::NewSession` with the same `name` and a long-lived argv (for example `sleep 60`) from both at the same time (`tokio::join!` over the two `request` calls). Exactly one reply is `Response::Created` and the other is `Response::Error` whose message is `session name <name> is already in use`; `Request::List` then shows one session with that name. It is a contract test: it passes on the base code. The developer shows it red on the mutant that deletes the gate line (the check at `check_team_and_name` then passes in both requests before either inserts), restores the file by checksum, and names the number of attempts: if the race does not reproduce reliably (the mutant must fail in at least 3 of 3 runs), the developer reports it and widens the window only inside the test (a larger argv or a team scope), never in production code.
+- The test count after this amendment is 1415.
+- Section 5's expectation for the `get` mutant is corrected: it dies on `messages_by_name_match_id_and_retained_messages_survive_kill` (`tests/refs_and_list.rs`), not on `kill_exited_removes_only_exited_sessions_and_frees_names` (tester, mutant 4).
+- Unpinned and left (backlog F94): `authenticate`'s `exit_code().is_none()` check (serve re-checks every request; only the Hello reply for an exited session's token would differ) and the `poll_transitions` order.
