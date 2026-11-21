@@ -123,10 +123,20 @@ impl PrefixMachine {
     /// Consume one read of human input. Adjacent forwarded bytes are coalesced
     /// into a single `Forward`. State carries over to the next call.
     pub fn feed(&mut self, input: &[u8]) -> Vec<Action> {
+        self.feed_inner(input, false).1
+    }
+
+    /// Consume human input up to and including the first `Action::Command`,
+    /// returning the number of bytes consumed and the actions produced.
+    pub fn feed_until_command(&mut self, input: &[u8]) -> (usize, Vec<Action>) {
+        self.feed_inner(input, true)
+    }
+
+    fn feed_inner(&mut self, input: &[u8], stop_on_command: bool) -> (usize, Vec<Action>) {
         let mut actions = Vec::new();
         let mut forwarded = Vec::new();
 
-        for &byte in input {
+        for (index, &byte) in input.iter().enumerate() {
             match self.paste {
                 PasteState::Inside { .. } => {
                     forwarded.push(byte);
@@ -139,44 +149,24 @@ impl PrefixMachine {
                             forwarded.push(byte);
                             self.advance_paste_marker(byte, PASTE_START);
                         } else {
-                            match byte {
-                                b'd' => {
-                                    Self::flush_forward(&mut actions, &mut forwarded);
-                                    actions.push(Action::Command(Command::Detach));
+                            let command = match byte {
+                                b'd' => Some(Command::Detach),
+                                b'w' => Some(Command::SessionPicker),
+                                b'[' => Some(Command::ScrollMode),
+                                b's' => Some(Command::StatusLine),
+                                b'v' => Some(Command::ViewerMode),
+                                b'r' => Some(Command::Release),
+                                b'1'..=b'9' => Some(Command::TeamMember(byte - b'0')),
+                                b'n' => Some(Command::TeamNext),
+                                b'p' => Some(Command::TeamPrev),
+                                _ => None,
+                            };
+                            if let Some(command) = command {
+                                Self::flush_forward(&mut actions, &mut forwarded);
+                                actions.push(Action::Command(command));
+                                if stop_on_command {
+                                    return (index + 1, actions);
                                 }
-                                b'w' => {
-                                    Self::flush_forward(&mut actions, &mut forwarded);
-                                    actions.push(Action::Command(Command::SessionPicker));
-                                }
-                                b'[' => {
-                                    Self::flush_forward(&mut actions, &mut forwarded);
-                                    actions.push(Action::Command(Command::ScrollMode));
-                                }
-                                b's' => {
-                                    Self::flush_forward(&mut actions, &mut forwarded);
-                                    actions.push(Action::Command(Command::StatusLine));
-                                }
-                                b'v' => {
-                                    Self::flush_forward(&mut actions, &mut forwarded);
-                                    actions.push(Action::Command(Command::ViewerMode));
-                                }
-                                b'r' => {
-                                    Self::flush_forward(&mut actions, &mut forwarded);
-                                    actions.push(Action::Command(Command::Release));
-                                }
-                                b'1'..=b'9' => {
-                                    Self::flush_forward(&mut actions, &mut forwarded);
-                                    actions.push(Action::Command(Command::TeamMember(byte - b'0')));
-                                }
-                                b'n' => {
-                                    Self::flush_forward(&mut actions, &mut forwarded);
-                                    actions.push(Action::Command(Command::TeamNext));
-                                }
-                                b'p' => {
-                                    Self::flush_forward(&mut actions, &mut forwarded);
-                                    actions.push(Action::Command(Command::TeamPrev));
-                                }
-                                _ => {}
                             }
                         }
                     } else if byte == self.prefix {
@@ -190,7 +180,7 @@ impl PrefixMachine {
         }
 
         Self::flush_forward(&mut actions, &mut forwarded);
-        actions
+        (input.len(), actions)
     }
 
     fn flush_forward(actions: &mut Vec<Action>, forwarded: &mut Vec<u8>) {

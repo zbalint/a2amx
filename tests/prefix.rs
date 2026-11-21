@@ -254,3 +254,36 @@ fn status_line_command_survives_split_reads_and_flushes_input() {
         ]
     );
 }
+
+#[test]
+fn feed_until_command_stops_right_after_first_command() {
+    let mut machine = PrefixMachine::new(0x02);
+    assert_eq!(
+        machine.feed_until_command(b"abc"),
+        (3, vec![Action::Forward(b"abc".to_vec())])
+    );
+    assert_eq!(
+        machine.feed_until_command(&[0x02, b'd']),
+        (2, vec![Action::Command(Command::Detach)])
+    );
+    assert_eq!(
+        machine.feed_until_command(b"ab\x02dxyz"),
+        (
+            4,
+            vec![
+                Action::Forward(b"ab".to_vec()),
+                Action::Command(Command::Detach)
+            ]
+        )
+    );
+    assert_eq!(machine.feed_until_command(&[0x02]), (1, vec![]));
+    assert_eq!(
+        machine.feed_until_command(b"w"),
+        (1, vec![Action::Command(Command::SessionPicker)])
+    );
+    let paste = b"\x1b[200~\x02d\x1b[201~";
+    assert_eq!(
+        machine.feed_until_command(paste),
+        (paste.len(), vec![Action::Forward(paste.to_vec())])
+    );
+}

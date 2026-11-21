@@ -1,7 +1,7 @@
 //! Parsing terminal input: scroll keys, mouse reports, focus reports.
 
 use crate::emulator::Scroll;
-use crate::mouse;
+use crate::mouse::{self, MouseReport};
 
 pub(super) fn parse_decimal(bytes: &[u8]) -> u16 {
     bytes
@@ -18,13 +18,13 @@ pub(super) fn is_focus_report(bytes: &[u8]) -> bool {
 }
 
 // shortcut: a report split across input chunks is typed input; reassemble only if it proves noisy; this scan covers SGR and X10.
-pub(super) fn find_mouse_report(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
+pub(super) fn find_mouse_report(bytes: &[u8], start: usize) -> Option<(usize, MouseReport<'_>)> {
     let mut offset = start;
     while offset < bytes.len() {
         if bytes[offset] == 0x1b
             && let Some(report) = mouse::parse_report(bytes, offset)
         {
-            return Some((offset, report.end));
+            return Some((offset, report));
         }
         offset += 1;
     }

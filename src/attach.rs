@@ -7,21 +7,17 @@ mod picker;
 mod state;
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::client::{Attachment, Client};
 use crate::lookup::session_in_team;
-use crate::prefix::PrefixMachine;
-use crate::status;
 use crate::terminal::{Output, OutputHandle, TerminalGuard, write_stderr};
-use crate::viewer::Viewer;
-use crate::wire::{ClientFrame, StatusInfo};
+use crate::wire::ClientFrame;
 
 use self::event_loop::run_attachment_loop;
-use self::model::{Geometry, Mode, Viewport};
+use self::model::{Geometry, Model, Viewport};
 
 const INPUT_CHUNK: usize = 8 * 1024;
-const MOUSE_CAPTURE: &[u8] = b"\x1b[?1000h\x1b[?1006h";
 #[derive(Clone, Copy)]
 pub struct AttachOptions {
     pub prefix: u8,
@@ -143,13 +139,6 @@ struct AttachOutcome {
     message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MousePress {
-    Team,
-    Rule,
-    Grid,
-}
-
 struct AttachmentConfig {
     home: PathBuf,
     prefix: u8,
@@ -164,18 +153,52 @@ struct AttachmentConfig {
 struct AttachmentState {
     attachment: Option<Attachment>,
     home: PathBuf,
-    session: String,
-    geometry: Geometry,
-    team_regions: Vec<status::TeamRegion>,
-    mouse_press: Option<MousePress>,
-    prefix_machine: PrefixMachine,
-    prefix_byte: u8,
-    after_prefix: bool,
-    viewer: Viewer,
-    viewer_after: Option<Duration>,
-    status: Option<StatusInfo>,
-    session_mouse: bool,
-    mode: Mode,
+    model: Model,
     picker_control: Option<Client>,
     output: OutputHandle,
+}
+
+impl AttachmentState {
+    fn new(attachment: Attachment, config: AttachmentConfig) -> Self {
+        let AttachmentConfig {
+            home,
+            prefix,
+            session,
+            cols,
+            rows,
+            in_team,
+            viewer_after,
+            output,
+        } = config;
+        let top_rows = attachment.top_rows();
+        let geometry = Geometry {
+            viewport: Viewport {
+                cols,
+                rows,
+                status_visible: true,
+            },
+            in_team,
+            granted_top: top_rows,
+        };
+        Self {
+            attachment: Some(attachment),
+            home,
+            model: Model::new(
+                session,
+                geometry,
+                prefix,
+                false,
+                viewer_after,
+                Instant::now(),
+            ),
+            picker_control: None,
+            output,
+        }
+    }
+
+    pub(super) fn detached_outcome(&self) -> AttachOutcome {
+        AttachOutcome {
+            message: format!("[detached from {}]", self.model.session()),
+        }
+    }
 }

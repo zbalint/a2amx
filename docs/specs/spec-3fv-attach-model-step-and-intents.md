@@ -276,4 +276,17 @@ command-layer or `main.rs` change; moving `AttachmentConfig` or `open_attachment
 
 ## Review record
 
-(Appended by the architect at acceptance.)
+Models: architect and consultant Claude Sonnet 5.5 (fresh consultant session for the draft review and for the design
+read); senior developer Antigravity CLI, single slot Gemini 4 Hydrogen (Medium); tester OMP
+opencode-go/deepseek-v4.1-flash, single slot. BLOCKED/amend cycles: 1.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | `step` could not express the old `Err("mouse report parser lost a report boundary")` (no `Result`, no `unwrap`) | `find_mouse_report` returns the parsed report; the branch disappears |
+| draft review | consultant | section 3.4 understated the change: any prefix-cut batch without a command coalesces, and viewer decorations repeat once per batch | 3.4 widened; section 0 promise reworded |
+| draft review | consultant | missing read accessors, the `picker_control` lifetime rule, an unused `switched` parameter, the viewer-mode resize tail, `Detach` without an attachment | getters, driver rule, parameter dropped, rows and wording fixed |
+| draft review | consultant | six test examples wrong or unable to kill their mutant (items 8, 9, 11, 12, 13), an equivalent mutant listed, acceptance greps matching the model, wrong count note | examples rewritten, mutant removed, greps scoped |
+| implementation | developer (BLOCKED m_8221) | `Model::resize` had no `now` although the old viewer-mode path calls `draw_viewer_decorations(Instant::now())` | amendment 1 (93b9ed7): `resize(cols, rows, now)`; architect and consultant both missed it (no list of which old paths read the clock) |
+| tester pass | tester | 8 of 33 mutants survived: exited-member skip, TeamPrev, team-click column bounds, `switch_failed` clearing regions, footer re-render (all expressible), `picker_control` drop and `Detach` dropping the rest of the read (no seam) | developer added five model tests (fix request, 4 further mutants killed); the two seam-less ones accepted as known survivors |
+| tester pass | tester | spec text slips: item 11 offsets, dev-plan consumed count | corrected in the plan and test comments |
+| architect review (consultant design read) | consultant | driver filtered intents by type at nested call sites and ignored `Detach` outcomes in four loop arms; lost `// shortcut:` comment; `Mode` visibility; implicit invariants | work queue in `perform_intents`, outcomes returned, comment restored, `Mode` private, doc lines added (fix request 2) |
