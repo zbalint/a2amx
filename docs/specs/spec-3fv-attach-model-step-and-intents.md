@@ -85,7 +85,7 @@ Methods (all synchronous, no I/O, no `Instant::now()` inside: the caller passes 
 | `on_output(&mut self, data: Vec<u8>, now) -> Vec<Intent>` | the `Data` arm of the event loop, `scan_session_mouse`, `draw_status`, `draw_viewer_decorations` | `Output` intents in today's send order; it scans the session mouse mode even in picker mode and then returns `[]` |
 | `on_status(&mut self, info: StatusInfo, now) -> Vec<Intent>` | the `Status` arm | `Output` intents |
 | `on_tick(&mut self, now) -> Vec<Intent>` | the tick arm | `SetViewer`, `Redraw`, `Output` intents |
-| `resize(&mut self, cols, rows) -> Vec<Intent>` | the SIGWINCH arm | `Output` (picker re-render), then `Resize`, then in viewer mode `Output` (status), `Output` (decorations) |
+| `resize(&mut self, cols, rows, now) -> Vec<Intent>` | the SIGWINCH arm | `Output` (picker re-render), then `Resize`, then in viewer mode `Output` (status), `Output` (decorations) |
 | `picker_opened(&mut self, sessions: Vec<SessionSummary>) -> Vec<Intent>` | `open_picker` after the daemon calls | `Output(render)`; sets the mode, clears `team_regions` |
 | `picker_sessions(&mut self, sessions) -> Vec<Intent>` | `refresh_picker` after the daemon call | `Output(render)` |
 | `attached(&mut self, to: String, result: Attached) -> Vec<Intent>` | `adopt` plus the success block of `switch_session` | the title `Output`, always (the same-session switch of the status toggle sends it too, as today) |
@@ -210,7 +210,7 @@ A `Model` over 80x24 visible, `in_team` false, `granted_top` 0, prefix `0x02`, s
     each of the two key batches. Focus reports: a model with `viewer == false`, `viewer_after == Some(1 s)`, created
     at `t0`; `step(ESC[I, 0, t0 + 900 ms)`; `on_tick(t0 + 1 s)` returns `[SetViewer{viewer:true}, ..]` (a focus report
     is not input); the same sequence with `b"a"` instead of the focus report returns `[]` at the tick.
-12. `resize(100, 30)` returns `[Resize{cols:100, rows:28}]` in live mode (30 rows, status visible: 2 status rows, granted 0).
+12. `resize(100, 30, now)` returns `[Resize{cols:100, rows:28}]` in live mode (30 rows, status visible: 2 status rows, granted 0).
 13. status toggle: `[0x02, b's']` with `in_team` true and `granted_top` 2 on a 80x24 viewport returns, in order,
     `Output(render_team_line("s1", "", &[], 80).bytes)`, `Output(render_team_rule(80, false))`,
     `Output(clear_status(80, 24))`, then `Switch{to: "s1"}` (desired top becomes 0, granted is 2). With `in_team`
