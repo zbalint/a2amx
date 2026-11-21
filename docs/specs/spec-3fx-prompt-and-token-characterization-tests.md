@@ -78,8 +78,10 @@ the `team reset` decline path.
   change `gateway token is empty` to `gateway token is emptyX`; (7) in `gateway.rs` change `if token.is_empty()`
   to `if !token.is_empty()`. Each mutant must make the named test fail and no other: (1) test 1; (2) test 2; (3) test 2
   (under the PTY the answer `n` then proceeds to shut the daemon down); (4) test 3; (5) test 3; (6) test 4; (7)
-  test 4 and also `tests/migrate_cli.rs::test_14_gateway_token_migrates_and_explicit_home_is_ignored` (a non-empty
-  token then bails), which is expected. The developer lists the killing test per mutant. After the pass `git diff --stat --
+  is an equivalent mutant for test 4: `relay_files::write_token` (`src/relay_files.rs:82-85`) rejects an empty token
+  with the same text, so test 4's observable result is unchanged; only
+  `tests/migrate_cli.rs::test_14_gateway_token_migrates_and_explicit_home_is_ignored` fails (a non-empty token then
+  bails). The developer records 7 as killed by that test only (amendment 1). The developer lists the killing test per mutant. After the pass `git diff --stat --
   src` is empty.
 - `cargo test --no-fail-fast` all pass (baseline at the base commit: 64 suites ok, 1393 passed, 0 failed,
   3 ignored; after: 65 suites, 1396 passed), `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`.
@@ -99,5 +101,10 @@ the `team reset` decline path.
 | `gateway token` reads one line from stdin, trims it, and bails with `gateway token is empty` if empty, before any file write | `src/commands/gateway.rs:29-43` (empty check at 39; the read is inside `run_gateway_token`, 14-27, after `migrate_old_state` and `layout.ensure()`) | read; the file-absent assertion is checked by the developer against the base |
 | No test contains `refusing to stop`, `not stopped`, `not killed` or `gateway token is empty` as an exact text; the stop refusal is asserted loosely (`daemon_lifecycle.rs:72`) | `rg -n 'refusing to stop\|not stopped\|not killed\|gateway token is empty' tests`; consultant read | run, no match; read |
 | The kill refusal without a terminal, `kill --exited`, `list --team`, `list --as` and the reset refusals are already tested | `tests/daemon_cli/kill_and_down.rs:5`, `tests/refs_and_list.rs:146,473-483`, `tests/daemon_cli/reset.rs:538` | read (consultant: `daemon_lifecycle.rs:72-87` is the loose stop refusal test) |
+| `relay_files::write_token` also bails with `gateway token is empty` before writing (the guard is duplicated, so mutant 7 is equivalent for test 4) | `src/relay_files.rs:82-85` | read (developer BLOCKED m_8295, architect read) |
 | `tests/daemon_cli/` files stay under 1,000 lines | `wc -l`: `daemon_lifecycle.rs` 414, `kill_and_down.rs` 332 | run |
 | `PtyHarness::spawn` takes `&[String]` args including `--home`, `wait_for_text`, `send`, `wait_exit` | `tests/common/pty.rs:47-213`, `tests/daemon_cli/reset.rs:109-121` | read |
+
+## Amendment 1
+
+Mutant 7 of section 4 is redefined as above (equivalent for test 4, killed by `migrate_cli` test 14 only): the base has two empty-token guards (`gateway.rs:39` and `relay_files::write_token`). Nothing else changes.
