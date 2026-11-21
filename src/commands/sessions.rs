@@ -2,12 +2,12 @@
 
 use crate::attach::{self, AttachOptions};
 use crate::client::Client;
-use crate::lookup::{request_sessions, resolve_reference, resolve_session};
+use crate::lookup::{resolve_reference, resolve_session};
 use crate::messaging;
 use crate::table::{format_messages_table, format_session_table, session_confinement_mode};
 use crate::terminal::confirm;
 use crate::terminal::{stdin_is_terminal, terminal_size_with_default, write_stderr, write_stdout};
-use crate::wire::{Activity, Request, Response};
+use crate::wire::Activity;
 use anyhow::{anyhow, bail};
 use std::path::{Path, PathBuf};
 
@@ -18,12 +18,7 @@ pub(super) async fn run_list(
     viewer: Option<String>,
 ) -> anyhow::Result<()> {
     let mut client = Client::connect(&home).await?;
-    let response = client.request(Request::List).await?;
-    let mut sessions = match response {
-        Response::Sessions { sessions } => sessions,
-        Response::Error { message } => return Err(anyhow!(message)),
-        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
-    };
+    let mut sessions = client.sessions().await?;
     let viewer_info = viewer.map(|name| {
         let session = sessions
             .iter()
@@ -70,7 +65,7 @@ pub(super) async fn run_confine_show(
     reference: Option<String>,
 ) -> anyhow::Result<()> {
     let mut client = Client::connect(&home).await?;
-    let sessions = request_sessions(&mut client).await?;
+    let sessions = client.sessions().await?;
     if sessions.is_empty() {
         if let Some(reference) = reference {
             bail!("unknown session {reference}");
@@ -129,7 +124,7 @@ pub(super) async fn run_kill(
     now: bool,
 ) -> anyhow::Result<()> {
     let mut client = Client::connect(&home).await?;
-    let sessions = request_sessions(&mut client).await?;
+    let sessions = client.sessions().await?;
     if exited {
         let mut found = false;
         let mut failed = false;
@@ -139,7 +134,7 @@ pub(super) async fn run_kill(
         {
             found = true;
             let label = summary.name.as_deref().unwrap_or(&summary.id);
-            match kill_session(&mut client, summary.id.clone(), false).await {
+            match client.kill(summary.id.clone(), false).await {
                 Ok(()) => write_stdout(format!("removed {label}\n").into_bytes()).await?,
                 Err(error) => {
                     write_stderr(format!("{label}: {error}\n").into_bytes()).await?;
@@ -172,37 +167,13 @@ pub(super) async fn run_kill(
             return write_stdout(b"not killed\n".to_vec()).await;
         }
     }
-    kill_session(&mut client, session, now).await
-}
-
-async fn kill_session(client: &mut Client, session: String, now: bool) -> anyhow::Result<()> {
-    match client.request(Request::Kill { session, now }).await? {
-        Response::Ok => Ok(()),
-        Response::Error { message } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
-    }
-}
-
-pub(super) async fn reset_one(client: &mut Client, session: &str) -> anyhow::Result<usize> {
-    match client
-        .request(Request::Reset {
-            session: session.to_owned(),
-        })
-        .await?
-    {
-        Response::Reset { steps } => {
-            usize::try_from(steps).map_err(|_| anyhow!("reset step count does not fit in usize"))
-        }
-        Response::Failed { code, message } => Err(anyhow!("{code}: {message}")),
-        Response::Error { message } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
-    }
+    client.kill(session, now).await
 }
 
 pub(super) async fn run_reset(home: PathBuf, reference: String) -> anyhow::Result<()> {
     let session = resolve_session(&home, &reference).await?;
     let mut client = Client::connect(&home).await?;
-    let steps = reset_one(&mut client, &session).await?;
+    let steps = client.reset(&session).await?;
     let noun = if steps == 1 { "step" } else { "steps" };
     write_stdout(format!("reset {session}: {steps} {noun}\n").into_bytes()).await?;
     Ok(())
@@ -211,16 +182,7 @@ pub(super) async fn run_reset(home: PathBuf, reference: String) -> anyhow::Resul
 pub(super) async fn run_explain(home: PathBuf, reference: String) -> anyhow::Result<()> {
     let session = resolve_session(&home, &reference).await?;
     let mut client = Client::connect(&home).await?;
-    let response = client
-        .request(Request::Explain {
-            session: session.clone(),
-        })
-        .await?;
-    let info = match response {
-        Response::Explain { info } => info,
-        Response::Error { message } => return Err(anyhow!(message)),
-        other => return Err(anyhow!("unexpected explain response: {other:?}")),
-    };
+    let info = client.explain(session.clone()).await?;
     let mut output = String::new();
     if let Some(code) = info.exit_code {
         output.push_str(&format!(
@@ -273,7 +235,7 @@ pub(super) async fn run_explain(home: PathBuf, reference: String) -> anyhow::Res
         }
     }
 
-    let sessions = request_sessions(&mut client).await?;
+    let sessions = client.sessions().await?;
     if let Some(summary) = sessions.into_iter().find(|summary| summary.id == session)
         && let Some(confine) = summary.confine
     {
@@ -313,12 +275,7 @@ pub(super) async fn run_screen(
 ) -> anyhow::Result<()> {
     let session = resolve_session(&home, &session).await?;
     let mut client = Client::connect(&home).await?;
-    let response = client.request(Request::Screen { session }).await?;
-    let lines = match response {
-        Response::Screen { lines } => lines,
-        Response::Error { message } => return Err(anyhow!(message)),
-        other => return Err(anyhow!("unexpected screen response: {other:?}")),
-    };
+    let lines = client.screen(session).await?;
     let lines = if let Some(rows) = rows {
         let start = lines.len().saturating_sub(rows);
         lines.into_iter().skip(start).collect::<Vec<_>>()
@@ -341,29 +298,13 @@ pub(super) async fn run_messages(
         None => None,
     };
     let mut client = Client::connect(&home).await?;
-    let response = client
-        .request(Request::ListMessages { session, state })
-        .await?;
-    let messages = match response {
-        Response::Messages { messages } => messages,
-        Response::Error { message } | Response::Failed { message, .. } => {
-            return Err(anyhow!(message));
-        }
-        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
-    };
+    let messages = client.messages(session, state).await?;
     write_stdout(format_messages_table(&messages).into_bytes()).await
 }
 
 pub(super) async fn run_cancel(home: PathBuf, message: String) -> anyhow::Result<()> {
     let mut client = Client::connect(&home).await?;
-    let response = client
-        .request(Request::CancelMessage { id: message })
-        .await?;
-    match response {
-        Response::Ok => Ok(()),
-        Response::Error { message } | Response::Failed { message, .. } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
-    }
+    client.cancel_message(message).await
 }
 
 pub(super) async fn run_attach_command(

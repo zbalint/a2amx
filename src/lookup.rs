@@ -2,18 +2,9 @@
 
 use std::path::Path;
 
-use anyhow::anyhow;
-
 use crate::client::Client;
-use crate::wire::{Request, Response, SessionSummary};
+use crate::wire::SessionSummary;
 
-pub async fn request_sessions(client: &mut Client) -> anyhow::Result<Vec<SessionSummary>> {
-    match client.request(Request::List).await? {
-        Response::Sessions { sessions } => Ok(sessions),
-        Response::Error { message } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
-    }
-}
 /// A name resolves to its id; other references remain for the daemon to judge.
 pub fn resolve_reference(sessions: &[SessionSummary], reference: &str) -> String {
     sessions
@@ -24,15 +15,12 @@ pub fn resolve_reference(sessions: &[SessionSummary], reference: &str) -> String
 
 pub async fn resolve_session(home: &Path, reference: &str) -> anyhow::Result<String> {
     let mut client = Client::connect(home).await?;
-    Ok(resolve_reference(
-        &request_sessions(&mut client).await?,
-        reference,
-    ))
+    Ok(resolve_reference(&client.sessions().await?, reference))
 }
 
 pub(crate) async fn session_in_team(home: &Path, reference: &str) -> anyhow::Result<bool> {
     let mut client = Client::connect(home).await?;
-    let sessions = request_sessions(&mut client).await?;
+    let sessions = client.sessions().await?;
     let id = resolve_reference(&sessions, reference);
     Ok(sessions
         .iter()

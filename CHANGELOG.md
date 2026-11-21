@@ -22,6 +22,8 @@ All notable user-visible changes are listed here. The format follows
 
 - Owner presence is judged per session (F90). The owner is present for a session only while that session has an interactive attachment, and for the `owner_away` grace period after it ends (a viewer attachment does not count). `send_message(to="human:owner")` is refused with `owner_present` only for that session, so an agent in a detached session can reach you while you work in another one. The refusal now says which case applies: `the owner is attached to this session in the terminal (viewer mode does not count); write to them there instead`, or `the owner left this session less than N seconds ago; try again later or write to them in the terminal`. `list_agents` reports `owner` for the caller's own session, and the away notice goes only to the session you left. This is not a breaking change: fewer messages are refused.
 
+- `team up` prints every failure to obtain a remote-messaging lease code as `warning: could not obtain lease code: {error}`; a daemon refusal such as `no agent in this team has remote messaging enabled` now carries that prefix. This is not a breaking change.
+
 ### Added
 
 - Antigravity CLI (`agy`) is a harness: `a2amx new --harness agy` and the `agy` command infer it, and a session wires `--settings` (status line, queued messages, trusted workspace). `a2amx statusline --harness agy` reads Antigravity's status-line payload and reports the five-hour and weekly quota of the model's bucket group; `--harness claude` stays the default. Stopping an `agy` session sends Ctrl-D twice, like Claude Code. Delivery is hold-only for now; typed delivery and the plugin follow in later releases. Not a breaking change.

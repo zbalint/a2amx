@@ -13,6 +13,9 @@ use crate::wire::{
     BridgeDown, BridgeUp, ClientFrame, FrameDecoder, Request, Response, ServerFrame,
 };
 
+mod requests;
+pub use requests::IssuedLeaseCode;
+
 pub const UNREACHABLE: &str = "cannot reach the a2amx daemon: start it with `a2amx daemon start`";
 
 /// Returns a warning when the daemon's build differs from the running CLI build.

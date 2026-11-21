@@ -5,18 +5,15 @@ use self::dry_run::dry_run_report;
 use super::{
     grants::{auto_grants_for, confirm_new_grants, load_accepted_grants, project_key},
     launch::{NewOptions, create_session, parse_activity_watch, resolved_confine_request},
-    sessions::reset_one,
 };
 use crate::attach::{self, AttachOptions};
 use crate::client::Client;
 use crate::harness::Harness;
-use crate::lookup::request_sessions;
 use crate::messaging::{TeamScope, display_duration};
 use crate::table::session_confinement_mode;
 use crate::team::{self, TeamSession};
 use crate::terminal::confirm;
 use crate::terminal::{stdin_is_terminal, terminal_size_with_default, write_stderr, write_stdout};
-use crate::wire::{Request, Response};
 use anyhow::{Context, anyhow, bail};
 use std::collections::BTreeMap;
 use std::io;
@@ -212,7 +209,7 @@ pub(super) async fn run_team_status(
     let source = resolve_team_file(&home, file).await?;
     let wanted = read_team(source).await?;
     let mut client = Client::connect(&home).await?;
-    let existing = request_sessions(&mut client).await?;
+    let existing = client.sessions().await?;
     let entries = team::inspect(&wanted, &existing);
     let mut output = String::from("NAME TEAM STATE CONFINE NOTE\n");
     let mut has_conflict = false;
@@ -265,11 +262,8 @@ async fn note_lost_messages(home: &Path, wanted: &[TeamSession]) {
     let Ok(mut client) = Client::connect(home).await else {
         return;
     };
-    let Ok(Response::Messages { messages }) = client
-        .request(Request::ListMessages {
-            session: None,
-            state: Some("undeliverable".to_owned()),
-        })
+    let Ok(messages) = client
+        .messages(None, Some("undeliverable".to_owned()))
         .await
     else {
         return;
@@ -424,29 +418,19 @@ async fn write_auto_summaries(actions: &[team::Action]) -> anyhow::Result<()> {
 
 async fn issue_lease_code(client: &mut Client, remote_team: Option<String>) -> anyhow::Result<()> {
     if let Some(team) = remote_team {
-        match client.request(Request::IssueLeaseCode { team }).await {
-            Ok(Response::LeaseCode {
-                code,
-                agents,
-                valid_secs,
-            }) => {
-                write_stdout(format!("remote messaging for: {}\n", agents.join(", ")).into_bytes())
-                    .await?;
+        match client.issue_lease_code(team).await {
+            Ok(lease) => {
                 write_stdout(
-                    format!(
-                        "post this code in the control channel within {}: {code}\n",
-                        display_duration(Duration::from_secs(valid_secs))
-                    )
-                    .into_bytes(),
+                    format!("remote messaging for: {}\n", lease.agents.join(", ")).into_bytes(),
                 )
                 .await?;
-            }
-            Ok(Response::Error { message }) => {
-                write_stderr(format!("warning: {message}\n").into_bytes()).await?;
-            }
-            Ok(other) => {
-                write_stderr(
-                    format!("warning: unexpected lease response: {other:?}\n").into_bytes(),
+                write_stdout(
+                    format!(
+                        "post this code in the control channel within {}: {}\n",
+                        display_duration(Duration::from_secs(lease.valid_secs)),
+                        lease.code
+                    )
+                    .into_bytes(),
                 )
                 .await?;
             }
@@ -501,7 +485,7 @@ pub(super) async fn run_team_up(
         .find(|session| session.attach)
         .map(|session| session.name.as_str());
     let mut client = Client::connect(&home).await?;
-    let existing = request_sessions(&mut client).await?;
+    let existing = client.sessions().await?;
     let mut actions = match team::plan(&wanted, &existing) {
         Ok(actions) => actions,
         Err(conflicts) => {
@@ -630,7 +614,7 @@ pub(super) async fn run_team_down(
         names
     };
     let mut client = Client::connect(&home).await?;
-    let sessions = request_sessions(&mut client).await?;
+    let sessions = client.sessions().await?;
     let mut failed = false;
     let mut missing_explicit = false;
     for name in names {
@@ -644,19 +628,11 @@ pub(super) async fn run_team_down(
             }
             continue;
         };
-        let result = client
-            .request(Request::Kill {
-                session: session.id.clone(),
-                now,
-            })
-            .await;
-        let error = match result {
-            Ok(Response::Ok) => {
+        let error = match client.kill(session.id.clone(), now).await {
+            Ok(()) => {
                 write_stdout(format!("killed {name} {}\n", session.id).into_bytes()).await?;
                 continue;
             }
-            Ok(Response::Error { message }) => message,
-            Ok(other) => format!("unexpected daemon response: {other:?}"),
             Err(error) => error.to_string(),
         };
         write_stderr(format!("failed {name}: {error}\n").into_bytes()).await?;
@@ -695,7 +671,7 @@ pub(super) async fn run_team_reset(
             .collect()
     };
     let mut client = Client::connect(&home).await?;
-    let sessions = request_sessions(&mut client).await?;
+    let sessions = client.sessions().await?;
     let targets = team::reset_targets(&names, explicit, &except, include_attached, &sessions);
     let running = targets
         .iter()
@@ -733,7 +709,7 @@ pub(super) async fn run_team_reset(
     let mut failed = false;
     for target in targets {
         match target.state {
-            team::ResetState::Reset { id } => match reset_one(&mut client, &id).await {
+            team::ResetState::Reset { id } => match client.reset(&id).await {
                 Ok(steps) => {
                     let noun = if steps == 1 { "step" } else { "steps" };
                     write_stdout(

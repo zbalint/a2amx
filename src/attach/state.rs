@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 
 use crate::client::Client;
-use crate::lookup::request_sessions;
 use crate::wire::ClientFrame;
 
 use super::model::{Attached, Intent};
@@ -71,7 +70,7 @@ impl AttachmentState {
 
     async fn open_picker(&mut self) -> anyhow::Result<Vec<Intent>> {
         let mut control = Client::connect(&self.home).await?;
-        let sessions = request_sessions(&mut control).await?;
+        let sessions = control.sessions().await?;
         self.picker_control = Some(control);
         Ok(self.model.picker_opened(sessions))
     }
@@ -81,7 +80,7 @@ impl AttachmentState {
             .picker_control
             .as_mut()
             .ok_or_else(|| anyhow!("picker is not open"))?;
-        let sessions = request_sessions(control).await?;
+        let sessions = control.sessions().await?;
         Ok(self.model.picker_sessions(sessions))
     }
 

@@ -3,10 +3,8 @@
 use super::home::{migrate_old_state, warn_explicit_old_layout};
 use crate::client::Client;
 use crate::daemon::{self, Daemon, DaemonConfig};
-use crate::lookup::request_sessions;
 use crate::terminal::confirm;
 use crate::terminal::{write_stderr, write_stdout};
-use crate::wire::{Request, Response};
 use anyhow::{Context, anyhow};
 use std::io::{self};
 use std::os::unix::fs::OpenOptionsExt;
@@ -173,12 +171,8 @@ pub(super) async fn run_daemon_status(home: PathBuf) -> anyhow::Result<std::proc
         Err(error) => return Err(error),
     };
     let addrs = read_addrs(&home).await?;
-    let sessions = request_sessions(&mut client).await?;
-    let daemon_version = match client.request(Request::Version).await? {
-        Response::Version { version } => Some(version),
-        Response::Error { .. } => None,
-        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
-    };
+    let sessions = client.sessions().await?;
+    let daemon_version = client.version().await?;
     let running = sessions
         .iter()
         .filter(|session| session.exit_code.is_none())
@@ -207,11 +201,7 @@ pub(super) async fn run_stop(home: PathBuf, yes: bool, now: bool) -> anyhow::Res
     let Ok(mut client) = Client::connect(&home).await else {
         return write_stdout(b"no daemon running\n".to_vec()).await;
     };
-    let sessions = match client.request(Request::List).await? {
-        Response::Sessions { sessions } => sessions,
-        Response::Error { message } => return Err(anyhow!(message)),
-        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
-    };
+    let sessions = client.sessions().await?;
     let running = sessions.iter().filter(|s| s.exit_code.is_none()).count();
     if running > 0 && !yes {
         let prompt =
@@ -225,11 +215,7 @@ pub(super) async fn run_stop(home: PathBuf, yes: bool, now: bool) -> anyhow::Res
             return write_stdout(b"not stopped\n".to_vec()).await;
         }
     }
-    match client.request(Request::Shutdown { now }).await? {
-        Response::Ok => {}
-        Response::Error { message } => return Err(anyhow!(message)),
-        other => return Err(anyhow!("unexpected daemon response: {other:?}")),
-    }
+    client.shutdown(now).await?;
     let deadline = tokio::time::Instant::now() + DAEMON_STOP_TIMEOUT;
     while read_addrs(&home).await.is_ok() {
         if tokio::time::Instant::now() >= deadline {

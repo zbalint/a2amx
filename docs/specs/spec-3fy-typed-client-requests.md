@@ -207,3 +207,18 @@ behaviour-neutral later edit); the launch type, renderers and the team up split 
 | `Response::Created{session: String}`, `Messages{messages: Vec<MessageInfo>}`, `Explain{info: ExplainInfo}` | `src/wire.rs:308-330,365-370` | read |
 | `src/client.rs` has 336 lines, no `requests` module exists | `wc -l`, `rg` | run |
 | `Client::request` stays used by `mcp.rs`, `statusline.rs`, `hook.rs`, `gateway.rs`, `client.rs` and tests | `rg -c '\.request\(' src`; consultant read | run; read (`daemon.rs` has none) |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (fresh consultant sessions for the draft review and the design read); senior developer Antigravity CLI, Gemini 4 Hydrogen (Medium); tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the acceptance grep `unexpected ... response` also matches `src/hook.rs:24`, so it could not print only `requests.rs` | grep gets `--glob '!src/hook.rs'` |
+| draft review | consultant | claim "the daemon never sends the lease Error" was false (`src/daemon.rs:1498-1503`); the lease warning change is reachable | 3.2 reworded, CHANGELOG line, claims row fixed |
+| draft review | consultant | `Response::Reset` steps is `u32`, not `u64`; the usize conversion was an untestable branch | `reset` returns `u32` |
+| draft review | consultant | `confined` bool is redundant with the request and could disagree | `create_session(request)` derives it |
+| draft review | consultant | scope said one line in `client.rs`, 3.1 said two; `IssuedLeaseCode` needs `Debug`; wrong test file named for `ExplainInfo`; `Client::request` users omitted `gateway.rs`; `request_sessions` count off by one; `resolve_session`/`session_in_team` mislabelled; mutant "swap Failed and Error formats" ill-defined | spec text corrected |
+| architect draft | architect | the acceptance grep was not run against out-of-scope matches before locking; the "unreachable" claim was not checked against the daemon handler | consultant caught both; lesson recorded |
+| tester pass | tester | the `team up` lease warning prefix and the `team down` `failed {name}: {error}` line are unpinned (mutants survive) | recorded in the backlog (F94) as test hardening, not blocking |
+| design read | consultant | `create_session` still takes the raw `Request`; `reset(&str)` vs `String`; `Failed` code kept for `reset` only; test scaffolding repeated about 45 times | later items in the backlog (F94) |

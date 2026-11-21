@@ -153,7 +153,7 @@ specs showing it found nothing.
 | `privilege` | Refusal to run with effective uid 0 |
 | `wire` | Framing, control JSON, stream frames |
 | `session` | One PTY, its child, its emulator |
-| `daemon` / `client` | TCP server and the client API |
+| `daemon` / `client` | TCP server and the client API; `client/requests.rs` holds one typed method per control request with its reply semantics |
 | `bridge` | The `omp-bridge` relay between an OMP extension and the daemon |
 | `channel` | The `a2amx mcp --channel` process that relays daemon deliveries to Claude Code as channel events |
 | `delivery` | Ordered delivery attempts and the PTY, native, and Codex delivery channels |
@@ -186,7 +186,7 @@ specs showing it found nothing.
 | `attach` | The interactive attach screen: `model` (the pure `Model`: all screen state, `step`/`on_output`/`on_status`/`on_tick`/`resize` turning events into `Intent`s, plus `Viewport`, `Geometry`; no I/O, no clock), `state` (the async driver that performs intents over the daemon connection and the terminal), `input` (byte parsing helpers), `event_loop` (the select loop), `picker` (the pure `PickerScreen`) |
 | `terminal` | The human's terminal: raw stdout/stderr writes, the output thread, restore-on-exit guards (`EchoGuard`, `TerminalGuard`), size and tty tests, the yes/no prompt |
 | `table` | Aligned session and message tables for the list commands and the picker (pure) |
-| `lookup` | The session list request and resolving a user's session reference (name or id) |
+| `lookup` | Resolving a user's session reference (name or id) over the session list |
 | `commands` | `commands::run`, the one public entry: dispatch over the parsed CLI to the command handlers, one file per responsibility (`home` root preparation, `daemon`, `gateway`, `launch` and `grants` for starting a session, `team` with its `dry_run`, `sessions` for commands on existing sessions and messages) |
 | `main` | The process entry: tracing setup, argument parsing, the root-user refusal, the final error line and exit code |
 

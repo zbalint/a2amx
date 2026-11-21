@@ -6,11 +6,10 @@ use crate::client::Client;
 use crate::confine::ConfineRequest;
 use crate::daemon::{self};
 use crate::harness::{Deliver, Harness};
-use crate::lookup::request_sessions;
 use crate::messaging::{self, TeamScope};
 use crate::names;
 use crate::terminal::{stdin_is_terminal, terminal_size_with_default, write_stderr, write_stdout};
-use crate::wire::{Request, Response};
+use crate::wire::Request;
 use anyhow::anyhow;
 use std::path::{Path, PathBuf};
 
@@ -109,7 +108,8 @@ pub(super) async fn run_new(
     let name = match name {
         Some(name) => Some(name),
         None => {
-            let taken = request_sessions(&mut client)
+            let taken = client
+                .sessions()
                 .await?
                 .into_iter()
                 .filter_map(|session| session.name)
@@ -427,7 +427,6 @@ pub(super) async fn create_session(
         remote,
         heartbeat,
     };
-    let confined = confine.is_some();
     let request = match confine {
         Some(confine) => Request::Confine {
             confine,
@@ -435,15 +434,5 @@ pub(super) async fn create_session(
         },
         None => request,
     };
-    let response = client.request(request).await?;
-    match response {
-        Response::Created { session } => Ok(session),
-        Response::Error { message } if confined && message.contains("invalid control request") => {
-            Err(anyhow!(
-                "the running daemon does not support --confine; restart it"
-            ))
-        }
-        Response::Error { message } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
-    }
+    client.create_session(request).await
 }
