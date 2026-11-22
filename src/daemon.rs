@@ -705,11 +705,15 @@ impl Runtime {
 
     async fn send_message(
         &self,
-        sender_id: &str,
+        role: &Role,
         to: String,
         subject: String,
         body: String,
     ) -> Response {
+        let sender_id = match session_id(role, "send_message") {
+            Ok(id) => id,
+            Err(message) => return Response::Error { message },
+        };
         if let Err(error) = messaging::validate_message(&subject, &body) {
             return failed(error.code, &error.message);
         }
@@ -1101,7 +1105,11 @@ impl Runtime {
         }
     }
 
-    async fn report_prompt(&self, session_id: &str, prompt: String) -> anyhow::Result<Response> {
+    async fn report_prompt(&self, role: &Role, prompt: String) -> anyhow::Result<Response> {
+        let session_id = match session_id(role, "report_prompt") {
+            Ok(id) => id,
+            Err(message) => return Ok(Response::Error { message }),
+        };
         let (_, session) =
             lookup(self, session_id).ok_or_else(|| anyhow::anyhow!("session is unavailable"))?;
         if session.channel()
@@ -1132,10 +1140,14 @@ impl Runtime {
 
     async fn report_quota(
         &self,
-        session_id: &str,
+        role: &Role,
         five_hour: Option<QuotaWindow>,
         weekly: Option<QuotaWindow>,
     ) -> anyhow::Result<Response> {
+        let session_id = match session_id(role, "report_quota") {
+            Ok(id) => id,
+            Err(message) => return Ok(Response::Error { message }),
+        };
         let now = store::now();
         let latest = now.saturating_add(8 * 24 * 60 * 60);
         for window in [five_hour, weekly].into_iter().flatten() {
@@ -1884,18 +1896,11 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 to,
                 subject,
                 message,
-            } => match session_id(&role, "send_message") {
-                Ok(id) => runtime.send_message(id, to, subject, message).await,
-                Err(refusal) => Response::Error { message: refusal },
-            },
-            Request::ReportPrompt { prompt } => match session_id(&role, "report_prompt") {
-                Ok(id) => runtime.report_prompt(id, prompt).await?,
-                Err(refusal) => Response::Error { message: refusal },
-            },
-            Request::ReportQuota { five_hour, weekly } => match session_id(&role, "report_quota") {
-                Ok(id) => runtime.report_quota(id, five_hour, weekly).await?,
-                Err(refusal) => Response::Error { message: refusal },
-            },
+            } => runtime.send_message(&role, to, subject, message).await,
+            Request::ReportPrompt { prompt } => runtime.report_prompt(&role, prompt).await?,
+            Request::ReportQuota { five_hour, weekly } => {
+                runtime.report_quota(&role, five_hour, weekly).await?
+            }
             Request::BridgeAttach => {
                 if let Some(result) = bridge_attach(&mut connection, &runtime, &role).await? {
                     result
