@@ -153,7 +153,7 @@ specs showing it found nothing.
 | `privilege` | Refusal to run with effective uid 0 |
 | `wire` | Framing, control JSON, stream frames |
 | `session` | One PTY, its child, its emulator |
-| `daemon` / `client` | TCP server and the client API; `client/requests.rs` holds one typed method per control request with its reply semantics; `daemon/omp_usage.rs` holds the OMP usage cache and probe; `daemon/registry.rs` holds the session map (a leaf lock: callers filter a snapshot) |
+| `daemon` / `client` | TCP server and the client API; `client/requests.rs` holds one typed method per control request with its reply semantics; `daemon/omp_usage.rs` holds the OMP usage cache and probe; `daemon/registry.rs` holds the session map (a leaf lock: callers filter a snapshot); `daemon/notices.rs` holds the system-notice producers (presence, peer exit, activity, heartbeat) and the one `post_system` helper |
 | `bridge` | The `omp-bridge` relay between an OMP extension and the daemon |
 | `channel` | The `a2amx mcp --channel` process that relays daemon deliveries to Claude Code as channel events |
 | `delivery` | Ordered delivery attempts and the PTY, native, and Codex delivery channels |
