@@ -86,3 +86,16 @@ Attack paths and dispositions: (a) a token sends a request outside its audience:
 | the three tool names and the bridge text | `src/daemon.rs:1776-1777`, `:2321-2327` | read |
 | refusal texts are pinned except `report_quota needs a session token` and a session sending `Confine` | `rg -n 'not permitted for|needs a session token' tests` (ten hits); the consultant found no `report_quota` text and no `Confine` in the session loop | probed; gaps closed in section 5 |
 | `session_only_request` and `request_permitted` have one caller each | `rg -n` | probed |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer OMP openai-codex/gpt-5.6-luna; tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | `session_id` returning `Result<&str, Response>` fails `clippy::result_large_err` (`Response` holds `MessageInfo` inline, about 250 bytes; the compile gate would have failed) | returns `Result<&str, String>`; callers build `Response::Error` |
+| draft review | consultant | the spec said 23 request variants (25), left the 13 admin-only variants unnamed, and deleted from `:1948` instead of `:1946` (the doc comment would have stayed behind) | corrected, 5 + 7 + 13 named, range `:1946-2032` |
+| draft review | consultant | the `needs a session token` grep printed two lines (doc comment and format); the rejection of moving `Role` rested on a false cost (30 touched lines; about 2); the "unreachable wildcard" claim was false for `report_quota` | greps pinned, reasons corrected |
+| draft review | consultant | two pinning gaps: nothing pins `report_quota needs a session token`, and no test has a session send `Confine` (moving it into `AdminOrSession` would have let a session create sessions) | two assertions added to the existing test in `sessions_and_naming.rs`, which pass on the old code |
+| implementation | developer | the spec's import list for `trust.rs` named `Response`, which is unused after the `Err(String)` change | dropped (`-D warnings`) |
+| tester pass | tester | no problems found: 17 mutants, all killed, including every one of the 13 admin-only promotions | n/a |

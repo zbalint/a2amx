@@ -82,6 +82,10 @@ async fn session_tokens_roles_permissions_and_child_identity() {
     assert!(unknown.is_err());
 
     for request in [
+        Request::Confine {
+            confine: a2amx::wire::ConfineRequest::default(),
+            request: Box::new(Request::List),
+        },
         Request::Version,
         Request::Hello {
             token: sender_token.clone(),
@@ -145,6 +149,18 @@ async fn session_tokens_roles_permissions_and_child_identity() {
                 .unwrap()
         ),
         "send_message needs a session token"
+    );
+    assert_eq!(
+        error_message(
+            admin
+                .request(Request::ReportQuota {
+                    five_hour: None,
+                    weekly: None,
+                })
+                .await
+                .unwrap()
+        ),
+        "report_quota needs a session token"
     );
 
     accepted(

@@ -38,9 +38,11 @@ mod notices;
 mod omp_usage;
 mod registry;
 mod remote;
+mod trust;
 use omp_usage::OmpUsage;
 use registry::Sessions;
 use remote::Leases;
+use trust::{request_permitted, session_id};
 const ACTIVITY_QUIET: Duration = Duration::from_secs(10);
 const ACTIVITY_POLL: Duration = Duration::from_secs(1);
 pub(crate) const NEEDS_INPUT_AFTER: Duration = Duration::from_secs(10);
@@ -1766,38 +1768,6 @@ async fn response(connection: &mut Framed, response: Response) -> anyhow::Result
     connection.send(&serde_json::to_vec(&response)?).await
 }
 
-/// Requests that act as one session: an admin token has no sender, so it is refused.
-async fn session_only_request(
-    runtime: &Runtime,
-    role: &Role,
-    request: Request,
-) -> anyhow::Result<Response> {
-    let tool = match &request {
-        Request::SendMessage { .. } => "send_message",
-        Request::ReportPrompt { .. } => "report_prompt",
-        _ => "report_quota",
-    };
-    let Role::Session(id) = role else {
-        return Ok(Response::Error {
-            message: format!("{tool} needs a session token"),
-        });
-    };
-    Ok(match request {
-        Request::SendMessage {
-            to,
-            subject,
-            message,
-        } => runtime.send_message(id, to, subject, message).await,
-        Request::ReportPrompt { prompt } => runtime.report_prompt(id, prompt).await?,
-        Request::ReportQuota { five_hour, weekly } => {
-            runtime.report_quota(id, five_hour, weekly).await?
-        }
-        _ => Response::Error {
-            message: "unexpected request".into(),
-        },
-    })
-}
-
 async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
     let mut connection = Framed::new(socket);
     let Some(role) = authenticate_hello(&mut connection, &runtime).await? else {
@@ -1910,11 +1880,22 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
                 }
             }
             Request::ListAgents => list_agents(&runtime, &role),
-            request @ (Request::SendMessage { .. }
-            | Request::ReportPrompt { .. }
-            | Request::ReportQuota { .. }) => {
-                session_only_request(&runtime, &role, request).await?
-            }
+            Request::SendMessage {
+                to,
+                subject,
+                message,
+            } => match session_id(&role, "send_message") {
+                Ok(id) => runtime.send_message(id, to, subject, message).await,
+                Err(refusal) => Response::Error { message: refusal },
+            },
+            Request::ReportPrompt { prompt } => match session_id(&role, "report_prompt") {
+                Ok(id) => runtime.report_prompt(id, prompt).await?,
+                Err(refusal) => Response::Error { message: refusal },
+            },
+            Request::ReportQuota { five_hour, weekly } => match session_id(&role, "report_quota") {
+                Ok(id) => runtime.report_quota(id, five_hour, weekly).await?,
+                Err(refusal) => Response::Error { message: refusal },
+            },
             Request::BridgeAttach => {
                 if let Some(result) = bridge_attach(&mut connection, &runtime, &role).await? {
                     result
@@ -1941,94 +1922,6 @@ async fn serve(socket: TcpStream, runtime: Arc<Runtime>) -> anyhow::Result<()> {
 
 fn session_has_exited(runtime: &Runtime, role: &Role) -> bool {
     matches!(role, Role::Session(id) if !lookup(runtime, id).is_some_and(|(_, session)| session.exit_code().is_none()))
-}
-
-/// One verdict per role and request. Neither match has a wildcard arm: a new `Request`
-/// variant or a new `Role` does not compile until its verdict is written here.
-fn request_permitted(role: &Role, request: &Request) -> bool {
-    match role {
-        Role::Admin => match request {
-            Request::Hello { .. }
-            | Request::Confine { .. }
-            | Request::NewSession { .. }
-            | Request::List
-            | Request::Version
-            | Request::Attach { .. }
-            | Request::Kill { .. }
-            | Request::Reset { .. }
-            | Request::Screen { .. }
-            | Request::Explain { .. }
-            | Request::Shutdown { .. }
-            | Request::SendMessage { .. }
-            | Request::ListAgents
-            | Request::MessageStatus { .. }
-            | Request::ReportPrompt { .. }
-            | Request::ReportQuota { .. }
-            | Request::ListMessages { .. }
-            | Request::CancelMessage { .. }
-            | Request::BridgeAttach
-            | Request::IssueLeaseCode { .. } => true,
-            Request::GatewayAgents
-            | Request::HumanInbound { .. }
-            | Request::HumanOutboundNext
-            | Request::HumanOutboundDone { .. }
-            | Request::RedeemLeaseCode { .. } => false,
-        },
-        Role::Gateway => match request {
-            Request::GatewayAgents
-            | Request::HumanInbound { .. }
-            | Request::HumanOutboundNext
-            | Request::HumanOutboundDone { .. }
-            | Request::RedeemLeaseCode { .. } => true,
-            Request::Hello { .. }
-            | Request::Confine { .. }
-            | Request::NewSession { .. }
-            | Request::List
-            | Request::Version
-            | Request::Attach { .. }
-            | Request::Kill { .. }
-            | Request::Reset { .. }
-            | Request::Screen { .. }
-            | Request::Explain { .. }
-            | Request::Shutdown { .. }
-            | Request::SendMessage { .. }
-            | Request::ListAgents
-            | Request::MessageStatus { .. }
-            | Request::ReportPrompt { .. }
-            | Request::ReportQuota { .. }
-            | Request::ListMessages { .. }
-            | Request::CancelMessage { .. }
-            | Request::BridgeAttach
-            | Request::IssueLeaseCode { .. } => false,
-        },
-        Role::Session(_) => match request {
-            Request::SendMessage { .. }
-            | Request::Reset { .. }
-            | Request::ListAgents
-            | Request::MessageStatus { .. }
-            | Request::ReportPrompt { .. }
-            | Request::ReportQuota { .. }
-            | Request::BridgeAttach => true,
-            Request::Hello { .. }
-            | Request::Confine { .. }
-            | Request::NewSession { .. }
-            | Request::List
-            | Request::Version
-            | Request::Attach { .. }
-            | Request::Kill { .. }
-            | Request::Screen { .. }
-            | Request::Explain { .. }
-            | Request::Shutdown { .. }
-            | Request::GatewayAgents
-            | Request::HumanInbound { .. }
-            | Request::HumanOutboundNext
-            | Request::HumanOutboundDone { .. }
-            | Request::IssueLeaseCode { .. }
-            | Request::RedeemLeaseCode { .. }
-            | Request::ListMessages { .. }
-            | Request::CancelMessage { .. } => false,
-        },
-    }
 }
 
 async fn authenticate_hello(
@@ -2317,31 +2210,25 @@ async fn bridge_attach(
     runtime: &Arc<Runtime>,
     role: &Role,
 ) -> anyhow::Result<Option<Response>> {
-    match role {
-        Role::Admin => Ok(Some(Response::Error {
-            message: "bridge_attach needs a session token".into(),
-        })),
-        Role::Gateway => Ok(Some(Response::Error {
-            message: "bridge_attach needs a session token".into(),
-        })),
-        Role::Session(id) => {
-            let Some((_, session)) = lookup(runtime, id) else {
-                anyhow::bail!("bridge session disappeared");
-            };
-            if session.harness() != Harness::Omp && !session.channel() {
-                Ok(Some(Response::Error {
-                    message: "session is not an omp session".into(),
-                }))
-            } else if let Some(guard) = session.native_attach() {
-                response(connection, Response::Attached).await?;
-                bridge(connection, runtime, session, guard).await?;
-                Ok(None)
-            } else {
-                Ok(Some(Response::Error {
-                    message: "a bridge is already attached to this session".into(),
-                }))
-            }
-        }
+    let id = match session_id(role, "bridge_attach") {
+        Ok(id) => id,
+        Err(message) => return Ok(Some(Response::Error { message })),
+    };
+    let Some((_, session)) = lookup(runtime, id) else {
+        anyhow::bail!("bridge session disappeared");
+    };
+    if session.harness() != Harness::Omp && !session.channel() {
+        Ok(Some(Response::Error {
+            message: "session is not an omp session".into(),
+        }))
+    } else if let Some(guard) = session.native_attach() {
+        response(connection, Response::Attached).await?;
+        bridge(connection, runtime, session, guard).await?;
+        Ok(None)
+    } else {
+        Ok(Some(Response::Error {
+            message: "a bridge is already attached to this session".into(),
+        }))
     }
 }
 
