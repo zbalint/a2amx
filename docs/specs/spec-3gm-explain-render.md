@@ -58,3 +58,16 @@ The confinement help block; `run_screen`, `run_messages`, `run_kill`; any new te
 | `src/table.rs` is pure (no I/O) and `tests/table.rs` imports the table functions and wire types | files | read |
 | `tests/explain.rs` covers the ready, hold, not-ready, starting, needs-input, exited-confined and exited branches by process tests, and `reset: refused (not_ready): screen not ready` at `:249`; nothing asserts `activity: unknown` or the `unknown` fallbacks of the reset verdict | `rg -n 'reset: refused\|activity: unknown' tests` | probed |
 | the string `exited (code` occurs once in `src` (`commands/sessions.rs:189`), and `run_explain` is called only from `commands.rs:185` | `rg -n 'exited \(code\|run_explain' src` | probed |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer antigravity Gemini 4 Hydrogen (Medium) (the senior developer); tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft | architect | the claim "no test asserts `reset: refused`" was false (`tests/explain.rs:249`) | claims row and Why corrected before review |
+| draft review | consultant | the borrow edits were listed wrongly: `if let Some(explanation) = hold.explanation` moves out of a reference (E0507) and was not named | the two edits stated exactly |
+| draft review | consultant | the block range was `:186-232`, it is `:186-236`; length estimate 45 (38) | corrected |
+| draft review | consultant | the new tests left the unknown-fallback gaps open (their field values were not fixed) | literal contents fixed in the spec |
+| draft review | consultant | the `Activity` import and the `//!` line of `table.rs` were left open | import removal stated as fact; `//!` line in scope |
+| implementation | developer | `push_str(&explanation)` after `as_deref()` fails clippy `needless_borrow`; the spec said exactly two edits | third edit made, behaviour identical; recorded (tester reproduced the lint) |

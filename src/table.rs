@@ -1,10 +1,10 @@
-//! Turning sessions and messages into aligned text tables.
+//! Turning wire views into CLI text: aligned session and message tables and the explain lines.
 
 use std::time::Duration;
 
 use crate::messaging::display_duration;
 use crate::quota;
-use crate::wire::{Activity, MessageInfo, SessionSummary};
+use crate::wire::{Activity, ExplainInfo, MessageInfo, SessionSummary};
 
 pub fn session_confinement_mode(session: &SessionSummary) -> &'static str {
     session
@@ -198,6 +198,62 @@ pub fn format_session_table(sessions: &[SessionSummary], details: bool) -> Strin
 
 pub fn format_messages_table(messages: &[MessageInfo]) -> String {
     format_table(&MESSAGE_HEADERS, &message_value_rows(messages))
+}
+
+/// The state lines `a2amx explain` prints for a session: one header line, then for a running session activity, readiness, needed input, hold, queue and the reset verdict.
+pub fn format_explain(info: &ExplainInfo) -> String {
+    let mut output = String::new();
+    if let Some(code) = info.exit_code {
+        output.push_str(&format!(
+            "{} ({}): {}, exited (code {code})\n",
+            info.id,
+            info.address,
+            info.harness.as_str(),
+        ));
+    } else {
+        output.push_str(&format!(
+            "{} ({}): {}, running\n",
+            info.id,
+            info.address,
+            info.harness.as_str()
+        ));
+        let activity = info.activity.map(Activity::as_str).unwrap_or("unknown");
+        let cause = info.activity_cause.as_deref().unwrap_or("unknown");
+        output.push_str(&format!("activity: {activity} ({cause})\n"));
+        let ready = match info.ready {
+            Some(true) => "yes",
+            Some(false) if info.starting => "no (starting)",
+            Some(false) => "no",
+            None => "unknown",
+        };
+        output.push_str(&format!("ready: {ready}\n"));
+        output.push_str(&format!(
+            "needs input: {}\n",
+            info.needs_input.as_deref().unwrap_or("no")
+        ));
+        if let Some(hold) = info.hold.as_ref() {
+            output.push_str("hold: ");
+            output.push_str(&hold.reason);
+            if let Some(explanation) = hold.explanation.as_deref() {
+                output.push_str(" - ");
+                output.push_str(explanation);
+            }
+            output.push('\n');
+        } else {
+            output.push_str("hold: none\n");
+        }
+        output.push_str(&format!("queued: {}\n", info.pending));
+        if info.reset.allowed {
+            output.push_str("reset: gate open\n");
+        } else {
+            output.push_str("reset: refused (");
+            output.push_str(info.reset.code.as_deref().unwrap_or("unknown"));
+            output.push_str("): ");
+            output.push_str(info.reset.reason.as_deref().unwrap_or("unknown"));
+            output.push('\n');
+        }
+    }
+    output
 }
 
 pub(crate) fn format_row<T: AsRef<str>>(values: &[T], widths: &[usize]) -> String {

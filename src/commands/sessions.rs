@@ -4,10 +4,11 @@ use crate::attach::{self, AttachOptions};
 use crate::client::Client;
 use crate::lookup::{resolve_reference, resolve_session};
 use crate::messaging;
-use crate::table::{format_messages_table, format_session_table, session_confinement_mode};
+use crate::table::{
+    format_explain, format_messages_table, format_session_table, session_confinement_mode,
+};
 use crate::terminal::confirm;
 use crate::terminal::{stdin_is_terminal, terminal_size_with_default, write_stderr, write_stdout};
-use crate::wire::Activity;
 use anyhow::{anyhow, bail};
 use std::path::{Path, PathBuf};
 
@@ -183,57 +184,7 @@ pub(super) async fn run_explain(home: PathBuf, reference: String) -> anyhow::Res
     let session = resolve_session(&home, &reference).await?;
     let mut client = Client::connect(&home).await?;
     let info = client.explain(session.clone()).await?;
-    let mut output = String::new();
-    if let Some(code) = info.exit_code {
-        output.push_str(&format!(
-            "{} ({}): {}, exited (code {code})\n",
-            info.id,
-            info.address,
-            info.harness.as_str(),
-        ));
-    } else {
-        output.push_str(&format!(
-            "{} ({}): {}, running\n",
-            info.id,
-            info.address,
-            info.harness.as_str()
-        ));
-        let activity = info.activity.map(Activity::as_str).unwrap_or("unknown");
-        let cause = info.activity_cause.as_deref().unwrap_or("unknown");
-        output.push_str(&format!("activity: {activity} ({cause})\n"));
-        let ready = match info.ready {
-            Some(true) => "yes",
-            Some(false) if info.starting => "no (starting)",
-            Some(false) => "no",
-            None => "unknown",
-        };
-        output.push_str(&format!("ready: {ready}\n"));
-        output.push_str(&format!(
-            "needs input: {}\n",
-            info.needs_input.as_deref().unwrap_or("no")
-        ));
-        if let Some(hold) = info.hold {
-            output.push_str("hold: ");
-            output.push_str(&hold.reason);
-            if let Some(explanation) = hold.explanation {
-                output.push_str(" - ");
-                output.push_str(&explanation);
-            }
-            output.push('\n');
-        } else {
-            output.push_str("hold: none\n");
-        }
-        output.push_str(&format!("queued: {}\n", info.pending));
-        if info.reset.allowed {
-            output.push_str("reset: gate open\n");
-        } else {
-            output.push_str("reset: refused (");
-            output.push_str(info.reset.code.as_deref().unwrap_or("unknown"));
-            output.push_str("): ");
-            output.push_str(info.reset.reason.as_deref().unwrap_or("unknown"));
-            output.push('\n');
-        }
-    }
+    let mut output = format_explain(&info);
 
     let sessions = client.sessions().await?;
     if let Some(summary) = sessions.into_iter().find(|summary| summary.id == session)

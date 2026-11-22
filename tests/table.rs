@@ -1,7 +1,11 @@
 use a2amx::harness::Harness;
 use a2amx::messaging::TeamScope;
-use a2amx::table::{format_messages_table, format_session_table, session_confinement_mode};
-use a2amx::wire::{ConfineInfo, MessageInfo, SessionSummary};
+use a2amx::table::{
+    format_explain, format_messages_table, format_session_table, session_confinement_mode,
+};
+use a2amx::wire::{
+    Activity, ConfineInfo, ExplainInfo, HoldInfo, MessageInfo, ResetVerdict, SessionSummary,
+};
 
 fn base_message(id: &str, from: &str, to: &str, state: &str, subject: &str) -> MessageInfo {
     MessageInfo {
@@ -181,4 +185,219 @@ fn confinement_mode_label() {
 
     session.confine.as_mut().unwrap().auto = false;
     assert_eq!(session_confinement_mode(&session), "manual");
+}
+
+#[test]
+fn explain_exited_session_is_one_line() {
+    let info = ExplainInfo {
+        id: "s1".to_owned(),
+        address: "agent-plan@host-a".to_owned(),
+        harness: Harness::Generic,
+        exit_code: Some(3),
+        ready: None,
+        starting: false,
+        activity: None,
+        activity_cause: None,
+        needs_input: None,
+        hold: None,
+        pending: 0,
+        reset: ResetVerdict {
+            allowed: false,
+            code: None,
+            reason: None,
+        },
+    };
+    assert_eq!(
+        format_explain(&info),
+        "s1 (agent-plan@host-a): generic, exited (code 3)\n"
+    );
+}
+
+#[test]
+fn explain_running_session_with_unknowns_and_open_gate() {
+    let info = ExplainInfo {
+        id: "s1".to_owned(),
+        address: "agent-plan@host-a".to_owned(),
+        harness: Harness::Generic,
+        exit_code: None,
+        ready: None,
+        starting: false,
+        activity: None,
+        activity_cause: None,
+        needs_input: None,
+        hold: None,
+        pending: 0,
+        reset: ResetVerdict {
+            allowed: true,
+            code: None,
+            reason: None,
+        },
+    };
+    assert_eq!(
+        format_explain(&info),
+        concat!(
+            "s1 (agent-plan@host-a): generic, running\n",
+            "activity: unknown (unknown)\n",
+            "ready: unknown\n",
+            "needs input: no\n",
+            "hold: none\n",
+            "queued: 0\n",
+            "reset: gate open\n",
+        )
+    );
+}
+
+#[test]
+fn explain_running_session_with_hold_and_refused_reset() {
+    let mut info = ExplainInfo {
+        id: "s1".to_owned(),
+        address: "agent-plan@host-a".to_owned(),
+        harness: Harness::Generic,
+        exit_code: None,
+        ready: Some(true),
+        starting: false,
+        activity: Some(Activity::Working),
+        activity_cause: Some("output".to_owned()),
+        needs_input: Some("trust prompt".to_owned()),
+        hold: Some(HoldInfo {
+            reason: "recipient_busy".to_owned(),
+            explanation: Some("composer has a draft".to_owned()),
+        }),
+        pending: 2,
+        reset: ResetVerdict {
+            allowed: false,
+            code: Some("not_ready".to_owned()),
+            reason: Some("screen not ready".to_owned()),
+        },
+    };
+    assert_eq!(
+        format_explain(&info),
+        concat!(
+            "s1 (agent-plan@host-a): generic, running\n",
+            "activity: working (output)\n",
+            "ready: yes\n",
+            "needs input: trust prompt\n",
+            "hold: recipient_busy - composer has a draft\n",
+            "queued: 2\n",
+            "reset: refused (not_ready): screen not ready\n",
+        )
+    );
+
+    info.hold = Some(HoldInfo {
+        reason: "recipient_busy".to_owned(),
+        explanation: None,
+    });
+    info.reset = ResetVerdict {
+        allowed: false,
+        code: None,
+        reason: None,
+    };
+    assert_eq!(
+        format_explain(&info),
+        concat!(
+            "s1 (agent-plan@host-a): generic, running\n",
+            "activity: working (output)\n",
+            "ready: yes\n",
+            "needs input: trust prompt\n",
+            "hold: recipient_busy\n",
+            "queued: 2\n",
+            "reset: refused (unknown): unknown\n",
+        )
+    );
+}
+
+#[test]
+fn explain_ready_states() {
+    let ready_yes = ExplainInfo {
+        id: "s1".to_owned(),
+        address: "agent-plan@host-a".to_owned(),
+        harness: Harness::Generic,
+        exit_code: None,
+        ready: Some(true),
+        starting: false,
+        activity: Some(Activity::Idle),
+        activity_cause: Some("prompt".to_owned()),
+        needs_input: None,
+        hold: None,
+        pending: 0,
+        reset: ResetVerdict {
+            allowed: true,
+            code: None,
+            reason: None,
+        },
+    };
+    assert_eq!(
+        format_explain(&ready_yes),
+        concat!(
+            "s1 (agent-plan@host-a): generic, running\n",
+            "activity: idle (prompt)\n",
+            "ready: yes\n",
+            "needs input: no\n",
+            "hold: none\n",
+            "queued: 0\n",
+            "reset: gate open\n",
+        )
+    );
+
+    let ready_starting = ExplainInfo {
+        id: "s1".to_owned(),
+        address: "agent-plan@host-a".to_owned(),
+        harness: Harness::Generic,
+        exit_code: None,
+        ready: Some(false),
+        starting: true,
+        activity: Some(Activity::Busy),
+        activity_cause: Some("boot".to_owned()),
+        needs_input: None,
+        hold: None,
+        pending: 0,
+        reset: ResetVerdict {
+            allowed: true,
+            code: None,
+            reason: None,
+        },
+    };
+    assert_eq!(
+        format_explain(&ready_starting),
+        concat!(
+            "s1 (agent-plan@host-a): generic, running\n",
+            "activity: busy (boot)\n",
+            "ready: no (starting)\n",
+            "needs input: no\n",
+            "hold: none\n",
+            "queued: 0\n",
+            "reset: gate open\n",
+        )
+    );
+
+    let ready_no = ExplainInfo {
+        id: "s1".to_owned(),
+        address: "agent-plan@host-a".to_owned(),
+        harness: Harness::Generic,
+        exit_code: None,
+        ready: Some(false),
+        starting: false,
+        activity: Some(Activity::Working),
+        activity_cause: Some("output".to_owned()),
+        needs_input: None,
+        hold: None,
+        pending: 0,
+        reset: ResetVerdict {
+            allowed: true,
+            code: None,
+            reason: None,
+        },
+    };
+    assert_eq!(
+        format_explain(&ready_no),
+        concat!(
+            "s1 (agent-plan@host-a): generic, running\n",
+            "activity: working (output)\n",
+            "ready: no\n",
+            "needs input: no\n",
+            "hold: none\n",
+            "queued: 0\n",
+            "reset: gate open\n",
+        )
+    );
 }
