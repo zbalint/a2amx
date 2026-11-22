@@ -78,3 +78,18 @@ No observable change. The `awaiting_receipt` predicate is the same boolean in al
 | `message_info`'s callers are `message_status` (`daemon.rs:496`) and `views::list_messages` (`views.rs:270`); after the move both are in `views.rs` | `rg -n 'message_info' src` | probed |
 | `MessageState` has no `Delivered` variant (Pending, Delivering, Submitted, Unsubmitted, Cancelled, Undeliverable) | `src/messaging.rs:256-263` | read (consultant) |
 | test killers per mutant | repo tests | consultant named candidates (m_8544); the tester confirms |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer OMP openai-codex/gpt-5.6-luna; tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | architect | the first draft said `message_info` is called only by `message_status`; `views::list_messages` also calls it | claim and visibility text corrected before lock |
+| draft review | consultant | `record_receipt` has a second outside caller (`src/daemon/bridge.rs:5,:108`); the spec named only `codex.rs`; the grep looked for `crate::daemon::` paths and missed sibling `use super::{...}` lists | spec names both callers, says `bridge.rs` is not edited, adds it to the empty-diff check |
+| draft review | consultant | the mutant "adds `MessageState::Delivered`" does not compile (no such variant) | replaced with `Pending` |
+| draft review | consultant | wording: "three Runtime methods" call `is_awaiting_receipt` (two do); several mutants had no named killer or were expected survivors | corrected; candidates and expected survivors named |
+| tester pass | tester | spec 2.4 placed `mod reports;` "between registry and remote" (not alphabetical; `remote` sorts first) | developer used the correct position; recorded |
+| tester pass | tester | the `note_corrupted` mutant is killed by two `delivery` tests, not only a verdict test | recorded |
+| tester pass | tester | `awaiting_receipt` state list with `Pending` added survives (an unpinned behaviour) | backlog follow-up |
+| tester pass | tester | expected survivors confirmed: `!observed` clause, boot clause, `message_status` foreign boot (no restart-over-the-same-root test) | backlog follow-up |

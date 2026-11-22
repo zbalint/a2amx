@@ -19,13 +19,12 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use crate::client::Framed;
 use crate::confine;
-use crate::delivery::{AnyChannel, Channel};
 use crate::emulator::Size;
-use crate::harness::{self, Deliver, Harness};
-use crate::messaging::{self, Limits, MessageState, code};
+use crate::harness::Harness;
+use crate::messaging::{self, Limits};
 use crate::session::{Session, mark_inherited_fds_cloexec};
-use crate::store::{self, CancelResult, Message, RejectOutcome, Store};
-use crate::wire::{MessageInfo, QuotaWindow, Request, Response};
+use crate::store::{self, Store};
+use crate::wire::{Request, Response};
 mod admission;
 mod attach;
 mod bridge;
@@ -34,14 +33,17 @@ mod notices;
 mod omp_usage;
 mod registry;
 mod remote;
+mod reports;
 mod trust;
 mod views;
+use admission::cancel_message;
 use attach::attach;
 use bridge::bridge_attach;
 use launch::kill_session;
 use omp_usage::OmpUsage;
 use registry::Sessions;
 use remote::Leases;
+pub(crate) use reports::record_receipt;
 use trust::{request_permitted, session_id};
 use views::{explain_of, list_agents, list_messages, list_sessions, screen_of};
 const ACTIVITY_QUIET: Duration = Duration::from_secs(10);
@@ -132,34 +134,6 @@ fn parse_message_id(id: &str) -> Option<i64> {
         return None;
     }
     digits.parse().ok().filter(|seq| *seq > 0)
-}
-
-/// Stores a native receipt when `id` is an open message of this daemon run addressed
-/// to `session` and no receipt exists yet; reports whether one was stored.
-pub(crate) async fn record_receipt(
-    store: &Store,
-    boot: &str,
-    session: &Session,
-    id: &str,
-) -> anyhow::Result<bool> {
-    let Some(seq) = parse_message_id(id) else {
-        return Ok(false);
-    };
-    let Some(message) = store.get(seq).await? else {
-        return Ok(false);
-    };
-    if message.boot != boot
-        || message.recipient_session != session.id().0
-        || !matches!(
-            message.state,
-            MessageState::Delivering | MessageState::Submitted | MessageState::Unsubmitted
-        )
-        || message.observed
-    {
-        return Ok(false);
-    }
-    store.record_receipt(seq).await?;
-    Ok(true)
 }
 
 fn failed(code: &str, message: &str) -> Response {
@@ -311,253 +285,6 @@ impl Runtime {
                 failed(error.code, &error.message)
             }
         }
-    }
-
-    async fn report_prompt(&self, role: &Role, prompt: String) -> anyhow::Result<Response> {
-        let session_id = match session_id(role, "report_prompt") {
-            Ok(id) => id,
-            Err(message) => return Ok(Response::Error { message }),
-        };
-        let (_, session) =
-            lookup(self, session_id).ok_or_else(|| anyhow::anyhow!("session is unavailable"))?;
-        if session.channel()
-            && let Some(inner) = messaging::unwrap_channel(&prompt)
-        {
-            self.channel_prompt_verdict(&session, session_id, &inner)
-                .await?;
-            return Ok(Response::PromptVerdict {
-                verdict: "allow".into(),
-                reason: None,
-            });
-        }
-        let text = messaging::unwrap_pastes(&prompt);
-        let known = self.known_envelopes(&session, session_id, &text).await?;
-        if known.is_empty() {
-            session.note_submit(false);
-        } else if known.len() == 1 && text == known[0].1 {
-            self.store.record_receipt(known[0].0).await?;
-            session.note_submit(true);
-        } else {
-            return self.block_corrupted_submission(&session, text, known).await;
-        }
-        Ok(Response::PromptVerdict {
-            verdict: "allow".into(),
-            reason: None,
-        })
-    }
-
-    async fn report_quota(
-        &self,
-        role: &Role,
-        five_hour: Option<QuotaWindow>,
-        weekly: Option<QuotaWindow>,
-    ) -> anyhow::Result<Response> {
-        let session_id = match session_id(role, "report_quota") {
-            Ok(id) => id,
-            Err(message) => return Ok(Response::Error { message }),
-        };
-        let now = store::now();
-        let latest = now.saturating_add(8 * 24 * 60 * 60);
-        for window in [five_hour, weekly].into_iter().flatten() {
-            if window.left > 100 {
-                return Ok(Response::Error {
-                    message: "quota left must be at most 100".into(),
-                });
-            }
-            if window.resets_at > latest {
-                return Ok(Response::Error {
-                    message: "quota reset is too far in the future".into(),
-                });
-            }
-        }
-        let Some((_, session)) = lookup(self, session_id) else {
-            return Ok(Response::Error {
-                message: "session is unavailable".into(),
-            });
-        };
-        if matches!(session.harness(), Harness::Claude | Harness::Agy) {
-            session.set_quota_report(five_hour, weekly);
-        }
-        Ok(Response::Ok)
-    }
-
-    fn is_awaiting_receipt(&self, message: &Message, session_id: &str) -> bool {
-        message.boot == self.boot
-            && message.recipient_session == session_id
-            && matches!(
-                message.state,
-                MessageState::Delivering | MessageState::Submitted | MessageState::Unsubmitted
-            )
-            && !message.observed
-    }
-
-    async fn channel_prompt_verdict(
-        &self,
-        session: &Arc<Session>,
-        session_id: &str,
-        inner: &str,
-    ) -> anyhow::Result<()> {
-        let ids = messaging::envelope_ids(inner);
-        if let [seq] = ids.as_slice()
-            && let Some(message) = self.store.get(*seq).await?
-            && self.is_awaiting_receipt(&message, session_id)
-            && inner == messaging::channel_view(&message.envelope())
-        {
-            self.store.record_receipt(*seq).await?;
-            session.native_received();
-        }
-        Ok(())
-    }
-
-    async fn known_envelopes(
-        &self,
-        session: &Arc<Session>,
-        session_id: &str,
-        text: &str,
-    ) -> anyhow::Result<Vec<(i64, String)>> {
-        let mut known = Vec::new();
-        // shortcut: a session-token holder can forge prompts for that session;
-        // stronger attestation requires a different same-user trust contract.
-        for seq in messaging::envelope_ids(text) {
-            if let Some(message) = self.store.get(seq).await?
-                && self.is_awaiting_receipt(&message, session_id)
-            {
-                // The hook sees the envelope as the harness transformed it on paste.
-                let envelope = harness::paste_view(session.harness(), &message.envelope());
-                known.push((seq, envelope));
-            }
-        }
-        Ok(known)
-    }
-
-    async fn block_corrupted_submission(
-        &self,
-        session: &Arc<Session>,
-        text: String,
-        known: Vec<(i64, String)>,
-    ) -> anyhow::Result<Response> {
-        let mut remainder = text;
-        let mut complete = true;
-        for (_, envelope) in &known {
-            if let Some(start) = remainder.find(envelope) {
-                remainder.replace_range(start..start + envelope.len(), "");
-            } else {
-                complete = false;
-                break;
-            }
-        }
-        // shortcut: interleaved envelopes cannot be separated safely; their
-        // human text stays in the transcript until a harness can rewrite it.
-        // A leftover wrapper tag means unwrapping failed; pasting it back would put
-        // harness markup in the human's composer.
-        let draft = (complete
-            && !remainder.contains("<pasted_content")
-            && !remainder.contains("</pasted_content"))
-        .then(|| messaging::sanitize_draft(remainder.trim()));
-        session.note_corrupted(draft);
-        let mut undeliverable = false;
-        for (seq, _) in known {
-            if self
-                .store
-                .reject_attempt(seq, messaging::MAX_MESSAGE_REJECTIONS)
-                .await?
-                == RejectOutcome::Undeliverable
-            {
-                undeliverable = true;
-            }
-        }
-        session.message_notify().notify_one();
-        Ok(Response::PromptVerdict {
-            verdict: "block".into(),
-            reason: Some(
-                if undeliverable {
-                    messaging::UNMATCHABLE_SUBMISSION_REASON
-                } else {
-                    messaging::CORRUPTED_SUBMISSION_REASON
-                }
-                .into(),
-            ),
-        })
-    }
-
-    async fn message_status(&self, role: &Role, id: &str) -> anyhow::Result<Response> {
-        let Some(seq) = parse_message_id(id) else {
-            return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
-        };
-        let Some(message) = self.store.get(seq).await? else {
-            return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
-        };
-        if let Role::Session(sender) = role
-            && (message.boot != self.boot || message.sender_session != *sender)
-        {
-            return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
-        }
-        Ok(Response::Status {
-            message: self.message_info(message).await?,
-        })
-    }
-
-    async fn message_info(&self, message: Message) -> anyhow::Result<MessageInfo> {
-        let recipient = if message.boot == self.boot && message.state == MessageState::Pending {
-            lookup(self, &message.recipient_session).map(|(_, session)| session)
-        } else {
-            None
-        };
-        let hold_reason = if let Some(session) = recipient {
-            let queued = self
-                .store
-                .has_earlier_open(&self.boot, &message.recipient_session, message.seq)
-                .await?;
-            let channel = AnyChannel::for_session(session.clone());
-            if session.exit_code().is_some() {
-                None
-            } else if session.deliver() == Deliver::Hold {
-                Some("deliver_hold")
-            } else if let Some(reason) = channel.hold_reason() {
-                Some(reason)
-            } else if queued {
-                Some("queued")
-            } else {
-                channel.unready_reason()
-            }
-        } else {
-            None
-        };
-        Ok(MessageInfo {
-            id: format!("m_{}", message.seq),
-            from: message.sender_address,
-            to: message.recipient_address,
-            subject: message.subject,
-            state: message.state.as_str().into(),
-            detail: message.detail,
-            hold_reason: hold_reason.map(str::to_owned),
-            hold_explanation: hold_reason
-                .and_then(messaging::hold_explanation)
-                .map(str::to_owned),
-            accepted_at: Some(message.accepted_at),
-            updated_at: Some(message.updated_at),
-            evidence: if message.state == MessageState::Submitted {
-                Some(
-                    if message.observed {
-                        // shortcut: a removed session reports submission_observed for a
-                        // native receipt; persist the channel with the receipt if that matters.
-                        if lookup(self, &message.recipient_session).is_some_and(|(_, session)| {
-                            matches!(session.harness(), Harness::Omp | Harness::Codex)
-                                || session.channel()
-                        }) {
-                            "native_receipt"
-                        } else {
-                            "submission_observed"
-                        }
-                    } else {
-                        "write_complete"
-                    }
-                    .into(),
-                )
-            } else {
-                None
-            },
-        })
     }
 }
 
@@ -1140,23 +867,6 @@ async fn authenticate_hello(
         return Ok(None);
     };
     Ok(Some(role))
-}
-
-async fn cancel_message(runtime: &Runtime, id: &str) -> anyhow::Result<Response> {
-    Ok(match parse_message_id(id) {
-        Some(seq) => match runtime.store.cancel(seq).await? {
-            CancelResult::Cancelled => Response::Ok,
-            CancelResult::NotCancellable(state) => Response::Error {
-                message: format!("message {id} is {} and cannot be cancelled", state.as_str()),
-            },
-            CancelResult::Unknown => Response::Error {
-                message: format!("unknown message {id}"),
-            },
-        },
-        None => Response::Error {
-            message: format!("unknown message {id}"),
-        },
-    })
 }
 
 fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {

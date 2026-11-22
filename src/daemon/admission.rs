@@ -7,7 +7,7 @@ use crate::delivery::{AnyChannel, Channel};
 use crate::harness::Deliver;
 use crate::messaging::{self, code};
 use crate::session::Session;
-use crate::store::{InsertError, Message, NewMessage};
+use crate::store::{CancelResult, InsertError, Message, NewMessage};
 use crate::wire::{HumanOutboundMessage, Response};
 
 impl Runtime {
@@ -327,4 +327,21 @@ impl Runtime {
             }
         }
     }
+}
+
+pub(super) async fn cancel_message(runtime: &Runtime, id: &str) -> anyhow::Result<Response> {
+    Ok(match parse_message_id(id) {
+        Some(seq) => match runtime.store.cancel(seq).await? {
+            CancelResult::Cancelled => Response::Ok,
+            CancelResult::NotCancellable(state) => Response::Error {
+                message: format!("message {id} is {} and cannot be cancelled", state.as_str()),
+            },
+            CancelResult::Unknown => Response::Error {
+                message: format!("unknown message {id}"),
+            },
+        },
+        None => Response::Error {
+            message: format!("unknown message {id}"),
+        },
+    })
 }

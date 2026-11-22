@@ -2,15 +2,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::{ACTIVITY_QUIET, Role, Runtime, lookup};
+use super::{ACTIVITY_QUIET, Role, Runtime, failed, lookup, parse_message_id};
 use crate::delivery::{AnyChannel, Channel};
 use crate::harness::{self, Deliver, Harness};
-use crate::messaging::{self, MessageState};
+use crate::messaging::{self, MessageState, code};
 use crate::quota;
 use crate::session::Session;
-use crate::store;
+use crate::store::{self, Message};
 use crate::wire::{
-    Activity, AgentSummary, ExplainInfo, HoldInfo, QuotaInfo, ResetVerdict, Response,
+    Activity, AgentSummary, ExplainInfo, HoldInfo, MessageInfo, QuotaInfo, ResetVerdict, Response,
     SessionSummary,
 };
 
@@ -362,4 +362,86 @@ fn session_activity_cause(session: &Arc<Session>) -> Option<(Activity, String)> 
 
 pub(super) fn session_activity(session: &Arc<Session>) -> Option<Activity> {
     session_activity_cause(session).map(|(activity, _)| activity)
+}
+
+impl Runtime {
+    pub(super) async fn message_status(&self, role: &Role, id: &str) -> anyhow::Result<Response> {
+        let Some(seq) = parse_message_id(id) else {
+            return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
+        };
+        let Some(message) = self.store.get(seq).await? else {
+            return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
+        };
+        if let Role::Session(sender) = role
+            && (message.boot != self.boot || message.sender_session != *sender)
+        {
+            return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
+        }
+        Ok(Response::Status {
+            message: self.message_info(message).await?,
+        })
+    }
+
+    async fn message_info(&self, message: Message) -> anyhow::Result<MessageInfo> {
+        let recipient = if message.boot == self.boot && message.state == MessageState::Pending {
+            lookup(self, &message.recipient_session).map(|(_, session)| session)
+        } else {
+            None
+        };
+        let hold_reason = if let Some(session) = recipient {
+            let queued = self
+                .store
+                .has_earlier_open(&self.boot, &message.recipient_session, message.seq)
+                .await?;
+            let channel = AnyChannel::for_session(session.clone());
+            if session.exit_code().is_some() {
+                None
+            } else if session.deliver() == Deliver::Hold {
+                Some("deliver_hold")
+            } else if let Some(reason) = channel.hold_reason() {
+                Some(reason)
+            } else if queued {
+                Some("queued")
+            } else {
+                channel.unready_reason()
+            }
+        } else {
+            None
+        };
+        Ok(MessageInfo {
+            id: format!("m_{}", message.seq),
+            from: message.sender_address,
+            to: message.recipient_address,
+            subject: message.subject,
+            state: message.state.as_str().into(),
+            detail: message.detail,
+            hold_reason: hold_reason.map(str::to_owned),
+            hold_explanation: hold_reason
+                .and_then(messaging::hold_explanation)
+                .map(str::to_owned),
+            accepted_at: Some(message.accepted_at),
+            updated_at: Some(message.updated_at),
+            evidence: if message.state == MessageState::Submitted {
+                Some(
+                    if message.observed {
+                        // shortcut: a removed session reports submission_observed for a
+                        // native receipt; persist the channel with the receipt if that matters.
+                        if lookup(self, &message.recipient_session).is_some_and(|(_, session)| {
+                            matches!(session.harness(), Harness::Omp | Harness::Codex)
+                                || session.channel()
+                        }) {
+                            "native_receipt"
+                        } else {
+                            "submission_observed"
+                        }
+                    } else {
+                        "write_complete"
+                    }
+                    .into(),
+                )
+            } else {
+                None
+            },
+        })
+    }
 }
