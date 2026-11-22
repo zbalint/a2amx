@@ -5,6 +5,8 @@
 [![Quality gate (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
 [![Coverage (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=coverage)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
 [![Security rating (develop)](https://sonarcloud.io/api/project_badges/measure?project=zbalint_a2amx&branch=develop&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=zbalint_a2amx&branch=develop)
+[![CodeScene Average Code Health](https://codescene.io/projects/87817/status-badges/average-code-health)](https://codescene.io/projects/87817)
+[![CodeScene Hotspot Code Health](https://codescene.io/projects/87817/status-badges/hotspot-code-health)](https://codescene.io/projects/87817)
 [![Rust 1.89+](https://img.shields.io/badge/Rust-1.89%2B-orange?logo=rust)](https://github.com/zbalint/a2amx/blob/develop/Cargo.toml)
 [![Platform Linux](https://img.shields.io/badge/platform-Linux-blue?logo=linux)](https://github.com/zbalint/a2amx)
 [![License AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](https://spdx.org/licenses/AGPL-3.0-or-later.html)
