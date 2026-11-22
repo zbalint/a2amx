@@ -11,7 +11,8 @@ use crate::messaging::{self, display_duration};
 use crate::session::Session;
 use crate::store::{InsertError, NewMessage};
 
-use super::{Runtime, session_activity, session_working};
+use super::Runtime;
+use super::views::{session_activity, session_working};
 use crate::wire::Activity;
 
 const HEARTBEAT_POLL: Duration = Duration::from_secs(1);

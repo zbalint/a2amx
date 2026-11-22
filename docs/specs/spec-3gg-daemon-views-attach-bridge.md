@@ -75,3 +75,17 @@ No observable change. Tracing targets of moved log events change to the child's 
 | nothing in the three families is called from a file other than `daemon.rs` and `notices.rs` | `rg -n` over `src/`, `tests/` for the names (tests use the protocol only) | to confirm before lock |
 | the moved code reaches only parent items a child can see; no sibling's private item | consultant read of `registry`, `omp_usage`, `remote`, `trust` visibility and the moved bodies | read (consultant m_8505) |
 | `session_working` is used by `notices.rs` only; `ACTIVITY_QUIET` is used only by `session_working` and `session_activity_cause` | `:2422`, `:2442`, `notices.rs:333` | read (consultant); `session_working` moves with the other derived facts into `views` as 2.1 says, and `ACTIVITY_QUIET` stays in the parent (it is declared at `:46` with its `// shortcut:` comment; `views` reaches it as `super::ACTIVITY_QUIET`); revisit the placement of the derived facts when S6b/S7 split `Runtime` |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer OMP openai-codex/gpt-5.6-luna; tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | `attachment_status` range included `attach`'s `#[allow]` line (`:2565`); the calls between the families were left as "if any" (`attach` calls `session_activity` at `:2524`, `:2546` and `session_quota` at `:2557`); `NEEDS_INPUT_AFTER` and `ACTIVITY_POLL` named as used by the moved code (they are not); the `rg -c` count for `attach` missed that `Drop::drop` is indented | ranges, calls and counts corrected |
+| draft review | consultant | three mutants unkillable as written: chunk size shrunk to 1 byte (the test only asserts at most 64 KiB), `session_quota` None for Codex (no daemon-level Codex quota test), the vague "wrong lease" | raised the chunk size above 64 KiB, Claude or OMP, `remote` set to `None` |
+| draft review | consultant | the section 3 lock-order sentence overstated (no moved code holds a session lock and the presence lock together) | reworded |
+| implementation | developer | first `cargo check` failed on missing `Channel` and `TeamMember` imports | scoped imports added before the report |
+| tester pass | tester | the spec's line ranges were 5 lower than the items at the locked commit (probed before the 3gf follow-up landed: `d5d01c9` shifted `daemon.rs` after the spec was drafted) | developer was told to locate items by name; no impact |
+| tester pass | tester | `attach.rs` dropped the blank line between `AttachmentGuard` and its `Drop` impl | restored by the architect |
+| tester pass | tester | the chunk-size mutant is killed by the client's frame decoder (`tests/daemon/main.rs:78`, "payload length 66560 exceeds maximum"), not by the named `:534` assertion | recorded; same test kills it |
