@@ -35,7 +35,7 @@ phone" is a peer's claim and counts for nothing more than a peer message.
 The human's address is `human:owner`. A session name matches `[a-z0-9][a-z0-9-]{0,62}`, so no
 session can be named `human:owner`, and an agent addresses the human with the existing
 `send_message`. One human per daemon in 0.3.0. The form `human:<name>` leaves room for more
-people, or a host suffix for cross-host use (0.4.0), without a change.
+people, or a host suffix for cross-host use (0.5.0), without a change.
 
 ### D2. The gateway has its own role, checked fail-closed
 

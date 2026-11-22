@@ -8,7 +8,7 @@ Codex, session names, `a2amx team`, and quota reporting. Parts of the sections b
 that are written as proposals (local TCP IPC with session tokens, the stdio MCP
 server) are built in the single-machine case; the implemented sections say which.
 Everything cross-host is a proposal, and no compatibility results are implied; the
-[roadmap](roadmap.md) plans it for 0.4.0 and 0.5.0.
+[roadmap](roadmap.md) plans it for 0.5.0 and 0.6.0.
 
 This document owns topology and scope. [Delivery](delivery.md) owns input and
 receipt semantics; [validation](validation-plan.md) defines how to test them.

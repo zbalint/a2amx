@@ -5,6 +5,8 @@ All notable user-visible changes are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-22
+
 ### Changed
 
 - **Breaking:** everything a2amx keeps now lives under one root directory, `~/.a2amx` (or `A2AMX_HOME`, or `--home`), in the subdirectories `bin/`, `config/`, `state/`, `run/` and `log/`. The daemon's files moved from `~/.local/state/a2amx`: the team file is `config/team.toml`, the gateway's files are `config/gateway.toml`, `config/secrets/discord.token`, `state/gateway/pairing.json` and `state/gateway/seen.json`, the message database is `state/messages.db`, the address and token files are in `run/`, and the logs are in `log/`. `XDG_STATE_HOME` and `A2AMX_INSTALL_DIR` are no longer read: `A2AMX_HOME` moves the whole tree, the binary included. A confined session sees `bin/`, `config/` (without `secrets/`) and `log/` read-only; `state/`, `run/` and `config/secrets/` are hidden. The first `daemon start`, `gateway token` or `gateway up` moves the old data (see the next entries).
@@ -22,6 +24,7 @@ All notable user-visible changes are listed here. The format follows
 
 - Owner presence is judged per session (F90). The owner is present for a session only while that session has an interactive attachment, and for the `owner_away` grace period after it ends (a viewer attachment does not count). `send_message(to="human:owner")` is refused with `owner_present` only for that session, so an agent in a detached session can reach you while you work in another one. The refusal now says which case applies: `the owner is attached to this session in the terminal (viewer mode does not count); write to them there instead`, or `the owner left this session less than N seconds ago; try again later or write to them in the terminal`. `list_agents` reports `owner` for the caller's own session, and the away notice goes only to the session you left. This is not a breaking change: fewer messages are refused.
 
+- `a2amx new` checks its options in a fixed order: when both an activity and a heartbeat lack a watch, the error is now `heartbeat needs a non-empty watch` (it was `activity needs a non-empty watch`), and an activity without a watch plus an unparseable heartbeat now reports `invalid heartbeat ...` first. Inputs with one mistake are unchanged. This is not a breaking change.
 - `team up` prints every failure to obtain a remote-messaging lease code as `warning: could not obtain lease code: {error}`; a daemon refusal such as `no agent in this team has remote messaging enabled` now carries that prefix. This is not a breaking change.
 
 ### Added
@@ -38,6 +41,7 @@ All notable user-visible changes are listed here. The format follows
 
 ### Fixed
 
+- A failed daemon start no longer leaves files behind. When `daemon start` fails after it wrote the tokens (an address file that cannot be written, a bind error), it now removes the admin and gateway tokens and the address files, so no token remains for a daemon that is not running. If the clean-up itself fails the error names both problems. Not a breaking change.
 - The attach screen no longer feeds mouse reports to the session picker or scroll mode as keystrokes while the session has mouse reporting on: a wheel report is not typed into the picker filter, and the wheel scrolls in scroll mode.
 
 ## [0.3.1] - 2026-11-12

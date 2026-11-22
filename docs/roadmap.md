@@ -66,7 +66,18 @@ runs have not been tested live.
   messages with agents. Discord text is not end-to-end encrypted, and the documentation says so.
   The core does not depend on Discord, so another transport can be added later.
 
-### 0.4.0: Multiple hosts, messaging and management
+### 0.4.0: Configuration, layout and Antigravity — Released
+
+The release moves everything a2amx keeps under one root directory (`~/.a2amx`, with `config/`,
+`state/`, `run/`, `log/` and `bin/`) and adds the policy files `daemon.toml`, `gateway.toml`
+and `client.toml` with defaults, `a2amx config show`, one rule set for team files, per-project
+auto-grant consent, and a one-time migration of the old state directory. It also adds the
+Antigravity CLI (`agy`) harness, confined Codex sessions, owner presence judged per session,
+and a failed daemon start that leaves no token files behind. The release has breaking changes;
+see the [changelog](../CHANGELOG.md). Inside, the daemon and the attach screen were
+restructured into smaller modules without changing their behavior.
+
+### 0.5.0: Multiple hosts, messaging and management
 
 - A daemon on each host connects to one central daemon, which keeps the directory and
   accepts messages. Hosts join by pairing, and every connection between hosts is
@@ -85,7 +96,7 @@ For example, a planning agent on `host-a` could message a reviewing agent on `ho
 The recipient's host would queue the message until delivery is permitted, deliver a
 clearly attributed message, and report a receipt when the harness provides one.
 
-### 0.5.0: Multiple hosts, attach and launch
+### 0.6.0: Multiple hosts, attach and launch
 
 - Attach to a session on another host, with terminal traffic relayed through the
   central daemon and scheduled separately from messages and control traffic (G3).
