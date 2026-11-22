@@ -66,6 +66,20 @@ async fn spawn_fake(
     Ok((addr, recorded, handle))
 }
 
+/// Run one typed call against a fake daemon that answers with `reply`; return the call's result and the requests the daemon recorded.
+async fn exchange<T>(
+    reply: Response,
+    call: impl AsyncFnOnce(&mut Client) -> T,
+) -> (T, Vec<Request>) {
+    let (addr, recorded, handle) = spawn_fake(vec![reply]).await.unwrap();
+    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let result = call(&mut client).await;
+    drop(client);
+    handle.await.unwrap();
+    let requests = recorded.lock().unwrap().clone();
+    (result, requests)
+}
+
 fn sample_explain() -> ExplainInfo {
     ExplainInfo {
         id: "s1".into(),
@@ -105,468 +119,374 @@ fn sample_message() -> MessageInfo {
 
 #[tokio::test]
 async fn sessions_success_error_and_unexpected() {
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Sessions { sessions: vec![] }])
-        .await
-        .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(client.sessions().await.unwrap(), vec![]);
-    assert_eq!(recorded.lock().unwrap().as_slice(), &[Request::List]);
-    handle.await.unwrap();
+    let (res, req) = exchange(Response::Sessions { sessions: vec![] }, async |c| {
+        c.sessions().await
+    })
+    .await;
+    assert_eq!(res.unwrap(), vec![]);
+    assert_eq!(req, vec![Request::List]);
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "boom".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(client.sessions().await.unwrap_err().to_string(), "boom");
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "boom".into(),
+        },
+        async |c| c.sessions().await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "boom");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Created {
-        session: "x".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(
+        Response::Created {
+            session: "x".into(),
+        },
+        async |c| c.sessions().await,
+    )
+    .await;
     assert_eq!(
-        client.sessions().await.unwrap_err().to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Created { session: \"x\" }"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn kill_success_error_and_unexpected() {
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Ok]).await.unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    client.kill("s1".into(), true).await.unwrap();
+    let (res, req) = exchange(Response::Ok, async |c| c.kill("s1".into(), true).await).await;
+    res.unwrap();
     assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &[Request::Kill {
+        req,
+        vec![Request::Kill {
             session: "s1".into(),
             now: true,
         }]
     );
-    handle.await.unwrap();
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "no such session".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client
-            .kill("s1".into(), false)
-            .await
-            .unwrap_err()
-            .to_string(),
-        "no such session"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "no such session".into(),
+        },
+        async |c| c.kill("s1".into(), false).await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "no such session");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Created {
-        session: "x".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(
+        Response::Created {
+            session: "x".into(),
+        },
+        async |c| c.kill("s1".into(), false).await,
+    )
+    .await;
     assert_eq!(
-        client
-            .kill("s1".into(), false)
-            .await
-            .unwrap_err()
-            .to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Created { session: \"x\" }"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn reset_success_failed_error_and_unexpected() {
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Reset { steps: 2 }])
-        .await
-        .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(client.reset("s1").await.unwrap(), 2);
+    let (res, req) = exchange(Response::Reset { steps: 2 }, async |c| c.reset("s1").await).await;
+    assert_eq!(res.unwrap(), 2);
     assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &[Request::Reset {
+        req,
+        vec![Request::Reset {
             session: "s1".into(),
         }]
     );
-    handle.await.unwrap();
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Failed {
-        code: "draft_present".into(),
-        message: "draft".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(
+        Response::Failed {
+            code: "draft_present".into(),
+            message: "draft".into(),
+        },
+        async |c| c.reset("s1").await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "draft_present: draft");
+
+    let (res, _) = exchange(
+        Response::Error {
+            message: "boom".into(),
+        },
+        async |c| c.reset("s1").await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "boom");
+
+    let (res, _) = exchange(
+        Response::Created {
+            session: "x".into(),
+        },
+        async |c| c.reset("s1").await,
+    )
+    .await;
     assert_eq!(
-        client.reset("s1").await.unwrap_err().to_string(),
-        "draft_present: draft"
-    );
-    handle.await.unwrap();
-
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "boom".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(client.reset("s1").await.unwrap_err().to_string(), "boom");
-    handle.await.unwrap();
-
-    let (addr, _, handle) = spawn_fake(vec![Response::Created {
-        session: "x".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client.reset("s1").await.unwrap_err().to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Created { session: \"x\" }"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn shutdown_success_error_and_unexpected() {
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Ok]).await.unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    client.shutdown(false).await.unwrap();
-    assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &[Request::Shutdown { now: false }]
-    );
-    handle.await.unwrap();
+    let (res, req) = exchange(Response::Ok, async |c| c.shutdown(false).await).await;
+    res.unwrap();
+    assert_eq!(req, vec![Request::Shutdown { now: false }]);
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "denied".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client.shutdown(true).await.unwrap_err().to_string(),
-        "denied"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "denied".into(),
+        },
+        async |c| c.shutdown(true).await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "denied");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Created {
-        session: "x".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(
+        Response::Created {
+            session: "x".into(),
+        },
+        async |c| c.shutdown(false).await,
+    )
+    .await;
     assert_eq!(
-        client.shutdown(false).await.unwrap_err().to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Created { session: \"x\" }"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn version_success_old_daemon_and_unexpected() {
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Version {
-        version: "1.2".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(client.version().await.unwrap(), Some("1.2".into()));
-    assert_eq!(recorded.lock().unwrap().as_slice(), &[Request::Version]);
-    handle.await.unwrap();
+    let (res, req) = exchange(
+        Response::Version {
+            version: "1.2".into(),
+        },
+        async |c| c.version().await,
+    )
+    .await;
+    assert_eq!(res.unwrap(), Some("1.2".into()));
+    assert_eq!(req, vec![Request::Version]);
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "old".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(client.version().await.unwrap(), None);
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "old".into(),
+        },
+        async |c| c.version().await,
+    )
+    .await;
+    assert_eq!(res.unwrap(), None);
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Ok]).await.unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(Response::Ok, async |c| c.version().await).await;
     assert_eq!(
-        client.version().await.unwrap_err().to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Ok"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn explain_success_error_and_unexpected() {
     let info = sample_explain();
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Explain { info: info.clone() }])
-        .await
-        .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(client.explain("s1".into()).await.unwrap(), info);
+    let (res, req) = exchange(Response::Explain { info: info.clone() }, async |c| {
+        c.explain("s1".into()).await
+    })
+    .await;
+    assert_eq!(res.unwrap(), info);
     assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &[Request::Explain {
+        req,
+        vec![Request::Explain {
             session: "s1".into(),
         }]
     );
-    handle.await.unwrap();
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "missing".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client.explain("s1".into()).await.unwrap_err().to_string(),
-        "missing"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "missing".into(),
+        },
+        async |c| c.explain("s1".into()).await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "missing");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Created {
-        session: "x".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(
+        Response::Created {
+            session: "x".into(),
+        },
+        async |c| c.explain("s1".into()).await,
+    )
+    .await;
     assert_eq!(
-        client.explain("s1".into()).await.unwrap_err().to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Created { session: \"x\" }"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn screen_success_error_and_unexpected() {
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Screen {
-        lines: vec!["line1".into(), "line2".into()],
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, req) = exchange(
+        Response::Screen {
+            lines: vec!["line1".into(), "line2".into()],
+        },
+        async |c| c.screen("s1".into()).await,
+    )
+    .await;
+    assert_eq!(res.unwrap(), vec!["line1".to_owned(), "line2".to_owned()]);
     assert_eq!(
-        client.screen("s1".into()).await.unwrap(),
-        vec!["line1".to_owned(), "line2".to_owned()]
-    );
-    assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &[Request::Screen {
+        req,
+        vec![Request::Screen {
             session: "s1".into(),
         }]
     );
-    handle.await.unwrap();
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "missing".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client.screen("s1".into()).await.unwrap_err().to_string(),
-        "missing"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "missing".into(),
+        },
+        async |c| c.screen("s1".into()).await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "missing");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Created {
-        session: "x".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(
+        Response::Created {
+            session: "x".into(),
+        },
+        async |c| c.screen("s1".into()).await,
+    )
+    .await;
     assert_eq!(
-        client.screen("s1".into()).await.unwrap_err().to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Created { session: \"x\" }"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn messages_success_failed_error_and_unexpected() {
     let msg = sample_message();
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Messages {
-        messages: vec![msg.clone()],
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, req) = exchange(
+        Response::Messages {
+            messages: vec![msg.clone()],
+        },
+        async |c| c.messages(None, Some("undeliverable".into())).await,
+    )
+    .await;
+    assert_eq!(res.unwrap(), vec![msg]);
     assert_eq!(
-        client
-            .messages(None, Some("undeliverable".into()))
-            .await
-            .unwrap(),
-        vec![msg]
-    );
-    assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &[Request::ListMessages {
+        req,
+        vec![Request::ListMessages {
             session: None,
             state: Some("undeliverable".into()),
         }]
     );
-    handle.await.unwrap();
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Failed {
-        code: "c".into(),
-        message: "m".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client
-            .messages(None, Some("undeliverable".into()))
-            .await
-            .unwrap_err()
-            .to_string(),
-        "m"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Failed {
+            code: "c".into(),
+            message: "m".into(),
+        },
+        async |c| c.messages(None, Some("undeliverable".into())).await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "m");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "e".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client.messages(None, None).await.unwrap_err().to_string(),
-        "e"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "e".into(),
+        },
+        async |c| c.messages(None, None).await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "e");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Created {
-        session: "x".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(
+        Response::Created {
+            session: "x".into(),
+        },
+        async |c| c.messages(None, None).await,
+    )
+    .await;
     assert_eq!(
-        client.messages(None, None).await.unwrap_err().to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Created { session: \"x\" }"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn cancel_message_success_failed_error_and_unexpected() {
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Ok]).await.unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    client.cancel_message("m1".into()).await.unwrap();
-    assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &[Request::CancelMessage { id: "m1".into() }]
-    );
-    handle.await.unwrap();
+    let (res, req) = exchange(Response::Ok, async |c| c.cancel_message("m1".into()).await).await;
+    res.unwrap();
+    assert_eq!(req, vec![Request::CancelMessage { id: "m1".into() }]);
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Failed {
-        code: "c".into(),
-        message: "gone".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client
-            .cancel_message("m1".into())
-            .await
-            .unwrap_err()
-            .to_string(),
-        "gone"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Failed {
+            code: "c".into(),
+            message: "gone".into(),
+        },
+        async |c| c.cancel_message("m1".into()).await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "gone");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "e".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client
-            .cancel_message("m1".into())
-            .await
-            .unwrap_err()
-            .to_string(),
-        "e"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "e".into(),
+        },
+        async |c| c.cancel_message("m1".into()).await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "e");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Created {
-        session: "x".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(
+        Response::Created {
+            session: "x".into(),
+        },
+        async |c| c.cancel_message("m1".into()).await,
+    )
+    .await;
     assert_eq!(
-        client
-            .cancel_message("m1".into())
-            .await
-            .unwrap_err()
-            .to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Created { session: \"x\" }"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn issue_lease_code_success_error_and_unexpected() {
-    let (addr, recorded, handle) = spawn_fake(vec![Response::LeaseCode {
-        code: "AB12".into(),
-        agents: vec!["a".into()],
-        valid_secs: 60,
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, req) = exchange(
+        Response::LeaseCode {
+            code: "AB12".into(),
+            agents: vec!["a".into()],
+            valid_secs: 60,
+        },
+        async |c| c.issue_lease_code("t1".into()).await,
+    )
+    .await;
     assert_eq!(
-        client.issue_lease_code("t1".into()).await.unwrap(),
+        res.unwrap(),
         IssuedLeaseCode {
             code: "AB12".into(),
             agents: vec!["a".into()],
             valid_secs: 60,
         }
     );
-    assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &[Request::IssueLeaseCode { team: "t1".into() }]
-    );
-    handle.await.unwrap();
+    assert_eq!(req, vec![Request::IssueLeaseCode { team: "t1".into() }]);
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "no remote".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client
-            .issue_lease_code("t1".into())
-            .await
-            .unwrap_err()
-            .to_string(),
-        "no remote"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "no remote".into(),
+        },
+        async |c| c.issue_lease_code("t1".into()).await,
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "no remote");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Created {
-        session: "x".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(
+        Response::Created {
+            session: "x".into(),
+        },
+        async |c| c.issue_lease_code("t1".into()).await,
+    )
+    .await;
     assert_eq!(
-        client
-            .issue_lease_code("t1".into())
-            .await
-            .unwrap_err()
-            .to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Created { session: \"x\" }"
     );
-    handle.await.unwrap();
 }
 
 fn new_session() -> NewSessionRequest {
@@ -598,10 +518,8 @@ fn new_session() -> NewSessionRequest {
     }
 }
 
-fn recorded_json(recorded: &Mutex<Vec<Request>>) -> Vec<serde_json::Value> {
+fn recorded_json(recorded: &[Request]) -> Vec<serde_json::Value> {
     recorded
-        .lock()
-        .unwrap()
         .iter()
         .map(|request| serde_json::to_value(request).unwrap())
         .collect()
@@ -633,15 +551,15 @@ fn expected_new_session() -> serde_json::Value {
 async fn create_session_unconfined_success_records_all_fields() {
     let session = new_session();
     let expected = expected_new_session();
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Created {
-        session: "s9".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(client.create_session(session, None).await.unwrap(), "s9");
-    assert_eq!(recorded_json(&recorded), vec![expected]);
-    handle.await.unwrap();
+    let (res, req) = exchange(
+        Response::Created {
+            session: "s9".into(),
+        },
+        async |c| c.create_session(session, None).await,
+    )
+    .await;
+    assert_eq!(res.unwrap(), "s9");
+    assert_eq!(recorded_json(&req), vec![expected]);
 }
 
 #[tokio::test]
@@ -657,87 +575,72 @@ async fn create_session_confined_success_wraps_all_fields() {
         "confine": serde_json::to_value(&confine).unwrap(),
         "request": expected_new_session(),
     });
-    let (addr, recorded, handle) = spawn_fake(vec![Response::Created {
-        session: "s9".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client.create_session(session, Some(confine)).await.unwrap(),
-        "s9"
-    );
-    assert_eq!(recorded_json(&recorded), vec![expected]);
-    handle.await.unwrap();
+    let (res, req) = exchange(
+        Response::Created {
+            session: "s9".into(),
+        },
+        async |c| c.create_session(session, Some(confine)).await,
+    )
+    .await;
+    assert_eq!(res.unwrap(), "s9");
+    assert_eq!(recorded_json(&req), vec![expected]);
 }
 
 #[tokio::test]
 async fn create_session_confined_version_skew_maps_error() {
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "invalid control request: unknown variant".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    let error = client
-        .create_session(new_session(), Some(ConfineRequest::default()))
-        .await
-        .unwrap_err();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "invalid control request: unknown variant".into(),
+        },
+        async |c| {
+            c.create_session(new_session(), Some(ConfineRequest::default()))
+                .await
+        },
+    )
+    .await;
     assert_eq!(
-        error.to_string(),
+        res.unwrap_err().to_string(),
         "the running daemon does not support --confine; restart it"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn create_session_unconfined_version_skew_keeps_daemon_error() {
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "invalid control request: unknown variant".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    let error = client
-        .create_session(new_session(), None)
-        .await
-        .unwrap_err();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "invalid control request: unknown variant".into(),
+        },
+        async |c| c.create_session(new_session(), None).await,
+    )
+    .await;
     assert_eq!(
-        error.to_string(),
+        res.unwrap_err().to_string(),
         "invalid control request: unknown variant"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]
 async fn create_session_other_error_and_unexpected_reply() {
-    let (addr, _, handle) = spawn_fake(vec![Response::Error {
-        message: "other".into(),
-    }])
-    .await
-    .unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
-    assert_eq!(
-        client
-            .create_session(new_session(), Some(ConfineRequest::default()))
-            .await
-            .unwrap_err()
-            .to_string(),
-        "other"
-    );
-    handle.await.unwrap();
+    let (res, _) = exchange(
+        Response::Error {
+            message: "other".into(),
+        },
+        async |c| {
+            c.create_session(new_session(), Some(ConfineRequest::default()))
+                .await
+        },
+    )
+    .await;
+    assert_eq!(res.unwrap_err().to_string(), "other");
 
-    let (addr, _, handle) = spawn_fake(vec![Response::Ok]).await.unwrap();
-    let mut client = Client::connect_addr(addr, "token").await.unwrap();
+    let (res, _) = exchange(Response::Ok, async |c| {
+        c.create_session(new_session(), None).await
+    })
+    .await;
     assert_eq!(
-        client
-            .create_session(new_session(), None)
-            .await
-            .unwrap_err()
-            .to_string(),
+        res.unwrap_err().to_string(),
         "unexpected daemon response: Ok"
     );
-    handle.await.unwrap();
 }
 
 #[tokio::test]

@@ -62,3 +62,14 @@ No new test, no deleted test. The file shrinks (expect roughly 450-550 lines; no
 | `AsyncFnOnce` is available | `rust-toolchain.toml` channel `1.98.1` (stable since 1.85) | read |
 | the file already allows unwrap and expect | `tests/client_requests.rs:1` | read |
 | the other users of `spawn_fake` are in this file only | `rg -n 'spawn_fake' tests` prints nothing outside `tests/client_requests.rs` | probed |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer OMP-external senior slot (antigravity, Gemini 4 Hydrogen, Medium); no separate tester (the developer ran the mutation check, as the spec assigned). BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the spec's picture of the file was wrong: "eleven `*_success_error_and_unexpected` tests" (six have that suffix; ten per-method tests plus five `create_session_*`), "multi-reply tests" (none exist), counts 41 and "at most 8" | corrected to 39 one-reply cases, exact counts 3 and 2 |
+| draft review | consultant | the helper must drop the client before awaiting the fake's join handle (the fake blocks on receive); `recorded_json` takes the mutex, so its signature must change; a worktree with its own target dir is a second full build | order and signature stated; shared `CARGO_TARGET_DIR` |
+| implementation | developer | none beyond the spec | n/a |
+| architect review | architect | the spec said 16 tests before and after; `cargo test --test client_requests` runs 17 (the target also runs `common::fake_discord::tests`) | developer reported 17 before and after; spec text left as locked |
