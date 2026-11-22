@@ -64,3 +64,16 @@ No observable change. The order of checks in `serve` (hello, gateway guard, exit
 | `gateway_connections` is read by `remote.rs:213` and incremented only in `serve` | `rg -n gateway_connections src` | probed |
 | `Role` stays in the parent and `serve` reaches it | `src/daemon.rs:107` | read |
 | test killers per mutant | repo tests | consultant and tester to name |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer antigravity Gemini 4 Hydrogen (Medium) (the senior developer); tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the mutant "invalid-request branch drops its `continue`" does not compile (the arm must yield a `Request`) | replaced by `continue` to `return Ok(())` |
+| draft review | consultant | the hello-timeout mutant 5 s to 0 is not killed by the named test (it bounds the wait from above only) and is racy | replaced by 5 s to 30 s; 5 s to 1 s an expected survivor |
+| draft review | consultant | the "Shutdown answers before setting `stop_now`" mutant is equivalent (`Daemon::shutdown` reads it after `notify_one`) | marked equivalent; `stop_now` stores `false` named instead |
+| draft review | consultant | two import routes offered (via the parent's `use` lines or sibling paths) with the first leaving daemon.rs's imports unpruned; the spec named `session_id` as used by `serve` (it is not) and a tracing-target change (there is no tracing call in the moved code) | sibling paths chosen, the use-line list made exact, both false statements removed |
+| tester pass | tester | the `stop_now` store mutant, left open in the spec, is killed by `kill_and_down::daemon_stop_now_skips_ctrl_d` | recorded |
+| tester pass | tester | spec test line references name the test's first line, not the failing assertion | recorded |
