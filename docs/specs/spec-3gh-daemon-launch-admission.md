@@ -73,3 +73,18 @@ No observable change. The deliberate locks held across awaits (the creation gate
 | `kill_session`'s `now` only matters for a graceful non-Generic kill; tests kill with `now: true` | `src/session/exit.rs:14-19`, test greps | consultant read; mutant listed as an expected survivor |
 | the move cannot add a Sonar issue: `src/daemon.rs` has no open issue on `develop`, so `create_session` and `send_message` are under the complexity limit (30); Sonar may count the moved bodies as new code, but a rule that did not fire in `daemon.rs` does not fire in the new files | `search_sonar_issues_in_projects` for `zbalint_a2amx:src/daemon.rs`, branch `develop`: 0 open issues | probed; if the gate still fails on a moved function, the architect reads the issue and decides, it is not the developer's to fix |
 | `serve`'s call sites of the six `pub(super)` items | `rg -n` at HEAD | probed |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer OMP openai-codex/gpt-5.6-luna; tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | `accept_channel_dialog`'s range swallowed `current_exe`'s doc comment (`:1379-1380`); start-to-next-start ranges included trailing blanks and a neighbour's doc | ranges rewritten doc-comment-to-brace; boundary rule stated |
+| draft review | consultant | the `pub(super)` list named `sample_activity` and hedged; the closed set is six items | list closed in 2.2 |
+| draft review | consultant | four mutants not killable as written (`plan_confinement` "ignores a grant", `prepare_codex` "skips the start", `send_message` rate-limit overlap, `kill_session` `now`) and a half-vacuous grep (`SYSTEM_SESSION`) | concrete mutants named; grep replaced by counts; `ACTIVITY_POLL` moved with its only user |
+| draft review | consultant | Sonar may count moved bodies as new code | probed: no open issue on `daemon.rs` at develop; recorded in the claims table |
+| tester pass | tester | the spec called the `kill_session` `now` inversion an expected survivor; eight `kill_and_down` tests kill it | spec claim was false; recorded here (code unchanged) |
+| tester pass | tester | `without_overlays` fallback of `plan_confinement` has no daemon-level test (mutant M4b survives) | backlog follow-up |
+| tester pass | tester | the agent-branch empty-windows mutant is killed by `broker::limits_and_lifecycle::rate_limit_does_not_cross_sender_sessions`, not `rate_limits.rs` | recorded |
+| implementation | developer | first `cargo check` failed on a missing `HashSet` import in `launch.rs` | explicit import added before the report |
