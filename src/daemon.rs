@@ -31,16 +31,16 @@ use crate::session::{
 use crate::store::{self, CancelResult, InsertError, Message, NewMessage, RejectOutcome, Store};
 use crate::wire::{
     Activity, AgentSummary, BRIDGE_PROTOCOL, BridgeDown, BridgeUp, ClientFrame, ExplainInfo,
-    GatewayAgent, HoldInfo, HumanOutboundMessage, MessageInfo, QuotaInfo, QuotaWindow, RemoteLease,
-    RemoteStatus, Request, ResetVerdict, Response, ServerFrame, SessionSummary, StatusInfo,
-    TeamMember,
+    HoldInfo, HumanOutboundMessage, MessageInfo, QuotaInfo, QuotaWindow, Request, ResetVerdict,
+    Response, ServerFrame, SessionSummary, StatusInfo, TeamMember,
 };
 mod notices;
 mod omp_usage;
 mod registry;
+mod remote;
 use omp_usage::OmpUsage;
 use registry::Sessions;
-
+use remote::Leases;
 const ACTIVITY_QUIET: Duration = Duration::from_secs(10);
 const ACTIVITY_POLL: Duration = Duration::from_secs(1);
 pub(crate) const NEEDS_INPUT_AFTER: Duration = Duration::from_secs(10);
@@ -89,7 +89,7 @@ struct Runtime {
     omp_usage: OmpUsage,
     rate: tokio::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     presence: Arc<Mutex<HashMap<String, messaging::Presence>>>,
-    leases: Mutex<PresenceLeases>,
+    leases: Leases,
     gateway_connections: AtomicUsize,
     // shortcut: a stopped gateway leaves messages delivering until daemon restart;
     // each stuck message consumes the shared human queue limit, so add a timeout
@@ -98,28 +98,6 @@ struct Runtime {
     deliveries: Mutex<Vec<JoinHandle<()>>>,
     stop_requested: tokio::sync::Notify,
     stop_now: AtomicBool,
-}
-
-#[derive(Default)]
-struct PresenceLeases {
-    teams: HashMap<String, TeamLease>,
-    wrong_codes: u32,
-}
-
-#[derive(Default)]
-struct TeamLease {
-    lease: Option<ActiveLease>,
-    pending: Option<PendingLeaseCode>,
-}
-
-struct ActiveLease {
-    expires: Instant,
-    members: Vec<SessionId>,
-}
-
-struct PendingLeaseCode {
-    code: String,
-    expires: Instant,
 }
 
 enum Role {
@@ -870,233 +848,6 @@ impl Runtime {
         Ok(Ok(sequence))
     }
 
-    fn remote_members(&self, team: &str) -> Vec<(SessionId, String, messaging::RemoteMode)> {
-        self.sessions
-            .snapshot()
-            .iter()
-            .filter_map(|session| {
-                (session.exit_code().is_none()
-                    && session.team().is_some_and(|scope| scope.name == team))
-                .then(|| {
-                    session.remote().map(|mode| {
-                        let name = session
-                            .name()
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| session.id().0.clone());
-                        (session.id().clone(), name, mode)
-                    })
-                })
-                .flatten()
-            })
-            .collect()
-    }
-
-    async fn issue_lease_code(&self, team: String) -> anyhow::Result<Response> {
-        let members = self.remote_members(&team);
-        if members.is_empty() {
-            return Ok(Response::Error {
-                message: "no agent in this team has remote messaging enabled".into(),
-            });
-        }
-        let code = tokio::task::spawn_blocking(random_hex::<6>).await??;
-        let agents = members
-            .iter()
-            .map(|(_, name, mode)| {
-                let mode = match mode {
-                    messaging::RemoteMode::Send => "send",
-                    messaging::RemoteMode::Both => "both",
-                };
-                format!("{name} ({mode})")
-            })
-            .collect();
-        let mut leases = self.leases.lock().unwrap_or_else(PoisonError::into_inner);
-        leases.teams.entry(team).or_default().pending = Some(PendingLeaseCode {
-            code: code.clone(),
-            expires: Instant::now() + Duration::from_secs(self.limits.code_secs),
-        });
-        leases.wrong_codes = 0;
-        Ok(Response::LeaseCode {
-            code,
-            agents,
-            valid_secs: self.limits.code_secs,
-        })
-    }
-
-    fn take_matching_lease_code(&self, code: &str, now: Instant) -> Option<String> {
-        let mut leases = self.leases.lock().unwrap_or_else(PoisonError::into_inner);
-        if leases.wrong_codes >= messaging::MAX_WRONG_CODES {
-            return None;
-        }
-        let mut matched_team = None;
-        for (team, state) in &leases.teams {
-            if let Some(pending) = state.pending.as_ref()
-                && now < pending.expires
-                && constant_time_eq(code, &pending.code)
-            {
-                matched_team.get_or_insert_with(|| team.clone());
-            }
-        }
-        let team = matched_team;
-        if let Some(team) = team {
-            leases
-                .teams
-                .get_mut(&team)
-                .and_then(|state| state.pending.take());
-            return Some(team);
-        }
-        for state in leases.teams.values_mut() {
-            if state
-                .pending
-                .as_ref()
-                .is_some_and(|pending| now >= pending.expires)
-            {
-                state.pending = None;
-            }
-        }
-        leases.wrong_codes = leases.wrong_codes.saturating_add(1);
-        if leases.wrong_codes >= messaging::MAX_WRONG_CODES {
-            for state in leases.teams.values_mut() {
-                state.pending = None;
-            }
-        }
-        None
-    }
-
-    fn start_lease(&self, team: &str, now: Instant) {
-        let members = self
-            .remote_members(team)
-            .into_iter()
-            .map(|(id, _, _)| id)
-            .collect();
-        let mut leases = self.leases.lock().unwrap_or_else(PoisonError::into_inner);
-        leases.teams.entry(team.to_owned()).or_default().lease = Some(ActiveLease {
-            expires: now + Duration::from_secs(self.limits.lease_secs),
-            members,
-        });
-    }
-
-    fn redeem_lease_code(&self, code: String) -> Response {
-        let now = Instant::now();
-        let Some(team) = self.take_matching_lease_code(&code, now) else {
-            return Response::Error {
-                message: "invalid or expired code".into(),
-            };
-        };
-        self.start_lease(&team, now);
-        Response::Ok
-    }
-
-    fn lease_state(&self, team: &str, id: &str, now: Instant) -> RemoteLease {
-        let leases = self.leases.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(lease) = leases
-            .teams
-            .get(team)
-            .and_then(|state| state.lease.as_ref())
-        else {
-            return RemoteLease::None;
-        };
-        if !lease.members.iter().any(|member| member.0.as_str() == id) {
-            return RemoteLease::None;
-        }
-        if now < lease.expires {
-            RemoteLease::Active
-        } else {
-            RemoteLease::Ended
-        }
-    }
-
-    fn lease_valid(&self, team: &str, id: &str, now: Instant) -> bool {
-        self.lease_state(team, id, now) == RemoteLease::Active
-    }
-
-    fn remote_status(&self, session: &Session) -> Option<RemoteStatus> {
-        session.remote()?;
-        let now = Instant::now();
-        let lease = session.team().map_or(RemoteLease::None, |team| {
-            self.lease_state(&team.name, &session.id().0, now)
-        });
-        Some(RemoteStatus {
-            lease,
-            gateway: self.gateway_connections.load(Ordering::Relaxed) > 0,
-        })
-    }
-
-    fn gateway_agents(&self) -> Response {
-        let now = Instant::now();
-        let agents = self
-            .sessions
-            .snapshot()
-            .iter()
-            .filter_map(|session| {
-                if session.exit_code().is_some() || !session.confined() {
-                    return None;
-                }
-                let mode = session.remote()?;
-                let team = session.team()?;
-                if !self.lease_valid(&team.name, &session.id().0, now) {
-                    return None;
-                }
-                let mode = match mode {
-                    messaging::RemoteMode::Send => "send",
-                    messaging::RemoteMode::Both => "both",
-                };
-                Some(GatewayAgent {
-                    address: messaging::address(session.name(), &session.id().0, &self.host_name),
-                    name: session
-                        .name()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| session.id().0.clone()),
-                    team: team.name.clone(),
-                    mode: mode.into(),
-                })
-            })
-            .collect();
-        Response::GatewayAgents { agents }
-    }
-
-    fn remote_ineligible(
-        &self,
-        session: &Session,
-        now: Instant,
-        direction: messaging::Direction,
-    ) -> Option<(&'static str, &'static str)> {
-        if session.exit_code().is_some() {
-            return Some((code::RECIPIENT_EXITED, "recipient has exited"));
-        }
-        if !session.confined() {
-            return Some((
-                code::NOT_PERMITTED,
-                "remote messaging needs a confined session",
-            ));
-        }
-        let enabled = match direction {
-            messaging::Direction::ToAgent => match session.remote() {
-                None | Some(messaging::RemoteMode::Send) => false,
-                Some(messaging::RemoteMode::Both) => true,
-            },
-            messaging::Direction::ToHuman => match session.remote() {
-                None => false,
-                Some(messaging::RemoteMode::Send | messaging::RemoteMode::Both) => true,
-            },
-        };
-        if !enabled {
-            return Some((
-                code::NOT_PERMITTED,
-                "remote messages to this session are not enabled",
-            ));
-        }
-        let Some(team) = session.team() else {
-            return Some((
-                code::NOT_PERMITTED,
-                "remote messaging is not active for this team; start it at the computer",
-            ));
-        };
-        (!self.lease_valid(&team.name, &session.id().0, now)).then_some((
-            code::NOT_PERMITTED,
-            "remote messaging is not active for this team; start it at the computer",
-        ))
-    }
-
     async fn human_inbound(&self, to: String, body: String) -> Response {
         if let Err(error) = messaging::validate_message(messaging::HUMAN_SUBJECT, &body) {
             return failed(error.code, &error.message);
@@ -1761,7 +1512,7 @@ impl Daemon {
             // rate limits must survive daemon restarts.
             rate: tokio::sync::Mutex::new(HashMap::new()),
             presence: Arc::new(Mutex::new(HashMap::new())),
-            leases: Mutex::new(PresenceLeases::default()),
+            leases: Leases::new(),
             gateway_connections: AtomicUsize::new(0),
             human_attempts: Mutex::new(HashMap::new()),
             deliveries: Mutex::new(Vec::new()),

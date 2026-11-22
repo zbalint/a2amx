@@ -100,3 +100,15 @@ No observable change: the same lease codes, the same lockout, the same expiry, t
 | The expiry, single-use and lockout rules are pinned | `tests/human_inbound/inbound_admission.rs:230` (`lease_codes_expire_are_single_use...`) and the next test (`five_wrong_codes...`) | read |
 | Lease expiry (`Ended`) is pinned | `tests/presence/remote_status.rs` (`RemoteLease::Ended` at `:158`) | read |
 | Nothing logs inside the moved lease code | the moved bodies | read |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer OMP openai-codex/gpt-5.6-luna; tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | two acceptance greps could not print the stated counts (`lock\(\)` also matches `self.lock()`; `leases` is case-sensitive and missed `use remote::Leases;`) | `state\.lock\(\)` and `-i`, counts 1 and 3 |
+| draft review | consultant | the wrong-attempt entry check is an equivalent mutant; the two `confined` checks are expected survivors (creation refuses remote mode without confinement); the exit-check killer races a `sleep 1` | recorded in section 5 |
+| draft review | consultant | "eleven methods" (ten), `random_hex` called private at `:141` (it is `pub fn` at `:1972`), `MutexGuard` and the three unused `wire` imports unnamed | corrected |
+| tester pass | tester | the spec said the drop check mutated to `>` is killed by `five_wrong_codes...`: it survives, because the entry check also stops the sixth attempt (the two guards make each other redundant in that direction) | recorded in backlog F94; no code change; the spec text above stays as locked |
+| implementation | developer | a malformed first edit of `daemon.rs` was discarded by restoring the file; one `real_bwrap` failure in the first full run passed alone and in the final full run (known exact-HOME flake) | no residual change |
