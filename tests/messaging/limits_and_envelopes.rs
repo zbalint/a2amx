@@ -156,6 +156,16 @@ fn input_reports_are_not_typing_but_incomplete_or_user_bytes_are() {
 }
 
 #[test]
+fn malformed_sgr_mouse_reports_count_as_typing() {
+    assert!(input_is_typing(b"\x1b[<;1;2M"));
+    assert!(input_is_typing(b"\x1b[<0;;2M"));
+    assert!(input_is_typing(b"\x1b[<0;1;M"));
+    assert!(input_is_typing(b"\x1b[<0:1;2M"));
+    assert!(input_is_typing(b"\x1b[<0;1:2M"));
+    assert!(input_is_typing(b"\x1b[<0;1;2\x1b[I"));
+}
+
+#[test]
 fn names_hosts_and_addresses_follow_reserved_namespace_rules() {
     assert!(validate_name("agent-plan").is_ok());
     assert!(validate_name("a").is_ok());

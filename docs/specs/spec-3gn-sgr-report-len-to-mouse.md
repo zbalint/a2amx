@@ -48,3 +48,14 @@ None: every input yields the same `Option<usize>`. Existing tests pass unchanged
 | `input_is_typing` is used by `src/session.rs:340` and tests | same | probed |
 | spec 3ar says it "stays where it is" (scope of that spec only) | `docs/specs/spec-3ar-attach-top-rows.md:31` | read |
 | `mouse.rs` has no I/O and does not otherwise import `messaging` | `src/mouse.rs` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (its report names its own model); developer antigravity Gemini 4 Hydrogen (Medium); tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft | architect | the expected `end` values in the first draft were miscounted (12 and 8, correct 11 and 9) | corrected before review |
+| draft review | consultant | `parse_report` re-checks the number fields, so three of the five listed mutants could not be killed through `tests/mouse.rs` | `tests/messaging/limits_and_envelopes.rs` added to scope with five `input_is_typing` cases |
+| draft review | consultant | the spec said both "private" and `pub(crate)`; "red first" was wrong for a behavior-preserving refactor; two cases already existed; two mutants named code that would not exist; the status check counted three files | all five corrected in the lock |
+| tester pass | tester | a non-`M`/`m` final byte followed by `ESC [ I` survived (`_ => None` mutated to `Some(after_row)`); `parse_report` masks it | architect added the case `\x1b[<0;1;2\x1b[I` to `malformed_sgr_mouse_reports_count_as_typing` |

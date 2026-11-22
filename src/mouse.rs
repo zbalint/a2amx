@@ -1,7 +1,5 @@
 //! Parsing and translating terminal mouse reports for reserved top rows.
 
-use crate::messaging::sgr_mouse_report_len;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
     Sgr,
@@ -84,4 +82,28 @@ pub fn with_row(report: &MouseReport<'_>, row: u16) -> Vec<u8> {
         }
     }
     bytes
+}
+
+pub(crate) fn sgr_mouse_report_len(bytes: &[u8], start: usize) -> Option<usize> {
+    let after_button = skip_digits(bytes, start + 3)?;
+    if bytes.get(after_button) != Some(&b';') {
+        return None;
+    }
+    let after_col = skip_digits(bytes, after_button + 1)?;
+    if bytes.get(after_col) != Some(&b';') {
+        return None;
+    }
+    let after_row = skip_digits(bytes, after_col + 1)?;
+    match bytes.get(after_row) {
+        Some(b'M' | b'm') => Some(after_row + 1),
+        _ => None,
+    }
+}
+
+fn skip_digits(bytes: &[u8], mut index: usize) -> Option<usize> {
+    let start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+        index += 1;
+    }
+    (index > start).then_some(index)
 }

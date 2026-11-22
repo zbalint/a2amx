@@ -706,39 +706,6 @@ pub fn sanitize_draft(text: &str) -> String {
         .collect()
 }
 
-pub fn sgr_mouse_report_len(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut index = start + 3;
-    let first = index;
-    while index < bytes.len() && bytes[index].is_ascii_digit() {
-        index += 1;
-    }
-    if index == first || bytes.get(index) != Some(&b';') {
-        return None;
-    }
-    index += 1;
-
-    let second = index;
-    while index < bytes.len() && bytes[index].is_ascii_digit() {
-        index += 1;
-    }
-    if index == second || bytes.get(index) != Some(&b';') {
-        return None;
-    }
-    index += 1;
-
-    let third = index;
-    while index < bytes.len() && bytes[index].is_ascii_digit() {
-        index += 1;
-    }
-    if index == third {
-        return None;
-    }
-    match bytes.get(index) {
-        Some(b'M' | b'm') => Some(index + 1),
-        _ => None,
-    }
-}
-
 // shortcut: a report split across input frames may hold the session; upgrade only if it proves noisy.
 pub fn input_is_typing(bytes: &[u8]) -> bool {
     let mut index = 0;
@@ -750,7 +717,7 @@ pub fn input_is_typing(bytes: &[u8]) -> bool {
         match bytes.get(index + 2) {
             Some(b'I' | b'O') => index += 3,
             Some(b'<') => {
-                let Some(end) = sgr_mouse_report_len(bytes, index) else {
+                let Some(end) = crate::mouse::sgr_mouse_report_len(bytes, index) else {
                     return true;
                 };
                 index = end;

@@ -79,3 +79,16 @@ fn malformed_and_partial_mouse_reports_are_rejected() {
         Shifted::Grid(b"\x1b[<0;5;2M".to_vec())
     );
 }
+
+#[test]
+fn sgr_report_end_accepts_press_release_and_trailing_bytes() {
+    assert_eq!(parse_report(b"\x1b[<0;10;20M", 0).map(|r| r.end), Some(11));
+    assert_eq!(parse_report(b"\x1b[<0;10;20m", 0).map(|r| r.end), Some(11));
+    assert_eq!(parse_report(b"\x1b[<0;1;2Mxyz", 0).map(|r| r.end), Some(9));
+}
+
+#[test]
+fn sgr_report_end_rejects_bad_final_byte_and_missing_separator() {
+    assert_eq!(parse_report(b"\x1b[<0;1;2X", 0).map(|r| r.end), None);
+    assert_eq!(parse_report(b"\x1b[<0M", 0).map(|r| r.end), None);
+}
