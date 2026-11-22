@@ -74,3 +74,16 @@ No observable change: the same accepted and refused inputs, the same texts, the 
 | the check order in `run_new` is the one listed in step 4 | `src/commands/launch.rs:57-135` | read |
 | `ActivityWatch::validate` (`wire.rs:121-136`) re-parses `format!("{seconds}s")` once, inside a loop over `working_after` and `idle_after` with labels `activity working_after` and `activity idle_after`; the call is the only one in `wire.rs` | `src/wire.rs:121-136` | read |
 | `tests/prop_messaging.rs` has a `proptest!` block with `seconds_intervals_parse_exactly` (`:298-300`, `n in 1..=86400u64`) and a plain test `malformed_or_out_of_range_intervals_are_rejected` (`:318-330`); the added tests follow the same two shapes | `tests/prop_messaging.rs:290-330` | read |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer antigravity Gemini 4 Hydrogen (Medium) (the senior developer); tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the acceptance grep `format!("{seconds}s")` has a fourth hit (`src/config.rs:729`, display only) and could not pass; the claims row said three hits | grep changed to `parse_interval\(&format!`, row corrected |
+| draft review | consultant | the test count was 1417 for a proptest and a plain test (two tests) | 1418 stated |
+| draft review | consultant | `NewFlags` was a single-use 12-field parameter object that left `watch` ownership unspecified and run_new long | `plan_new` takes the whole `Command` and returns a wider `NewPlan` |
+| draft review | consultant | the grant dedupe, `grant::validate` and generated-name mutants have no killers; the CLI call at `launch.rs:46` has no CLI killer | named as expected survivors |
+| tester pass | tester | the order of the `--confine-*` guard against `--remote` is pinned by no test (mutant survived) | recorded, backlog |
+| tester pass | tester | expected survivors confirmed by probe: `grant::validate` skip, no dedupe, pick ignores taken names | recorded, backlog |

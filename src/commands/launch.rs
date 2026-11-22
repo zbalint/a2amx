@@ -43,7 +43,7 @@ pub(super) fn validate_watch_options(
         if watch.is_empty() {
             return Err(anyhow!("heartbeat needs a non-empty watch"));
         }
-        crate::messaging::parse_interval(&format!("{seconds}s"), "heartbeat")?;
+        crate::messaging::interval_from_seconds(seconds, "heartbeat")?;
     }
     if let Some(activity) = activity {
         activity.validate(!watch.is_empty())?;
@@ -51,11 +51,25 @@ pub(super) fn validate_watch_options(
     Ok(())
 }
 
-pub(super) async fn run_new(
-    home: PathBuf,
-    attach_options: AttachOptions,
-    options: Command,
-) -> anyhow::Result<()> {
+/// What `a2amx new` decided from its flags before it touches the daemon.
+struct NewPlan {
+    detach: bool,
+    name: Option<String>,
+    harness: Option<Harness>,
+    deliver: Option<Deliver>,
+    no_authorize_peers: bool,
+    no_channel: bool,
+    remote: Option<messaging::RemoteMode>,
+    confine: Option<ConfineRequest>, // flags only; relative paths are resolved against the cwd in `run_new`
+    reset: Vec<String>,
+    control_from: Vec<String>,
+    watch: Vec<String>,
+    activity: Option<crate::wire::ActivityWatch>,
+    heartbeat: Option<u64>,
+    command: Vec<String>,
+}
+
+fn plan_new(command: Command) -> anyhow::Result<NewPlan> {
     let Command::New {
         detach,
         name,
@@ -69,7 +83,7 @@ pub(super) async fn run_new(
         confine_hide,
         confine_unhide,
         confine_default_hides,
-        mut confine_grant,
+        confine_grant,
         confine_keep_env,
         reset,
         control_from,
@@ -78,17 +92,11 @@ pub(super) async fn run_new(
         activity_idle_after,
         heartbeat,
         command,
-    } = options
+    } = command
     else {
         return Err(anyhow!("expected new session options"));
     };
-    let mut unique_grants = Vec::with_capacity(confine_grant.len());
-    for grant in confine_grant {
-        if !unique_grants.contains(&grant) {
-            unique_grants.push(grant);
-        }
-    }
-    confine_grant = unique_grants;
+    let confine_grant = crate::team::deduplicated_values(&[], &confine_grant);
     let has_confine_options = !confine_write.is_empty()
         || !confine_hide.is_empty()
         || !confine_unhide.is_empty()
@@ -115,10 +123,41 @@ pub(super) async fn run_new(
         .transpose()?
         .map(|duration| duration.as_secs());
     validate_watch_options(&watch, activity.as_ref(), heartbeat)?;
-    let mut client = Client::connect(&home).await?;
-    let mut generated_name = None;
-    let name = match name {
-        Some(name) => Some(name),
+    let confine = confine.then_some(ConfineRequest {
+        write: confine_write,
+        hide: confine_hide,
+        unhide: confine_unhide,
+        no_default_hides: confine_default_hides == Some(false),
+        grants: confine_grant,
+        keep_env: confine_keep_env,
+        auto: false,
+        reasons: Vec::new(),
+        team_file: None,
+    });
+    Ok(NewPlan {
+        detach,
+        name,
+        harness,
+        deliver,
+        no_authorize_peers,
+        no_channel,
+        remote,
+        confine,
+        reset,
+        control_from,
+        watch,
+        activity,
+        heartbeat,
+        command,
+    })
+}
+
+async fn pick_session_name(
+    client: &mut Client,
+    name: Option<String>,
+) -> anyhow::Result<(String, bool)> {
+    match name {
+        Some(name) => Ok((name, false)),
         None => {
             let taken = client
                 .sessions()
@@ -132,57 +171,55 @@ pub(super) async fn run_new(
             // upgrade trigger is daemon-side generation if either is reported.
             let generated = names::pick(&taken, seed)
                 .ok_or_else(|| anyhow!("no free generated session name; pass --name"))?;
-            generated_name = Some(generated.clone());
-            Some(generated)
+            Ok((generated, true))
         }
-    };
+    }
+}
+
+pub(super) async fn run_new(
+    home: PathBuf,
+    attach_options: AttachOptions,
+    options: Command,
+) -> anyhow::Result<()> {
+    let plan = plan_new(options)?;
+    let mut client = Client::connect(&home).await?;
+    let (name, generated) = pick_session_name(&mut client, plan.name).await?;
     let (cols, rows) = terminal_size_with_default()?;
     let cwd = std::env::current_dir()?;
-    let confine = if confine {
-        let request = ConfineRequest {
-            write: confine_write,
-            hide: confine_hide,
-            unhide: confine_unhide,
-            no_default_hides: confine_default_hides == Some(false),
-            grants: confine_grant,
-            keep_env: confine_keep_env,
-            auto: false,
-            reasons: Vec::new(),
-            team_file: None,
-        };
-        Some(resolved_confine_request(&request, &cwd, None)?)
-    } else {
-        None
-    };
+    let confine = plan
+        .confine
+        .as_ref()
+        .map(|request| resolved_confine_request(request, &cwd, None))
+        .transpose()?;
     let session = create_session(
         &home,
         &mut client,
         NewOptions {
-            name,
-            harness,
+            name: Some(name.clone()),
+            harness: plan.harness,
             role: None,
-            remote,
+            remote: plan.remote,
             team: None,
-            deliver,
-            no_authorize_peers,
-            no_channel,
+            deliver: plan.deliver,
+            no_authorize_peers: plan.no_authorize_peers,
+            no_channel: plan.no_channel,
             confine,
-            reset,
-            control_from,
-            watch,
-            activity,
-            heartbeat,
-            command,
+            reset: plan.reset,
+            control_from: plan.control_from,
+            watch: plan.watch,
+            activity: plan.activity,
+            heartbeat: plan.heartbeat,
+            command: plan.command,
             cwd,
             cols,
             rows,
         },
     )
     .await?;
-    if let Some(name) = generated_name {
+    if generated {
         write_stderr(format!("name: {name}\n").into_bytes()).await?;
     }
-    if detach {
+    if plan.detach {
         write_stdout(format!("{session}\n").into_bytes()).await?;
         return Ok(());
     }

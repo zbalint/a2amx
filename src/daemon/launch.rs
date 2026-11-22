@@ -134,7 +134,7 @@ impl Runtime {
             return Ok(Response::Error { message });
         }
         let heartbeat = match heartbeat
-            .map(|seconds| messaging::parse_interval(&format!("{seconds}s"), "heartbeat"))
+            .map(|seconds| messaging::interval_from_seconds(seconds, "heartbeat"))
             .transpose()
         {
             Ok(heartbeat) => heartbeat,

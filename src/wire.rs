@@ -130,7 +130,7 @@ impl ActivityWatch {
             (self.idle_after, "activity idle_after"),
         ] {
             if let Some(seconds) = seconds {
-                crate::messaging::parse_interval(&format!("{seconds}s"), label)?;
+                crate::messaging::interval_from_seconds(seconds, label)?;
             }
         }
         Ok(())

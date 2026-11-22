@@ -1,6 +1,6 @@
 use a2amx::messaging::{
-    MAX_MESSAGE_BYTES, MAX_SUBJECT_BYTES, Origin, code, envelope_ids, parse_interval,
-    render_envelope, validate_message,
+    MAX_MESSAGE_BYTES, MAX_SUBJECT_BYTES, Origin, code, envelope_ids, interval_from_seconds,
+    parse_interval, render_envelope, validate_message,
 };
 use proptest::prelude::*;
 use std::time::Duration;
@@ -300,6 +300,11 @@ proptest! {
     }
 
     #[test]
+    fn seconds_interval_checks_accept_exactly_the_range(n in 1..=86400u64) {
+        prop_assert_eq!(interval_from_seconds(n, "heartbeat").unwrap_or_default(), Duration::from_secs(n));
+    }
+
+    #[test]
     fn minute_intervals_parse_exactly(n in 1..=1440u64) {
         prop_assert_eq!(parse_interval(&format!("{n}m"), "heartbeat").unwrap_or_default(), Duration::from_secs(60 * n));
     }
@@ -326,4 +331,20 @@ fn malformed_or_out_of_range_intervals_are_rejected() {
             "{value:?} was accepted"
         );
     }
+}
+
+#[test]
+fn interval_from_seconds_refuses_zero_and_over_a_day_with_the_parse_text() {
+    assert_eq!(
+        interval_from_seconds(0, "heartbeat")
+            .unwrap_err()
+            .to_string(),
+        "invalid heartbeat \"0s\": expected a number followed by s, m or h, from 1s to 24h"
+    );
+    assert_eq!(
+        interval_from_seconds(86401, "heartbeat")
+            .unwrap_err()
+            .to_string(),
+        "invalid heartbeat \"86401s\": expected a number followed by s, m or h, from 1s to 24h"
+    );
 }

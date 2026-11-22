@@ -496,6 +496,18 @@ pub fn parse_interval(value: &str, label: &str) -> anyhow::Result<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 
+/// The range check of `parse_interval` for a value already in seconds; the error text is the one `parse_interval` gives for `"{seconds}s"`.
+pub fn interval_from_seconds(seconds: u64, label: &str) -> anyhow::Result<Duration> {
+    if (1..=HEARTBEAT_MAX.as_secs()).contains(&seconds) {
+        Ok(Duration::from_secs(seconds))
+    } else {
+        let value = format!("{seconds}s");
+        Err(anyhow::anyhow!(
+            "invalid {label} {value:?}: expected a number followed by s, m or h, from 1s to 24h"
+        ))
+    }
+}
+
 fn invalid(code: &'static str, message: impl Into<String>) -> MessageError {
     MessageError::new(code, message)
 }

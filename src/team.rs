@@ -364,7 +364,7 @@ fn reject_renamed_allow(text: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn deduplicated_values(team: &[String], own: &[String]) -> Vec<String> {
+pub(crate) fn deduplicated_values(team: &[String], own: &[String]) -> Vec<String> {
     let mut values = Vec::with_capacity(team.len() + own.len());
     for value in team.iter().chain(own) {
         if !values.contains(value) {
