@@ -40,6 +40,14 @@ async fn state_is_owner_only_and_exclusively_locked() {
             0o600
         );
     }
+    let published = [
+        "run/admin.token",
+        "run/gateway.token",
+        "run/link/gateway.token",
+        "run/addr",
+        "run/link/addr",
+    ]
+    .map(|file| (file, std::fs::read(dir.path().join(file)).unwrap()));
     let second = Daemon::start(DaemonConfig {
         root: dir.path().to_owned(),
         listen: vec!["127.0.0.1:0".parse().unwrap()],
@@ -53,6 +61,14 @@ async fn state_is_owner_only_and_exclusively_locked() {
         second.err().unwrap().to_string(),
         "another a2amx daemon is running for this a2amx directory"
     );
+    // A refused second start must leave the running daemon's published files alone.
+    for (file, bytes) in published {
+        assert_eq!(
+            std::fs::read(dir.path().join(file)).unwrap(),
+            bytes,
+            "{file}"
+        );
+    }
     daemon.shutdown().await.unwrap();
     assert!(!dir.path().join("run/addr").exists());
     assert!(!dir.path().join("run/link/addr").exists());
@@ -162,7 +178,7 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
         .await
         .is_err()
     );
-    assert!(!home.join("addr").exists());
+    assert!(!home.join("run/addr").exists());
     assert!(!home.join("run/admin.token").exists());
     assert!(!home.join("run/gateway.token").exists());
     assert!(!home.join("run/link/gateway.token").exists());
@@ -184,6 +200,52 @@ async fn partial_bind_failure_releases_addresses_and_lock_and_parents_are_privat
     .await
     .unwrap();
     assert_ne!(daemon.addrs()[0].port(), 0);
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_start_after_the_tokens_are_written_removes_every_state_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_owned();
+    std::fs::create_dir_all(root.join("run/addr")).unwrap();
+    let bwrap_dir = root.join("bwrap-path");
+    let error = Daemon::start(DaemonConfig {
+        root: root.clone(),
+        listen: vec!["127.0.0.1:0".parse().unwrap()],
+        host_name: None,
+        limits: a2amx::messaging::Limits::default(),
+        bwrap_path: Some(bwrap_dir.clone().into_os_string()),
+        env_path: None,
+    })
+    .await
+    .err()
+    .unwrap();
+    let message = error.to_string();
+    let original = message.find("Is a directory").expect(&message);
+    let cleanup = message
+        .find("failed to remove state files after a failed start")
+        .expect(&message);
+    assert!(original < cleanup, "{message}");
+    for file in [
+        "run/admin.token",
+        "run/gateway.token",
+        "run/link/gateway.token",
+        "run/link/addr",
+    ] {
+        assert!(!root.join(file).exists(), "{file} should not exist");
+    }
+    std::fs::remove_dir(root.join("run/addr")).unwrap();
+    std::fs::create_dir_all(&bwrap_dir).unwrap();
+    let daemon = Daemon::start(DaemonConfig {
+        root,
+        listen: vec!["127.0.0.1:0".parse().unwrap()],
+        host_name: None,
+        limits: a2amx::messaging::Limits::default(),
+        bwrap_path: Some(bwrap_dir.into_os_string()),
+        env_path: None,
+    })
+    .await
+    .unwrap();
     daemon.shutdown().await.unwrap();
 }
 

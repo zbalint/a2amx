@@ -2,30 +2,27 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::Read;
 use std::net::SocketAddr;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
-use tokio::net::TcpListener;
 use tokio::sync::watch;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 
-use crate::confine;
 use crate::harness::Harness;
 use crate::messaging::{self, Limits};
-use crate::session::{Session, mark_inherited_fds_cloexec};
-use crate::store::{self, Store};
+use crate::session::Session;
+use crate::store::Store;
 use crate::wire::Response;
 mod admission;
 mod attach;
 mod bridge;
 mod launch;
+mod lifecycle;
 mod notices;
 mod omp_usage;
 mod registry;
@@ -38,7 +35,7 @@ use omp_usage::OmpUsage;
 use registry::Sessions;
 use remote::Leases;
 pub(crate) use reports::record_receipt;
-use serve::{response, serve};
+use serve::response;
 use trust::session_id;
 const ACTIVITY_QUIET: Duration = Duration::from_secs(10);
 pub(crate) const NEEDS_INPUT_AFTER: Duration = Duration::from_secs(10);
@@ -65,7 +62,7 @@ pub struct Daemon {
     shutdown: watch::Sender<bool>,
     listeners: Vec<JoinHandle<()>>,
     purge: Option<JoinHandle<()>>,
-    omp_usage: Option<JoinHandle<()>>,
+    omp_usage_poller: Option<JoinHandle<()>>,
     presence: Option<JoinHandle<()>>,
     layout: crate::layout::Layout,
     lock: Option<File>,
@@ -282,356 +279,6 @@ pub fn current_exe() -> std::io::Result<PathBuf> {
     Ok(exe)
 }
 
-impl Daemon {
-    /// Bind every listen address, write the chosen addresses to a file in the
-    /// a2amx directory, write the admin token file (mode 0600), and start serving.
-    pub async fn start(config: DaemonConfig) -> anyhow::Result<Self> {
-        mark_inherited_fds_cloexec()?;
-        let exe = tokio::task::spawn_blocking(current_exe).await??;
-        let bwrap_path = config
-            .bwrap_path
-            .clone()
-            .or_else(|| std::env::var_os("PATH"))
-            .unwrap_or_default();
-        let env_path = config
-            .env_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(confine::ENV_PATH));
-        let layout = crate::layout::Layout::new(config.root.clone());
-        layout.ensure()?;
-        let lock_path = layout.daemon_lock();
-        let lock = tokio::task::spawn_blocking(move || -> anyhow::Result<File> {
-            let lock = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .open(lock_path)?;
-            rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-                .map_err(|_| {
-                    anyhow::anyhow!("another a2amx daemon is running for this a2amx directory")
-                })?;
-            Ok(lock)
-        })
-        .await??;
-        let host_name = config.host_name;
-        let (token, gateway_token, host_name, boot) =
-            tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-                let token = random_hex::<32>()?;
-                let gateway_token = random_hex::<32>()?;
-                let host = match host_name {
-                    Some(host) => {
-                        messaging::validate_host(&host).context("invalid host name")?;
-                        host
-                    }
-                    None => messaging::default_host_name(),
-                };
-                Ok((token, gateway_token, host, random_hex::<8>()?))
-            })
-            .await??;
-        let layout = crate::layout::Layout::new(config.root.clone());
-        let store = Store::open(&layout, config.limits).await?;
-        // Written only after the steps that can fail without binding, so an early
-        // startup error never leaves a token for a daemon that is not running.
-        let gateway_path = layout.gateway_token();
-        let link_gateway_path = layout.link_gateway_token();
-        let token_path = layout.admin_token();
-        let gateway_text = gateway_token.clone();
-        let token_text = token.clone();
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            write_state_file(&gateway_path, gateway_text.as_bytes())?;
-            if let Err(error) = write_state_file(&link_gateway_path, gateway_text.as_bytes()) {
-                return match remove_state_files(&[&gateway_path, &link_gateway_path]) {
-                    Ok(()) => Err(error),
-                    Err(cleanup) => Err(anyhow::anyhow!(
-                        "{error}; failed to remove gateway tokens after link write failure: {cleanup}"
-                    )),
-                };
-            }
-            if let Err(error) = write_state_file(&token_path, token_text.as_bytes()) {
-                return match remove_state_files(&[&gateway_path, &link_gateway_path]) {
-                    Ok(()) => Err(error),
-                    Err(cleanup) => Err(anyhow::anyhow!(
-                        "{error}; failed to remove gateway tokens after admin.token write failure: {cleanup}"
-                    )),
-                };
-            }
-            Ok(())
-        })
-        .await??;
-        let mut bound = Vec::new();
-        let mut addrs = Vec::new();
-        let listen = if config.listen.is_empty() {
-            vec![SocketAddr::from(([127, 0, 0, 1], 0))]
-        } else {
-            config.listen
-        };
-        for address in listen {
-            let listener = match TcpListener::bind(address).await {
-                Ok(listener) => listener,
-                Err(error) => {
-                    let admin_path = layout.admin_token();
-                    let gateway_path = layout.gateway_token();
-                    let link_gateway_path = layout.link_gateway_token();
-                    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        remove_state_files(&[&admin_path, &gateway_path, &link_gateway_path])
-                    })
-                    .await??;
-                    return Err(error.into());
-                }
-            };
-            addrs.push(listener.local_addr()?);
-            bound.push(listener);
-        }
-        let path = layout.addr();
-        let link_path = layout.link_addr();
-        let addresses = addrs
-            .iter()
-            .map(|addr| format!("{addr}\n"))
-            .collect::<String>();
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            write_state_file(&path, addresses.as_bytes())?;
-            if let Err(error) = write_state_file(&link_path, addresses.as_bytes()) {
-                if let Err(cleanup) = remove_state_files(&[&path, &link_path]) {
-                    return Err(anyhow::anyhow!(
-                        "{error}; failed to remove daemon addresses after link write failure: {cleanup}"
-                    ));
-                }
-                return Err(error);
-            }
-            Ok(())
-        })
-        .await??;
-        // shortcut: sessions live only in this daemon; add persistence only with
-        // a later lifecycle specification.
-        let (shutdown, _) = watch::channel(false);
-        let runtime = Arc::new(Runtime {
-            sessions: Sessions::new(),
-            token,
-            gateway_token,
-            store,
-            host_name,
-            boot,
-            limits: config.limits,
-            address: addrs[0].to_string(),
-            layout: layout.clone(),
-            bwrap_path,
-            env_path,
-            exe,
-            omp_usage: OmpUsage::new(),
-            // shortcut: accepted-send timestamps are memory-only; persist them if
-            // rate limits must survive daemon restarts.
-            rate: tokio::sync::Mutex::new(HashMap::new()),
-            presence: Arc::new(Mutex::new(HashMap::new())),
-            leases: Leases::new(),
-            gateway_connections: AtomicUsize::new(0),
-            human_attempts: Mutex::new(HashMap::new()),
-            deliveries: Mutex::new(Vec::new()),
-            stop_requested: tokio::sync::Notify::new(),
-            stop_now: AtomicBool::new(false),
-        });
-        let purge = {
-            let store = runtime.store.clone();
-            let mut stopping = shutdown.subscribe();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(3600));
-                interval.tick().await;
-                loop {
-                    tokio::select! {
-                        _ = stopping.changed() => break,
-                        _ = interval.tick() => {
-                            if let Err(error) = store.purge(store::now()).await {
-                                tracing::error!(%error, "message purge failed");
-                            }
-                        }
-                    }
-                }
-            })
-        };
-        let omp_usage = {
-            let runtime = runtime.clone();
-            let mut stopping = shutdown.subscribe();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(OMP_USAGE_CHECK);
-                loop {
-                    tokio::select! {
-                        _ = stopping.changed() => break,
-                        _ = interval.tick() => {
-                            if runtime.omp_usage.poll(
-                                runtime.omp_usage_command(),
-                                runtime.bwrap_path.as_os_str(),
-                                &mut stopping,
-                            ).await
-                            {
-                                break;
-                            }
-                        }
-                    }
-                }
-            })
-        };
-        let presence = {
-            let runtime = runtime.clone();
-            let stopping = shutdown.subscribe();
-            tokio::spawn(runtime.poll_presence(stopping))
-        };
-        let listeners = bound.into_iter().map(|listener| {
-            let runtime = runtime.clone();
-            let mut stopping = shutdown.subscribe();
-            tokio::spawn(async move {
-                let mut connections = JoinSet::new();
-                loop {
-                    tokio::select! {
-                        _ = stopping.changed() => break,
-                        accepted = listener.accept() => {
-                            match accepted {
-                                Ok((socket, _)) => {
-                                    let runtime = runtime.clone();
-                                    let mut stopping = stopping.clone();
-                                    connections.spawn(async move {
-                                        tokio::select! {
-                                            _ = stopping.changed() => {},
-                                            result = serve(socket, runtime) => {
-                                                if let Err(error) = result {
-                                                    tracing::debug!(%error, "client connection closed");
-                                                }
-                                            }
-                                        }
-                                    });
-                                }
-                                Err(error) => tracing::warn!(%error, "accept failed"),
-                            }
-                        }
-                        Some(result) = connections.join_next(), if !connections.is_empty() => {
-                            if let Err(error) = result {
-                                tracing::warn!(%error, "connection task failed");
-                            }
-                        }
-                    }
-                }
-                connections.abort_all();
-                while connections.join_next().await.is_some() {}
-            })
-        }).collect();
-        Ok(Self {
-            addrs,
-            runtime,
-            shutdown,
-            listeners,
-            purge: Some(purge),
-            omp_usage: Some(omp_usage),
-            presence: Some(presence),
-            layout,
-            lock: Some(lock),
-        })
-    }
-
-    /// Addresses actually bound (resolves port 0).
-    pub fn addrs(&self) -> &[SocketAddr] {
-        &self.addrs
-    }
-
-    pub fn host_name(&self) -> &str {
-        &self.runtime.host_name
-    }
-
-    /// Completes when an admin client asked the daemon to shut down.
-    pub async fn stop_requested(&self) {
-        self.runtime.stop_requested.notified().await;
-    }
-
-    pub async fn shutdown(mut self) -> anyhow::Result<()> {
-        let _ = self.shutdown.send(true);
-        for listener in self.listeners.drain(..) {
-            listener.await?;
-        }
-        if let Some(purge) = self.purge.take() {
-            purge.await?;
-        }
-        if let Some(omp_usage) = self.omp_usage.take() {
-            omp_usage.await?;
-        }
-        if let Some(presence) = self.presence.take() {
-            presence.await?;
-        }
-        let mut failure = None;
-        let deliveries = std::mem::take(
-            &mut *self
-                .runtime
-                .deliveries
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
-        // Stop injection before killing children so graceful shutdown, rather
-        // than a racing recipient-exit observer, owns the remaining open rows.
-        for delivery in &deliveries {
-            delivery.abort();
-        }
-        for delivery in deliveries {
-            if let Err(error) = delivery.await
-                && !error.is_cancelled()
-            {
-                failure.get_or_insert(anyhow::Error::new(error).context("message delivery task"));
-            }
-        }
-        let sessions = self.runtime.sessions.snapshot();
-        let graceful = !self.runtime.stop_now.load(Ordering::Relaxed);
-        let mut kills = JoinSet::new();
-        for session in sessions {
-            kills.spawn(async move { session.kill(graceful).await });
-        }
-        while let Some(result) = kills.join_next().await {
-            if let Err(error) = result
-                .context("session shutdown task")
-                .and_then(|value| value)
-            {
-                failure.get_or_insert(error);
-            }
-        }
-        self.runtime.sessions.clear();
-        if let Err(error) = self
-            .runtime
-            .store
-            .fail_open(&self.runtime.boot, None, "daemon_stopped")
-            .await
-        {
-            failure.get_or_insert(error);
-        }
-        if let Err(error) = self.runtime.store.close().await {
-            failure.get_or_insert(error);
-        }
-        let addr = self.layout.addr();
-        let link_addr = self.layout.link_addr();
-        let lock = self.lock.take();
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            remove_state_files(&[&addr, &link_addr])?;
-            drop(lock);
-            Ok(())
-        })
-        .await??;
-        match failure {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
-    }
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        let _ = self.shutdown.send(true);
-        for delivery in self
-            .runtime
-            .deliveries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .drain(..)
-        {
-            delivery.abort();
-        }
-    }
-}
-
 pub fn random_hex<const N: usize>() -> anyhow::Result<String> {
     let mut random = [0; N];
     File::open("/dev/urandom")?.read_exact(&mut random)?;
@@ -641,37 +288,6 @@ pub fn random_hex<const N: usize>() -> anyhow::Result<String> {
         write!(&mut text, "{byte:02x}")?;
     }
     Ok(text)
-}
-
-fn remove_state_files(paths: &[&Path]) -> anyhow::Result<()> {
-    let mut first_error = None;
-    for path in paths {
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("cannot remove state file {}: {error}", path.display())
-                });
-            }
-        }
-    }
-    match first_error {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
-}
-
-fn write_state_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    file.write_all(bytes)?;
-    Ok(())
 }
 
 fn lookup(runtime: &Runtime, id: &str) -> Option<(u64, Arc<Session>)> {

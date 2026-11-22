@@ -96,3 +96,20 @@ Attack paths: (a) a token file left behind by a failed start lets a later proces
 | `remove_state_files` and `write_state_file` have callers only in `Daemon::start`/`shutdown` | `rg -n` | probed (no hit outside `daemon.rs`) |
 | `random_hex`, `current_exe` are called from outside the file (`relay.rs`, `relay_files.rs`, `commands/`) and stay | `rg -n` | probed |
 | test killers per mutant | repo tests | consultant and tester to name |
+
+## Review record
+
+Models: architect and consultant Claude Sonnet 5.5 (the consultant's report names claude-opus-5-5 for itself); developer antigravity Gemini 4 Hydrogen (Medium) (the senior developer); tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the spec described `shutdown`'s failure handling as first-failure-wins for every step; the four task joins use `?` and return early, only deliveries and sessions remember the first failure, and the final removal's `??` overrides | the two semantics stated per step; the tester's diff check named them |
+| draft review | consultant | the new test drives `rollback`'s clean-up-failure arm (a directory also fails `remove_file` with `EISDIR`), which the spec did not say; the spec called that arm untestable | stated; the test asserts both the write failure and the clean-up text |
+| draft review | consultant | the defect list was incomplete (five gaps: three leaked tokens, partial token files, a stale address file on bind failure); the lock binding had to stay alive across `rollback`; two mutants were equivalent or killerless | list, instruction and mutants corrected |
+| draft review | consultant | the stale `run/addr` beside a fresh token between the token write and the address write | recorded as pre-existing, backlog follow-up |
+| implementation | architect | `rollback` had two identical error arms (Sonar identical-branches smell) | merged into one with `map_err` and `and_then` before the gate |
+| implementation | architect | the `Runtime` literal spelled `std::collections::HashMap::new()` in full (not byte-identical to the base) | `use std::collections::HashMap;` added |
+| tester pass | tester | RED on the old code is the missing clean-up-phrase `expect`, not the token-absence assertions (those are never reached) | recorded; token retention on the old code is source-level evidence |
+| tester pass | tester | `stop_deliveries` skipped is killed by `graceful_restart_marks_exited_and_continues_ids` (spec expected a survivor) | recorded |
+| tester pass | tester | rollback on the acquire-lock error (deleting a running daemon's files) survived: nothing pinned that refusal leaves the running daemon's files | `state_is_owner_only_and_exclusively_locked` now reads the five files before the refused second start and asserts them unchanged after; the architect re-ran the mutant and it is killed |
+| tester pass | tester | `stop_tasks` first-failure-wins survives (needs join-error injection); `start` is 86 lines (target 80, report only) | expected survivor; recorded |
