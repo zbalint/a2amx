@@ -335,6 +335,10 @@ impl fmt::Display for MessageError {
 
 impl std::error::Error for MessageError {}
 
+fn is_label_char(ch: char) -> bool {
+    ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'
+}
+
 fn valid_dns_label(value: &str) -> bool {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
@@ -343,28 +347,34 @@ fn valid_dns_label(value: &str) -> bool {
     if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
         return false;
     }
-    value.len() <= 63 && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+    value.len() <= 63 && chars.all(is_label_char)
+}
+
+fn team_visible(a: Party<'_>, b: Party<'_>) -> bool {
+    match (a.team, b.team) {
+        (Some(a), Some(b)) if a.name == b.name => true,
+        (Some(a), Some(b)) if a.private && b.private => {
+            a.allow.iter().any(|name| name == &b.name) && b.allow.iter().any(|name| name == &a.name)
+        }
+        _ => true,
+    }
+}
+
+fn agent_visible(a: Party<'_>, b: Party<'_>) -> bool {
+    match (a.name, a.team, b.name, b.team) {
+        (Some(a_name), Some(a_team), Some(b_name), Some(b_team)) => {
+            a_team.agents.iter().any(|name| name == b_name)
+                && b_team.agents.iter().any(|name| name == a_name)
+        }
+        _ => false,
+    }
 }
 
 /// Visible when both parties share a team, either side is ungrouped/public, or mutual team allow.
 /// It is also visible for two named parties when each session-level agents list contains the other.
 /// The result is symmetric and requires mutual consent for both allow forms.
 pub fn visible(a: Party<'_>, b: Party<'_>) -> bool {
-    let team_visible = match (a.team, b.team) {
-        (Some(a), Some(b)) if a.name == b.name => true,
-        (Some(a), Some(b)) if a.private && b.private => {
-            a.allow.iter().any(|name| name == &b.name) && b.allow.iter().any(|name| name == &a.name)
-        }
-        _ => true,
-    };
-    team_visible
-        || match (a.name, a.team, b.name, b.team) {
-            (Some(a_name), Some(a_team), Some(b_name), Some(b_team)) => {
-                a_team.agents.iter().any(|name| name == b_name)
-                    && b_team.agents.iter().any(|name| name == a_name)
-            }
-            _ => false,
-        }
+    team_visible(a, b) || agent_visible(a, b)
 }
 
 pub fn validate_role(role: &str) -> anyhow::Result<()> {
@@ -434,11 +444,11 @@ pub fn default_host_name() -> String {
 
     let mut normalized = String::new();
     for character in raw.trim().chars().flat_map(char::to_lowercase) {
-        if character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-' {
-            normalized.push(character);
+        normalized.push(if is_label_char(character) {
+            character
         } else {
-            normalized.push('-');
-        }
+            '-'
+        });
     }
 
     let without_leading_hyphens = normalized.trim_start_matches('-');
@@ -470,21 +480,19 @@ pub fn local_part<'a>(to: &'a str, host: &str) -> Option<&'a str> {
     (target_host == host).then_some(local)
 }
 
+fn interval_error(label: &str, value: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "invalid {label} {value:?}: expected a number followed by s, m or h, from 1s to 24h"
+    )
+}
+
 pub fn parse_interval(value: &str, label: &str) -> anyhow::Result<Duration> {
-    let invalid = || {
-        anyhow::anyhow!(
-            "invalid {label} {value:?}: expected a number followed by s, m or h, from 1s to 24h"
-        )
-    };
-    let (number, multiplier) = if let Some(number) = value.strip_suffix('s') {
-        (number, 1)
-    } else if let Some(number) = value.strip_suffix('m') {
-        (number, 60)
-    } else if let Some(number) = value.strip_suffix('h') {
-        (number, 60 * 60)
-    } else {
-        return Err(invalid());
-    };
+    const UNITS: [(&str, u64); 3] = [("s", 1), ("m", 60), ("h", 60 * 60)];
+    let invalid = || interval_error(label, value);
+    let (number, multiplier) = UNITS
+        .iter()
+        .find_map(|&(suffix, mult)| value.strip_suffix(suffix).map(|n| (n, mult)))
+        .ok_or_else(invalid)?;
     if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(invalid());
     }
@@ -501,10 +509,7 @@ pub fn interval_from_seconds(seconds: u64, label: &str) -> anyhow::Result<Durati
     if (1..=HEARTBEAT_MAX.as_secs()).contains(&seconds) {
         Ok(Duration::from_secs(seconds))
     } else {
-        let value = format!("{seconds}s");
-        Err(anyhow::anyhow!(
-            "invalid {label} {value:?}: expected a number followed by s, m or h, from 1s to 24h"
-        ))
+        Err(interval_error(label, &format!("{seconds}s")))
     }
 }
 
@@ -512,29 +517,12 @@ fn invalid(code: &'static str, message: impl Into<String>) -> MessageError {
     MessageError::new(code, message)
 }
 
-pub fn validate_message(subject: &str, message: &str) -> std::result::Result<(), MessageError> {
-    if subject.is_empty() {
-        return Err(invalid(code::INVALID_CONTENT, "subject must not be empty"));
-    }
-    if message.is_empty() {
-        return Err(invalid(code::INVALID_CONTENT, "message must not be empty"));
-    }
-    if subject.len() > MAX_SUBJECT_BYTES {
-        return Err(invalid(code::TOO_LARGE, "subject exceeds the byte limit"));
-    }
-    if message.len() > MAX_MESSAGE_BYTES {
-        return Err(invalid(code::TOO_LARGE, "message exceeds the byte limit"));
-    }
-    if subject.chars().any(char::is_control) {
-        return Err(invalid(
-            code::INVALID_CONTENT,
-            "subject contains a control character",
-        ));
-    }
-    if message
-        .chars()
-        .any(|character| character.is_control() && character != '\n' && character != '\t')
-    {
+fn is_disallowed_control(character: char) -> bool {
+    character.is_control() && !matches!(character, '\n' | '\t')
+}
+
+fn validate_body_content(message: &str) -> std::result::Result<(), MessageError> {
+    if message.chars().any(is_disallowed_control) {
         return Err(invalid(
             code::INVALID_CONTENT,
             "message contains a disallowed control character",
@@ -558,6 +546,28 @@ pub fn validate_message(subject: &str, message: &str) -> std::result::Result<(),
         ));
     }
     Ok(())
+}
+
+pub fn validate_message(subject: &str, message: &str) -> std::result::Result<(), MessageError> {
+    if subject.is_empty() {
+        return Err(invalid(code::INVALID_CONTENT, "subject must not be empty"));
+    }
+    if message.is_empty() {
+        return Err(invalid(code::INVALID_CONTENT, "message must not be empty"));
+    }
+    if subject.len() > MAX_SUBJECT_BYTES {
+        return Err(invalid(code::TOO_LARGE, "subject exceeds the byte limit"));
+    }
+    if message.len() > MAX_MESSAGE_BYTES {
+        return Err(invalid(code::TOO_LARGE, "message exceeds the byte limit"));
+    }
+    if subject.chars().any(char::is_control) {
+        return Err(invalid(
+            code::INVALID_CONTENT,
+            "subject contains a control character",
+        ));
+    }
+    validate_body_content(message)
 }
 
 fn push_escaped_attribute(output: &mut String, value: &str) {
@@ -628,47 +638,53 @@ pub fn channel_view(envelope: &str) -> String {
     envelope.replace("</channel>", "<\\/channel>")
 }
 
+const PASTE_OPEN: &str = "<pasted_content id=\"";
+
+fn parse_paste_candidate(prompt: &str, tag: usize) -> Option<(usize, usize, usize, usize)> {
+    let start = if tag == 0 {
+        0
+    } else if prompt[..tag].ends_with("\n\n") {
+        tag - 2
+    } else {
+        return None;
+    };
+    let id_start = tag + PASTE_OPEN.len();
+    let id_len = prompt.as_bytes()[id_start..]
+        .iter()
+        .take_while(|byte| byte.is_ascii_alphanumeric())
+        .count();
+    let id_end = id_start + id_len;
+    if id_len == 0 || !prompt[id_end..].starts_with("\">\n") {
+        return None;
+    }
+    let inner_start = id_end + 3;
+    let closing = format!("\n</pasted_content id=\"{}\">", &prompt[id_start..id_end]);
+    let inner_end = inner_start + prompt[inner_start..].find(&closing)?;
+    let mut after = inner_end + closing.len();
+    if prompt[after..].starts_with('\n') {
+        after += 1;
+    } else if after != prompt.len() {
+        return None;
+    }
+    Some((start, inner_start, inner_end, after))
+}
+
 /// Replace every complete paste wrapper with its inner text.
 pub fn unwrap_pastes(prompt: &str) -> String {
     // shortcut: wrapper shapes were observed on Claude Code 2.1.285/2.1.286 (idle submits keep
     // the surrounding blank line and newline; queued mid-turn submits have the prompt's ends
     // trimmed); update this matcher if a supported harness version changes its paste format.
-    const OPEN: &str = "<pasted_content id=\"";
     let mut output = String::with_capacity(prompt.len());
     let mut cursor = 0;
     let mut search = 0;
-    while let Some(offset) = prompt[search..].find(OPEN) {
+    while let Some(offset) = prompt[search..].find(PASTE_OPEN) {
         let tag = search + offset;
         search = tag + 1;
-        let start = if tag == 0 {
-            0
-        } else if prompt[..tag].ends_with("\n\n") {
-            tag - 2
-        } else {
+        let Some((start, inner_start, inner_end, after)) = parse_paste_candidate(prompt, tag)
+        else {
             continue;
         };
         if start < cursor {
-            continue;
-        }
-        let id_start = tag + OPEN.len();
-        let id_len = prompt.as_bytes()[id_start..]
-            .iter()
-            .take_while(|byte| byte.is_ascii_alphanumeric())
-            .count();
-        let id_end = id_start + id_len;
-        if id_len == 0 || !prompt[id_end..].starts_with("\">\n") {
-            continue;
-        }
-        let inner_start = id_end + 3;
-        let closing = format!("\n</pasted_content id=\"{}\">", &prompt[id_start..id_end]);
-        let Some(end) = prompt[inner_start..].find(&closing) else {
-            continue;
-        };
-        let inner_end = inner_start + end;
-        let mut after = inner_end + closing.len();
-        if prompt[after..].starts_with('\n') {
-            after += 1;
-        } else if after != prompt.len() {
             continue;
         }
         output.push_str(&prompt[cursor..start]);
@@ -680,17 +696,22 @@ pub fn unwrap_pastes(prompt: &str) -> String {
     output
 }
 
+fn parse_envelope_id(digits: &str) -> Option<i64> {
+    let count = digits.bytes().take_while(u8::is_ascii_digit).count();
+    if !(1..=18).contains(&count) || digits.as_bytes().get(count) != Some(&b'"') {
+        return None;
+    }
+    let seq = digits[..count].parse::<i64>().ok()?;
+    (seq > 0).then_some(seq)
+}
+
 /// Message sequence numbers of envelope tags, in first-appearance order.
 pub fn envelope_ids(text: &str) -> Vec<i64> {
     const PREFIX: &str = "<a2amx-message id=\"m_";
     let mut ids = Vec::new();
     for (start, _) in text.match_indices(PREFIX) {
         let digits = &text[start + PREFIX.len()..];
-        let count = digits.bytes().take_while(u8::is_ascii_digit).count();
-        if (1..=18).contains(&count)
-            && digits.as_bytes().get(count) == Some(&b'"')
-            && let Ok(seq) = digits[..count].parse::<i64>()
-            && seq > 0
+        if let Some(seq) = parse_envelope_id(digits)
             && !ids.contains(&seq)
         {
             ids.push(seq);
@@ -702,7 +723,7 @@ pub fn envelope_ids(text: &str) -> Vec<i64> {
 /// Drop control characters other than newlines and tabs, without truncating.
 pub fn sanitize_draft(text: &str) -> String {
     text.chars()
-        .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+        .filter(|character| !is_disallowed_control(*character))
         .collect()
 }
 
@@ -753,6 +774,7 @@ mod tests {
             " 1s",
             "18446744073709551615h",
             "18446744073709551616s",
+            "1é",
         ] {
             assert_eq!(
                 parse_interval(value, "heartbeat").unwrap_err().to_string(),

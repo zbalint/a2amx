@@ -46,3 +46,16 @@ Before each step the developer confirms the behavior is pinned: names the existi
 |---|---|
 | `render_envelope` Excess Number of Function Arguments (5 string arguments) and the file-level String Heavy Function Arguments | A fix is an `Envelope` parameter struct, a public-signature change touching 13 call sites (one production caller, `src/store.rs`; two unit tests in `src/messaging.rs`; ten in `tests/prop_messaging.rs` and `tests/messaging/limits_and_envelopes.rs`). It would not be a false positive; it is a design choice with a large diff. Proposal: do it as its own spec if the owner agrees. |
 | file-level Low Cohesion | `messaging.rs` holds names, intervals, envelopes, paste handling, team visibility and input classification. Fixing it means splitting the module and moving public paths used by tests and other modules. Proposal: a separate spec after this one, once the remaining content is known. |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (its report names its own model); developer antigravity Gemini 4 Hydrogen (Medium); tester OMP opencode-go/deepseek-v4.1-flash. BLOCKED/amend cycles: 0. Result: `src/messaging.rs` 6.20 to 7.55 in `cs check`; the seven findings of section 1 are gone; Low Cohesion, String Heavy Function Arguments and `render_envelope` (5 arguments) are flagged for the owner.
+
+| Found at | By (role, model) | Problem | Resolution |
+|---|---|---|---|
+| draft review | consultant | the planned `validate_message` split (subject checks, then body checks) changes which error fires first, because the eight guards alternate between the two fields | split kept guards 1 to 5 together and moved 6 to 8 into one function; seven precedence tests added first |
+| draft review | consultant | the spec named `valid_name`, which is in `relay_files.rs`; the function is `valid_dns_label` | corrected |
+| draft review | consultant | `split_at` would panic on empty and multi-byte input; the `start < cursor` branch of `unwrap_pastes` and most error texts were unpinned; the mutation list named `\|\|` where the code has `&&`; the `render_envelope` call count was 12, correct 13 | spec changed to `strip_suffix`, characterization tests and corrected lists |
+| implementation | architect | the paste opening string was defined twice after the extraction | one module-level `PASTE_OPEN` |
+| tester pass | tester | three mutants survived in the new tests: a single-newline paste prefix, a missing newline after the id, and `continue` turned into `break` after a failed candidate | architect added the three cases to `paste_wrappers_are_unwrapped_without_changing_malformed_text`; the single-newline mutant was then killed |
+| tester pass | tester | failing mutants made proptest append seed lines to the tracked `tests/prop_messaging.proptest-regressions` | restored by the tester; the file is unchanged in the commit |

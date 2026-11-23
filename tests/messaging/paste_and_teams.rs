@@ -24,6 +24,18 @@ fn paste_wrappers_are_unwrapped_without_changing_malformed_text() {
         ),
         ("plain text", "plain text"),
         (
+            "x\n<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">",
+            "x\n<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">",
+        ),
+        (
+            "<pasted_content id=\"1\">X\n</pasted_content id=\"1\">",
+            "<pasted_content id=\"1\">X\n</pasted_content id=\"1\">",
+        ),
+        (
+            "<pasted_content id=\"\">\n\n<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">\n",
+            "<pasted_content id=\"\">X",
+        ),
+        (
             "é\n\n<pasted_content id=\"\">\nx\n</pasted_content id=\"\">\n",
             "é\n\n<pasted_content id=\"\">\nx\n</pasted_content id=\"\">\n",
         ),
@@ -58,6 +70,11 @@ fn paste_wrappers_trimmed_at_the_prompt_ends_are_still_unwrapped() {
         (
             "<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">tail",
             "<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">tail",
+        ),
+        // A second wrapper sharing the separator line starts before the first's cursor and stays literal.
+        (
+            "\n\n<pasted_content id=\"1\">\nX\n</pasted_content id=\"1\">\n\n<pasted_content id=\"2\">\nY\n</pasted_content id=\"2\">\n",
+            "X\n<pasted_content id=\"2\">\nY\n</pasted_content id=\"2\">\n",
         ),
     ];
     for (input, expected) in cases {

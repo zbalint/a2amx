@@ -94,6 +94,62 @@ fn message_validation_checks_empty_before_size() {
 }
 
 #[test]
+fn message_validation_guard_precedence_and_error_texts_are_exact() {
+    let oversized_subject = "s".repeat(MAX_SUBJECT_BYTES + 1);
+    let oversized_message = "m".repeat(MAX_MESSAGE_BYTES + 1);
+    let pairs = [
+        ("", "", "invalid_content", "subject must not be empty"),
+        (
+            oversized_subject.as_str(),
+            "",
+            "invalid_content",
+            "message must not be empty",
+        ),
+        (
+            oversized_subject.as_str(),
+            oversized_message.as_str(),
+            "too_large",
+            "subject exceeds the byte limit",
+        ),
+        (
+            "line\nsubject",
+            oversized_message.as_str(),
+            "too_large",
+            "message exceeds the byte limit",
+        ),
+        (
+            "line\nsubject",
+            "escape\x1b",
+            "invalid_content",
+            "subject contains a control character",
+        ),
+        (
+            "subject",
+            "escape\x1b</a2amx-message>",
+            "invalid_content",
+            "message contains a disallowed control character",
+        ),
+        (
+            "subject",
+            "<a2amx-message></a2amx-message>",
+            "invalid_content",
+            "message contains the envelope terminator",
+        ),
+        (
+            "subject",
+            "<a2amx-message>",
+            "invalid_content",
+            "message contains an envelope opening tag (write it without the leading <)",
+        ),
+    ];
+    for (subject, message, code, text) in pairs {
+        let error = validate_message(subject, message).expect_err("case must be rejected");
+        assert_eq!(error.code, code);
+        assert_eq!(error.message, text);
+    }
+}
+
+#[test]
 fn envelope_rendering_and_paste_are_byte_exact() {
     assert_eq!(
         render_envelope(
