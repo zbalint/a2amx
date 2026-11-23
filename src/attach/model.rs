@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::emulator::Scroll;
 use crate::mouse::{self, MouseReport, Shifted};
-use crate::picker::Outcome;
+use crate::picker::{Outcome, PickerAction};
 use crate::prefix::{Action, Command as PrefixCommand, PrefixMachine};
 use crate::status;
 use crate::viewer::{self, Viewer};
@@ -126,6 +126,15 @@ pub struct Attached {
     pub granted_top: u16,
 }
 
+/// Configuration for constructing a [`Model`].
+pub struct ModelConfig {
+    pub session: String,
+    pub geometry: Geometry,
+    pub prefix: u8,
+    pub viewer: bool,
+    pub viewer_after: Option<Duration>,
+}
+
 /// Pure synchronous state machine for the attach screen.
 pub struct Model {
     session: String,
@@ -142,24 +151,17 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(
-        session: String,
-        geometry: Geometry,
-        prefix: u8,
-        viewer: bool,
-        viewer_after: Option<Duration>,
-        now: Instant,
-    ) -> Self {
+    pub fn new(config: ModelConfig, now: Instant) -> Self {
         Self {
-            session,
-            geometry,
+            session: config.session,
+            geometry: config.geometry,
             mode: Mode::Live,
-            prefix_machine: PrefixMachine::new(prefix),
-            prefix_byte: prefix,
+            prefix_machine: PrefixMachine::new(config.prefix),
+            prefix_byte: config.prefix,
             mouse_press: None,
             session_mouse: false,
-            viewer: Viewer::new(now, viewer),
-            viewer_after,
+            viewer: Viewer::new(now, config.viewer),
+            viewer_after: config.viewer_after,
             status: None,
             team_regions: Vec::new(),
         }
@@ -201,41 +203,54 @@ impl Model {
         let report = (!pass_through)
             .then(|| find_mouse_report(read, offset))
             .flatten();
-        let mut intents = Vec::new();
-        if let Some((start, report)) = report
-            && start == offset
-        {
-            let end = report.end;
-            if self.geometry.granted_top > 0 && self.mode.is_live() {
-                self.handle_mouse_report(report, &mut intents);
-            } else {
-                self.handle_mouse_button(report.button, &mut intents);
-            }
-            return Step {
-                consumed: end - offset,
-                intents,
-            };
+        if let Some(step) = self.handle_step_mouse_report(report, offset) {
+            return step;
         }
         let segment_end = report.map_or(read.len(), |(start, _)| start);
+        self.dispatch_mode(&read[offset..segment_end], read == [0x1b], now)
+    }
+
+    fn handle_step_mouse_report(
+        &mut self,
+        report: Option<(usize, MouseReport<'_>)>,
+        offset: usize,
+    ) -> Option<Step> {
+        let (start, report) = report?;
+        if start != offset {
+            return None;
+        }
+        let end = report.end;
+        let mut intents = Vec::new();
+        if self.geometry.granted_top > 0 && self.mode.is_live() {
+            self.handle_mouse_report(report, &mut intents);
+        } else {
+            self.handle_mouse_button(report.button, &mut intents);
+        }
+        Some(Step {
+            consumed: end - offset,
+            intents,
+        })
+    }
+
+    fn dispatch_mode(&mut self, segment: &[u8], escape_alone: bool, now: Instant) -> Step {
+        let mut intents = Vec::new();
         match &mut self.mode {
             Mode::Picker(_) => {
-                self.handle_picker_input(&read[offset..offset + 1], read == [0x1b], &mut intents);
+                self.handle_picker_input(&segment[..1], escape_alone, &mut intents);
                 Step {
                     consumed: 1,
                     intents,
                 }
             }
             Mode::Scroll(_) => {
-                self.feed_scroll_input(&read[offset..offset + 1], &mut intents);
+                self.feed_scroll_input(&segment[..1], &mut intents);
                 Step {
                     consumed: 1,
                     intents,
                 }
             }
             Mode::Live => {
-                let (consumed, actions) = self
-                    .prefix_machine
-                    .feed_until_command(&read[offset..segment_end]);
+                let (consumed, actions) = self.prefix_machine.feed_until_command(segment);
                 self.handle_prefix_actions(actions, now, &mut intents);
                 Step { consumed, intents }
             }
@@ -397,11 +412,12 @@ impl Model {
         intents.push(Intent::Output(bytes));
     }
 
+    fn viewer_decorations_visible(&self) -> bool {
+        self.viewer.is_viewer() && self.geometry.viewport.status_visible && self.mode.is_live()
+    }
+
     fn draw_viewer_decorations(&self, now: Instant, intents: &mut Vec<Intent>) {
-        if !self.viewer.is_viewer()
-            || !self.geometry.viewport.status_visible
-            || !self.mode.is_live()
-        {
+        if !self.viewer_decorations_visible() {
             return;
         }
         intents.push(Intent::Output(viewer::marker(
@@ -541,15 +557,18 @@ impl Model {
         None
     }
 
-    fn select_member(&mut self, selected: String, intents: &mut Vec<Intent>) {
-        if self.geometry.granted_top == 0
-            || selected == self.session
-            || self
+    fn member_selectable(&self, selected: &str) -> bool {
+        self.geometry.granted_top > 0
+            && selected != self.session
+            && self
                 .status
                 .as_ref()
                 .and_then(|status| status.members.iter().find(|member| member.id == selected))
-                .is_none_or(|member| member.exited)
-        {
+                .is_some_and(|member| !member.exited)
+    }
+
+    fn select_member(&mut self, selected: String, intents: &mut Vec<Intent>) {
+        if !self.member_selectable(&selected) {
             return;
         }
         self.mouse_press = None;
@@ -603,67 +622,91 @@ impl Model {
             return;
         }
         match button {
-            64 => {
-                if !matches!(self.mode, Mode::Scroll(_)) {
-                    self.enter_scroll_mode(intents);
-                }
-                // shortcut: the wheel uses a fixed three-line step; make it configurable only if asked.
-                for _ in 0..3 {
-                    intents.push(Intent::Scroll(Scroll::LineUp));
-                }
+            64 => self.wheel_scroll_up(intents),
+            65 if matches!(self.mode, Mode::Scroll(_)) => Self::wheel_scroll_down(intents),
+            _ => {}
+        }
+    }
+
+    fn wheel_scroll_up(&mut self, intents: &mut Vec<Intent>) {
+        if !matches!(self.mode, Mode::Scroll(_)) {
+            self.enter_scroll_mode(intents);
+        }
+        // shortcut: the wheel uses a fixed three-line step; make it configurable only if asked.
+        for _ in 0..3 {
+            intents.push(Intent::Scroll(Scroll::LineUp));
+        }
+    }
+
+    fn wheel_scroll_down(intents: &mut Vec<Intent>) {
+        // shortcut: the wheel uses a fixed three-line step; make it configurable only if asked.
+        for _ in 0..3 {
+            intents.push(Intent::Scroll(Scroll::LineDown));
+        }
+    }
+
+    fn handle_mouse_report(&mut self, report: MouseReport<'_>, intents: &mut Vec<Intent>) {
+        match mouse::shift_row(&report, self.geometry.granted_top) {
+            Shifted::Claimed(claimed) => self.handle_claimed_mouse(claimed, intents),
+            Shifted::Grid(bytes) => self.handle_grid_mouse(report, bytes, intents),
+        }
+    }
+
+    fn handle_claimed_mouse(&mut self, claimed: MouseReport<'_>, intents: &mut Vec<Intent>) {
+        if claimed.release {
+            self.claimed_release(claimed, intents);
+        } else {
+            self.claimed_press(&claimed);
+        }
+    }
+
+    fn claimed_release(&mut self, claimed: MouseReport<'_>, intents: &mut Vec<Intent>) {
+        let session_mouse = self.session_mouse && !self.viewer.is_viewer();
+        match self.mouse_press.take() {
+            Some(MousePress::Team) if claimed.row == 1 => {
+                self.team_click(claimed.column, intents);
             }
-            65 if matches!(self.mode, Mode::Scroll(_)) => {
-                // shortcut: the wheel uses a fixed three-line step; make it configurable only if asked.
-                for _ in 0..3 {
-                    intents.push(Intent::Scroll(Scroll::LineDown));
-                }
+            Some(MousePress::Grid) if session_mouse => {
+                intents.push(Intent::Forward(mouse::with_row(&claimed, 1)));
             }
             _ => {}
         }
     }
 
-    fn handle_mouse_report(&mut self, report: MouseReport<'_>, intents: &mut Vec<Intent>) {
+    fn claimed_press(&mut self, claimed: &MouseReport<'_>) {
+        if claimed.button == 0 {
+            self.mouse_press = Some(match claimed.row {
+                1 => MousePress::Team,
+                2 => MousePress::Rule,
+                _ => return,
+            });
+        }
+    }
+
+    fn handle_grid_mouse(
+        &mut self,
+        report: MouseReport<'_>,
+        bytes: Vec<u8>,
+        intents: &mut Vec<Intent>,
+    ) {
         let session_mouse = self.session_mouse && !self.viewer.is_viewer();
-        match mouse::shift_row(&report, self.geometry.granted_top) {
-            Shifted::Claimed(claimed) => {
-                if claimed.release {
-                    match self.mouse_press.take() {
-                        Some(MousePress::Team) if claimed.row == 1 => {
-                            self.team_click(claimed.column, intents);
-                        }
-                        Some(MousePress::Grid) if session_mouse => {
-                            intents.push(Intent::Forward(mouse::with_row(&claimed, 1)));
-                        }
-                        _ => {}
-                    }
-                } else if claimed.button == 0 {
-                    self.mouse_press = Some(match claimed.row {
-                        1 => MousePress::Team,
-                        2 => MousePress::Rule,
-                        _ => return,
-                    });
+        if report.release {
+            match self.mouse_press.take() {
+                Some(MousePress::Team) => {}
+                Some(MousePress::Grid) | None if session_mouse => {
+                    intents.push(Intent::Forward(bytes));
                 }
+                _ => {}
             }
-            Shifted::Grid(bytes) => {
-                if report.release {
-                    match self.mouse_press.take() {
-                        Some(MousePress::Team) => {}
-                        Some(MousePress::Grid) | None if session_mouse => {
-                            intents.push(Intent::Forward(bytes));
-                        }
-                        _ => {}
-                    }
-                } else {
-                    if report.button == 0 {
-                        self.mouse_press = Some(MousePress::Grid);
-                    }
-                    if session_mouse {
-                        intents.push(Intent::Forward(bytes));
-                    } else {
-                        self.handle_mouse_button(report.button, intents);
-                    }
-                }
-            }
+            return;
+        }
+        if report.button == 0 {
+            self.mouse_press = Some(MousePress::Grid);
+        }
+        if session_mouse {
+            intents.push(Intent::Forward(bytes));
+        } else {
+            self.handle_mouse_button(report.button, intents);
         }
     }
 
@@ -684,22 +727,9 @@ impl Model {
         let mut found = false;
         let mut offset = 0;
         while offset + 3 < bytes.len() {
-            if bytes[offset] == 0x1b
-                && bytes.get(offset + 1) == Some(&b'[')
-                && bytes.get(offset + 2) == Some(&b'?')
-            {
-                let first = offset + 3;
-                let mut end = first;
-                while end < bytes.len() && bytes[end].is_ascii_digit() {
-                    end += 1;
-                }
-                if end > first && matches!(bytes.get(end), Some(b'h' | b'l')) {
-                    let mode = parse_decimal(&bytes[first..end]);
-                    if matches!(mode, 1000 | 1002 | 1003) {
-                        found = true;
-                        self.session_mouse = bytes[end] == b'h';
-                    }
-                }
+            if let Some(enabled) = mouse_mode_toggle(bytes, offset) {
+                found = true;
+                self.session_mouse = enabled;
             }
             offset += 1;
         }
@@ -707,50 +737,74 @@ impl Model {
     }
 
     fn handle_picker_input(&mut self, bytes: &[u8], escape_alone: bool, intents: &mut Vec<Intent>) {
-        let had_footer = {
-            let Mode::Picker(screen) = &mut self.mode else {
-                return;
-            };
-            screen.footer.take().is_some()
-        };
-        if had_footer && let Mode::Picker(screen) = &self.mode {
-            intents.push(Intent::Output(screen.render()));
-        }
+        self.clear_picker_footer(intents);
         let actions = match &mut self.mode {
             Mode::Picker(screen) => screen.feed(bytes, escape_alone),
             _ => return,
         };
         for action in actions {
-            let outcome = {
-                let Mode::Picker(screen) = &mut self.mode else {
-                    return;
-                };
-                let outcome = screen.apply(action);
-                screen.parser.set_filter_mode(screen.view.filter_mode());
-                outcome
-            };
-            match outcome {
-                None => {
-                    if let Mode::Picker(screen) = &self.mode {
-                        intents.push(Intent::Output(screen.render()));
-                    }
-                }
-                Some(Outcome::Cancel) => {
-                    intents.push(Intent::Redraw);
-                    self.mode = Mode::Live;
-                    return;
-                }
-                Some(Outcome::Attach(selected)) => {
-                    if selected == self.session {
-                        intents.push(Intent::Redraw);
-                        self.mode = Mode::Live;
-                        return;
-                    }
-                    self.mouse_press = None;
-                    intents.push(Intent::Switch { to: selected });
-                    return;
-                }
+            if !self.apply_picker_action(action, intents) {
+                return;
             }
         }
     }
+
+    fn clear_picker_footer(&mut self, intents: &mut Vec<Intent>) {
+        let Mode::Picker(screen) = &mut self.mode else {
+            return;
+        };
+        if screen.footer.take().is_some() {
+            intents.push(Intent::Output(screen.render()));
+        }
+    }
+
+    fn apply_picker_action(&mut self, action: PickerAction, intents: &mut Vec<Intent>) -> bool {
+        let outcome = {
+            let Mode::Picker(screen) = &mut self.mode else {
+                return false;
+            };
+            let outcome = screen.apply(action);
+            screen.parser.set_filter_mode(screen.view.filter_mode());
+            outcome
+        };
+        match outcome {
+            None => {
+                if let Mode::Picker(screen) = &self.mode {
+                    intents.push(Intent::Output(screen.render()));
+                }
+                true
+            }
+            Some(Outcome::Cancel) => {
+                intents.push(Intent::Redraw);
+                self.mode = Mode::Live;
+                false
+            }
+            Some(Outcome::Attach(selected)) => {
+                if selected == self.session {
+                    intents.push(Intent::Redraw);
+                    self.mode = Mode::Live;
+                    return false;
+                }
+                self.mouse_press = None;
+                intents.push(Intent::Switch { to: selected });
+                false
+            }
+        }
+    }
+}
+
+fn mouse_mode_toggle(bytes: &[u8], offset: usize) -> Option<bool> {
+    if !bytes[offset..].starts_with(b"\x1b[?") {
+        return None;
+    }
+    let first = offset + 3;
+    let mut end = first;
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == first || !matches!(bytes.get(end), Some(b'h' | b'l')) {
+        return None;
+    }
+    let mode = parse_decimal(&bytes[first..end]);
+    matches!(mode, 1000 | 1002 | 1003).then(|| bytes[end] == b'h')
 }

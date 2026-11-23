@@ -45,3 +45,17 @@ Owner rules (memories d295229d, 828f8118, fb283e4c, df233241): goal is a CodeSce
 ## 4. Flagged for the owner (not fixed here)
 
 Re-measured after this spec: nothing is expected to remain; the `cs check` of step 8 will say. Dead code found while reviewing, left alone: the `let Mode::Picker(..) else return` and the `_ => return` at the top of `handle_picker_input` (`step` only calls it in picker mode). The `// shortcut:` comments (wheel step fixed at three lines, split input unshifted with top rows and session mouse, a failed switch not shown) stay. `Model::new` changes from six positional arguments to a config struct (a signature change of a `pub` item inside the crate, four call sites).
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (strongest slot); developer antigravity-cli Gemini 4 Hydrogen (Medium); tester omp default slot (deepseek-v4.1-flash), automatic advisor. BLOCKED/amend cycles: 0. cs `src/attach/model.rs` 7.16 to 10.00; `src/attach.rs` stays 9.68 (two Excess Function Arguments findings, 7 and 6 arguments, identical at HEAD, not part of this spec); tests 1454 to 1459.
+
+| Found at | By | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | findings applied before locking | applied before locking |
+| Implementation | cs after the first extraction | a new Bumpy Road in `handle_claimed_mouse` | architect follow-up m_8785: split into `claimed_release` and `claimed_press`; cs 10.00 |
+| Tester pass | tester | 64 mutants, 46 killed; ten real test gaps: the granted-top-0 wheel release, two terms of `viewer_decorations_visible`, `take()` versus `clone()` in `claimed_release`, its viewer term, the `ESC [ ?` prefix of `mouse_mode_toggle`, the scan stride, the picker `Attach(other)` press clear, the footer re-render, the `button == 0` guards of the grid and claimed press | developer follow-up 2 (tests only, `model.rs` unchanged): tests with exact intents; each mutant confirmed failing |
+| Tester pass | tester | the tester's first report counted eleven gaps; one (`_ => return` in the claimed press) is unreachable because production grants at most two top rows (`Viewport::desired_top`) | correction m_8811 and m_8809; dropped from follow-up 2 |
+| Tester pass | tester | the spec's demanded test that a later picker action in the same read is dropped cannot exist: `dispatch_mode` feeds the picker one byte, so one read yields at most one action | spec claim was false (architect); recorded as unpinnable, with the `member_selectable` `granted_top` term, `end == first` and the scan bound as equivalents |
+| Tester pass | tester advisor | the advisor claimed two mutants were killed by `tests/attach_model.rs`; fresh reruns showed they survive | not accepted; the developer's tests kill them |
+| Process | owner | developer and tester ran cargo at the same time (the architect assigned follow-up 2 without a fresh `list_agents` check, and the tester started an unassigned build) | tester stopped; standing rule stored; one assignment at a time |

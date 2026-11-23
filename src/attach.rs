@@ -15,7 +15,7 @@ use crate::terminal::{Output, OutputHandle, TerminalGuard, write_stderr};
 use crate::wire::ClientFrame;
 
 use self::event_loop::run_attachment_loop;
-use self::model::{Geometry, Model, Viewport};
+use self::model::{Geometry, Model, ModelConfig, Viewport};
 
 const INPUT_CHUNK: usize = 8 * 1024;
 #[derive(Clone, Copy)]
@@ -184,11 +184,13 @@ impl AttachmentState {
             attachment: Some(attachment),
             home,
             model: Model::new(
-                session,
-                geometry,
-                prefix,
-                false,
-                viewer_after,
+                ModelConfig {
+                    session,
+                    geometry,
+                    prefix,
+                    viewer: false,
+                    viewer_after,
+                },
                 Instant::now(),
             ),
             picker_control: None,
