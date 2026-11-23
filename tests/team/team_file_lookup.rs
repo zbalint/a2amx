@@ -300,3 +300,192 @@ fn run_binary_in(home: &Path, cwd: &Path, args: &[&str]) -> std::io::Result<Outp
         .stdin(Stdio::null())
         .output()
 }
+
+#[test]
+fn team_file_lookup_characterizes_exact_error_texts_and_global_notice() {
+    let state = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    let missing_file = user_home.path().join("missing.toml");
+    let missing_arg = missing_file.to_str().unwrap();
+
+    // `team up --file MISSING` fails at canonicalize before `read_team`'s `cannot read team file`.
+    let up_missing = run_binary_in_with_home(
+        state.path(),
+        user_home.path(),
+        user_home.path(),
+        &["team", "up", "--file", missing_arg],
+    )
+    .unwrap();
+    assert!(!up_missing.status.success());
+    let up_err = String::from_utf8(up_missing.stderr).unwrap();
+    assert_eq!(up_err, "a2amx: No such file or directory (os error 2)\n");
+
+    // `team down --file MISSING` reaches `read_team`'s `cannot read team file`.
+    let down_missing = run_binary_in_with_home(
+        state.path(),
+        user_home.path(),
+        user_home.path(),
+        &["team", "down", "--file", missing_arg],
+    )
+    .unwrap();
+    assert!(!down_missing.status.success());
+    assert_eq!(
+        String::from_utf8(down_missing.stderr).unwrap(),
+        format!(
+            "a2amx: cannot read team file {}: No such file or directory (os error 2)\n",
+            missing_file.display()
+        )
+    );
+
+    // Missing parent directory fails at `cannot canonicalize team file directory`.
+    let bad_parent = user_home.path().join("no-such-dir");
+    let bad_file = bad_parent.join("a2amx.toml");
+    let bad_dir_out = run_binary_in_with_home(
+        state.path(),
+        user_home.path(),
+        user_home.path(),
+        &["team", "up", "--file", bad_file.to_str().unwrap()],
+    )
+    .unwrap();
+    assert!(!bad_dir_out.status.success());
+    assert_eq!(
+        String::from_utf8(bad_dir_out.stderr).unwrap(),
+        format!(
+            "a2amx: cannot canonicalize team file directory {}: No such file or directory (os error 2)\n",
+            bad_parent.display()
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_file_lookup_characterizes_global_notice_parse_and_eloop() {
+    let state = tempfile::tempdir().unwrap();
+    let _daemon = common::start_daemon_in(state.path(), Some("host-a"), Default::default()).await;
+    let user_home = tempfile::tempdir().unwrap();
+    let canonical_state = std::fs::canonicalize(state.path()).unwrap();
+    let global_file = canonical_state.join("config/team.toml");
+    std::fs::create_dir_all(global_file.parent().unwrap()).unwrap();
+
+    // Global notice exact text when local a2amx.toml is absent and global team.toml is valid.
+    std::fs::write(
+        &global_file,
+        "[[session]]\nname = 'worker'\ncommand = ['cat']\n",
+    )
+    .unwrap();
+    let project = user_home.path().join("my-proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let global_ok = run_binary_in_with_home(
+        state.path(),
+        &project,
+        user_home.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .unwrap();
+    assert!(global_ok.status.success(), "{global_ok:?}");
+    assert_eq!(
+        String::from_utf8(global_ok.stderr).unwrap(),
+        format!(
+            "using global team file {} as team my-proj\n",
+            global_file.display()
+        )
+    );
+
+    // Non-derivable cwd triggers team_name_for remedy text inside the global notice.
+    let bad_cwd = user_home.path().join("---");
+    std::fs::create_dir_all(&bad_cwd).unwrap();
+    let bad_cwd_out = run_binary_in_with_home(
+        state.path(),
+        &bad_cwd,
+        user_home.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .unwrap();
+    assert!(!bad_cwd_out.status.success());
+    assert_eq!(
+        String::from_utf8(bad_cwd_out.stderr).unwrap(),
+        format!(
+            "a2amx: cannot derive a valid team name \"\" from directory {}: invalid name \"\": expected [a-z0-9][a-z0-9-]{{0,62}}; create an a2amx.toml here, or pass --file\n",
+            bad_cwd.display()
+        )
+    );
+
+    // team::parse rejects a global file that sets `team =`.
+    std::fs::write(
+        &global_file,
+        "team = 'forbidden'\n[[session]]\nname = 'worker'\ncommand = ['cat']\n",
+    )
+    .unwrap();
+    let global_with_team = run_binary_in_with_home(
+        state.path(),
+        &project,
+        user_home.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .unwrap();
+    assert!(!global_with_team.status.success());
+    assert_eq!(
+        String::from_utf8(global_with_team.stderr).unwrap(),
+        format!(
+            "using global team file {} as team my-proj\na2amx: team file {}: the global team file must not set team; the team is named after the directory\n",
+            global_file.display(),
+            global_file.display()
+        )
+    );
+
+    // read_team's `team file PATH: ...` parse context on explicit --file.
+    let bad_toml = user_home.path().join("bad.toml");
+    std::fs::write(&bad_toml, "team = 'ok'\n").unwrap();
+    let bad_parse = run_binary_in_with_home(
+        state.path(),
+        &project,
+        user_home.path(),
+        &["team", "up", "--file", bad_toml.to_str().unwrap()],
+    )
+    .unwrap();
+    assert!(!bad_parse.status.success());
+    assert_eq!(
+        String::from_utf8(bad_parse.stderr).unwrap(),
+        format!(
+            "a2amx: team file {}: team must contain at least one session\n",
+            bad_toml.display()
+        )
+    );
+
+    // Self-referential symlink on global team.toml fails with ELOOP ("cannot inspect global team file").
+    std::fs::remove_file(&global_file).unwrap();
+    std::os::unix::fs::symlink("team.toml", &global_file).unwrap();
+    let global_eloop = run_binary_in_with_home(
+        state.path(),
+        &project,
+        user_home.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .unwrap();
+    assert!(!global_eloop.status.success());
+    assert_eq!(
+        String::from_utf8(global_eloop.stderr).unwrap(),
+        format!(
+            "a2amx: cannot inspect global team file {}: Too many levels of symbolic links (os error 40)\n",
+            global_file.display()
+        )
+    );
+
+    // Self-referential symlink on cwd/a2amx.toml fails with ELOOP ("cannot inspect team file").
+    let local_link = project.join("a2amx.toml");
+    std::os::unix::fs::symlink("a2amx.toml", &local_link).unwrap();
+    let local_eloop = run_binary_in_with_home(
+        state.path(),
+        &project,
+        user_home.path(),
+        &["team", "up", "--dry-run"],
+    )
+    .unwrap();
+    assert!(!local_eloop.status.success());
+    assert_eq!(
+        String::from_utf8(local_eloop.stderr).unwrap(),
+        format!(
+            "a2amx: cannot inspect team file {}: Too many levels of symbolic links (os error 40)\n",
+            local_link.display()
+        )
+    );
+}

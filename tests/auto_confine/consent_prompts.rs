@@ -408,3 +408,144 @@ async fn pty_subtracts_seeded_auto_grants_from_consent() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn escape_notice_precedes_auto_confinement_summary() {
+    let state = tempfile::tempdir().expect("state");
+    let _daemon = common::start_daemon_in(
+        state.path(),
+        Some("host-a"),
+        a2amx::messaging::Limits::default(),
+    )
+    .await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    std::fs::write(project.path().join("Cargo.toml"), "").expect("cargo marker");
+    let team_file = project.path().join("team.toml");
+    std::fs::write(
+        &team_file,
+        "team = \"t\"\n[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n[session.confine]\ngrants = [\"docker\"]\n",
+    )
+    .expect("team file");
+
+    let out = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "team",
+            "up",
+            "--dry-run",
+            "--file",
+            team_file.to_str().unwrap(),
+        ],
+    )
+    .expect("team up");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "session t-worker: grant docker can escape: a privileged container started through the daemon mounts the host filesystem and runs as root on the host\nauto confinement for session t-worker: grants cargo, cache\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_auto_summaries_preserves_session_order() {
+    let state = tempfile::tempdir().expect("state");
+    let _daemon = common::start_daemon_in(
+        state.path(),
+        Some("host-a"),
+        a2amx::messaging::Limits::default(),
+    )
+    .await;
+    let project = tempfile::tempdir().expect("project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    std::fs::write(project.path().join("Cargo.toml"), "").expect("cargo marker");
+    let team_file = project.path().join("team.toml");
+    std::fs::write(
+        &team_file,
+        "team = \"t\"\n[confine]\nenabled = true\nauto = true\n[[session]]\nname = \"first\"\ncommand = [\"cat\"]\n[[session]]\nname = \"second\"\ncommand = [\"cat\"]\n",
+    )
+    .expect("team file");
+
+    let out = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "team",
+            "up",
+            "--dry-run",
+            "--file",
+            team_file.to_str().unwrap(),
+        ],
+    )
+    .expect("team up");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "auto confinement for session t-first: grants cargo, cache\nauto confinement for session t-second: grants cargo, cache\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_auto_team_skips_loading_accepted_grants() {
+    let state = tempfile::tempdir().expect("state");
+    let _daemon = common::start_daemon_in(
+        state.path(),
+        Some("host-a"),
+        a2amx::messaging::Limits::default(),
+    )
+    .await;
+    std::fs::create_dir_all(state.path().join("state/auto-grants.toml"))
+        .expect("auto-grants.toml as directory");
+    let project = tempfile::tempdir().expect("project");
+    let canonical_project = std::fs::canonicalize(project.path()).expect("canonical project");
+    let user_home = tempfile::tempdir().expect("user home");
+    let runtime = tempfile::tempdir().expect("runtime");
+    let team_file = project.path().join("team.toml");
+    std::fs::write(
+        &team_file,
+        "team = \"plain\"\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\n",
+    )
+    .expect("team file");
+
+    let out = run_binary(
+        state.path(),
+        project.path(),
+        user_home.path(),
+        runtime.path(),
+        &[
+            "team",
+            "up",
+            "--dry-run",
+            "--file",
+            team_file.to_str().unwrap(),
+        ],
+    )
+    .expect("dry run");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "would start plain-worker\n  harness: generic\n  cwd: {}\n  team: plain, private, allow: -\n  confinement: off\n  command: cat\n",
+            canonical_project.display()
+        )
+    );
+}

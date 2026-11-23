@@ -45,3 +45,18 @@ Owner rules (memories d295229d, 828f8118, fb283e4c, df233241): goal is a CodeSce
 ## 4. Flagged for the owner (not fixed here)
 
 File-level Overall Code Complexity of `src/commands/team.rs` (756 lines of team status, up, down and reset in one module): re-measured after this spec; a split by command moves public paths and `dry_run` already lives in its own module. `resolved_cwd` is computed three times with the same `map_or_else` (`resolve_auto_grants`, `validate_team_session`, `start_planned_session`): a shared helper is a small follow-up, deliberately not in this spec because it touches three call sites in an already large diff. `note_lost_messages` swallows connection and request errors (`let Ok(..) else return`, `let _ = write_stderr`): by design for a best-effort note, reported only so the owner knows. The shortcut comment at the action loop (non-atomic conflict check and spawn) stays. Inconsistency left alone: `team up --file MISSING` fails at the bare `canonicalize` of the team path (an io error without context) before `read_team`'s `cannot read team file`, whereas status, down and reset give the context text; fixing it changes an error text.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (strongest slot); developer antigravity-cli Gemini 4 Hydrogen (Medium); tester omp default slot (deepseek-v4.1-flash), automatic advisor. BLOCKED/amend cycles: 0. cs `src/commands/team.rs` 7.13 to 10.00; `src/commands.rs` 9.10 to 8.97 (the existing Large Method in `run()` grew 165 to 190 lines from building the two args structs: reported); tests 1442 to 1454.
+
+| Found at | By | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | findings applied before locking (pub(super) args structs instead of private ones, a parameter cap of four on every new function, the three `note_lost_messages` positions) | applied before locking |
+| Draft | architect | the first draft was committed (5c6aa88) before a failed patch script was fixed | spec re-committed as 66488a9; `&&` after patch scripts |
+| Tester pass | tester | fourteen survivor classes: order of the lost-message note and the conflict lines, of the escape notices and the auto summaries, of two auto summaries; the `has_auto` guard on the accepted-grants load; `stdin_is_terminal` in the attach gate; the final down failure line; the reset `running == 0` return; exact global-notice and parse texts; start-validation precedence | developer added nine tests and tightened three assertions; each mutant applied by the developer and confirmed failing |
+| Tester pass | tester | the developer's claim that "cannot inspect team file" and "cannot inspect global team file" cannot be pinned was false | a self-referential symlink gives ELOOP; pinned in `team_file_lookup_characterizes_global_notice_parse_and_eloop` |
+| Tester pass | tester | two entries in the tester's own event were wrong (killers attributed to the wrong tests) | corrected by rerunning on the right targets |
+| Implementation | developer | three tester probe outputs differed from the tester's text (the `failed` line of a duplicate down goes to stderr; the reset gate text includes `reset gate rejected step 1 of 1`; heartbeat vs activity inside `start_planned_session` is unobservable because `team::parse` validates first) | tests use the observed text; the swap is recorded as equivalent |
+
+Equivalent or unproven, reported: summaries moved after the dry-run report (unobservable), validate before auto grants (equivalence unproven), the lease-refusal warning branch (probably unreachable), relative `HOME` canonicalization, the `attach_id.is_some()` term. Flagged for the owner: the Large Method in `src/commands.rs` `run()`.

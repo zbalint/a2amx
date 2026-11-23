@@ -20,7 +20,7 @@ use self::{
         run_attach_command, run_cancel, run_confine_show, run_explain, run_kill, run_list,
         run_messages, run_reset, run_screen,
     },
-    team::{run_team_down, run_team_reset, run_team_status, run_team_up},
+    team::{ResetArgs, UpOptions, run_team_down, run_team_reset, run_team_status, run_team_up},
 };
 use crate::attach::AttachOptions;
 use crate::bridge;
@@ -162,7 +162,20 @@ pub async fn run(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 dry_run,
                 yes,
                 items,
-            } => run_team_up(home, attach_options, file, detach, dry_run, yes, items).await,
+            } => {
+                run_team_up(
+                    home,
+                    UpOptions {
+                        attach_options,
+                        file,
+                        detach,
+                        dry_run,
+                        yes,
+                        items,
+                    },
+                )
+                .await
+            }
             TeamAction::Down { file, names, now } => run_team_down(home, file, names, now).await,
             TeamAction::Reset {
                 file,
@@ -170,7 +183,19 @@ pub async fn run(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 except,
                 include_attached,
                 yes,
-            } => run_team_reset(home, file, names, except, include_attached, yes).await,
+            } => {
+                run_team_reset(
+                    home,
+                    ResetArgs {
+                        file,
+                        names,
+                        except,
+                        include_attached,
+                        yes,
+                    },
+                )
+                .await
+            }
         },
         Command::Attach { session, force } => {
             run_attach_command(home, attach_options, session, force).await

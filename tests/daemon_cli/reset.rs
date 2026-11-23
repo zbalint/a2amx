@@ -450,10 +450,9 @@ fn team_reset_continues_after_a_not_ready_session_and_fails() {
     let reset = run(&home, &["team", "reset", "--file", file_arg, "--yes"]);
 
     assert!(!reset.status.success(), "stdout: {}", stdout(&reset));
-    assert!(
-        stderr(&reset).contains("failed config-not-ready: not_ready:"),
-        "{}",
-        stderr(&reset)
+    assert_eq!(
+        stderr(&reset),
+        "failed config-not-ready: not_ready: reset gate rejected step 1 of 1: screen not ready\na2amx: one or more team sessions could not be reset\n"
     );
     assert_eq!(
         stdout(&reset),
@@ -534,10 +533,10 @@ fn team_reset_requires_yes_for_nonterminal_invocation() {
     let reset = run(&home, &["team", "reset", "--file", file_arg]);
 
     assert!(!reset.status.success());
-    assert!(
-        stderr(&reset).starts_with("a2amx: refusing to reset: "),
-        "{}",
-        stderr(&reset)
+    assert_eq!(stdout(&reset), "config-alpha s1\nconfig-beta s2\n");
+    assert_eq!(
+        stderr(&reset),
+        "a2amx: refusing to reset: 2 running session(s); pass --yes to reset them\n"
     );
     for name in ["config-alpha", "config-beta"] {
         let screen = run(&home, &["screen", name]);
@@ -726,4 +725,123 @@ fn reset_rejects_a_concurrent_request_as_busy() {
     let first = first.wait_with_output().expect("wait first reset");
     assert!(first.status.success(), "stderr: {}", stderr(&first));
     assert_eq!(stdout(&first), "reset s1: 2 steps\n");
+}
+
+#[test]
+fn team_reset_characterizes_confirm_no_and_attached_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    let fixture = fake_reset_composer(dir.path());
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    let file = home.join("config/team.toml");
+    std::fs::write(
+        &file,
+        format!(
+            "team = \"cfg\"\n[[session]]\nname = \"alpha\"\ncommand = [\"python3\", \"-u\", \"{}\"]\n",
+            fixture.display()
+        ),
+    )
+    .unwrap();
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let file_arg = file.to_str().unwrap();
+    assert!(
+        run(&home, &["team", "up", "--detach", "--file", file_arg])
+            .status
+            .success()
+    );
+
+    // Attach to cfg-alpha in a PTY so it is marked attached.
+    let mut attached_pty = PtyHarness::spawn(
+        &[
+            "--home".to_string(),
+            home.to_str().unwrap().to_string(),
+            "attach".to_string(),
+            "cfg-alpha".to_string(),
+        ],
+        dir.path(),
+    )
+    .unwrap();
+    let wait = Duration::from_secs(5);
+    attached_pty.wait_for_text("[s1]", wait).ok();
+
+    // Without --include-attached, cfg-alpha is skipped with exact line.
+    let skipped = run(&home, &["team", "reset", "--file", file_arg, "--yes"]);
+    assert!(skipped.status.success());
+    assert_eq!(
+        stdout(&skipped),
+        "skipped cfg-alpha s1 (attached; use --include-attached or name it)\n"
+    );
+
+    // Non-terminal with --include-attached prints preview with ` (attached)` before refusing.
+    let nonterm = run(
+        &home,
+        &["team", "reset", "--file", file_arg, "--include-attached"],
+    );
+    assert!(!nonterm.status.success());
+    assert_eq!(stdout(&nonterm), "cfg-alpha s1 (attached)\n");
+    assert_eq!(
+        stderr(&nonterm),
+        "a2amx: refusing to reset: 1 running session(s); pass --yes to reset them\n"
+    );
+
+    // Terminal "n" prints `not reset` and exits 0.
+    let mut pty = PtyHarness::spawn(
+        &[
+            "--home".to_string(),
+            home.to_str().unwrap().to_string(),
+            "team".to_string(),
+            "reset".to_string(),
+            "--file".to_string(),
+            file_arg.to_string(),
+            "--include-attached".to_string(),
+        ],
+        dir.path(),
+    )
+    .unwrap();
+    pty.wait_for_text(
+        "Reset 1 session(s)? This clears their conversations. [y/N]",
+        wait,
+    )
+    .unwrap();
+    pty.send(b"n\r").unwrap();
+    pty.wait_for_text("not reset", wait).unwrap();
+    assert_eq!(pty.wait_exit(wait).unwrap(), 0);
+
+    attached_pty.send(&[2, b'd']).unwrap();
+    let _ = attached_pty.wait_exit(wait);
+}
+
+#[test]
+fn team_reset_exited_only_skips_confirmation_without_yes() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    std::fs::create_dir_all(home.join("config")).unwrap();
+    let file = home.join("config/team.toml");
+    std::fs::write(
+        &file,
+        "[[session]]\nname = \"alpha\"\ncommand = [\"true\"]\n",
+    )
+    .unwrap();
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let file_arg = file.to_str().unwrap();
+    let started = run(&home, &["team", "up", "--detach", "--file", file_arg]);
+    assert!(started.status.success(), "stderr: {}", stderr(&started));
+
+    let mut waited = 0;
+    loop {
+        let status = run(&home, &["team", "status", "--file", file_arg]);
+        if stdout(&status).contains("exited") {
+            break;
+        }
+        assert!(waited < 50);
+        waited += 1;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let reset = run(&home, &["team", "reset", "--file", file_arg]);
+    assert!(reset.status.success(), "stderr: {}", stderr(&reset));
+    assert_eq!(stdout(&reset), "skipped config-alpha s1 (exited)\n");
+    assert_eq!(stderr(&reset), "");
 }

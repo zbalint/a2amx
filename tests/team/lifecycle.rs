@@ -475,3 +475,271 @@ attach = true
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_and_down_characterize_exact_conflict_abort_and_missing_outputs() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let file = dir.path().join("config/team.toml");
+    let file_arg = file.to_str().unwrap();
+    std::fs::write(
+        &file,
+        "team = \"demo\"\n[[session]]\nname = \"alpha\"\ncommand = [\"true\"]\n",
+    )
+    .unwrap();
+    assert!(
+        run_binary(dir.path(), &["team", "up", "--detach", "--file", file_arg])
+            .unwrap()
+            .status
+            .success()
+    );
+
+    // Wait for alpha to exit, then re-run `team up` to characterize exact conflict stderr.
+    let mut waited = 0;
+    loop {
+        let status = run_binary(dir.path(), &["team", "status", "--file", file_arg]).unwrap();
+        if String::from_utf8_lossy(&status.stdout).contains("exited") {
+            break;
+        }
+        assert!(waited < 50);
+        waited += 1;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let conflict = run_binary(dir.path(), &["team", "up", "--detach", "--file", file_arg]).unwrap();
+    assert!(!conflict.status.success());
+    assert_eq!(
+        String::from_utf8(conflict.stderr).unwrap(),
+        "session demo-alpha has exited (s1); run a2amx kill demo-alpha first\na2amx: team has session conflicts\n"
+    );
+
+    // `team down` with missing explicit name prints `no session`, hint, and exits 0.
+    let down_missing = run_binary(dir.path(), &["team", "down", "no-such"]).unwrap();
+    assert!(down_missing.status.success());
+    assert_eq!(
+        String::from_utf8(down_missing.stdout).unwrap(),
+        "no session no-such\n"
+    );
+    assert_eq!(
+        String::from_utf8(down_missing.stderr).unwrap(),
+        "hint: names given to team down are full session names (with any team prefix); see a2amx list\n"
+    );
+
+    // `team down` using team file with a missing session prints `no session` and no hint.
+    let missing_file = dir.path().join("config/missing-member.toml");
+    std::fs::write(
+        &missing_file,
+        "team = \"demo\"\n[[session]]\nname = \"ghost\"\ncommand = [\"cat\"]\n",
+    )
+    .unwrap();
+    let down_file = run_binary(
+        dir.path(),
+        &["team", "down", "--file", missing_file.to_str().unwrap()],
+    )
+    .unwrap();
+    assert!(down_file.status.success());
+    assert_eq!(
+        String::from_utf8(down_file.stdout).unwrap(),
+        "no session demo-ghost\n"
+    );
+    assert_eq!(String::from_utf8(down_file.stderr).unwrap(), "");
+
+    // P13 abort: first session starts, second fails create_session (`failed NAME: ...`), exits non-zero.
+    let abort_file = dir.path().join("config/abort.toml");
+    std::fs::write(
+        &abort_file,
+        "team = \"abort\"\n[[session]]\nname = \"one\"\ncommand = [\"cat\"]\n[[session]]\nname = \"two\"\ncommand = [\"/definitely/missing/a2amx-cmd\"]\n",
+    )
+    .unwrap();
+    let aborted = run_binary(
+        dir.path(),
+        &[
+            "team",
+            "up",
+            "--detach",
+            "--file",
+            abort_file.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    assert!(!aborted.status.success());
+    assert_eq!(
+        String::from_utf8(aborted.stdout).unwrap(),
+        "started abort-one s2\n"
+    );
+    let abort_err = String::from_utf8(aborted.stderr).unwrap();
+    assert_eq!(
+        abort_err,
+        "a2amx: failed abort-two: Failed to spawn command '/definitely/missing/a2amx-cmd': No such file or directory (os error 2)\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_notes_lost_messages_before_conflict_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Default::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_recipient_id, _recipient_token, _recipient_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("wanted-wanted"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (_sender_id, sender_token, sender_addr) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let mut sender = Client::connect_addr(sender_addr, &sender_token)
+        .await
+        .unwrap();
+    let accepted = sender
+        .request(Request::SendMessage {
+            to: "wanted-wanted@host-a".into(),
+            subject: "restart".into(),
+            message: "body".into(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(accepted, Response::Accepted { .. }));
+    drop(daemon);
+
+    let _restarted = common::start_daemon_in(dir.path(), Some("host-a"), Default::default()).await;
+    let mut admin2 = Client::connect(dir.path()).await.unwrap();
+    let (conflict_id, _, _) = common::new_agent(
+        &mut admin2,
+        dir.path(),
+        Some("wanted-wanted"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    std::fs::write(
+        dir.path().join("wanted.toml"),
+        "team = \"wanted\"\n[[session]]\nname = 'wanted'\ncommand = ['cat']",
+    )
+    .unwrap();
+    let up = run_binary(
+        dir.path(),
+        &["team", "up", "--detach", "--file", "wanted.toml"],
+    )
+    .unwrap();
+    assert!(!up.status.success());
+    assert_eq!(
+        String::from_utf8(up.stderr).unwrap(),
+        format!(
+            "note: 1 message(s) to this team were lost in a daemon restart; see a2amx messages --state undeliverable\nsession wanted-wanted ({conflict_id}) is running with a different team setting; run a2amx team down first\na2amx: team has session conflicts\n"
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_non_terminal_stdin_skips_attach() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let file = dir.path().join("noatt.toml");
+    std::fs::write(
+        &file,
+        "team = \"noatt\"\n[[session]]\nname = \"worker\"\ncommand = [\"cat\"]\nattach = true\n",
+    )
+    .unwrap();
+    let up = run_binary(
+        dir.path(),
+        &["team", "up", "--file", file.to_str().unwrap()],
+    )
+    .unwrap();
+    assert!(up.status.success());
+    assert_eq!(
+        String::from_utf8(up.stdout).unwrap(),
+        "started noatt-worker s1\n"
+    );
+    assert_eq!(String::from_utf8(up.stderr).unwrap(), "");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_down_duplicate_name_reports_killed_then_failed_and_exits_one() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let file = dir.path().join("dup.toml");
+    std::fs::write(
+        &file,
+        "team = \"t\"\n[[session]]\nname = \"alpha\"\ncommand = [\"cat\"]\n",
+    )
+    .unwrap();
+    assert!(
+        run_binary(
+            dir.path(),
+            &["team", "up", "--detach", "--file", file.to_str().unwrap()],
+        )
+        .unwrap()
+        .status
+        .success()
+    );
+    let down = run_binary(dir.path(), &["team", "down", "t-alpha", "t-alpha"]).unwrap();
+    assert!(!down.status.success());
+    assert_eq!(
+        String::from_utf8(down.stdout).unwrap(),
+        "killed t-alpha s1\n"
+    );
+    assert_eq!(
+        String::from_utf8(down.stderr).unwrap(),
+        "failed t-alpha: unknown session s1\na2amx: one or more team sessions could not be killed\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_start_validation_precedence() {
+    let (dir, _daemon) = common::start_daemon().await;
+
+    // heartbeat error precedes activity error in one session.
+    let hb_file = dir.path().join("hb-act.toml");
+    std::fs::write(
+        &hb_file,
+        "team = \"prec\"\n[[session]]\nname = \"other\"\ncommand = [\"cat\"]\n[[session]]\nname = \"one\"\ncommand = [\"cat\"]\nwatch = [\"other\"]\nheartbeat = \"bad\"\n[session.activity]\nworking_after = \"bad\"\n",
+    )
+    .unwrap();
+    let hb_out = run_binary(
+        dir.path(),
+        &[
+            "team",
+            "up",
+            "--detach",
+            "--file",
+            hb_file.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    assert!(!hb_out.status.success());
+    assert_eq!(
+        String::from_utf8(hb_out.stderr).unwrap(),
+        format!(
+            "a2amx: team file {}: session prec-one: invalid heartbeat \"bad\": expected a number followed by s, m or h, from 1s to 24h\n",
+            hb_file.display()
+        )
+    );
+
+    // validate_session_confine precedes resolved_confine_request (invalid keep_env + bad confine path).
+    let conf_file = dir.path().join("conf.toml");
+    std::fs::write(
+        &conf_file,
+        "team = \"prec\"\n[[session]]\nname = \"two\"\ncommand = [\"cat\"]\n[session.confine]\nenabled = true\nkeep_env = [\"BAD=ENV\"]\nwrite = [\"missing-write-dir\"]\n",
+    )
+    .unwrap();
+    let conf_out = run_binary(
+        dir.path(),
+        &[
+            "team",
+            "up",
+            "--detach",
+            "--file",
+            conf_file.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    assert!(!conf_out.status.success());
+    assert_eq!(
+        String::from_utf8(conf_out.stderr).unwrap(),
+        "a2amx: keep_env \"BAD=ENV\" is not unset by default, so there is nothing to keep\n"
+    );
+}
