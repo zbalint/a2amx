@@ -53,3 +53,16 @@ Owner rules (memories d295229d, 828f8118, fb283e4c): goal is a CodeScene-clean r
 | `wire_omp_argv` (5 arguments) | Public; 5 call sites (`src/commands/launch.rs` 1, `tests/omp_wiring.rs` 4). Same proposal. |
 | Unreachable or misleading code found while reviewing, deliberately left alone: the `agy_composer` else-branch in `agy_composer_idle`; the missing-value error in `append_system_prompt` (goes with the shared iterator, step 7); the non-object tests in `wire_agy_argv` and `merge_settings` (an object is guaranteed); the short-cells branch in `claude_composer_empty` (only if the emulator builds short cell vectors: unchecked); and the wrong wording "permissions.allow must be an array" when `permissions` itself is not an object in `wire_agy_argv` (pinned by `tests/agy_wiring.rs`; a text fix is a behavior change). | Each is a code or behavior change the owner has not approved. |
 | file-level Overall Code Complexity | Re-measured after this spec. The file holds readiness for five harnesses, argv wiring for four and the prompt-option rules; splitting it moves public paths. |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (strongest slot, review m_8671); developer antigravity-cli Gemini 4 Hydrogen (Medium); tester omp default slot (deepseek-v4.1-flash), automatic advisor. BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | seven findings: guard-order panics (`row == 0`), duplicate validation making the append missing-value error unreachable, call counts of the argv wrappers | applied before locking |
+| Architect review | architect | `step_settings_value` introduced a new Bumpy Road 2 | developer split it into `separate_settings_value` and `inline_settings_value`; cs 9.38 to 9.53 |
+| Tester pass | tester | survivor: `--append-system-prompt` last occurrence turned into first was not killed (spec-required kill) | architect added `append_system_prompt_extends_the_last_occurrence`; mutant re-run killed |
+| Tester pass | tester | survivor: an inverse NBSP first cell with a dim rest was accepted as a suggestion | architect added `inverse_nbsp_with_dim` case to the claude readiness edge test; mutant re-run killed |
+
+Equivalent or unreachable mutants (no killers): rules bound `>=` versus `>`, glyph/rules order swap, dim scan before the first-cell guard (needs an empty cell slice the emulator cannot produce). Narrow survivors left unpinned and reported: re-scan of a separate `--settings` value that is itself `--settings`, parse object check precedence, `rposition` with two `--` separators, re-scan of a prompt value that is itself `--append-system-prompt=`.

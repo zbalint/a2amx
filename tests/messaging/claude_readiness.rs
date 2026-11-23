@@ -488,3 +488,97 @@ fn generic_readiness_only_uses_bracketed_paste_and_scroll_state() {
     ));
     assert!(!harness::ready(Harness::Generic, &screen_from(&f1), true));
 }
+
+#[test]
+fn claude_readiness_and_composer_empty_characterize_edge_guards() {
+    let rules = "─".repeat(40);
+
+    let top_row_zero = format!("\x1b[2J\x1b[?2004h\x1b[1;1H❯ \x1b[2;1H{rules}\x1b[1;3H\x1b[?25h");
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(top_row_zero.as_bytes()),
+        false
+    ));
+
+    let non_space_after_glyph =
+        format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯x\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h");
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(non_space_after_glyph.as_bytes()),
+        false
+    ));
+
+    let nbsp_after_glyph = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯\u{a0}\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    assert!(harness::ready(
+        Harness::Claude,
+        &screen_from(nbsp_after_glyph.as_bytes()),
+        false
+    ));
+
+    let rule_only_above =
+        format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[3;3H\x1b[?25h");
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(rule_only_above.as_bytes()),
+        false
+    ));
+
+    let dialog_marker = format!(
+        "\x1b[2J\x1b[?2004h\x1b[1;1HEnter to confirm\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    assert!(!harness::ready(
+        Harness::Claude,
+        &screen_from(dialog_marker.as_bytes()),
+        false
+    ));
+
+    let col_three =
+        format!("\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[4;1H{rules}\x1b[3;4H\x1b[?25h");
+    assert!(!harness::claude_composer_empty(
+        &screen_from(col_three.as_bytes()),
+        false
+    ));
+
+    let inverse_with_non_dim = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[7mT\x1b[0mext\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    assert!(!harness::claude_composer_empty(
+        &screen_from(inverse_with_non_dim.as_bytes()),
+        false
+    ));
+
+    let inverse_without_dim = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[7mT\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    assert!(!harness::claude_composer_empty(
+        &screen_from(inverse_without_dim.as_bytes()),
+        false
+    ));
+
+    let inverse_nbsp_with_dim = format!(
+        "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[7m\u{a0}\x1b[0;2mext\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+    );
+    assert!(!harness::claude_composer_empty(
+        &screen_from(inverse_nbsp_with_dim.as_bytes()),
+        false
+    ));
+
+    for marker in ["[Image #1]", "[Pasted text #1]"] {
+        let first = &marker[..1];
+        let rest = &marker[1..];
+        let dim_marker = format!(
+            "\x1b[2J\x1b[?2004h\x1b[2;1H{rules}\x1b[3;1H❯ \x1b[7m{first}\x1b[0;2m{rest}\x1b[0m\x1b[4;1H{rules}\x1b[3;3H\x1b[?25h"
+        );
+        assert!(
+            !harness::claude_composer_empty(&screen_from(dim_marker.as_bytes()), false),
+            "marker {marker}"
+        );
+    }
+
+    assert_eq!(
+        harness::paste_view(Harness::Claude, "<pasted_content id=\"1\">\nx"),
+        "<\\pasted_content id=\"1\">\nx"
+    );
+}

@@ -164,6 +164,20 @@ fn global_status_line_is_used_and_disabled_user_line_becomes_report_only() {
         disabled["statusLine"],
         json!({"command": "'/x/a2amx' statusline --harness agy --report", "enabled": true})
     );
+
+    for raw in [
+        json!({"statusLine": {"command": "a\u{0000}b", "enabled": false}}),
+        json!({"statusLine": {"command": 5, "enabled": false}}),
+    ] {
+        let argv = wire_agy_argv(
+            vec!["agy".into(), "--settings".into(), raw.to_string()],
+            Path::new("/x/a2amx"),
+            Path::new("/work"),
+            Path::new(""),
+        )
+        .unwrap();
+        assert_eq!(settings(&argv)["statusLine"], raw["statusLine"]);
+    }
 }
 
 #[test]

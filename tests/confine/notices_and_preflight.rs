@@ -144,6 +144,24 @@ fn prompt_notice_preserves_bubblewrap_separator() {
     assert_eq!(result[8], "after");
 }
 #[test]
+fn append_system_prompt_extends_the_last_occurrence() {
+    let result = a2amx::harness::append_system_prompt(
+        vec![
+            "claude".into(),
+            "--append-system-prompt".into(),
+            "one".into(),
+            "--append-system-prompt=two".into(),
+        ],
+        "notice",
+        Harness::Claude,
+        Path::new("."),
+    )
+    .expect("append");
+    assert_eq!(result[2], "one");
+    assert_eq!(result[3], "--append-system-prompt=two\n\nnotice");
+}
+
+#[test]
 fn prompt_file_options_are_refused_for_confined_harnesses() {
     assert!(
         a2amx::harness::append_system_prompt(
@@ -212,6 +230,88 @@ fn prompt_file_options_are_refused_for_confined_harnesses() {
     assert!(
         a2amx::harness::validate_prompt_options(&omp_after_separator, Harness::Omp, root.path())
             .is_ok()
+    );
+
+    assert_eq!(
+        a2amx::harness::validate_prompt_options(
+            &["claude".into(), "--append-system-prompt".into()],
+            Harness::Claude,
+            Path::new("."),
+        )
+        .unwrap_err()
+        .to_string(),
+        "--append-system-prompt is missing its value"
+    );
+    assert_eq!(
+        a2amx::harness::validate_prompt_options(
+            &[
+                "claude".into(),
+                "--append-system-prompt-file".into(),
+                "prompt.txt".into(),
+            ],
+            Harness::Claude,
+            Path::new("."),
+        )
+        .unwrap_err()
+        .to_string(),
+        "confinement cannot be combined with --append-system-prompt-file"
+    );
+    assert_eq!(
+        a2amx::harness::validate_prompt_options(
+            &[
+                "claude".into(),
+                "--append-system-prompt".into(),
+                "--append-system-prompt-file".into(),
+            ],
+            Harness::Claude,
+            Path::new("."),
+        )
+        .unwrap_err()
+        .to_string(),
+        "confinement cannot be combined with --append-system-prompt-file"
+    );
+    assert_eq!(
+        a2amx::harness::validate_prompt_options(
+            &[
+                "omp".into(),
+                "--append-system-prompt=prompt.txt".into(),
+                "--append-system-prompt".into(),
+            ],
+            Harness::Omp,
+            root.path(),
+        )
+        .unwrap_err()
+        .to_string(),
+        "confinement cannot use an existing file as OMP's append-system-prompt value"
+    );
+    assert!(
+        a2amx::harness::validate_prompt_options(
+            &["omp".into(), "--append-system-prompt=".into()],
+            Harness::Omp,
+            root.path(),
+        )
+        .is_ok()
+    );
+    for harness in [Harness::Codex, Harness::Agy] {
+        assert!(
+            a2amx::harness::validate_prompt_options(
+                &["cmd".into(), "--append-system-prompt=prompt.txt".into()],
+                harness,
+                root.path(),
+            )
+            .is_ok()
+        );
+    }
+    let generic_argv = vec!["sh".into(), "--append-system-prompt".into()];
+    assert_eq!(
+        a2amx::harness::append_system_prompt(
+            generic_argv.clone(),
+            "notice",
+            Harness::Generic,
+            Path::new("."),
+        )
+        .unwrap(),
+        generic_argv
     );
 }
 

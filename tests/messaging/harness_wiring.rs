@@ -468,6 +468,100 @@ fn claude_settings_errors_fail_with_settings_context() {
 }
 
 #[test]
+fn claude_settings_characterize_exact_errors_precedence_and_separators() {
+    let directory = TempDir::new().expect("temporary settings directory");
+    let invalid_file = directory.path().join("invalid.json");
+    std::fs::write(&invalid_file, "{").expect("invalid settings file");
+    let array_file = directory.path().join("array.json");
+    std::fs::write(&array_file, "[1]").expect("array settings file");
+
+    let wire_err = |argv: Vec<String>| {
+        harness::wire_claude_argv(
+            argv,
+            Path::new("/usr/bin/a2amx"),
+            directory.path(),
+            Path::new("/nonexistent/a2amx-config"),
+            false,
+            None,
+        )
+        .expect_err("settings input should fail")
+        .to_string()
+    };
+
+    assert_eq!(
+        wire_err(vec!["claude".into(), "--settings".into()]),
+        "--settings is missing its value"
+    );
+    assert_eq!(
+        wire_err(vec!["claude".into(), "--settings=".into()]),
+        "--settings= needs a non-empty value"
+    );
+    assert_eq!(
+        wire_err(vec!["claude".into(), "--settings".into(), "  ".into()]),
+        "--settings needs a non-empty value"
+    );
+    assert_eq!(
+        wire_err(vec![
+            "claude".into(),
+            "--settings".into(),
+            "missing.json".into()
+        ]),
+        "cannot read --settings file missing.json"
+    );
+    assert_eq!(
+        wire_err(vec!["claude".into(), "--settings".into(), "{".into()]),
+        "cannot read --settings file {"
+    );
+    assert_eq!(
+        wire_err(vec![
+            "claude".into(),
+            "--settings".into(),
+            "array.json".into()
+        ]),
+        "--settings JSON must be an object"
+    );
+    assert_eq!(
+        wire_err(vec![
+            "claude".into(),
+            "--settings=".into(),
+            "--settings".into()
+        ]),
+        "--settings= needs a non-empty value"
+    );
+    assert_eq!(
+        wire_err(vec![
+            "claude".into(),
+            "--settings".into(),
+            "{}".into(),
+            "--settings=".into()
+        ]),
+        "--settings= needs a non-empty value"
+    );
+    assert_eq!(
+        wire_err(vec!["claude".into(), "--settings".into(), "{x".into()]),
+        "cannot read --settings file {x"
+    );
+    assert_eq!(
+        wire_err(vec!["claude".into(), "--settings".into(), "x}".into()]),
+        "cannot read --settings file x}"
+    );
+
+    let after_separator = harness::wire_claude_argv(
+        vec!["claude".into(), "--".into(), "--settings".into()],
+        Path::new("/usr/bin/a2amx"),
+        directory.path(),
+        Path::new("/nonexistent/a2amx-config"),
+        false,
+        None,
+    )
+    .expect("settings after -- should be untouched");
+    assert_eq!(
+        &after_separator[after_separator.len() - 2..],
+        ["--", "--settings"]
+    );
+}
+
+#[test]
 fn claude_channel_settings_merge_matches_plain_launch() {
     let argv = harness::wire_claude_channel_argv(
         vec![

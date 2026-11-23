@@ -407,3 +407,39 @@ fn agy_turn_in_flight_detects_spinner_and_queued_rows_above_composer() {
         &top_row_zero
     )));
 }
+
+#[test]
+fn agy_composer_idle_rejects_each_cursor_mismatch_and_non_blank_placeholder_tail() {
+    let two_row_body = agy_composer_bytes(8, &["", ""], 2, true);
+    assert!(!harness::agy_composer_idle(
+        &agy_screen_from(&two_row_body),
+        false
+    ));
+
+    let rules = "─".repeat(120);
+    let cursor_on_bottom_rule = format!(
+        "\x1b[2J\x1b[?2004h\x1b[9;1H{rules}\x1b[10;1H> \x1b[11;1H{rules}\x1b[11;3H\x1b[?25h"
+    );
+    assert!(!harness::agy_composer_idle(
+        &agy_screen_from(cursor_on_bottom_rule.as_bytes()),
+        false
+    ));
+
+    let cursor_col_three = agy_composer_bytes(8, &[""], 3, true);
+    assert!(!harness::agy_composer_idle(
+        &agy_screen_from(&cursor_col_three),
+        false
+    ));
+
+    for placeholder in [
+        "Auto mode: edits & safe commands auto-approved (shift+tab to cycle)",
+        "Plan mode: research & plan only (shift+tab to cycle)",
+    ] {
+        let with_tail = format!("{placeholder}!");
+        let bytes = agy_composer_bytes(8, &[&with_tail], 2, true);
+        assert!(
+            !harness::agy_composer_idle(&agy_screen_from(&bytes), false),
+            "placeholder {placeholder}"
+        );
+    }
+}

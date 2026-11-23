@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, anyhow};
 
-use crate::emulator::{Attrs, Screen};
+use crate::emulator::{Attrs, Cell, Screen};
 
 #[derive(
     Debug,
@@ -263,6 +263,10 @@ fn row_matches_text_then_blank(screen: &Screen, row: u16, start: u16, text: &str
     row_is_blank_from(screen, row, end)
 }
 
+fn cursor_on_agy_input(screen: &Screen, top: u16, bottom: u16) -> bool {
+    bottom == top + 2 && screen.cursor.row == top + 1 && screen.cursor.col == 2
+}
+
 /// Returns whether an Agy composer is visibly empty and safe to release as a stale draft.
 pub fn agy_composer_idle(screen: &Screen, scrolled: bool) -> bool {
     if !ready(Harness::Agy, screen, scrolled) {
@@ -271,7 +275,7 @@ pub fn agy_composer_idle(screen: &Screen, scrolled: bool) -> bool {
     let Some((top, bottom)) = agy_composer(screen) else {
         return false;
     };
-    if bottom != top + 2 || screen.cursor.row != top + 1 || screen.cursor.col != 2 {
+    if !cursor_on_agy_input(screen, top, bottom) {
         return false;
     }
     row_is_blank_from(screen, screen.cursor.row, 2)
@@ -303,25 +307,57 @@ pub fn agy_turn_in_flight(screen: &Screen) -> bool {
         )
 }
 
-fn claude_ready(screen: &Screen, scrolled: bool) -> bool {
-    if !screen.modes.bracketed_paste || scrolled || !claude_cursor_shown(screen) {
-        return false;
-    }
-
-    let row = screen.cursor.row;
+fn claude_prompt_at_row(screen: &Screen, row: u16) -> bool {
     // Claude Code 2.1.286 draws the glyph followed by U+00A0; older builds used a plain space.
-    if cell_char(screen, row, 0) != Some('❯')
-        || !matches!(cell_char(screen, row, 1), Some(' ' | '\u{a0}'))
-    {
-        return false;
-    }
+    cell_char(screen, row, 0) == Some('❯')
+        && matches!(cell_char(screen, row, 1), Some(' ' | '\u{a0}'))
+}
+
+fn claude_composer_rules_valid(screen: &Screen, row: u16) -> bool {
     if row == 0 || row.saturating_add(1) >= screen.size.rows {
         return false;
     }
-    if !row_is_rule(screen, row - 1) || !row_is_rule(screen, row + 1) {
+    row_is_rule(screen, row - 1) && row_is_rule(screen, row + 1)
+}
+
+fn claude_ready(screen: &Screen, scrolled: bool) -> bool {
+    if !screen.modes.bracketed_paste || scrolled {
         return false;
     }
-    !has_dialog_marker(screen)
+    if !claude_cursor_shown(screen) {
+        return false;
+    }
+    let row = screen.cursor.row;
+    claude_prompt_at_row(screen, row)
+        && claude_composer_rules_valid(screen, row)
+        && !has_dialog_marker(screen)
+}
+
+fn has_placeholder_prefix(screen: &Screen, row: u16) -> bool {
+    ["[Pasted text #", "[Image #"].iter().any(|prefix| {
+        prefix.chars().enumerate().all(|(offset, expected)| {
+            cell_char(screen, row, 2 + u16::try_from(offset).unwrap_or(u16::MAX)) == Some(expected)
+        })
+    })
+}
+
+fn is_dim_placeholder_suggestion(screen: &Screen, row: u16, cells: &[Cell]) -> bool {
+    if cells.first().is_none_or(|cell| {
+        matches!(cell.ch, ' ' | '\u{a0}') || !cell.attrs.contains(Attrs::INVERSE)
+    }) {
+        return false;
+    }
+    let mut has_dim = false;
+    for cell in &cells[1..] {
+        if matches!(cell.ch, ' ' | '\u{a0}') {
+            continue;
+        }
+        if !cell.attrs.contains(Attrs::DIM) {
+            return false;
+        }
+        has_dim = true;
+    }
+    has_dim && !has_placeholder_prefix(screen, row)
 }
 
 /// Returns whether the Claude composer is safely observed as empty.
@@ -341,32 +377,7 @@ pub fn claude_composer_empty(screen: &Screen, scrolled: bool) -> bool {
     if row_is_blank_from(screen, row, 2) {
         return true;
     }
-    if cells.first().is_none_or(|cell| {
-        matches!(cell.ch, ' ' | '\u{a0}') || !cell.attrs.contains(Attrs::INVERSE)
-    }) {
-        return false;
-    }
-    let mut has_dim = false;
-    for cell in &cells[1..] {
-        if matches!(cell.ch, ' ' | '\u{a0}') {
-            continue;
-        }
-        if !cell.attrs.contains(Attrs::DIM) {
-            return false;
-        }
-        has_dim = true;
-    }
-    if !has_dim {
-        return false;
-    }
-    for prefix in ["[Pasted text #", "[Image #"] {
-        if prefix.chars().enumerate().all(|(offset, expected)| {
-            cell_char(screen, row, 2 + u16::try_from(offset).unwrap_or(u16::MAX)) == Some(expected)
-        }) {
-            return false;
-        }
-    }
-    true
+    is_dim_placeholder_suggestion(screen, row, cells)
 }
 
 pub fn ready(harness: Harness, screen: &Screen, scrolled: bool) -> bool {
@@ -393,44 +404,57 @@ fn shell_quote(value: &str) -> String {
     quoted
 }
 
+fn is_claude_paste_tag(text: &str, lt_index: usize) -> bool {
+    let suffix = &text.as_bytes()[lt_index + 1..];
+    let suffix = suffix.strip_prefix(b"/").unwrap_or(suffix);
+    suffix
+        .get(..b"pasted_content".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"pasted_content"))
+}
+
+fn escape_claude_paste(text: &str) -> String {
+    let text = text.replace('\t', "    ");
+    // Claude Code 2.1.286 escapes pasted_content after < or </, ignoring ASCII case.
+    // shortcut: runs like <<pasted_content, Unicode case folding, and other versions
+    // were not probed; re-probe before extending this rule.
+    let mut escaped = String::new();
+    let mut start = 0;
+    for (index, character) in text.char_indices() {
+        if character != '<' || !is_claude_paste_tag(&text, index) {
+            continue;
+        }
+        if start == 0 {
+            escaped.reserve(text.len() + 1);
+        }
+        escaped.push_str(&text[start..=index]);
+        escaped.push('\\');
+        start = index + 1;
+    }
+    if start == 0 {
+        text
+    } else {
+        escaped.push_str(&text[start..]);
+        escaped
+    }
+}
+
 /// What the harness delivers to its prompt hook for text pasted into the composer.
 pub fn paste_view(harness: Harness, text: &str) -> String {
     match harness {
         // Claude Code 2.1.285/2.1.286 turns each pasted tab into four spaces.
-        Harness::Claude => {
-            let text = text.replace('\t', "    ");
-            // Claude Code 2.1.286 escapes pasted_content after < or </, ignoring ASCII case.
-            // shortcut: runs like <<pasted_content, Unicode case folding, and other versions
-            // were not probed; re-probe before extending this rule.
-            let mut escaped = String::new();
-            let mut start = 0;
-            for (index, character) in text.char_indices() {
-                if character != '<' {
-                    continue;
-                }
-                let suffix = &text.as_bytes()[index + 1..];
-                let suffix = suffix.strip_prefix(b"/").unwrap_or(suffix);
-                if suffix
-                    .get(..b"pasted_content".len())
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"pasted_content"))
-                {
-                    if start == 0 {
-                        escaped.reserve(text.len() + 1);
-                    }
-                    escaped.push_str(&text[start..=index]);
-                    escaped.push('\\');
-                    start = index + 1;
-                }
-            }
-            if start == 0 {
-                text
-            } else {
-                escaped.push_str(&text[start..]);
-                escaped
-            }
-        }
+        Harness::Claude => escape_claude_paste(text),
         Harness::Generic | Harness::Omp | Harness::Codex | Harness::Agy => text.to_owned(),
     }
+}
+
+struct ClaudeArgvOptions<'a> {
+    argv: Vec<String>,
+    exe: &'a Path,
+    cwd: &'a Path,
+    config_dir: &'a Path,
+    authorize_peers: bool,
+    role: Option<&'a str>,
+    channel: bool,
 }
 
 pub fn wire_claude_argv(
@@ -441,7 +465,15 @@ pub fn wire_claude_argv(
     authorize_peers: bool,
     role: Option<&str>,
 ) -> anyhow::Result<Vec<String>> {
-    claude_argv(argv, exe, cwd, config_dir, authorize_peers, role, false)
+    claude_argv(ClaudeArgvOptions {
+        argv,
+        exe,
+        cwd,
+        config_dir,
+        authorize_peers,
+        role,
+        channel: false,
+    })
 }
 
 pub fn wire_claude_channel_argv(
@@ -452,18 +484,27 @@ pub fn wire_claude_channel_argv(
     authorize_peers: bool,
     role: Option<&str>,
 ) -> anyhow::Result<Vec<String>> {
-    claude_argv(argv, exe, cwd, config_dir, authorize_peers, role, true)
+    claude_argv(ClaudeArgvOptions {
+        argv,
+        exe,
+        cwd,
+        config_dir,
+        authorize_peers,
+        role,
+        channel: true,
+    })
 }
 
-fn claude_argv(
-    argv: Vec<String>,
-    exe: &Path,
-    cwd: &Path,
-    config_dir: &Path,
-    authorize_peers: bool,
-    role: Option<&str>,
-    channel: bool,
-) -> anyhow::Result<Vec<String>> {
+fn claude_argv(options: ClaudeArgvOptions<'_>) -> anyhow::Result<Vec<String>> {
+    let ClaudeArgvOptions {
+        argv,
+        exe,
+        cwd,
+        config_dir,
+        authorize_peers,
+        role,
+        channel,
+    } = options;
     let (argv, user_settings) = take_user_settings(argv, cwd)?;
     let resolved_status_line = resolve_status_line(user_settings.as_ref(), cwd, config_dir);
     let status_line = build_status_line(&resolved_status_line, exe);
@@ -595,6 +636,19 @@ fn resolve_agy_status_line(
     None
 }
 
+fn agy_user_status_command(status_line: &serde_json::Value) -> Result<&str, serde_json::Value> {
+    let Some(object) = status_line.as_object() else {
+        return Err(status_line.clone());
+    };
+    let Some(command) = object.get("command").and_then(serde_json::Value::as_str) else {
+        return Err(status_line.clone());
+    };
+    if command.as_bytes().contains(&0) {
+        return Err(status_line.clone());
+    }
+    Ok(command)
+}
+
 fn build_agy_status_line(resolved: &Option<serde_json::Value>, exe: &Path) -> serde_json::Value {
     let executable = shell_quote(exe.to_string_lossy().as_ref());
     let Some(status_line) = resolved else {
@@ -603,22 +657,15 @@ fn build_agy_status_line(resolved: &Option<serde_json::Value>, exe: &Path) -> se
             "enabled": true,
         });
     };
-    let Some(object) = status_line.as_object() else {
-        return status_line.clone();
+    let command = match agy_user_status_command(status_line) {
+        Ok(command) => command,
+        Err(early) => return early,
     };
-    let Some(command) = object.get("command").and_then(serde_json::Value::as_str) else {
-        return status_line.clone();
-    };
-    if command.as_bytes().contains(&0) {
-        return status_line.clone();
-    }
-    if command.trim().is_empty() {
-        return serde_json::json!({
-            "command": format!("{executable} statusline --harness agy --report"),
-            "enabled": true,
-        });
-    }
-    if object.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) {
+    let disabled = status_line
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        == Some(false);
+    if command.trim().is_empty() || disabled {
         return serde_json::json!({
             "command": format!("{executable} statusline --harness agy --report"),
             "enabled": true,
@@ -635,7 +682,7 @@ fn build_agy_status_line(resolved: &Option<serde_json::Value>, exe: &Path) -> se
     );
     chained.insert("enabled".to_owned(), serde_json::Value::Bool(true));
     for key in ["padding", "stack_with_default"] {
-        if let Some(value) = object.get(key) {
+        if let Some(value) = status_line.get(key) {
             chained.insert(key.to_owned(), value.clone());
         }
     }
@@ -711,36 +758,48 @@ pub fn wire_agy_argv(
     ))
 }
 
-fn take_user_settings(
-    mut argv: Vec<String>,
-    cwd: &Path,
-) -> anyhow::Result<(Vec<String>, Option<serde_json::Value>)> {
-    let scan_end = argv
-        .iter()
-        .position(|argument| argument == "--")
-        .unwrap_or(argv.len());
+fn separate_settings_value(
+    argv: &[String],
+    scan_end: usize,
+    index: usize,
+) -> anyhow::Result<Option<(String, usize)>> {
+    if argv[index] != "--settings" {
+        return Ok(None);
+    }
+    if index + 1 >= scan_end {
+        return Err(anyhow!("--settings is missing its value"));
+    }
+    Ok(Some((argv[index + 1].clone(), index + 2)))
+}
+
+fn inline_settings_value(arg: &str) -> anyhow::Result<Option<String>> {
+    let Some(settings) = arg.strip_prefix("--settings=") else {
+        return Ok(None);
+    };
+    if settings.is_empty() {
+        return Err(anyhow!("--settings= needs a non-empty value"));
+    }
+    Ok(Some(settings.to_owned()))
+}
+
+fn find_settings_value(argv: &[String], scan_end: usize) -> anyhow::Result<Option<String>> {
     let mut value = None;
     let mut index = 0;
     while index < scan_end {
-        if argv[index] == "--settings" {
-            if index + 1 >= scan_end {
-                return Err(anyhow!("--settings is missing its value"));
-            }
-            value = Some(argv[index + 1].clone());
-            index += 2;
-        } else if let Some(settings) = argv[index].strip_prefix("--settings=") {
-            if settings.is_empty() {
-                return Err(anyhow!("--settings= needs a non-empty value"));
-            }
-            value = Some(settings.to_owned());
-            index += 1;
-        } else {
-            index += 1;
+        if let Some((found, next_index)) = separate_settings_value(argv, scan_end, index)? {
+            value = Some(found);
+            index = next_index;
+            continue;
         }
+        if let Some(found) = inline_settings_value(&argv[index])? {
+            value = Some(found);
+        }
+        index += 1;
     }
-    let Some(value) = value else {
-        return Ok((argv, None));
-    };
+    Ok(value)
+}
+
+fn parse_settings_value(value: &str, cwd: &Path) -> anyhow::Result<serde_json::Value> {
     let value = value.trim();
     if value.is_empty() {
         return Err(anyhow!("--settings needs a non-empty value"));
@@ -756,7 +815,10 @@ fn take_user_settings(
     if !settings.is_object() {
         return Err(anyhow!("--settings JSON must be an object"));
     }
+    Ok(settings)
+}
 
+fn strip_settings_flags(mut argv: Vec<String>, scan_end: usize) -> Vec<String> {
     let mut filtered = Vec::with_capacity(argv.len());
     let mut index = 0;
     while index < argv.len() {
@@ -773,7 +835,22 @@ fn take_user_settings(
             index += 1;
         }
     }
-    Ok((filtered, Some(settings)))
+    filtered
+}
+
+fn take_user_settings(
+    argv: Vec<String>,
+    cwd: &Path,
+) -> anyhow::Result<(Vec<String>, Option<serde_json::Value>)> {
+    let scan_end = argv
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(argv.len());
+    let Some(value) = find_settings_value(&argv, scan_end)? else {
+        return Ok((argv, None));
+    };
+    let settings = parse_settings_value(&value, cwd)?;
+    Ok((strip_settings_flags(argv, scan_end), Some(settings)))
 }
 
 fn merge_settings(
@@ -836,6 +913,43 @@ pub fn wire_omp_argv(
     insert_extras(argv, extras)
 }
 
+fn omp_value_is_file(base_dir: &Path, value: &str) -> bool {
+    let path = Path::new(value);
+    let path = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        base_dir.join(path)
+    };
+    path.is_file()
+}
+
+fn scan_append_system_prompt_flags(
+    argv: &[String],
+    mut on_value: impl FnMut(&str) -> anyhow::Result<()>,
+) -> anyhow::Result<Option<(usize, usize)>> {
+    let mut last = None;
+    let mut index = 0;
+    while index < argv.len() {
+        let argument = &argv[index];
+        if argument == "--append-system-prompt" {
+            let value_index = index + 1;
+            if value_index >= argv.len() {
+                return Err(anyhow!("--append-system-prompt is missing its value"));
+            }
+            on_value(&argv[value_index])?;
+            last = Some((index, value_index));
+            index += 2;
+        } else if let Some(value) = argument.strip_prefix("--append-system-prompt=") {
+            on_value(value)?;
+            last = Some((index, index));
+            index += 1;
+        } else {
+            index += 1;
+        }
+    }
+    Ok(last)
+}
+
 /// Validate harness prompt-file options against the session's working directory.
 ///
 /// The command slice excludes bubblewrap's own arguments. OMP accepts a prompt
@@ -861,36 +975,14 @@ pub fn validate_prompt_options(
             "confinement cannot be combined with --append-system-prompt-file"
         ));
     }
-    let mut index = 0;
-    while index < argv.len() {
-        let argument = &argv[index];
-        let value = if argument == "--append-system-prompt" {
-            let value_index = index + 1;
-            if value_index >= argv.len() {
-                return Err(anyhow!("--append-system-prompt is missing its value"));
-            }
-            index = value_index;
-            Some(argv[value_index].as_str())
-        } else {
-            argument.strip_prefix("--append-system-prompt=")
-        };
-        if harness == Harness::Omp
-            && value.is_some_and(|value| {
-                let path = Path::new(value);
-                let path = if path.is_absolute() {
-                    path.to_owned()
-                } else {
-                    base_dir.join(path)
-                };
-                path.is_file()
-            })
-        {
+    scan_append_system_prompt_flags(argv, |value| {
+        if harness == Harness::Omp && omp_value_is_file(base_dir, value) {
             return Err(anyhow!(
                 "confinement cannot use an existing file as OMP's append-system-prompt value"
             ));
         }
-        index += 1;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -914,26 +1006,10 @@ pub fn append_system_prompt(
         .map_or(argv.len(), |index| command_start + index);
     validate_prompt_options(&argv[command_start..command_end], harness, base_dir)?;
 
-    let mut last = None;
-    let mut index = command_start;
-    while index < command_end {
-        let argument = &argv[index];
-        if argument == "--append-system-prompt" {
-            let value_index = index + 1;
-            if value_index >= command_end {
-                return Err(anyhow!("--append-system-prompt is missing its value"));
-            }
-            last = Some((index, value_index));
-            index += 2;
-            continue;
-        }
-        if argument.starts_with("--append-system-prompt=") {
-            last = Some((index, index));
-        }
-        index += 1;
-    }
-
-    if let Some((flag_index, value_index)) = last {
+    let last = scan_append_system_prompt_flags(&argv[command_start..command_end], |_| Ok(()))?;
+    if let Some((flag_offset, value_offset)) = last {
+        let flag_index = command_start + flag_offset;
+        let value_index = command_start + value_offset;
         let value = if flag_index == value_index {
             argv[flag_index]
                 .strip_prefix("--append-system-prompt=")
