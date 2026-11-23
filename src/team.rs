@@ -191,15 +191,26 @@ pub enum ResetState {
     SkippedAttached { id: String },
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ResetOptions<'a> {
+    pub explicit: bool,
+    pub except: &'a [String],
+    pub include_attached: bool,
+}
+
+impl ResetOptions<'_> {
+    fn protects_attached(self) -> bool {
+        !self.explicit && !self.include_attached
+    }
+}
+
 /// Classify selected session names for an ordered team reset.
 pub fn reset_targets(
     names: &[String],
-    explicit: bool,
-    except: &[String],
-    include_attached: bool,
+    options: ResetOptions<'_>,
     existing: &[SessionSummary],
 ) -> Vec<ResetTarget> {
-    let except: HashSet<_> = except.iter().map(String::as_str).collect();
+    let except: HashSet<_> = options.except.iter().map(String::as_str).collect();
     names
         .iter()
         .filter(|name| !except.contains(name.as_str()))
@@ -212,7 +223,7 @@ pub fn reset_targets(
                 Some(session) if session.exit_code.is_some() => ResetState::Exited {
                     id: session.id.clone(),
                 },
-                Some(session) if session.attached && !explicit && !include_attached => {
+                Some(session) if session.attached && options.protects_attached() => {
                     ResetState::SkippedAttached {
                         id: session.id.clone(),
                     }
@@ -291,8 +302,19 @@ pub fn parse(text: &str, dir: &std::path::Path, global: bool) -> anyhow::Result<
         None => team_name_for(dir, remedy)?,
     };
     let scope = build_scope(team, private, allow_teams)?;
-    let mut sessions = Vec::with_capacity(session.len());
-    for (index, mut table) in session.into_iter().enumerate() {
+    let mut sessions = parse_raw_sessions(session, confine.as_ref())?;
+    resolve_team_sessions(&mut sessions, &scope)?;
+    validate_sessions(&sessions)?;
+    Ok(sessions)
+}
+
+fn parse_raw_sessions(
+    tables: Vec<toml::value::Table>,
+    team_confine: Option<&ConfineTable>,
+) -> anyhow::Result<Vec<TeamSession>> {
+    let auto = team_confine.is_some_and(|table| table.auto == Some(true));
+    let mut sessions = Vec::with_capacity(tables.len());
+    for (index, mut table) in tables.into_iter().enumerate() {
         let own_confine = table
             .remove("confine")
             .map(|value| {
@@ -302,17 +324,19 @@ pub fn parse(text: &str, dir: &std::path::Path, global: bool) -> anyhow::Result<
             })
             .transpose()?;
         let mut session = session_from_table(index, table)?;
-        session.confine = merge_confine(&session.name, confine.as_ref(), own_confine.as_ref())?;
-        session.auto = confine
-            .as_ref()
-            .is_some_and(|table| table.auto == Some(true));
+        session.confine = merge_confine(&session.name, team_confine, own_confine.as_ref())?;
+        session.auto = auto;
         sessions.push(session);
     }
+    Ok(sessions)
+}
+
+fn resolve_team_sessions(sessions: &mut [TeamSession], scope: &TeamScope) -> anyhow::Result<()> {
     let base_names: HashSet<String> = sessions
         .iter()
         .map(|session| session.name.clone())
         .collect();
-    for session in &mut sessions {
+    for session in sessions {
         let original_name = session.name.clone();
         session.name = format!("{}-{original_name}", scope.name);
         let mut session_scope = scope.clone();
@@ -323,24 +347,15 @@ pub fn parse(text: &str, dir: &std::path::Path, global: bool) -> anyhow::Result<
             scope.private,
         )?;
         session.team = Some(session_scope);
-        let session_scope = session.team.as_ref();
-        resolve_references(
-            &mut session.watch,
-            &base_names,
-            session_scope,
-            &session.name,
-            "watch",
-        )?;
-        resolve_references(
-            &mut session.control_from,
-            &base_names,
-            session_scope,
-            &session.name,
-            "control_from",
-        )?;
+        let context = ReferenceContext {
+            base_names: &base_names,
+            scope: session.team.as_ref(),
+            session_name: &session.name,
+        };
+        resolve_references(&mut session.watch, &context, "watch")?;
+        resolve_references(&mut session.control_from, &context, "control_from")?;
     }
-    validate_sessions(&sessions)?;
-    Ok(sessions)
+    Ok(())
 }
 
 fn reject_renamed_allow(text: &str) -> anyhow::Result<()> {
@@ -406,11 +421,24 @@ fn validate_confine_syntax(prefix: &str, table: &ConfineTable) -> anyhow::Result
     Ok(())
 }
 
-fn merge_confine(
+fn validate_team_grants(team_grants: &[String]) -> anyhow::Result<()> {
+    for name in team_grants {
+        let grant = crate::grant::lookup(name)?;
+        if !grant.team_default_ok {
+            bail!(
+                "[confine] grants: {name:?} exposes {}; grant it in the session that needs it, not team-wide",
+                grant.exposes
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_confine_tables(
     session_name: &str,
     team: Option<&ConfineTable>,
     own: Option<&ConfineTable>,
-) -> anyhow::Result<Option<crate::confine::ConfineRequest>> {
+) -> anyhow::Result<()> {
     if let Some(table) = team {
         validate_confine_syntax("[confine] ", table)?;
         if table.auto == Some(true) && table.enabled == Some(false) {
@@ -427,51 +455,45 @@ fn merge_confine(
             "[confine] keep_env: a credential variable is returned per session, not team-wide; put keep_env in [session.confine]"
         );
     }
-
     if let Some(table) = own {
         validate_confine_syntax(&format!("session {session_name}: "), table)?;
     }
     if let Some(team_grants) = team.map(|table| &table.grants) {
-        for name in team_grants {
-            let grant = crate::grant::lookup(name)?;
-            if !grant.team_default_ok {
-                bail!(
-                    "[confine] grants: {name:?} exposes {}; grant it in the session that needs it, not team-wide",
-                    grant.exposes
-                );
-            }
-        }
+        validate_team_grants(team_grants)?;
     }
-    let enabled = own
-        .map(|table| table.enabled.unwrap_or(true))
-        .or_else(|| team.map(|table| table.enabled.unwrap_or(true)))
-        .unwrap_or(false);
-    let write = deduplicated_values(
-        team.map_or(&[][..], |table| &table.write),
-        own.map_or(&[][..], |table| &table.write),
-    );
-    let hide = deduplicated_values(
-        team.map_or(&[][..], |table| &table.hide),
-        own.map_or(&[][..], |table| &table.hide),
-    );
-    let unhide = deduplicated_values(
-        team.map_or(&[][..], |table| &table.unhide),
-        own.map_or(&[][..], |table| &table.unhide),
-    );
-    let grants = deduplicated_values(
-        team.map_or(&[][..], |table| &table.grants),
-        own.map_or(&[][..], |table| &table.grants),
-    );
-    let keep_env = deduplicated_values(&[], own.map_or(&[][..], |table| &table.keep_env));
-    let own_has_options = own.is_some_and(|table| {
+    Ok(())
+}
+
+fn own_has_options(own: Option<&ConfineTable>) -> bool {
+    own.is_some_and(|table| {
         !table.write.is_empty()
             || !table.hide.is_empty()
             || !table.unhide.is_empty()
             || !table.grants.is_empty()
             || !table.keep_env.is_empty()
             || table.default_hides.is_some()
-    });
-    if own.is_some_and(|table| table.enabled == Some(false)) && own_has_options {
+    })
+}
+
+fn merge_confine_list(
+    team: Option<&ConfineTable>,
+    own: Option<&ConfineTable>,
+    field: fn(&ConfineTable) -> &[String],
+) -> Vec<String> {
+    deduplicated_values(team.map_or(&[][..], field), own.map_or(&[][..], field))
+}
+
+fn merge_confine(
+    session_name: &str,
+    team: Option<&ConfineTable>,
+    own: Option<&ConfineTable>,
+) -> anyhow::Result<Option<crate::confine::ConfineRequest>> {
+    validate_confine_tables(session_name, team, own)?;
+    let enabled = own
+        .map(|table| table.enabled.unwrap_or(true))
+        .or_else(|| team.map(|table| table.enabled.unwrap_or(true)))
+        .unwrap_or(false);
+    if own.is_some_and(|table| table.enabled == Some(false)) && own_has_options(own) {
         bail!(
             "session {session_name}: [confine] options are set but enabled = false; remove the options or the enabled = false"
         );
@@ -479,6 +501,11 @@ fn merge_confine(
     if !enabled {
         return Ok(None);
     }
+    let write = merge_confine_list(team, own, |table| &table.write);
+    let hide = merge_confine_list(team, own, |table| &table.hide);
+    let unhide = merge_confine_list(team, own, |table| &table.unhide);
+    let grants = merge_confine_list(team, own, |table| &table.grants);
+    let keep_env = deduplicated_values(&[], own.map_or(&[][..], |table| &table.keep_env));
     validate_confine_list(session_name, "write", &write)?;
     validate_confine_list(session_name, "hide", &hide)?;
     validate_confine_list(session_name, "unhide", &unhide)?;
@@ -562,6 +589,33 @@ fn session_from_table(index: usize, mut table: toml::value::Table) -> anyhow::Re
         .with_context(|| format!("session {}", index + 1))
 }
 
+fn validate_allow_agent_part(value: &str, session_name: &str, entry: &str) -> anyhow::Result<()> {
+    validate_name(value).map_err(|error| {
+        anyhow::anyhow!("session {session_name}: allow_agents entry {entry:?}: {error}")
+    })
+}
+
+fn resolve_agent_allow_entry(
+    entry: &str,
+    own_team: &str,
+    session_name: &str,
+) -> anyhow::Result<String> {
+    let Some((team, agent)) = entry.split_once('/') else {
+        bail!("session {session_name}: allow_agents entry {entry:?} must be TEAM/AGENT");
+    };
+    if !is_single_segment(team) || !is_single_segment(agent) {
+        bail!("session {session_name}: allow_agents entry {entry:?} must be TEAM/AGENT");
+    }
+    validate_allow_agent_part(team, session_name, entry)?;
+    validate_allow_agent_part(agent, session_name, entry)?;
+    if team == own_team {
+        bail!("session {session_name}: allow_agents entry {entry:?} must name another team");
+    }
+    let resolved = format!("{team}-{agent}");
+    validate_allow_agent_part(&resolved, session_name, entry)?;
+    Ok(resolved)
+}
+
 fn resolve_agent_allow(
     entries: &[String],
     own_team: &str,
@@ -580,25 +634,7 @@ fn resolve_agent_allow(
     let mut seen = HashSet::with_capacity(entries.len());
     let mut agents = Vec::with_capacity(entries.len());
     for entry in entries {
-        let Some((team, agent)) = entry.split_once('/') else {
-            bail!("session {session_name}: allow_agents entry {entry:?} must be TEAM/AGENT");
-        };
-        if team.is_empty() || agent.is_empty() || agent.contains('/') {
-            bail!("session {session_name}: allow_agents entry {entry:?} must be TEAM/AGENT");
-        }
-        validate_name(team).map_err(|error| {
-            anyhow::anyhow!("session {session_name}: allow_agents entry {entry:?}: {error}")
-        })?;
-        validate_name(agent).map_err(|error| {
-            anyhow::anyhow!("session {session_name}: allow_agents entry {entry:?}: {error}")
-        })?;
-        if team == own_team {
-            bail!("session {session_name}: allow_agents entry {entry:?} must name another team");
-        }
-        let resolved = format!("{team}-{agent}");
-        validate_name(&resolved).map_err(|error| {
-            anyhow::anyhow!("session {session_name}: allow_agents entry {entry:?}: {error}")
-        })?;
+        let resolved = resolve_agent_allow_entry(entry, own_team, session_name)?;
         if !seen.insert(resolved.clone()) {
             bail!("session {session_name}: allow_agents entry {entry:?} is repeated");
         }
@@ -607,42 +643,73 @@ fn resolve_agent_allow(
     Ok(agents)
 }
 
+struct ReferenceContext<'a> {
+    base_names: &'a HashSet<String>,
+    scope: Option<&'a TeamScope>,
+    session_name: &'a str,
+}
+
+fn is_single_segment(segment: &str) -> bool {
+    !segment.is_empty() && !segment.contains('/')
+}
+
+fn resolve_explicit_reference(
+    reference: &str,
+    session_name: &str,
+    kind: &str,
+) -> Option<anyhow::Result<String>> {
+    if let Some(name) = reference.strip_prefix('/') {
+        if !is_single_segment(name) {
+            return Some(Err(anyhow::anyhow!(
+                "invalid {kind} reference {reference:?} in {session_name}"
+            )));
+        }
+        return Some(validate_name(name).map(|()| name.to_owned()));
+    }
+    let (team, name) = reference.split_once('/')?;
+    if !is_single_segment(team) || !is_single_segment(name) {
+        return Some(Err(anyhow::anyhow!(
+            "invalid {kind} reference {reference:?} in {session_name}"
+        )));
+    }
+    if let Err(err) = validate_name(team).and_then(|()| validate_name(name)) {
+        return Some(Err(err));
+    }
+    Some(Ok(format!("{team}-{name}")))
+}
+
+fn resolve_reference(
+    reference: &str,
+    context: &ReferenceContext<'_>,
+    kind: &str,
+) -> anyhow::Result<String> {
+    let session_name = context.session_name;
+    let resolved = if let Some(explicit) = resolve_explicit_reference(reference, session_name, kind)
+    {
+        explicit?
+    } else if let Some(scope) = context.scope {
+        if !context.base_names.contains(reference) {
+            bail!("unknown session {reference} in {kind} of {session_name}");
+        }
+        format!("{}-{reference}", scope.name)
+    } else {
+        reference.to_owned()
+    };
+    if reference.contains('/') {
+        validate_name(&resolved).map_err(|error| {
+            anyhow::anyhow!("session {session_name} {kind} entry {reference:?}: {error}")
+        })?;
+    }
+    Ok(resolved)
+}
+
 fn resolve_references(
     references: &mut [String],
-    base_names: &HashSet<String>,
-    scope: Option<&TeamScope>,
-    session_name: &str,
+    context: &ReferenceContext<'_>,
     kind: &str,
 ) -> anyhow::Result<()> {
     for reference in references {
-        let explicit = reference.starts_with('/') || reference.contains('/');
-        let resolved = if let Some(name) = reference.strip_prefix('/') {
-            if name.is_empty() || name.contains('/') {
-                bail!("invalid {kind} reference {reference:?} in {session_name}");
-            }
-            validate_name(name)?;
-            name.to_owned()
-        } else if let Some((team, name)) = reference.split_once('/') {
-            if team.is_empty() || name.is_empty() || name.contains('/') {
-                bail!("invalid {kind} reference {reference:?} in {session_name}");
-            }
-            validate_name(team)?;
-            validate_name(name)?;
-            format!("{team}-{name}")
-        } else if let Some(scope) = scope {
-            if !base_names.contains(reference) {
-                bail!("unknown session {reference} in {kind} of {session_name}");
-            }
-            format!("{}-{reference}", scope.name)
-        } else {
-            reference.clone()
-        };
-        if explicit {
-            validate_name(&resolved).map_err(|error| {
-                anyhow::anyhow!("session {session_name} {kind} entry {reference:?}: {error}")
-            })?;
-        }
-        *reference = resolved;
+        *reference = resolve_reference(reference, context, kind)?;
     }
     Ok(())
 }

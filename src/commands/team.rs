@@ -672,7 +672,15 @@ pub(super) async fn run_team_reset(
     };
     let mut client = Client::connect(&home).await?;
     let sessions = client.sessions().await?;
-    let targets = team::reset_targets(&names, explicit, &except, include_attached, &sessions);
+    let targets = team::reset_targets(
+        &names,
+        team::ResetOptions {
+            explicit,
+            except: &except,
+            include_attached,
+        },
+        &sessions,
+    );
     let running = targets
         .iter()
         .filter(|target| matches!(target.state, team::ResetState::Reset { .. }))

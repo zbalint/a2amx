@@ -42,3 +42,15 @@ Rejected: changing any error text, accepted syntax or the order of checks (the f
 ## 4. Flagged for the owner (not fixed here)
 
 Found while reviewing, deliberately not changed here (each would alter behavior or code the owner has not approved): (a) the branch of `resolve_references` for a bare name with no scope is unreachable (`parse`, the only caller, always passes `Some` scope); removing it changes the parameter type to `&TeamScope`; (b) the post-resolution `validate_name` for the leading-slash form cannot fire; (c) the bare `validate_name` errors in `resolve_references` (`/Bad`, `Bad/x`, `x/Bad`) carry no session or kind prefix, unlike the `allow_agents` texts: an inconsistency whose fix is a behavior change. The file-level findings of `src/team.rs` (Low Cohesion, Overall Code Complexity, String Heavy Function Arguments): the file holds the team-file model, scope building, confine merging, reference resolution and the reset and inspect planning. Splitting it moves public paths (`team::*` is used by `commands`, `daemon` and tests). Re-measured after this spec; proposal then.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (strongest slot, review m_a2amx draft); developer and tester: tester's local slot omp default (deepseek-v4.1-flash), advisor automatic. BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | check-order and grouping traps in `merge_confine` (alternating team/own tables) | contiguous-run rule written into the spec |
+| Tester pass | tester | 6 surviving mutants: `own_has_options` terms for hide, unhide, grants, keep_env, default_hides unpinned; `default_hides` own-vs-team precedence unpinned | architect added five C7 cases and one own-vs-team `default_hides` case to `merge_confine_check_precedence_and_disabled_shortcut_are_exact`; hide-term mutant re-run: killed |
+| Tester pass | tester | `team_up_forwards_reset_configuration_and_consent` flaked in 5 of ~55 full runs under mutation | recorded as a pre-existing flake; passes standalone and on every restored-tree run |
+
+One equivalent mutant: merging team `keep_env` (C4 rejects a non-empty team `keep_env` first).

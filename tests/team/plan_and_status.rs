@@ -40,7 +40,15 @@ fn reset_targets_preserve_order_and_protect_attached_sessions() {
     ];
     let except = ["d", "unselected"].map(String::from);
     assert_eq!(
-        team::reset_targets(&names, false, &except, false, &existing),
+        team::reset_targets(
+            &names,
+            team::ResetOptions {
+                explicit: false,
+                except: &except,
+                include_attached: false,
+            },
+            &existing,
+        ),
         vec![
             ResetTarget {
                 name: "a".into(),
@@ -60,9 +68,17 @@ fn reset_targets_preserve_order_and_protect_attached_sessions() {
             },
         ]
     );
-    for (explicit, include_attached) in [(false, true), (true, false)] {
+    for (explicit, include_attached) in [(false, true), (true, false), (true, true)] {
         assert_eq!(
-            team::reset_targets(&names, explicit, &except, include_attached, &existing),
+            team::reset_targets(
+                &names,
+                team::ResetOptions {
+                    explicit,
+                    except: &except,
+                    include_attached,
+                },
+                &existing,
+            ),
             vec![
                 ResetTarget {
                     name: "a".into(),
@@ -83,6 +99,23 @@ fn reset_targets_preserve_order_and_protect_attached_sessions() {
             ]
         );
     }
+    let mut attached_exited = summary("a", "a-id", Some(1));
+    attached_exited.attached = true;
+    assert_eq!(
+        team::reset_targets(
+            &["a".into()],
+            team::ResetOptions {
+                explicit: false,
+                except: &[],
+                include_attached: false,
+            },
+            &[attached_exited],
+        ),
+        vec![ResetTarget {
+            name: "a".into(),
+            state: ResetState::Exited { id: "a-id".into() },
+        }]
+    );
 }
 #[test]
 fn plan_preserves_wanted_order_and_preflights_every_exited_conflict() {

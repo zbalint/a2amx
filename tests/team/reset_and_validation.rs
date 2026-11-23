@@ -283,3 +283,238 @@ fn parse_characterizes_check_precedence() {
         assert_validation_error(label, text, expected);
     }
 }
+
+#[test]
+fn merge_confine_check_precedence_and_disabled_shortcut_are_exact() {
+    let dir = Path::new("/work/demo");
+    let many_writes = (0..65)
+        .map(|i| format!("\"/tmp/w{i}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let many_grants = (0..65)
+        .map(|i| format!("\"bogus{i}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let cases = [
+        (
+            "C2 precedes C3",
+            "[confine]\nauto = true\nenabled = false\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nauto = true",
+            "[confine] auto needs confinement; remove enabled = false",
+        ),
+        (
+            "C3 precedes C4",
+            "[confine]\nkeep_env = ['A']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nauto = false",
+            "session worker: auto belongs in the team's [confine] table, not [session.confine]",
+        ),
+        (
+            "C4 precedes C5",
+            "[confine]\nkeep_env = ['A']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['']",
+            "[confine] keep_env: a credential variable is returned per session, not team-wide; put keep_env in [session.confine]",
+        ),
+        (
+            "C5 precedes C6",
+            "[confine]\ngrants = ['snap']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nwrite = ['']",
+            "session worker: write entry is empty",
+        ),
+        (
+            "C6 precedes C7",
+            "[confine]\ngrants = ['snap']\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\nwrite = ['/tmp']",
+            "[confine] grants: \"snap\" exposes snapd package management: installs and removes packages; grant it in the session that needs it, not team-wide",
+        ),
+        (
+            "C7 precedes C9",
+            &format!(
+                "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\nwrite = [{many_writes}]"
+            ),
+            "session worker: [confine] options are set but enabled = false; remove the options or the enabled = false",
+        ),
+        (
+            "C7 sees hide alone",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\nhide = ['/x']",
+            "session worker: [confine] options are set but enabled = false; remove the options or the enabled = false",
+        ),
+        (
+            "C7 sees unhide alone",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\nunhide = ['/x']",
+            "session worker: [confine] options are set but enabled = false; remove the options or the enabled = false",
+        ),
+        (
+            "C7 sees grants alone",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\ngrants = ['snap']",
+            "session worker: [confine] options are set but enabled = false; remove the options or the enabled = false",
+        ),
+        (
+            "C7 sees keep_env alone",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\nkeep_env = ['A']",
+            "session worker: [confine] options are set but enabled = false; remove the options or the enabled = false",
+        ),
+        (
+            "C7 sees default_hides alone",
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\nenabled = false\ndefault_hides = false",
+            "session worker: [confine] options are set but enabled = false; remove the options or the enabled = false",
+        ),
+        (
+            "C9 precedes C10",
+            &format!(
+                "[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\ngrants = [{many_grants}]"
+            ),
+            "session worker: grants has at most 64 entries",
+        ),
+    ];
+    for (label, text, expected) in cases {
+        let err = team::parse(text, dir, false).expect_err(label);
+        assert_eq!(err.to_string(), expected, "{label}");
+    }
+
+    let both = "[confine]\ndefault_hides = false\n[[session]]\nname = 'worker'\ncommand = ['cat']\n[session.confine]\ndefault_hides = true";
+    let sessions = team::parse(both, dir, false).expect("own default_hides wins");
+    assert!(
+        !sessions[0]
+            .confine
+            .as_ref()
+            .expect("confine")
+            .no_default_hides
+    );
+
+    let disabled_team = format!(
+        "[confine]\nenabled = false\nwrite = [{many_writes}]\n[[session]]\nname = 'worker'\ncommand = ['cat']"
+    );
+    let sessions = team::parse(&disabled_team, dir, false).expect("C8 returns before C9");
+    assert_eq!(sessions[0].confine, None);
+}
+
+#[test]
+fn allow_agents_and_references_characterize_exact_errors() {
+    let dir = Path::new("/work/a2amx");
+    let allow_cases = [
+        (
+            "saltmdb",
+            "session a2amx-worker: allow_agents entry \"saltmdb\" must be TEAM/AGENT",
+        ),
+        (
+            "/x",
+            "session a2amx-worker: allow_agents entry \"/x\" must be TEAM/AGENT",
+        ),
+        (
+            "saltmdb/",
+            "session a2amx-worker: allow_agents entry \"saltmdb/\" must be TEAM/AGENT",
+        ),
+        (
+            "a/b/c",
+            "session a2amx-worker: allow_agents entry \"a/b/c\" must be TEAM/AGENT",
+        ),
+        (
+            "Bad/x",
+            "session a2amx-worker: allow_agents entry \"Bad/x\": invalid name \"Bad\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            "x/Bad",
+            "session a2amx-worker: allow_agents entry \"x/Bad\": invalid name \"Bad\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            "a2amx/x",
+            "session a2amx-worker: allow_agents entry \"a2amx/x\" must name another team",
+        ),
+    ];
+    for (entry, expected) in allow_cases {
+        let text =
+            format!("[[session]]\nname = 'worker'\ncommand = ['cat']\nallow_agents = ['{entry}']");
+        let err = team::parse(&text, dir, false).expect_err(entry);
+        assert_eq!(err.to_string(), expected, "{entry}");
+    }
+
+    let repeated = "[[session]]\nname = 'worker'\ncommand = ['cat']\nallow_agents = ['saltmdb/a', 'saltmdb/a']";
+    assert_eq!(
+        team::parse(repeated, dir, false).unwrap_err().to_string(),
+        "session a2amx-worker: allow_agents entry \"saltmdb/a\" is repeated"
+    );
+
+    let sixteen = (0..16)
+        .map(|i| format!("'saltmdb/a{i}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        team::parse(
+            &format!("[[session]]\nname = 'worker'\ncommand = ['cat']\nallow_agents = [{sixteen}]"),
+            dir,
+            false,
+        )
+        .is_ok()
+    );
+
+    let seventeen_bad = (0..17)
+        .map(|i| format!("'bad{i}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert_eq!(
+        team::parse(
+            &format!(
+                "private = false\n[[session]]\nname = 'worker'\ncommand = ['cat']\nallow_agents = [{seventeen_bad}]"
+            ),
+            dir,
+            false,
+        )
+        .unwrap_err()
+        .to_string(),
+        "session a2amx-worker: allow_agents needs a private team"
+    );
+    assert_eq!(
+        team::parse(
+            &format!(
+                "[[session]]\nname = 'worker'\ncommand = ['cat']\nallow_agents = [{seventeen_bad}]"
+            ),
+            dir,
+            false,
+        )
+        .unwrap_err()
+        .to_string(),
+        "session a2amx-worker: allow_agents has at most 16 entries"
+    );
+
+    assert_eq!(
+        team::parse(
+            "[[session]]\nname = 'worker'\ncommand = ['cat']\nallow_agents = ['a2amx/daemon']",
+            Path::new("/work/demo"),
+            false,
+        )
+        .unwrap_err()
+        .to_string(),
+        "session demo-worker: allow_agents entry \"a2amx/daemon\": invalid name \"a2amx-daemon\": reserved for the daemon"
+    );
+
+    for (reference, expected) in [
+        (
+            "/Bad",
+            "invalid name \"Bad\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            "Bad/x",
+            "invalid name \"Bad\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            "x/Bad",
+            "invalid name \"Bad\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+    ] {
+        let text =
+            format!("[[session]]\nname = 'architect'\ncommand = ['cat']\nwatch = ['{reference}']");
+        assert_eq!(
+            team::parse(&text, Path::new("/work/demo"), false)
+                .unwrap_err()
+                .to_string(),
+            expected,
+            "{reference}"
+        );
+    }
+    assert_eq!(
+        team::parse(
+            "[[session]]\nname = 'architect'\ncommand = ['cat']\nwatch = ['a2amx/daemon']",
+            Path::new("/work/demo"),
+            false,
+        )
+        .unwrap_err()
+        .to_string(),
+        "session demo-architect watch entry \"a2amx/daemon\": invalid name \"a2amx-daemon\": reserved for the daemon"
+    );
+}
