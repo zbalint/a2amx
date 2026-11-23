@@ -226,11 +226,13 @@ async fn session_tokens_cannot_confine_and_admin_confine_rejects_invalid_targets
         confine: a2amx::confine::ConfineRequest::default(),
         request: Box::new(confine_new_session_request()),
     };
-    assert!(matches!(
+    assert_eq!(
         admin.request(nested).await.unwrap(),
-        Response::Error { message } if message.contains("nested confinement")
-    ));
-    assert!(matches!(
+        Response::Error {
+            message: "nested confinement requests are not allowed".into()
+        }
+    );
+    assert_eq!(
         admin
             .request(Request::Confine {
                 confine: a2amx::confine::ConfineRequest::default(),
@@ -238,7 +240,9 @@ async fn session_tokens_cannot_confine_and_admin_confine_rejects_invalid_targets
             })
             .await
             .unwrap(),
-        Response::Error { message } if message.contains("expected new_session")
-    ));
+        Response::Error {
+            message: "expected new_session".into()
+        }
+    );
     daemon.shutdown().await.unwrap();
 }

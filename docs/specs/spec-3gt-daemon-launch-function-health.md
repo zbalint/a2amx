@@ -45,3 +45,15 @@ Owner rules (memories d295229d, 828f8118, fb283e4c, df233241): goal is a CodeSce
 ## 4. Flagged for the owner (not fixed here)
 
 The file-level Overall Code Complexity of `src/daemon/launch.rs` (re-measured after this spec). Unreachable or inconsistent code found while reviewing: the `confinement requires an explicit cwd` check inside `plan_confinement` (`:45-47`; C12 already returns for exactly that condition); C13b being an `anyhow` error where every other failure is a `Response::Error`. The daemon's `validate_team_scope` is the trust boundary (any client, including a raw wire request, reaches `create_session`) and is a different rule set from `src/team.rs` (different texts, `allow` versus `allow_teams`, an empty allow on a public team passes in the daemon and fails in `team.rs`, resolved names versus `TEAM/AGENT` entries); nothing is shared except `messaging::validate_name`, so this spec keeps both and changes no text.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (strongest slot, review m_8684); developer antigravity-cli Gemini 4 Hydrogen (Medium); tester omp default slot (deepseek-v4.1-flash), automatic advisor. BLOCKED/amend cycles: 0. cs `src/daemon/launch.rs` 7.13 to 8.81, only the file-level Low Cohesion left; tests 1440 to 1442; `src/wire.rs` untouched.
+
+| Found at | By | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | eight findings (the creation gate must stay bound through the registry insert, the session number must be allocated after C13, C2 is reachable through a raw `Confine` wrapper, a borrowed view struct instead of thirteen parameters) | applied before locking |
+| Tester pass | tester | eight survivors: the `exit_code().is_none()` filter and the `existing.allow != scope.allow` term of the team-conflict test; `NO_AUTHORIZE_ENV` not stripped for Codex; the `harness == Claude` term of the channel flag; and four order swaps inside the team-allow checks (validity vs trailing dash, trailing dash vs allow-private, the 16 cap vs the entry loop, validity vs the self-name check) | developer added tests for all eight (including a stub app-server that records its environment and the bridge seam for the channel flag); each mutant applied by the developer and confirmed failing; the tester's call that one swap is not equivalent (the daemon validates the agents before the session name) held |
+| Tester pass | tester | an early "survivor" (name checks before the team conflict) was only run against one test target | rerun against the whole `teams` suite: killed; corrected by the tester |
+
+Equivalent by construction: in-use check before the invalid-name check (registry names are always validated), repeat before self in the agent entries (the first occurrence already returns the self message). Probabilistic killer: the early creation-gate release is caught only by the concurrency test under a lucky interleaving. Unfixed and reported: the unreachable cwd check in `plan_confinement`, the `anyhow` error on `next_number` exhaustion.

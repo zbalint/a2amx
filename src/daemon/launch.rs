@@ -16,6 +16,91 @@ use crate::wire::{Request, Response};
 
 const ACTIVITY_POLL: Duration = Duration::from_secs(1);
 
+struct NewSessionValidation<'a> {
+    argv: &'a [String],
+    cols: u16,
+    rows: u16,
+    cwd: Option<&'a str>,
+    reset: &'a [String],
+    control_from: &'a [String],
+    watch: &'a [String],
+    activity: Option<&'a crate::wire::ActivityWatch>,
+    heartbeat: Option<u64>,
+    name: Option<&'a str>,
+    team: Option<&'a messaging::TeamScope>,
+    role: Option<&'a str>,
+    remote: Option<messaging::RemoteMode>,
+    confined: bool,
+}
+
+struct LaunchPrep<'a> {
+    id: &'a SessionId,
+    harness: Harness,
+    cwd: Option<&'a str>,
+    confine_request: Option<confine::ConfineRequest>,
+    argv: Vec<String>,
+    env: &'a mut Vec<(String, String)>,
+}
+
+struct CodexPrep<'a> {
+    id: &'a SessionId,
+    cwd: Option<&'a str>,
+    plan: Option<&'a confine::Plan>,
+}
+
+struct PreparedSession {
+    argv: Vec<String>,
+    env: Vec<(String, String)>,
+    channel: bool,
+    heartbeat: Option<Duration>,
+    token: String,
+    codex: Option<Arc<codex::Link>>,
+    confine: Option<Plan>,
+}
+
+fn into_session_spec(request: Request, prepared: PreparedSession) -> anyhow::Result<SessionSpec> {
+    let Request::NewSession {
+        cols,
+        rows,
+        cwd,
+        reset,
+        control_from,
+        watch,
+        activity,
+        name,
+        harness,
+        deliver,
+        team,
+        role,
+        remote,
+        ..
+    } = request
+    else {
+        anyhow::bail!("expected new_session");
+    };
+    Ok(SessionSpec {
+        argv: prepared.argv,
+        cwd: cwd.map(PathBuf::from),
+        size: Size { cols, rows },
+        env: prepared.env,
+        name,
+        harness,
+        channel: prepared.channel,
+        deliver: deliver.unwrap_or_else(|| harness.default_deliver()),
+        reset,
+        control_from,
+        watch,
+        activity,
+        heartbeat: prepared.heartbeat,
+        team,
+        role,
+        remote,
+        token: prepared.token,
+        codex: prepared.codex,
+        confine: prepared.confine,
+    })
+}
+
 impl Runtime {
     fn split_confine(
         request: Request,
@@ -89,179 +174,268 @@ impl Runtime {
         Ok(result.map(Some).map_err(|error| error.to_string()))
     }
 
-    pub(super) async fn create_session(
-        self: &Arc<Self>,
-        request: Request,
-    ) -> anyhow::Result<Response> {
-        let (confine_request, request) = match Self::split_confine(request) {
-            Ok(split) => split,
-            Err(message) => return Ok(Response::Error { message }),
-        };
+    fn has_valid_geometry(params: &NewSessionValidation<'_>) -> bool {
+        !params.argv.is_empty() && params.cols > 0 && params.rows > 0
+    }
+
+    fn validate_session_inputs(
+        params: &NewSessionValidation<'_>,
+    ) -> Result<Option<Duration>, String> {
+        if !Self::has_valid_geometry(params) {
+            return Err("command and nonzero dimensions are required".into());
+        }
+        messaging::validate_reset_steps(params.reset).map_err(|error| error.to_string())?;
+        if let Some(message) =
+            Self::validate_watch_lists(params.control_from, params.watch, params.name)
+        {
+            return Err(message);
+        }
+        let heartbeat = params
+            .heartbeat
+            .map(|seconds| messaging::interval_from_seconds(seconds, "heartbeat"))
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let unnamed = params.name.unwrap_or("unnamed");
+        if heartbeat.is_some() && params.watch.is_empty() {
+            return Err(format!(
+                "session {unnamed}: heartbeat needs a non-empty watch"
+            ));
+        }
+        if let Some(activity) = params.activity
+            && let Err(error) = activity.validate(!params.watch.is_empty())
+        {
+            return Err(format!("session {unnamed}: {error}"));
+        }
+        Ok(heartbeat)
+    }
+
+    fn validate_team_and_role(params: &NewSessionValidation<'_>) -> Result<(), String> {
+        if let Some(scope) = params.team
+            && let Some(message) = Self::validate_team_scope(scope, params.name)
+        {
+            return Err(message);
+        }
+        if let Some(role) = params.role
+            && let Err(error) = messaging::validate_role(role)
+        {
+            return Err(error.to_string());
+        }
+        Ok(())
+    }
+
+    fn validate_confinement_preconditions(params: &NewSessionValidation<'_>) -> Result<(), String> {
+        if params.remote.is_some() && !params.confined {
+            return Err("remote messaging needs a confined session".into());
+        }
+        if params.confined && params.cwd.is_none() {
+            return Err("confinement requires an explicit cwd".into());
+        }
+        Ok(())
+    }
+
+    fn validate_new_session_params(
+        params: &NewSessionValidation<'_>,
+    ) -> Result<Option<Duration>, String> {
+        let heartbeat = Self::validate_session_inputs(params)?;
+        Self::validate_team_and_role(params)?;
+        Self::validate_confinement_preconditions(params)?;
+        Ok(heartbeat)
+    }
+
+    fn validate_new_session_request(
+        request: &Request,
+        confined: bool,
+    ) -> Result<Option<Duration>, String> {
         let Request::NewSession {
             argv,
             cols,
             rows,
             cwd,
-            mut env,
             reset,
             control_from,
             watch,
             activity,
             heartbeat,
             name,
-            harness,
-            deliver,
             team,
             role,
             remote,
+            ..
         } = request
         else {
-            return Ok(Response::Error {
-                message: "expected new_session".into(),
-            });
+            return Err("expected new_session".into());
         };
-        if argv.is_empty() || cols == 0 || rows == 0 {
-            return Ok(Response::Error {
-                message: "command and nonzero dimensions are required".into(),
-            });
-        }
-        if let Err(error) = messaging::validate_reset_steps(&reset) {
-            return Ok(Response::Error {
-                message: error.to_string(),
-            });
-        }
-        if let Some(message) = Self::validate_watch_lists(&control_from, &watch, name.as_deref()) {
-            return Ok(Response::Error { message });
-        }
-        let heartbeat = match heartbeat
-            .map(|seconds| messaging::interval_from_seconds(seconds, "heartbeat"))
-            .transpose()
-        {
-            Ok(heartbeat) => heartbeat,
-            Err(error) => {
-                return Ok(Response::Error {
-                    message: error.to_string(),
-                });
-            }
-        };
-        if heartbeat.is_some() && watch.is_empty() {
-            return Ok(Response::Error {
-                message: format!(
-                    "session {}: heartbeat needs a non-empty watch",
-                    name.as_deref().unwrap_or("unnamed")
-                ),
-            });
-        }
-        if let Some(activity) = &activity
-            && let Err(error) = activity.validate(!watch.is_empty())
-        {
-            return Ok(Response::Error {
-                message: format!("session {}: {error}", name.as_deref().unwrap_or("unnamed")),
-            });
-        }
+        Self::validate_new_session_params(&NewSessionValidation {
+            argv,
+            cols: *cols,
+            rows: *rows,
+            cwd: cwd.as_deref(),
+            reset,
+            control_from,
+            watch,
+            activity: activity.as_ref(),
+            heartbeat: *heartbeat,
+            name: name.as_deref(),
+            team: team.as_ref(),
+            role: role.as_deref(),
+            remote: *remote,
+            confined,
+        })
+    }
 
-        if let Some(scope) = &team
-            && let Some(message) = Self::validate_team_scope(scope, name.as_deref())
-        {
-            return Ok(Response::Error { message });
-        }
-        if let Some(role) = &role
-            && let Err(error) = messaging::validate_role(role)
-        {
-            return Ok(Response::Error {
-                message: error.to_string(),
-            });
-        }
-
-        if remote.is_some() && confine_request.is_none() {
-            return Ok(Response::Error {
-                message: "remote messaging needs a confined session".into(),
-            });
-        }
-        if confine_request.is_some() && cwd.is_none() {
-            return Ok(Response::Error {
-                message: "confinement requires an explicit cwd".into(),
-            });
-        }
-        let _gate = self.sessions.begin_creation().await;
-        if let Some(message) = self.check_team_and_name(team.as_ref(), name.as_deref()) {
-            return Ok(Response::Error { message });
-        }
+    async fn prepare_session_identity(
+        &self,
+        harness: Harness,
+        env: &mut Vec<(String, String)>,
+    ) -> anyhow::Result<(u64, SessionId, String, bool)> {
         let number = self
             .sessions
             .next_number()
             .ok_or_else(|| anyhow::anyhow!("session id space exhausted"))?;
         let id = SessionId(format!("s{number}"));
-        let address = self.address.clone();
         let token = tokio::task::spawn_blocking(random_hex::<32>).await??;
         env.push(("A2AMX_TOKEN".into(), token.clone()));
-        env.push(("A2AMX_ADDR".into(), address));
-        let mut argv = argv;
-        let mut codex = None;
+        env.push(("A2AMX_ADDR".into(), self.address.clone()));
         let channel = harness == Harness::Claude
             && env
                 .iter()
                 .any(|(key, value)| key == harness::CHANNEL_ENV && value == "1");
         env.retain(|(key, _)| key != harness::CHANNEL_ENV);
+        Ok((number, id, token, channel))
+    }
+
+    async fn prepare_confined_and_codex(
+        &self,
+        prep: LaunchPrep<'_>,
+    ) -> anyhow::Result<Result<(Vec<String>, Option<Plan>, Option<Arc<codex::Link>>), String>> {
         let mut confine_plan = match self
-            .plan_confinement(confine_request, harness, cwd.as_deref())
+            .plan_confinement(prep.confine_request, prep.harness, prep.cwd)
             .await?
         {
             Ok(plan) => plan,
-            Err(message) => return Ok(Response::Error { message }),
+            Err(message) => return Ok(Err(message)),
         };
-        if harness == Harness::Codex
+        if prep.harness == Harness::Codex
             && let Some(plan) = confine_plan.take()
         {
-            confine_plan = Some(plan.with_codex_dir(codex::session_dir(&self.layout, &id.0)));
+            confine_plan = Some(plan.with_codex_dir(codex::session_dir(&self.layout, &prep.id.0)));
         }
-        if harness == Harness::Codex {
-            (argv, codex) = match self
-                .prepare_codex(&id, argv, cwd.as_deref(), &mut env, confine_plan.as_ref())
+        let mut argv = prep.argv;
+        let mut codex = None;
+        if prep.harness == Harness::Codex {
+            let prepared = match self
+                .prepare_codex(
+                    CodexPrep {
+                        id: prep.id,
+                        cwd: prep.cwd,
+                        plan: confine_plan.as_ref(),
+                    },
+                    argv,
+                    prep.env,
+                )
                 .await?
             {
-                Ok(prepared) => (prepared.0, Some(prepared.1)),
+                Ok(prepared) => prepared,
+                Err(message) => return Ok(Err(message)),
+            };
+            argv = prepared.0;
+            codex = Some(prepared.1);
+        }
+        Ok(Ok((argv, confine_plan, codex)))
+    }
+
+    fn register_and_start_session(
+        self: &Arc<Self>,
+        number: u64,
+        session: Session,
+        channel: bool,
+    ) -> String {
+        let session = Arc::new(session);
+        let id = session.id().0.clone();
+        self.sessions.insert(number, session.clone());
+        self.start_session_tasks(session, channel);
+        id
+    }
+
+    pub(super) async fn create_session(
+        self: &Arc<Self>,
+        request: Request,
+    ) -> anyhow::Result<Response> {
+        let (confine_request, mut request) = match Self::split_confine(request) {
+            Ok(split) => split,
+            Err(message) => return Ok(Response::Error { message }),
+        };
+        let heartbeat =
+            match Self::validate_new_session_request(&request, confine_request.is_some()) {
+                Ok(heartbeat) => heartbeat,
                 Err(message) => return Ok(Response::Error { message }),
             };
-        }
-        let session_spec = SessionSpec {
+        let Request::NewSession {
             argv,
-            cwd: cwd.map(PathBuf::from),
-            size: Size { cols, rows },
+            cwd,
             env,
             name,
             harness,
-            channel,
-            deliver: deliver.unwrap_or_else(|| harness.default_deliver()),
-            reset,
-            control_from,
-            watch,
-            activity,
-            heartbeat,
             team,
-            role,
-            remote,
-            token,
-            codex,
-            confine: confine_plan,
+            ..
+        } = &mut request
+        else {
+            anyhow::bail!("expected new_session");
         };
-        let session = if session_spec.confine.is_some() {
-            Session::spawn_confined(id, session_spec).await
-        } else {
-            tokio::task::spawn_blocking(move || Session::spawn(id, session_spec)).await?
+        let _gate = self.sessions.begin_creation().await;
+        if let Some(message) = self.check_team_and_name(team.as_ref(), name.as_deref()) {
+            return Ok(Response::Error { message });
+        }
+        let mut env = std::mem::take(env);
+        let argv = std::mem::take(argv);
+        let harness = *harness;
+        let (number, id, token, channel) = self.prepare_session_identity(harness, &mut env).await?;
+        let (argv, confine, codex) = match self
+            .prepare_confined_and_codex(LaunchPrep {
+                id: &id,
+                harness,
+                cwd: cwd.as_deref(),
+                confine_request,
+                argv,
+                env: &mut env,
+            })
+            .await?
+        {
+            Ok(prepared) => prepared,
+            Err(message) => return Ok(Response::Error { message }),
         };
-        match session {
-            Ok(session) => {
-                let session = Arc::new(session);
-                let id = session.id().0.clone();
-                self.sessions.insert(number, session.clone());
-                self.start_session_tasks(session.clone(), channel);
-                Ok(Response::Created { session: id })
-            }
+        let session_spec = into_session_spec(
+            request,
+            PreparedSession {
+                argv,
+                env,
+                channel,
+                heartbeat,
+                token,
+                codex,
+                confine,
+            },
+        )?;
+        match spawn_session(id, session_spec).await? {
+            Ok(session) => Ok(Response::Created {
+                session: self.register_and_start_session(number, session, channel),
+            }),
             Err(error) => Ok(Response::Error {
                 message: error.to_string(),
             }),
         }
+    }
+
+    fn validate_watch_entries(watch: &[String], name: Option<&str>) -> Option<String> {
+        for watcher in watch {
+            if let Err(error) = messaging::validate_name(watcher) {
+                return Some(format!("watch entry {watcher:?}: {error}"));
+            }
+            if name == Some(watcher.as_str()) {
+                return Some(format!("session {watcher} watches itself"));
+            }
+        }
+        None
     }
 
     fn validate_watch_lists(
@@ -274,18 +448,31 @@ impl Runtime {
                 return Some(format!("control_from entry {controller:?}: {error}"));
             }
         }
-        for watcher in watch {
-            if let Err(error) = messaging::validate_name(watcher) {
-                return Some(format!("watch entry {watcher:?}: {error}"));
+        Self::validate_watch_entries(watch, name)
+    }
+
+    fn validate_allow_entries(
+        entries: &[String],
+        prefix: &str,
+        self_name: Option<&str>,
+        self_message: &str,
+    ) -> Option<String> {
+        let mut seen = HashSet::with_capacity(entries.len());
+        for entry in entries {
+            if let Err(error) = messaging::validate_name(entry) {
+                return Some(format!("{prefix} {entry:?}: {error}"));
             }
-            if name == Some(watcher.as_str()) {
-                return Some(format!("session {watcher} watches itself"));
+            if self_name == Some(entry.as_str()) {
+                return Some(self_message.to_owned());
+            }
+            if !seen.insert(entry) {
+                return Some(format!("{prefix} {entry:?} is repeated"));
             }
         }
         None
     }
 
-    fn validate_team_scope(scope: &messaging::TeamScope, name: Option<&str>) -> Option<String> {
+    fn validate_team_allow_scope(scope: &messaging::TeamScope) -> Option<String> {
         if let Err(error) = messaging::validate_name(&scope.name) {
             return Some(format!("team: {error}"));
         }
@@ -295,37 +482,47 @@ impl Runtime {
         if !scope.private && !scope.allow.is_empty() {
             return Some("allow needs a private team".into());
         }
-        let mut seen = HashSet::with_capacity(scope.allow.len());
-        for entry in &scope.allow {
-            if let Err(error) = messaging::validate_name(entry) {
-                return Some(format!("team allow entry {entry:?}: {error}"));
-            }
-            if entry == &scope.name {
-                return Some("team allow entry must not be the team itself".into());
-            }
-            if !seen.insert(entry) {
-                return Some(format!("team allow entry {entry:?} is repeated"));
-            }
-        }
+        Self::validate_allow_entries(
+            &scope.allow,
+            "team allow entry",
+            Some(&scope.name),
+            "team allow entry must not be the team itself",
+        )
+    }
+
+    fn validate_session_agent_allow_scope(
+        scope: &messaging::TeamScope,
+        name: Option<&str>,
+    ) -> Option<String> {
         if !scope.private && !scope.agents.is_empty() {
             return Some("allow needs a private team".into());
         }
         if scope.agents.len() > 16 {
             return Some("session allow has at most 16 entries".into());
         }
-        let mut seen_agents = HashSet::with_capacity(scope.agents.len());
-        for entry in &scope.agents {
-            if let Err(error) = messaging::validate_name(entry) {
-                return Some(format!("session allow entry {entry:?}: {error}"));
-            }
-            if name == Some(entry.as_str()) {
-                return Some("session allow entry must not name itself".into());
-            }
-            if !seen_agents.insert(entry) {
-                return Some(format!("session allow entry {entry:?} is repeated"));
-            }
+        Self::validate_allow_entries(
+            &scope.agents,
+            "session allow entry",
+            name,
+            "session allow entry must not name itself",
+        )
+    }
+
+    fn validate_team_scope(scope: &messaging::TeamScope, name: Option<&str>) -> Option<String> {
+        if let Some(message) = Self::validate_team_allow_scope(scope) {
+            return Some(message);
         }
-        None
+        Self::validate_session_agent_allow_scope(scope, name)
+    }
+
+    fn team_settings_conflict(&self, scope: &messaging::TeamScope) -> bool {
+        self.sessions.snapshot().iter().any(|session| {
+            session.exit_code().is_none()
+                && session.team().is_some_and(|existing| {
+                    existing.name == scope.name
+                        && (existing.private != scope.private || existing.allow != scope.allow)
+                })
+        })
     }
 
     fn check_team_and_name(
@@ -333,20 +530,13 @@ impl Runtime {
         team: Option<&messaging::TeamScope>,
         name: Option<&str>,
     ) -> Option<String> {
-        if let Some(scope) = team {
-            let differs = self.sessions.snapshot().iter().any(|session| {
-                session.exit_code().is_none()
-                    && session.team().is_some_and(|existing| {
-                        existing.name == scope.name
-                            && (existing.private != scope.private || existing.allow != scope.allow)
-                    })
-            });
-            if differs {
-                return Some(format!(
-                    "team {} is already running with different settings",
-                    scope.name
-                ));
-            }
+        if let Some(scope) = team
+            && self.team_settings_conflict(scope)
+        {
+            return Some(format!(
+                "team {} is already running with different settings",
+                scope.name
+            ));
         }
         if let Some(name) = name {
             if let Err(error) = messaging::validate_name(name) {
@@ -366,11 +556,9 @@ impl Runtime {
 
     async fn prepare_codex(
         &self,
-        id: &SessionId,
+        prep: CodexPrep<'_>,
         mut argv: Vec<String>,
-        cwd: Option<&str>,
         env: &mut Vec<(String, String)>,
-        plan: Option<&confine::Plan>,
     ) -> anyhow::Result<Result<(Vec<String>, Arc<codex::Link>), String>> {
         // shortcut: the client signals --no-authorize-peers and the role through
         // the request environment; a wire field is deferred until a third
@@ -393,12 +581,12 @@ impl Runtime {
         {
             return Ok(Err(message));
         }
-        let notice = plan.map(confine::notice);
+        let notice = prep.plan.map(confine::notice);
         let started = codex::start(
             &argv[0],
             &self.layout,
-            &id.0,
-            cwd.map(Path::new),
+            &prep.id.0,
+            prep.cwd.map(Path::new),
             env,
             codex::server_config(
                 &self.exe,
@@ -406,7 +594,7 @@ impl Runtime {
                 codex_role.as_deref(),
                 notice.as_deref(),
             ),
-            plan,
+            prep.plan,
         )
         .await;
         let link = match started {
@@ -495,6 +683,25 @@ impl Runtime {
         }
     }
 }
+async fn spawn_session(
+    id: SessionId,
+    session_spec: SessionSpec,
+) -> anyhow::Result<anyhow::Result<Session>> {
+    if session_spec.confine.is_some() {
+        Ok(Session::spawn_confined(id, session_spec).await)
+    } else {
+        Ok(tokio::task::spawn_blocking(move || Session::spawn(id, session_spec)).await?)
+    }
+}
+
+async fn send_channel_dialog_enter(session: Arc<Session>) {
+    match tokio::task::spawn_blocking(move || session.write_input(b"\r")).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::debug!(%error, "channel dialog Enter failed"),
+        Err(error) => tracing::debug!(%error, "channel dialog input task failed"),
+    }
+}
+
 async fn accept_channel_dialog(session: Arc<Session>) {
     // shortcut: fixed 60 s window and one string match; re-probe the dialog text
     // when Claude Code changes it.
@@ -505,11 +712,7 @@ async fn accept_channel_dialog(session: Arc<Session>) {
         }
         let visible = harness::channel_dialog_visible(&session.lock().emulator.screen());
         if visible {
-            match tokio::task::spawn_blocking(move || session.write_input(b"\r")).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => tracing::debug!(%error, "channel dialog Enter failed"),
-                Err(error) => tracing::debug!(%error, "channel dialog input task failed"),
-            }
+            send_channel_dialog_enter(session).await;
             return;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;

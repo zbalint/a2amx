@@ -273,5 +273,157 @@ async fn new_session_team_conflict_precedes_in_use_name() {
             message: "team a is already running with different settings".into()
         }
     );
+
+    let too_many = (0..17)
+        .map(|index| format!("other-{index}"))
+        .collect::<Vec<_>>();
+    for (name, team, expected) in [
+        (
+            "self",
+            scope_with_agents("b", true, &[], &["self"]),
+            "session allow entry must not name itself",
+        ),
+        (
+            "repeat",
+            scope_with_agents("b", true, &[], &["other", "other"]),
+            "session allow entry \"other\" is repeated",
+        ),
+        (
+            "public",
+            scope_with_agents("b", false, &[], &["other"]),
+            "allow needs a private team",
+        ),
+        (
+            "cap",
+            TeamScope {
+                name: "b".into(),
+                private: true,
+                allow: Vec::new(),
+                agents: too_many.clone(),
+            },
+            "session allow has at most 16 entries",
+        ),
+        (
+            "repeat-over-cap",
+            TeamScope {
+                name: "b".into(),
+                private: true,
+                allow: vec!["x".into(), "x".into()],
+                agents: too_many,
+            },
+            "team allow entry \"x\" is repeated",
+        ),
+        (
+            "allow-self-over-bad-agent",
+            scope_with_agents("b", true, &["b"], &["Bad_Agent"]),
+            "team allow entry must not be the team itself",
+        ),
+        (
+            "team-validity-before-trailing-dash",
+            scope("Bad-", true, &[]),
+            "team: invalid name \"Bad-\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+        (
+            "trailing-dash-before-allow-private",
+            scope("a-", false, &["b"]),
+            "team must not end in '-'",
+        ),
+        (
+            "cap-before-bad-agent-entry",
+            TeamScope {
+                name: "b".into(),
+                private: true,
+                allow: Vec::new(),
+                agents: (0..16)
+                    .map(|index| format!("other-{index}"))
+                    .chain(std::iter::once("Bad_Name".into()))
+                    .collect(),
+            },
+            "session allow has at most 16 entries",
+        ),
+        (
+            "Bad_Name",
+            scope_with_agents("c", true, &[], &["Bad_Name"]),
+            "session allow entry \"Bad_Name\": invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}",
+        ),
+    ] {
+        assert_eq!(
+            admin
+                .request(new_session_request(name, team))
+                .await
+                .unwrap(),
+            Response::Error {
+                message: expected.into()
+            },
+            "{name}"
+        );
+    }
+
+    // Natural exit of a team member clears team_settings_conflict without explicit kill.
+    let mut short_req = new_session_request("short", scope("exited-team", true, &[]));
+    if let Request::NewSession { argv, .. } = &mut short_req {
+        *argv = vec!["true".into()];
+    }
+    assert!(matches!(
+        admin.request(short_req).await.unwrap(),
+        Response::Created { .. }
+    ));
+    common::eventually(|| async {
+        let mut probe = Client::connect(dir.path()).await.ok()?;
+        let Response::Sessions { sessions } = probe.request(Request::List).await.ok()? else {
+            return None;
+        };
+        sessions
+            .into_iter()
+            .find(|s| s.name.as_deref() == Some("short") && s.exit_code.is_some())
+    })
+    .await;
+    let after_natural_exit = admin
+        .request(new_session_request(
+            "next",
+            scope("exited-team", false, &[]),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        matches!(after_natural_exit, Response::Created { .. }),
+        "{after_natural_exit:?}"
+    );
+
+    // Differing team allow lists conflict, while identical allow lists succeed.
+    assert!(matches!(
+        admin
+            .request(new_session_request(
+                "allow-one",
+                scope("allow-team", true, &["b"]),
+            ))
+            .await
+            .unwrap(),
+        Response::Created { .. }
+    ));
+    assert_eq!(
+        admin
+            .request(new_session_request(
+                "allow-two",
+                scope("allow-team", true, &["c"]),
+            ))
+            .await
+            .unwrap(),
+        Response::Error {
+            message: "team allow-team is already running with different settings".into()
+        }
+    );
+    let matching_allow = admin
+        .request(new_session_request(
+            "allow-two",
+            scope("allow-team", true, &["b"]),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        matches!(matching_allow, Response::Created { .. }),
+        "{matching_allow:?}"
+    );
+
     daemon.shutdown().await.unwrap();
 }

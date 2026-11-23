@@ -309,6 +309,342 @@ async fn ids_are_numerically_ordered_and_not_reused_after_kill() {
 }
 
 #[tokio::test]
+async fn failed_validation_does_not_burn_session_number_and_precedence_is_exact() {
+    use a2amx::confine::ConfineRequest;
+    use a2amx::messaging::{RemoteMode, TeamScope};
+    use a2amx::wire::ActivityWatch;
+
+    let (dir, daemon) = common::start_daemon().await;
+    let mut client = Client::connect(dir.path()).await.unwrap();
+
+    let base_request = || Request::NewSession {
+        argv: vec!["sh".into(), "-c".into(), "sleep 30".into()],
+        cols: 40,
+        rows: 5,
+        cwd: None,
+        env: vec![],
+        reset: vec![],
+        control_from: vec![],
+        watch: vec![],
+        name: None,
+        harness: a2amx::harness::Harness::Generic,
+        deliver: None,
+        heartbeat: None,
+        activity: None,
+        team: None,
+        role: None,
+        remote: None,
+    };
+
+    let mut zero_dims = base_request();
+    if let Request::NewSession { cols, .. } = &mut zero_dims {
+        *cols = 0;
+    }
+    assert_eq!(
+        client.request(zero_dims).await.unwrap(),
+        Response::Error {
+            message: "command and nonzero dimensions are required".into()
+        }
+    );
+    assert_eq!(create(&mut client, &["cat"], vec![]).await, "s1");
+
+    let mut c3_c4 = base_request();
+    if let Request::NewSession { argv, reset, .. } = &mut c3_c4 {
+        argv.clear();
+        *reset = vec!["bad".into()];
+    }
+    assert_eq!(
+        client.request(c3_c4).await.unwrap(),
+        Response::Error {
+            message: "command and nonzero dimensions are required".into()
+        }
+    );
+
+    let mut c4_c5 = base_request();
+    if let Request::NewSession {
+        reset,
+        control_from,
+        ..
+    } = &mut c4_c5
+    {
+        *reset = vec!["bad".into()];
+        *control_from = vec!["Bad_Name".into()];
+    }
+    assert_eq!(
+        client.request(c4_c5).await.unwrap(),
+        Response::Error {
+            message: "reset step 1 must start with '/'".into()
+        }
+    );
+
+    let mut c5_c6 = base_request();
+    if let Request::NewSession {
+        watch,
+        heartbeat,
+        name,
+        ..
+    } = &mut c5_c6
+    {
+        *watch = vec!["Bad_Name".into()];
+        *heartbeat = Some(0);
+        *name = Some("Bad_Name".into());
+    }
+    assert_eq!(
+        client.request(c5_c6).await.unwrap(),
+        Response::Error {
+            message: "watch entry \"Bad_Name\": invalid name \"Bad_Name\": expected [a-z0-9][a-z0-9-]{0,62}".into()
+        }
+    );
+
+    let mut c6_c7 = base_request();
+    if let Request::NewSession { heartbeat, .. } = &mut c6_c7 {
+        *heartbeat = Some(0);
+    }
+    assert_eq!(
+        client.request(c6_c7).await.unwrap(),
+        Response::Error {
+            message:
+                "invalid heartbeat \"0s\": expected a number followed by s, m or h, from 1s to 24h"
+                    .into()
+        }
+    );
+
+    let mut c7_c8 = base_request();
+    if let Request::NewSession {
+        heartbeat,
+        activity,
+        ..
+    } = &mut c7_c8
+    {
+        *heartbeat = Some(10);
+        *activity = Some(ActivityWatch {
+            working_after: None,
+            idle_after: None,
+        });
+    }
+    assert_eq!(
+        client.request(c7_c8).await.unwrap(),
+        Response::Error {
+            message: "session unnamed: heartbeat needs a non-empty watch".into()
+        }
+    );
+
+    let mut c8_c9 = base_request();
+    if let Request::NewSession { activity, team, .. } = &mut c8_c9 {
+        *activity = Some(ActivityWatch {
+            working_after: None,
+            idle_after: None,
+        });
+        *team = Some(TeamScope {
+            name: "Bad_Team".into(),
+            private: true,
+            allow: vec![],
+            agents: vec![],
+        });
+    }
+    assert_eq!(
+        client.request(c8_c9).await.unwrap(),
+        Response::Error {
+            message: "session unnamed: activity needs a non-empty watch".into()
+        }
+    );
+
+    let mut c9_c10 = base_request();
+    if let Request::NewSession { team, role, .. } = &mut c9_c10 {
+        *team = Some(TeamScope {
+            name: "Bad_Team".into(),
+            private: true,
+            allow: vec![],
+            agents: vec![],
+        });
+        *role = Some("".into());
+    }
+    assert_eq!(
+        client.request(c9_c10).await.unwrap(),
+        Response::Error {
+            message: "team: invalid name \"Bad_Team\": expected [a-z0-9][a-z0-9-]{0,62}".into()
+        }
+    );
+
+    let mut c10_c11 = base_request();
+    if let Request::NewSession { role, remote, .. } = &mut c10_c11 {
+        *role = Some("".into());
+        *remote = Some(RemoteMode::Both);
+    }
+    assert_eq!(
+        client.request(c10_c11).await.unwrap(),
+        Response::Error {
+            message: "role must not be empty".into()
+        }
+    );
+
+    let mut running_team = base_request();
+    if let Request::NewSession { name, team, .. } = &mut running_team {
+        *name = Some("worker".into());
+        *team = Some(TeamScope {
+            name: "alpha".into(),
+            private: true,
+            allow: vec![],
+            agents: vec![],
+        });
+    }
+    assert!(matches!(
+        client.request(running_team).await.unwrap(),
+        Response::Created { .. }
+    ));
+
+    let mut c12_c13 = base_request();
+    if let Request::NewSession { name, team, .. } = &mut c12_c13 {
+        *name = Some("other".into());
+        *team = Some(TeamScope {
+            name: "alpha".into(),
+            private: false,
+            allow: vec![],
+            agents: vec![],
+        });
+    }
+    assert_eq!(
+        client
+            .request(Request::Confine {
+                confine: ConfineRequest::default(),
+                request: Box::new(c12_c13),
+            })
+            .await
+            .unwrap(),
+        Response::Error {
+            message: "confinement requires an explicit cwd".into()
+        }
+    );
+
+    let mut exited_req = base_request();
+    if let Request::NewSession { argv, name, .. } = &mut exited_req {
+        *argv = vec!["true".into()];
+        *name = Some("done".into());
+    }
+    assert!(matches!(
+        client.request(exited_req).await.unwrap(),
+        Response::Created { .. }
+    ));
+    common::eventually(|| async {
+        let mut probe = Client::connect(dir.path()).await.ok()?;
+        list(&mut probe)
+            .await
+            .into_iter()
+            .find(|s| s.name.as_deref() == Some("done") && s.exit_code.is_some())
+    })
+    .await;
+    let mut reuse_exited = base_request();
+    if let Request::NewSession { name, .. } = &mut reuse_exited {
+        *name = Some("done".into());
+    }
+    assert_eq!(
+        client.request(reuse_exited).await.unwrap(),
+        Response::Error {
+            message: "session name done is already in use".into()
+        }
+    );
+
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn generic_session_with_channel_env_refuses_bridge_and_codex_strips_no_authorize_env() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (dir, daemon) = common::start_daemon().await;
+    let mut client = Client::connect(dir.path()).await.unwrap();
+
+    // Generic session with A2AMX_CHANNEL=1 must not enable channel bridge.
+    let token_path = dir.path().join("generic.token");
+    let generic_resp = client
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                format!(
+                    "printf '%s\\n' \"$A2AMX_TOKEN\" > '{}'; sleep 30",
+                    token_path.display()
+                ),
+            ],
+            cols: 40,
+            rows: 5,
+            cwd: None,
+            env: vec![("A2AMX_CLAUDE_CHANNEL".into(), "1".into())],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("generic-channel".into()),
+            harness: a2amx::harness::Harness::Generic,
+            deliver: None,
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(generic_resp, Response::Created { .. }));
+    let token = common::eventually(|| async {
+        let content = std::fs::read_to_string(&token_path).ok()?;
+        let trimmed = content.trim().to_owned();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
+    .await;
+    let bridge_err = Client::connect_addr(daemon.addrs()[0], &token)
+        .await
+        .unwrap()
+        .bridge()
+        .await
+        .err()
+        .expect("generic session must refuse bridge");
+    assert_eq!(bridge_err.to_string(), "session is not an omp session");
+
+    // Codex session must strip A2AMX_NO_AUTHORIZE_PEERS from the app-server environment.
+    let env_record = dir.path().join("codex.env");
+    let stub = dir.path().join("codex-stub");
+    std::fs::write(
+        &stub,
+        format!(
+            r#"#!/usr/bin/env python3
+import os, sys
+if len(sys.argv) >= 2 and sys.argv[1] == "app-server":
+    with open({env_record:?}, "w") as f:
+        f.write(os.environ.get("A2AMX_NO_AUTHORIZE_PEERS", "ABSENT"))
+"#,
+            env_record = env_record.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let _codex_resp = client
+        .request(Request::NewSession {
+            argv: vec![stub.to_string_lossy().into_owned()],
+            cols: 40,
+            rows: 5,
+            cwd: Some(dir.path().to_string_lossy().into_owned()),
+            env: vec![("A2AMX_NO_AUTHORIZE_PEERS".into(), "1".into())],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("codex-env-strip".into()),
+            harness: a2amx::harness::Harness::Codex,
+            deliver: None,
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await
+        .unwrap();
+    let recorded = common::eventually(|| async { std::fs::read_to_string(&env_record).ok() }).await;
+    assert_eq!(recorded, "ABSENT");
+
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn concurrent_new_session_with_one_name_creates_exactly_one() {
     let (dir, daemon) = common::start_daemon().await;
     let mut first_client = Client::connect(dir.path()).await.unwrap();
