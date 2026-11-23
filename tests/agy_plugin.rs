@@ -66,6 +66,9 @@ struct Stub {
     wrong_after: PathBuf,
     wrong_content: PathBuf,
     install_fail: PathBuf,
+    install_sleep: PathBuf,
+    install_noop: PathBuf,
+    relist_fail: PathBuf,
 }
 
 impl Stub {
@@ -84,6 +87,10 @@ impl Stub {
         let wrong_after = dir.path().join("wrong-after");
         let wrong_content = dir.path().join("wrong-content");
         let install_fail = dir.path().join("install-fail");
+        let install_sleep = dir.path().join("install-sleep");
+        let install_noop = dir.path().join("install-noop");
+        let relist_fail = dir.path().join("relist-fail");
+        let relist_seen = dir.path().join("relist-seen");
         let plugins = dir.path().join("plugins");
         fs::create_dir(&plugins).unwrap();
         fs::write(&state, "[]").unwrap();
@@ -103,10 +110,14 @@ with open(sys.argv[1]+'/mcp_config.json') as f: json.load(f)
 PY
     ;;
   'plugin list')
+    if test -f '@RELIST_FAIL@' && test -f '@RELIST_SEEN@'; then printf 'relist boom' >&2; exit 1; fi
+    : > '@RELIST_SEEN@'
     if test -f '@LIST_FAIL_LARGE@'; then python3 -c 'import sys; [sys.stdout.write("x"*8192) for _ in range(16)]; sys.stdout.flush(); sys.stderr.write("boom"); sys.exit(1)'; fi
     cat '@STATE@' ;;
   'plugin install')
+    if test -f '@INSTALL_SLEEP@'; then sleep 0.5; fi
     if test -f '@INSTALL_FAIL@'; then echo 'install boom' >&2; exit 1; fi
+    if test -f '@INSTALL_NOOP@'; then printf '[]' > '@STATE@'; exit 0; fi
     if test -f '@INSTALL_STDOUT_LOOP@'; then python3 -c 'import sys; [sys.stdout.write("x"*8192) for _ in range(512)]; sys.stdout.flush()' || exit $?; fi
     rm -rf '@PLUGINS@/a2amx'
     cp -R "$3" '@PLUGINS@/a2amx'
@@ -126,6 +137,10 @@ esac
             .replace("@INSTALL_STDOUT_LOOP@", &install_stdout_loop.to_string_lossy())
             .replace("@LIST_FAIL_LARGE@", &list_fail_large.to_string_lossy())
             .replace("@INSTALL_FAIL@", &install_fail.to_string_lossy())
+            .replace("@INSTALL_SLEEP@", &install_sleep.to_string_lossy())
+            .replace("@INSTALL_NOOP@", &install_noop.to_string_lossy())
+            .replace("@RELIST_FAIL@", &relist_fail.to_string_lossy())
+            .replace("@RELIST_SEEN@", &relist_seen.to_string_lossy())
             .replace("@WRONG_CONTENT@", &wrong_content.to_string_lossy())
             .replace("@LOG@", &log.to_string_lossy())
             .replace("@WRONG_AFTER@", &wrong_after.to_string_lossy())
@@ -150,6 +165,9 @@ esac
             wrong_after,
             wrong_content,
             install_fail,
+            install_sleep,
+            install_noop,
+            relist_fail,
         }
     }
 
@@ -575,4 +593,209 @@ fn agy_commands_strip_session_environment_and_probe_is_exact() {
             .all(|line| line == "agy-env:||"),
         "{log:?}"
     );
+}
+
+#[test]
+fn install_characterizes_edge_errors_precedence_and_list_limits() {
+    let stub = Stub::new();
+    let layout = stub.layout();
+    let binary = layout.installed_binary();
+    fs::remove_file(&binary).unwrap();
+    fs::create_dir(&binary).unwrap();
+    assert_eq!(
+        agy::install(&layout, stub.program.as_os_str())
+            .unwrap_err()
+            .to_string(),
+        format!(
+            "a2amx is not installed at {}; the agy plugin needs the installed binary there",
+            binary.display()
+        )
+    );
+    fs::remove_dir(&binary).unwrap();
+    assert_eq!(
+        agy::install(&layout, OsStr::new(""))
+            .unwrap_err()
+            .to_string(),
+        format!(
+            "a2amx is not installed at {}; the agy plugin needs the installed binary there",
+            binary.display()
+        )
+    );
+
+    let layout = stub.layout();
+    fs::write(&binary, "#!/bin/sh\nexit 2\n").unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        agy::install(&layout, stub.program.as_os_str())
+            .unwrap_err()
+            .to_string(),
+        format!(
+            "the installed a2amx at {} does not support mcp --optional; reinstall it",
+            binary.display()
+        )
+    );
+
+    let layout = stub.layout();
+    assert_eq!(
+        agy::install(&layout, OsStr::new("/nonexistent/agy"))
+            .unwrap_err()
+            .to_string(),
+        "run /nonexistent/agy"
+    );
+
+    fs::write(&stub.state, "nope").unwrap();
+    assert_eq!(
+        agy::install(&layout, stub.program.as_os_str())
+            .unwrap_err()
+            .to_string(),
+        "agy plugin list returned invalid JSON"
+    );
+    fs::write(&stub.invalid, "1").unwrap();
+    assert_eq!(
+        agy::install(&layout, stub.program.as_os_str())
+            .unwrap_err()
+            .to_string(),
+        "agy plugin validate failed: Error: validation failed: 1 error\n"
+    );
+    fs::remove_file(&stub.invalid).unwrap();
+    fs::write(&stub.state, "[]").unwrap();
+
+    let stray_dir = layout.agy_dir().join("plugin/.install-d");
+    fs::create_dir_all(&stray_dir).unwrap();
+    agy::install(&layout, stub.program.as_os_str()).unwrap();
+    assert!(stray_dir.is_dir());
+
+    let state = fs::read_to_string(&stub.state).unwrap();
+    let padded_version = env!("CARGO_PKG_VERSION")
+        .split('.')
+        .enumerate()
+        .map(|(i, part)| {
+            if i == 0 {
+                format!("0{part}")
+            } else {
+                part.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".");
+    fs::write(
+        &stub.state,
+        state.replace(env!("CARGO_PKG_VERSION"), &padded_version),
+    )
+    .unwrap();
+    agy::install(&layout, stub.program.as_os_str()).unwrap();
+    assert_eq!(
+        stub.install_log()
+            .iter()
+            .filter(|line| line.starts_with("plugin install "))
+            .count(),
+        2
+    );
+
+    let base_state = fs::read_to_string(&stub.state).unwrap();
+    let pad_marker = ",\"pad\":\"";
+    let head = &base_state[..base_state.len() - 2];
+    let exact_len = 65536;
+    let pad_len = exact_len - head.len() - pad_marker.len() - 3;
+    let at_limit = format!("{head}{pad_marker}{}\"}}]", "a".repeat(pad_len));
+    assert_eq!(at_limit.len(), 65536);
+    fs::write(&stub.state, &at_limit).unwrap();
+    agy::install(&layout, stub.program.as_os_str()).unwrap();
+    assert_eq!(
+        stub.install_log()
+            .iter()
+            .filter(|line| line.starts_with("plugin install "))
+            .count(),
+        2
+    );
+
+    let over_limit = format!("{head}{pad_marker}{}\"}}]", "a".repeat(pad_len + 1));
+    assert_eq!(over_limit.len(), 65537);
+    fs::write(&stub.state, &over_limit).unwrap();
+    assert_eq!(
+        agy::install(&layout, stub.program.as_os_str())
+            .unwrap_err()
+            .to_string(),
+        "agy plugin list output exceeds 64 KiB"
+    );
+}
+
+#[test]
+fn install_characterizes_noop_relist_fail_and_sleeping_lock() {
+    {
+        let stub = Stub::new();
+        let layout = stub.layout();
+        fs::write(&stub.install_noop, "1").unwrap();
+        assert_eq!(
+            agy::install(&layout, stub.program.as_os_str())
+                .unwrap_err()
+                .to_string(),
+            "agy plugin install did not install a2amx"
+        );
+        fs::remove_file(&stub.install_noop).unwrap();
+
+        fs::write(&stub.relist_fail, "1").unwrap();
+        assert_eq!(
+            agy::install(&layout, stub.program.as_os_str())
+                .unwrap_err()
+                .to_string(),
+            "agy plugin list failed: relist boom"
+        );
+        fs::remove_file(&stub.relist_fail).unwrap();
+    }
+
+    let stub_sleep = Stub::new();
+    fs::write(&stub_sleep.install_sleep, "1").unwrap();
+    let layout = Arc::new(stub_sleep.layout());
+    let program = Arc::new(stub_sleep.program.clone());
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let layout = Arc::clone(&layout);
+        let program = Arc::clone(&program);
+        handles.push(thread::spawn(move || {
+            agy::install(&layout, program.as_os_str())
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+    assert_eq!(
+        stub_sleep
+            .install_log()
+            .iter()
+            .filter(|line| line.starts_with("plugin install "))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn failing_probe_leaves_no_agy_state_and_probe_timeout_is_capped_at_five_seconds() {
+    let stub = Stub::new();
+    let layout = stub.layout();
+    let binary = layout.installed_binary();
+    fs::write(&binary, "#!/bin/sh\nexit 2\n").unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        agy::install(&layout, stub.program.as_os_str())
+            .unwrap_err()
+            .to_string()
+            .contains("does not support mcp --optional")
+    );
+    assert!(!layout.agy_dir().exists());
+
+    let layout = stub.layout();
+    let binary = layout.installed_binary();
+    fs::write(&binary, "#!/bin/sh\nsleep 60\n").unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let started = std::time::Instant::now();
+    let error = agy::install_with_timeout(
+        &layout,
+        stub.program.as_os_str(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("timed out"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
 }

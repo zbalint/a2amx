@@ -40,3 +40,17 @@ Rejected: any change to an error text, a timeout, a limit or the order of the in
 ## 4. Flagged for the owner (not fixed here)
 
 Unreachable or inconsistent code found while reviewing, deliberately left alone: the "invalid crate version" error (the release process guarantees a parseable version); the `?` on `mcp_config` at `:110` (`json!().to_string()` cannot fail, so it need not return `Result`); the inner timeout error at `:344`; the "no stdout/stderr pipe" errors at `:312-319` (both are piped); and the raw io errors of phase P4, which carry no context unlike every other phase (a fix changes error text). Each is a code or behavior change the owner has not approved. The `cs check` of step 5 may add more.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (strongest slot, review m_8674); developer antigravity-cli Gemini 4 Hydrogen (Medium); tester omp default slot (deepseek-v4.1-flash). BLOCKED/amend cycles: 0. cs `src/agy.rs` 6.84 to 10.00, no findings left; tests 1432 to 1435.
+
+| Found at | By | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | seven findings (lock must be a named binding, readers before wait, one shared receive deadline, public-seam-only boundary tests) | applied before locking |
+| Implementation | developer | characterization run deadlocked on `ENV_LOCK` when two stubs lived in one scope | first stub scoped; tests green before any `src/agy.rs` edit |
+| Tester pass | tester | survivor: probe moved after the lock left `agy_dir` state and let a lock error win over the probe error | architect added `failing_probe_leaves_no_agy_state_and_probe_timeout_is_capped_at_five_seconds` (asserts `agy_dir` absent); mutant killed |
+| Tester pass | tester | survivor: probe timeout cap `min(5 s)` removed | same test (30 s budget, hanging probe, fails under 10 s); mutant killed (31 s) |
+| Architect review | architect | the architect's own mutation run overlapped the tester's mutations on the same file, so the checksum differed for a moment | tester's restore confirmed (`d4960079`), clean gate re-run on the final tree; lesson: one writer includes the architect during a tester pass |
+
+Survivors left, reported: staging the plugin directory before taking the lock (P4/P5 swap; needs a stub delay seam for two overlapping installs); the 1 s kill deadline changed to 2 s (reachable only when SIGKILL cannot reap; not simulable with stubs). Equivalent: dropping `version < ours_version ||`, `>=` versus `>` on the elapsed poll, `saturating_sub` versus plain subtraction (`len <= limit`). Noted by the tester: `run_command_clear` no longer forces `clear_env`; every call site passes the old value.

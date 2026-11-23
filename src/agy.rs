@@ -46,11 +46,11 @@ pub fn install(layout: &crate::layout::Layout, agy_program: &OsStr) -> Result<()
     install_with_timeout(layout, agy_program, Duration::from_secs(30))
 }
 
-pub fn install_with_timeout(
+fn prepare_install_target(
     layout: &crate::layout::Layout,
     agy_program: &OsStr,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<(PathBuf, PathBuf)> {
     let binary = layout.installed_binary();
     let metadata = fs::metadata(&binary).with_context(|| {
         format!(
@@ -68,9 +68,12 @@ pub fn install_with_timeout(
     let support = run_command_clear(
         &binary,
         &[OsString::from("mcp"), OsString::from("--optional")],
-        timeout.min(Duration::from_secs(5)),
-        MAX_STDOUT,
-        MAX_STDERR,
+        CommandOptions {
+            timeout: timeout.min(Duration::from_secs(5)),
+            stdout_limit: MAX_STDOUT,
+            stderr_limit: MAX_STDERR,
+            clear_env: true,
+        },
     )?;
     if !support.status.success() {
         bail!(
@@ -78,7 +81,25 @@ pub fn install_with_timeout(
             binary.display()
         );
     }
+    Ok((binary, program))
+}
 
+fn remove_stale_install_files(plugin: &Path) -> Result<()> {
+    for entry in fs::read_dir(plugin)? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with(".install-")
+            && entry.file_type()?.is_file()
+        {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn acquire_and_stage_plugin(
+    layout: &crate::layout::Layout,
+    binary: &Path,
+) -> Result<(File, PathBuf, PathBuf, PathBuf)> {
     let agy_dir = layout.agy_dir();
     fs::create_dir_all(&agy_dir)?;
     fs::set_permissions(&agy_dir, Permissions::from_mode(0o700))?;
@@ -95,19 +116,80 @@ pub fn install_with_timeout(
     let plugin = agy_dir.join("plugin");
     fs::create_dir_all(&plugin)?;
     fs::set_permissions(&plugin, Permissions::from_mode(0o700))?;
-    for entry in fs::read_dir(&plugin)? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with(".install-") {
-            let path = entry.path();
-            if entry.file_type()?.is_file() {
-                fs::remove_file(path)?;
-            }
-        }
-    }
+    remove_stale_install_files(&plugin)?;
     let manifest_path = plugin.join("plugin.json");
     let config_path = plugin.join("mcp_config.json");
     crate::omp::write_if_changed(&manifest_path, manifest().as_bytes())?;
-    crate::omp::write_if_changed(&config_path, mcp_config(&binary)?.as_bytes())?;
+    crate::omp::write_if_changed(&config_path, mcp_config(binary)?.as_bytes())?;
+    Ok((lock, plugin, manifest_path, config_path))
+}
+
+fn install_needed(list: &[PluginEntry], manifest_path: &Path, config_path: &Path) -> Result<bool> {
+    let ours = env!("CARGO_PKG_VERSION");
+    let ours_version =
+        parse_version(ours).ok_or_else(|| anyhow::anyhow!("invalid crate version"))?;
+    let needed = match list.iter().find(|entry| entry.name == PLUGIN) {
+        None => true,
+        Some(entry) => match entry.version.as_deref().and_then(parse_version) {
+            None => true,
+            Some(version) if version > ours_version => false,
+            Some(version) => {
+                version < ours_version
+                    || entry.version.as_deref() != Some(ours)
+                    || !entry_contents_match(entry, manifest_path, config_path)
+            }
+        },
+    };
+    Ok(needed)
+}
+
+fn run_and_verify_install(
+    program: &Path,
+    plugin: &Path,
+    paths: (&Path, &Path),
+    timeout: Duration,
+) -> Result<()> {
+    let (manifest_path, config_path) = paths;
+    let ours = env!("CARGO_PKG_VERSION");
+    let installed = run_command(
+        program,
+        &[
+            OsString::from("plugin"),
+            OsString::from("install"),
+            plugin.to_path_buf().into_os_string(),
+        ],
+        CommandOptions {
+            timeout,
+            stdout_limit: MAX_STDOUT,
+            stderr_limit: MAX_STDERR,
+            clear_env: false,
+        },
+    )?;
+    if !installed.status.success() {
+        bail!(
+            "agy plugin install failed: {}",
+            String::from_utf8_lossy(&installed.stderr.bytes)
+        );
+    }
+    let after = list_plugins(program, timeout)?;
+    let Some(entry) = after.iter().find(|entry| entry.name == PLUGIN) else {
+        bail!("agy plugin install did not install {PLUGIN}");
+    };
+    if entry.version.as_deref() != Some(ours)
+        || !entry_contents_match(entry, manifest_path, config_path)
+    {
+        bail!("agy plugin install produced an invalid {PLUGIN} plugin");
+    }
+    Ok(())
+}
+
+pub fn install_with_timeout(
+    layout: &crate::layout::Layout,
+    agy_program: &OsStr,
+    timeout: Duration,
+) -> Result<()> {
+    let (binary, program) = prepare_install_target(layout, agy_program, timeout)?;
+    let (_lock, plugin, manifest_path, config_path) = acquire_and_stage_plugin(layout, &binary)?;
 
     let validated = run_command(
         &program,
@@ -118,9 +200,12 @@ pub fn install_with_timeout(
             OsString::from("--strict"),
             OsString::from("--json"),
         ],
-        timeout,
-        MAX_STDOUT,
-        MAX_STDERR,
+        CommandOptions {
+            timeout,
+            stdout_limit: MAX_STDOUT,
+            stderr_limit: MAX_STDERR,
+            clear_env: false,
+        },
     )?;
     if !validated.status.success() {
         bail!(
@@ -130,48 +215,8 @@ pub fn install_with_timeout(
     }
 
     let list = list_plugins(&program, timeout)?;
-    let ours = env!("CARGO_PKG_VERSION");
-    let ours_version =
-        parse_version(ours).ok_or_else(|| anyhow::anyhow!("invalid crate version"))?;
-    let install_needed = match list.iter().find(|entry| entry.name == PLUGIN) {
-        None => true,
-        Some(entry) => match entry.version.as_deref().and_then(parse_version) {
-            None => true,
-            Some(version) if version > ours_version => false,
-            Some(version) => {
-                version < ours_version
-                    || entry.version.as_deref() != Some(ours)
-                    || !entry_contents_match(entry, &manifest_path, &config_path)
-            }
-        },
-    };
-    if install_needed {
-        let installed = run_command(
-            &program,
-            &[
-                OsString::from("plugin"),
-                OsString::from("install"),
-                plugin.clone().into_os_string(),
-            ],
-            timeout,
-            MAX_STDOUT,
-            MAX_STDERR,
-        )?;
-        if !installed.status.success() {
-            bail!(
-                "agy plugin install failed: {}",
-                String::from_utf8_lossy(&installed.stderr.bytes)
-            );
-        }
-        let after = list_plugins(&program, timeout)?;
-        let Some(entry) = after.iter().find(|entry| entry.name == PLUGIN) else {
-            bail!("agy plugin install did not install {PLUGIN}");
-        };
-        if entry.version.as_deref() != Some(ours)
-            || !entry_contents_match(entry, &manifest_path, &config_path)
-        {
-            bail!("agy plugin install produced an invalid {PLUGIN} plugin");
-        }
+    if install_needed(&list, &manifest_path, &config_path)? {
+        run_and_verify_install(&program, &plugin, (&manifest_path, &config_path), timeout)?;
     }
     Ok(())
 }
@@ -260,38 +305,50 @@ struct CapturedOutput {
     exceeded: bool,
 }
 
-fn run_command(
-    program: &Path,
-    args: &[OsString],
+#[derive(Clone, Copy)]
+struct CommandOptions {
     timeout: Duration,
     stdout_limit: usize,
     stderr_limit: usize,
+    clear_env: bool,
+}
+
+fn run_command(
+    program: &Path,
+    args: &[OsString],
+    options: CommandOptions,
 ) -> Result<CommandOutput> {
-    run_command_inner(program, args, timeout, stdout_limit, stderr_limit, false)
+    run_command_inner(program, args, options)
 }
 
 fn run_command_clear(
     program: &Path,
     args: &[OsString],
-    timeout: Duration,
-    stdout_limit: usize,
-    stderr_limit: usize,
+    options: CommandOptions,
 ) -> Result<CommandOutput> {
-    run_command_inner(program, args, timeout, stdout_limit, stderr_limit, true)
+    run_command_inner(program, args, options)
 }
 
 fn run_command_list(program: &Path, args: &[OsString], timeout: Duration) -> Result<CommandOutput> {
-    run_command_inner(program, args, timeout, MAX_STDOUT, MAX_STDERR, false)
+    run_command_inner(
+        program,
+        args,
+        CommandOptions {
+            timeout,
+            stdout_limit: MAX_STDOUT,
+            stderr_limit: MAX_STDERR,
+            clear_env: false,
+        },
+    )
 }
 
-fn run_command_inner(
-    program: &Path,
-    args: &[OsString],
-    timeout: Duration,
-    stdout_limit: usize,
-    stderr_limit: usize,
-    clear_env: bool,
-) -> Result<CommandOutput> {
+type PipedChild = (
+    std::process::Child,
+    std::process::ChildStdout,
+    std::process::ChildStderr,
+);
+
+fn spawn_piped_command(program: &Path, args: &[OsString], clear_env: bool) -> Result<PipedChild> {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -317,6 +374,18 @@ fn run_command_inner(
         .stderr
         .take()
         .ok_or_else(|| anyhow::anyhow!("agy command has no stderr pipe"))?;
+    Ok((child, stdout, stderr))
+}
+
+fn start_output_readers(
+    stdout: std::process::ChildStdout,
+    stderr: std::process::ChildStderr,
+    stdout_limit: usize,
+    stderr_limit: usize,
+) -> (
+    Receiver<io::Result<CapturedOutput>>,
+    Receiver<io::Result<CapturedOutput>>,
+) {
     let (stdout_tx, stdout_rx) = mpsc::channel();
     let (stderr_tx, stderr_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -325,31 +394,52 @@ fn run_command_inner(
     thread::spawn(move || {
         let _ = stderr_tx.send(read_limited(stderr, stderr_limit));
     });
+    (stdout_rx, stderr_rx)
+}
+
+fn kill_and_reap(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    let _ = child.kill();
+    let kill_deadline = Instant::now() + Duration::from_secs(1);
+    while child.try_wait()?.is_none() && Instant::now() < kill_deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    child.try_wait()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "agy command timed out after {:.3} seconds",
+            timeout.as_secs_f64()
+        )
+    })
+}
+
+fn wait_for_child(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<(std::process::ExitStatus, bool)> {
     let started = Instant::now();
-    let mut timed_out = false;
-    let status = loop {
+    loop {
         if let Some(status) = child.try_wait()? {
-            break status;
+            return Ok((status, false));
         }
         if started.elapsed() >= timeout {
-            timed_out = true;
-            let _ = child.kill();
-            let kill_deadline = Instant::now() + Duration::from_secs(1);
-            loop {
-                if child.try_wait()?.is_some() || Instant::now() >= kill_deadline {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            break child.try_wait()?.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "agy command timed out after {:.3} seconds",
-                    timeout.as_secs_f64()
-                )
-            })?;
+            return Ok((kill_and_reap(child, timeout)?, true));
         }
         thread::sleep(Duration::from_millis(10));
-    };
+    }
+}
+
+fn collect_command_output(
+    status: std::process::ExitStatus,
+    timed_out: bool,
+    timeout: Duration,
+    receivers: (
+        Receiver<io::Result<CapturedOutput>>,
+        Receiver<io::Result<CapturedOutput>>,
+    ),
+) -> Result<CommandOutput> {
+    let (stdout_rx, stderr_rx) = receivers;
     let deadline = Instant::now() + Duration::from_secs(1);
     let stdout_result = receive_output(stdout_rx, deadline);
     let stderr_result = receive_output(stderr_rx, deadline);
@@ -366,6 +456,18 @@ fn run_command_inner(
         stdout,
         stderr,
     })
+}
+
+fn run_command_inner(
+    program: &Path,
+    args: &[OsString],
+    options: CommandOptions,
+) -> Result<CommandOutput> {
+    let (mut child, stdout, stderr) = spawn_piped_command(program, args, options.clear_env)?;
+    let receivers =
+        start_output_readers(stdout, stderr, options.stdout_limit, options.stderr_limit);
+    let (status, timed_out) = wait_for_child(&mut child, options.timeout)?;
+    collect_command_output(status, timed_out, options.timeout, receivers)
 }
 
 fn receive_output(
@@ -391,15 +493,9 @@ fn read_limited<R: Read>(mut reader: R, limit: usize) -> io::Result<CapturedOutp
         if count == 0 {
             break;
         }
-        if bytes.len() < limit {
-            let kept = count.min(limit - bytes.len());
-            bytes.extend_from_slice(&buffer[..kept]);
-            if kept < count {
-                exceeded = true;
-            }
-        } else {
-            exceeded = true;
-        }
+        let kept = count.min(limit.saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&buffer[..kept]);
+        exceeded |= kept < count;
     }
     Ok(CapturedOutput { bytes, exceeded })
 }
