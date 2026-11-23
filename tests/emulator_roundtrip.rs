@@ -92,3 +92,39 @@ fn snapshot_does_not_replay_side_effects() {
     assert!(!snap.windows(6).any(|w| w == b"\x1b]52;c"));
     assert!(!snap.windows(4).any(|w| w == b"\x1b]8;"));
 }
+
+#[test]
+fn public_cell_maps_every_attribute_flag_alone_and_combined() {
+    let mut emu = Emulator::new(Size { cols: 20, rows: 2 });
+    emu.feed(
+        b"\x1b[1mA\x1b[0m\x1b[2mB\x1b[0m\x1b[3mC\x1b[0m\x1b[4mD\x1b[0m\x1b[7mE\x1b[0m\x1b[8mF\x1b[0m\x1b[9mG\x1b[0m\x1b[1;2;3;4;7;8;9mH\x1b[0m",
+    );
+    emu.feed("\u{6f22}".as_bytes());
+    let screen = emu.screen();
+    let expected = [
+        ('A', Attrs::BOLD),
+        ('B', Attrs::DIM),
+        ('C', Attrs::ITALIC),
+        ('D', Attrs::UNDERLINE),
+        ('E', Attrs::INVERSE),
+        ('F', Attrs::HIDDEN),
+        ('G', Attrs::STRIKEOUT),
+        (
+            'H',
+            Attrs::BOLD
+                | Attrs::DIM
+                | Attrs::ITALIC
+                | Attrs::UNDERLINE
+                | Attrs::INVERSE
+                | Attrs::HIDDEN
+                | Attrs::STRIKEOUT,
+        ),
+        ('漢', Attrs::WIDE),
+        (' ', Attrs::WIDE_SPACER),
+    ];
+    for (col, (ch, attrs)) in expected.into_iter().enumerate() {
+        let cell = screen.cell(0, col as u16);
+        assert_eq!(cell.ch, ch, "col {col}");
+        assert_eq!(cell.attrs, Attrs(attrs), "col {col}");
+    }
+}

@@ -323,22 +323,18 @@ impl Emulator {
 
         let current_modes = self.current_modes();
         let current_cursor = self.current_cursor();
-        let damaged_lines = self.collect_damage(current_cursor);
         let cursor_changed = current_cursor != self.last_cursor;
         let modes_changed = current_modes != self.last_modes;
-        if damaged_lines.is_empty() && !cursor_changed && !modes_changed {
+        let damaged_lines = self.collect_damage(current_cursor, cursor_changed);
+        if !has_pending_update(&damaged_lines, cursor_changed, modes_changed) {
             return Vec::new();
         }
-
-        let has_damaged_lines = !damaged_lines.is_empty();
 
         let mut render = Vec::new();
         for row in damaged_lines {
             self.render_line(&mut render, row, usize::from(self.row_origin));
         }
-        if has_damaged_lines || cursor_changed || modes_changed {
-            append_cursor(&mut render, current_cursor, usize::from(self.row_origin));
-        }
+        append_cursor(&mut render, current_cursor, usize::from(self.row_origin));
         append_mode_changes(&mut render, self.last_modes, current_modes, false);
 
         self.record_render_state(current_modes, current_cursor);
@@ -420,12 +416,10 @@ impl Emulator {
         }
     }
 
-    fn collect_damage(&mut self, current_cursor: Cursor) -> Vec<usize> {
-        let raw_cursor = self.term.grid().cursor.point;
-        let cursor_changed = current_cursor != self.last_cursor;
+    fn raw_cell_unchanged(&self, raw_cursor: index::Point) -> bool {
         // Term adds synthetic cursor damage but appends combining marks to a base
         // up to two columns left without damage. Cache only this bounded neighborhood.
-        let raw_cell_unchanged = raw_cursor == self.last_raw_cursor
+        raw_cursor == self.last_raw_cursor
             && self.term.grid()[raw_cursor] == self.last_raw_cursor_cell
             && self.last_preceding_cells.iter().enumerate().all(
                 |(index, previous)| match raw_cursor.column.0.checked_sub(index + 1) {
@@ -438,22 +432,26 @@ impl Emulator {
                     }
                     None => previous.is_none(),
                 },
-            );
+            )
+    }
+
+    fn collect_damage(&mut self, _current_cursor: Cursor, cursor_changed: bool) -> Vec<usize> {
+        let raw_cursor = self.term.grid().cursor.point;
+        let raw_cell_unchanged = self.raw_cell_unchanged(raw_cursor);
+        let rows = usize::from(self.size.rows);
         let lines: Vec<usize> = match self.term.damage() {
-            term::TermDamage::Full => (0..usize::from(self.size.rows)).collect(),
+            term::TermDamage::Full => (0..rows).collect(),
             term::TermDamage::Partial(bounds) => bounds
                 .filter_map(|bound| {
-                    // Term::damage always includes the cursor cell. Ignore that synthetic
-                    // point when neither the cursor nor the underlying line changed.
-                    if !cursor_changed
-                        && raw_cell_unchanged
-                        && bound.line == raw_cursor.line.0.max(0) as usize
-                        && bound.left == raw_cursor.column.0
-                        && bound.right == raw_cursor.column.0
-                    {
+                    if is_synthetic_cursor_damage(
+                        bound,
+                        raw_cursor,
+                        cursor_changed,
+                        raw_cell_unchanged,
+                    ) {
                         return None;
                     }
-                    (bound.line < usize::from(self.size.rows)).then_some(bound.line)
+                    (bound.line < rows).then_some(bound.line)
                 })
                 .collect(),
         };
@@ -483,11 +481,7 @@ impl Emulator {
         render
     }
 
-    fn render_line(&self, render: &mut Vec<u8>, row: usize, origin: usize) {
-        append_cursor_position(render, row, 0, origin);
-        render.extend_from_slice(b"\x1b[0m");
-
-        let cols = usize::from(self.size.cols);
+    fn last_visible_col(&self, row: usize, cols: usize) -> Option<usize> {
         let mut last = None;
         for col in 0..cols {
             let cell = self.cell_at(row, col);
@@ -496,16 +490,14 @@ impl Emulator {
             }
             last = Some(col);
         }
+        last
+    }
 
-        let Some(last) = last else {
-            render.extend_from_slice(b"\x1b[0m\x1b[K");
-            return;
-        };
-
+    fn render_line_cells(&self, render: &mut Vec<u8>, target: RenderLineTarget) -> usize {
         let mut output_col = 0usize;
         let mut style = CellStyle::default();
-        for col in 0..=last {
-            let cell = self.cell_at(row, col);
+        for col in 0..=target.last {
+            let cell = self.cell_at(target.row, col);
             if is_skipped_cell(cell) {
                 // shortcut: soft-wrap flags (WRAPLINE) are ignored (no reflow on the client);
                 // leading-wide spacer cells are likewise not reflowed.
@@ -513,7 +505,7 @@ impl Emulator {
                 continue;
             }
             if output_col != col {
-                append_cursor_position(render, row, col, origin);
+                append_cursor_position(render, target.row, col, target.origin);
             }
             let next_style = CellStyle::from_cell(cell);
             if next_style != style {
@@ -527,11 +519,51 @@ impl Emulator {
                 col + 1
             };
         }
+        output_col
+    }
+
+    fn render_line(&self, render: &mut Vec<u8>, row: usize, origin: usize) {
+        append_cursor_position(render, row, 0, origin);
+        render.extend_from_slice(b"\x1b[0m");
+
+        let cols = usize::from(self.size.cols);
+        let Some(last) = self.last_visible_col(row, cols) else {
+            render.extend_from_slice(b"\x1b[0m\x1b[K");
+            return;
+        };
+
+        let output_col = self.render_line_cells(render, RenderLineTarget { row, last, origin });
         render.extend_from_slice(b"\x1b[0m");
         if output_col < cols {
             render.extend_from_slice(b"\x1b[K");
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct RenderLineTarget {
+    row: usize,
+    last: usize,
+    origin: usize,
+}
+
+fn has_pending_update(damaged_lines: &[usize], cursor_changed: bool, modes_changed: bool) -> bool {
+    !damaged_lines.is_empty() || cursor_changed || modes_changed
+}
+
+fn is_synthetic_cursor_damage(
+    bound: term::LineDamageBounds,
+    raw_cursor: index::Point,
+    cursor_changed: bool,
+    raw_cell_unchanged: bool,
+) -> bool {
+    // Term::damage always includes the cursor cell. Ignore that synthetic
+    // point when neither the cursor nor the underlying line changed.
+    !cursor_changed
+        && raw_cell_unchanged
+        && bound.line == raw_cursor.line.0.max(0) as usize
+        && bound.left == raw_cursor.column.0
+        && bound.right == raw_cursor.column.0
 }
 
 /// The session module uses this adapter without naming alacritty's emulator types.
@@ -544,34 +576,24 @@ pub(crate) fn window_size(size: Size) -> event::WindowSize {
     }
 }
 
+const CELL_ATTR_FLAGS: [(Flags, u16); 9] = [
+    (Flags::BOLD, Attrs::BOLD),
+    (Flags::DIM, Attrs::DIM),
+    (Flags::ITALIC, Attrs::ITALIC),
+    (Flags::ALL_UNDERLINES, Attrs::UNDERLINE),
+    (Flags::INVERSE, Attrs::INVERSE),
+    (Flags::HIDDEN, Attrs::HIDDEN),
+    (Flags::STRIKEOUT, Attrs::STRIKEOUT),
+    (Flags::WIDE_CHAR, Attrs::WIDE),
+    (Flags::WIDE_CHAR_SPACER, Attrs::WIDE_SPACER),
+];
+
 fn public_cell(cell: &AlacrittyCell) -> Cell {
     let mut attrs = 0;
-    if cell.flags.contains(Flags::BOLD) {
-        attrs |= Attrs::BOLD;
-    }
-    if cell.flags.contains(Flags::DIM) {
-        attrs |= Attrs::DIM;
-    }
-    if cell.flags.contains(Flags::ITALIC) {
-        attrs |= Attrs::ITALIC;
-    }
-    if cell.flags.intersects(Flags::ALL_UNDERLINES) {
-        attrs |= Attrs::UNDERLINE;
-    }
-    if cell.flags.contains(Flags::INVERSE) {
-        attrs |= Attrs::INVERSE;
-    }
-    if cell.flags.contains(Flags::HIDDEN) {
-        attrs |= Attrs::HIDDEN;
-    }
-    if cell.flags.contains(Flags::STRIKEOUT) {
-        attrs |= Attrs::STRIKEOUT;
-    }
-    if cell.flags.contains(Flags::WIDE_CHAR) {
-        attrs |= Attrs::WIDE;
-    }
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-        attrs |= Attrs::WIDE_SPACER;
+    for &(flag, bit) in &CELL_ATTR_FLAGS {
+        if cell.flags.intersects(flag) {
+            attrs |= bit;
+        }
     }
 
     Cell {
@@ -597,8 +619,12 @@ fn is_skipped_cell(cell: &AlacrittyCell) -> bool {
         .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
 }
 
+fn has_default_colors(cell: &AlacrittyCell) -> bool {
+    is_default_color(cell.fg) && is_default_color(cell.bg)
+}
+
 fn is_default_blank(cell: &AlacrittyCell) -> bool {
-    if cell.c != ' ' || !is_default_color(cell.fg) || !is_default_color(cell.bg) {
+    if cell.c != ' ' || !has_default_colors(cell) {
         return false;
     }
     let visible_flags = cell.flags.difference(Flags::WRAPLINE);
@@ -657,31 +683,36 @@ fn append_cell_glyph(render: &mut Vec<u8>, cell: &AlacrittyCell) {
     }
 }
 
+const STYLE_SGR_PARAMS: [(Flags, usize); 7] = [
+    (Flags::BOLD, 1),
+    (Flags::DIM, 2),
+    (Flags::ITALIC, 3),
+    (Flags::ALL_UNDERLINES, 4),
+    (Flags::INVERSE, 7),
+    (Flags::HIDDEN, 8),
+    (Flags::STRIKEOUT, 9),
+];
+
+fn write_sgr_params(render: &mut Vec<u8>, params: &[usize]) {
+    render.extend_from_slice(b"\x1b[");
+    for (index, param) in params.iter().enumerate() {
+        if index != 0 {
+            render.push(b';');
+        }
+        push_decimal(render, *param);
+    }
+    render.push(b'm');
+}
+
 fn append_cell_style(render: &mut Vec<u8>, style: CellStyle) {
     render.extend_from_slice(b"\x1b[0m");
     let mut params = [0usize; 20];
     let mut count = 0;
     let flags = style.attrs;
-    if flags.contains(Flags::BOLD) {
-        push_param(&mut params, &mut count, 1);
-    }
-    if flags.contains(Flags::DIM) {
-        push_param(&mut params, &mut count, 2);
-    }
-    if flags.contains(Flags::ITALIC) {
-        push_param(&mut params, &mut count, 3);
-    }
-    if flags.intersects(Flags::ALL_UNDERLINES) {
-        push_param(&mut params, &mut count, 4);
-    }
-    if flags.contains(Flags::INVERSE) {
-        push_param(&mut params, &mut count, 7);
-    }
-    if flags.contains(Flags::HIDDEN) {
-        push_param(&mut params, &mut count, 8);
-    }
-    if flags.contains(Flags::STRIKEOUT) {
-        push_param(&mut params, &mut count, 9);
+    for &(flag, param) in &STYLE_SGR_PARAMS {
+        if flags.intersects(flag) {
+            push_param(&mut params, &mut count, param);
+        }
     }
     append_color_params(&mut params, &mut count, style.fg, true);
     append_color_params(&mut params, &mut count, style.bg, false);
@@ -689,14 +720,7 @@ fn append_cell_style(render: &mut Vec<u8>, style: CellStyle) {
     if count == 0 {
         return;
     }
-    render.extend_from_slice(b"\x1b[");
-    for (index, param) in params[..count].iter().enumerate() {
-        if index != 0 {
-            render.push(b';');
-        }
-        push_decimal(render, *param);
-    }
-    render.push(b'm');
+    write_sgr_params(render, &params[..count]);
 }
 
 fn append_color_params(
@@ -758,6 +782,33 @@ fn append_cursor_position(render: &mut Vec<u8>, row: usize, col: usize, origin: 
     render.push(b'H');
 }
 
+fn append_keypad_mode(render: &mut Vec<u8>, previous: Modes, current: Modes, explicit: bool) {
+    if !explicit && previous.app_keypad == current.app_keypad {
+        return;
+    }
+    if current.app_keypad {
+        render.extend_from_slice(b"\x1b=");
+    } else {
+        render.extend_from_slice(b"\x1b>");
+    }
+}
+
+fn append_mouse_mode(render: &mut Vec<u8>, previous: Modes, current: Modes, explicit: bool) {
+    if !explicit && previous.mouse == current.mouse {
+        return;
+    }
+    if explicit {
+        append_private_mode(render, 1000, false, true);
+        append_private_mode(render, 1002, false, true);
+        append_private_mode(render, 1003, false, true);
+    } else if previous.mouse != MouseMode::Off {
+        append_private_mode(render, mouse_mode_number(previous.mouse), false, true);
+    }
+    if current.mouse != MouseMode::Off {
+        append_private_mode(render, mouse_mode_number(current.mouse), true, true);
+    }
+}
+
 fn append_mode_changes(render: &mut Vec<u8>, previous: Modes, current: Modes, explicit: bool) {
     append_private_mode(
         render,
@@ -771,35 +822,14 @@ fn append_mode_changes(render: &mut Vec<u8>, previous: Modes, current: Modes, ex
         current.app_cursor,
         explicit || previous.app_cursor != current.app_cursor,
     );
-
-    if explicit || previous.app_keypad != current.app_keypad {
-        if current.app_keypad {
-            render.extend_from_slice(b"\x1b=");
-        } else {
-            render.extend_from_slice(b"\x1b>");
-        }
-    }
-
+    append_keypad_mode(render, previous, current, explicit);
     append_private_mode(
         render,
         1004,
         current.focus_reporting,
         explicit || previous.focus_reporting != current.focus_reporting,
     );
-
-    if explicit || previous.mouse != current.mouse {
-        if explicit {
-            append_private_mode(render, 1000, false, true);
-            append_private_mode(render, 1002, false, true);
-            append_private_mode(render, 1003, false, true);
-        } else if previous.mouse != MouseMode::Off {
-            append_private_mode(render, mouse_mode_number(previous.mouse), false, true);
-        }
-        if current.mouse != MouseMode::Off {
-            append_private_mode(render, mouse_mode_number(current.mouse), true, true);
-        }
-    }
-
+    append_mouse_mode(render, previous, current, explicit);
     append_private_mode(
         render,
         1006,

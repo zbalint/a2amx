@@ -424,3 +424,234 @@ fn combining_updates_include_wide_bases_and_the_right_margin() {
         assert_same_screen(&source, &mirror);
     }
 }
+
+#[test]
+fn render_line_and_styles_emit_exact_literal_bytes() {
+    let mut emu = Emulator::new(Size { cols: 4, rows: 2 });
+    emu.feed("漢x".as_bytes());
+    assert_eq!(
+        emu.render_full(),
+        concat!(
+            "\x1b[2J\x1b[H",
+            "\x1b[1;1H\x1b[0m漢x\x1b[0m\x1b[K",
+            "\x1b[2;1H\x1b[0m\x1b[0m\x1b[K",
+            "\x1b[1;4H\x1b[?25h",
+            "\x1b[?2004l\x1b[?1l\x1b>\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l",
+        )
+        .as_bytes()
+    );
+
+    let mut wide_end = Emulator::new(Size { cols: 4, rows: 1 });
+    wide_end.feed("ab漢".as_bytes());
+    assert_eq!(
+        wide_end.render_full(),
+        concat!(
+            "\x1b[2J\x1b[H",
+            "\x1b[1;1H\x1b[0mab漢\x1b[0m",
+            "\x1b[1;3H\x1b[?25h",
+            "\x1b[?2004l\x1b[?1l\x1b>\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l",
+        )
+        .as_bytes()
+    );
+
+    let mut mid_style = Emulator::new(Size { cols: 4, rows: 1 });
+    mid_style.feed(b"a\x1b[1mb");
+    assert!(mid_style.render_full().starts_with(
+        b"\x1b[2J\x1b[H\x1b[1;1H\x1b[0ma\x1b[0m\x1b[1mb\x1b[0m\x1b[K\x1b[1;3H\x1b[?25h"
+    ));
+
+    for (seq, expected) in [
+        (
+            b"\x1b[1mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[1mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[2mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[2mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[3mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[3mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[4mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[4mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[7mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[7mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[8mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[8mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[9mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[9mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[1;2;3;4;7;8;9mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[1;2;3;4;7;8;9mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[31;42mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[38;5;1;48;5;2mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[91;102mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[38;5;9;48;5;10mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[38;5;200mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[38;5;200mA\x1b[0m\x1b[K".as_slice(),
+        ),
+        (
+            b"\x1b[38;2;1;2;3;48;2;4;5;6mA".as_slice(),
+            b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[38;2;1;2;3;48;2;4;5;6mA\x1b[0m\x1b[K".as_slice(),
+        ),
+    ] {
+        let mut style_emu = Emulator::new(Size { cols: 4, rows: 1 });
+        style_emu.render_full();
+        style_emu.feed(seq);
+        assert!(
+            style_emu.render_update().starts_with(expected),
+            "seq {seq:?}"
+        );
+    }
+}
+
+#[test]
+fn mode_transitions_and_damage_updates_emit_exact_literal_bytes() {
+    for (seq, expected) in [
+        (
+            b"\x1b[?2004h".as_slice(),
+            b"\x1b[1;1H\x1b[?25h\x1b[?2004h".as_slice(),
+        ),
+        (
+            b"\x1b[?1h".as_slice(),
+            b"\x1b[1;1H\x1b[?25h\x1b[?1h".as_slice(),
+        ),
+        (b"\x1b=".as_slice(), b"\x1b[1;1H\x1b[?25h\x1b=".as_slice()),
+        (
+            b"\x1b[?1004h".as_slice(),
+            b"\x1b[1;1H\x1b[?25h\x1b[?1004h".as_slice(),
+        ),
+        (
+            b"\x1b[?1006h".as_slice(),
+            b"\x1b[1;1H\x1b[?25h\x1b[?1006h".as_slice(),
+        ),
+        (
+            b"\x1b[?1000h".as_slice(),
+            b"\x1b[1;1H\x1b[?25h\x1b[?1000h".as_slice(),
+        ),
+        (
+            b"\x1b[?1002h".as_slice(),
+            b"\x1b[1;1H\x1b[?25h\x1b[?1002h".as_slice(),
+        ),
+        (
+            b"\x1b[?1003h".as_slice(),
+            b"\x1b[1;1H\x1b[?25h\x1b[?1003h".as_slice(),
+        ),
+    ] {
+        let mut emu = Emulator::new(Size { cols: 4, rows: 2 });
+        emu.render_full();
+        emu.feed(seq);
+        assert_eq!(emu.render_update(), expected, "seq {seq:?}");
+    }
+
+    let mut emu = Emulator::new(Size { cols: 4, rows: 2 });
+    emu.render_full();
+    emu.feed(b"\x1b=");
+    assert_eq!(emu.render_update(), b"\x1b[1;1H\x1b[?25h\x1b=");
+    emu.feed(b"\x1b>");
+    assert_eq!(emu.render_update(), b"\x1b[1;1H\x1b[?25h\x1b>");
+
+    emu.feed(b"\x1b[?1000h");
+    assert_eq!(emu.render_update(), b"\x1b[1;1H\x1b[?25h\x1b[?1000h");
+    emu.feed(b"\x1b[?1002h");
+    assert_eq!(
+        emu.render_update(),
+        b"\x1b[1;1H\x1b[?25h\x1b[?1000l\x1b[?1002h"
+    );
+    assert_eq!(
+        emu.render_full(),
+        concat!(
+            "\x1b[2J\x1b[H",
+            "\x1b[1;1H\x1b[0m\x1b[0m\x1b[K",
+            "\x1b[2;1H\x1b[0m\x1b[0m\x1b[K",
+            "\x1b[1;1H\x1b[?25h",
+            "\x1b[?2004l\x1b[?1l\x1b>\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1002h\x1b[?1006l",
+        )
+        .as_bytes()
+    );
+    emu.feed(b"\x1b[?1003h");
+    assert_eq!(
+        emu.render_update(),
+        b"\x1b[1;1H\x1b[?25h\x1b[?1002l\x1b[?1003h"
+    );
+    emu.feed(b"\x1b[?1003l");
+    assert_eq!(emu.render_update(), b"\x1b[1;1H\x1b[?25h\x1b[?1003l");
+
+    assert_eq!(emu.render_update(), b"");
+    emu.feed(b"A\x1b[D");
+    assert_eq!(
+        emu.render_update(),
+        b"\x1b[1;1H\x1b[0mA\x1b[0m\x1b[K\x1b[1;1H\x1b[?25h"
+    );
+    emu.feed(b"\x1b[1X");
+    assert_eq!(
+        emu.render_update(),
+        b"\x1b[1;1H\x1b[0m\x1b[0m\x1b[K\x1b[1;1H\x1b[?25h"
+    );
+    emu.feed(b"A");
+    emu.render_full();
+    emu.feed("\u{301}".as_bytes());
+    assert_eq!(
+        emu.render_update(),
+        "\x1b[1;1H\x1b[0mA\u{301}\x1b[0m\x1b[K\x1b[1;2H\x1b[?25h".as_bytes()
+    );
+    let mut wide_combine = Emulator::new(Size { cols: 4, rows: 1 });
+    wide_combine.feed("漢".as_bytes());
+    wide_combine.render_full();
+    wide_combine.feed("\u{301}".as_bytes());
+    assert_eq!(
+        wide_combine.render_update(),
+        "\x1b[1;1H\x1b[0m漢\u{301}\x1b[0m\x1b[K\x1b[1;3H\x1b[?25h".as_bytes()
+    );
+    emu.feed(b"\x1b[2;3H");
+    assert_eq!(
+        emu.render_update(),
+        "\x1b[1;1H\x1b[0mA\u{301}\x1b[0m\x1b[K\x1b[2;1H\x1b[0m\x1b[0m\x1b[K\x1b[2;3H\x1b[?25h"
+            .as_bytes()
+    );
+}
+
+#[test]
+fn style_back_to_default_emits_only_the_reset_and_a_background_space_is_kept() {
+    let mut back_to_default = Emulator::new(Size { cols: 4, rows: 1 });
+    back_to_default.feed(b"\x1b[1mb\x1b[0mc");
+    assert!(back_to_default.render_full().starts_with(
+        b"\x1b[2J\x1b[H\x1b[1;1H\x1b[0m\x1b[0m\x1b[1mb\x1b[0mc\x1b[0m\x1b[K\x1b[1;3H\x1b[?25h"
+    ));
+
+    let mut background_space = Emulator::new(Size { cols: 3, rows: 1 });
+    background_space.feed(b"A\x1b[41m ");
+    assert!(background_space.render_full().starts_with(
+        b"\x1b[2J\x1b[H\x1b[1;1H\x1b[0mA\x1b[0m\x1b[48;5;1m \x1b[0m\x1b[K\x1b[1;3H\x1b[?25h"
+    ));
+}
+
+#[test]
+fn combining_mark_on_the_cell_under_a_stationary_cursor_is_rendered() {
+    let mut source = Emulator::new(SIZE);
+    let _ = source.render_full();
+    source.feed(b"A");
+    source.feed(b"\x1b[D");
+    let _ = source.render_update();
+    let _ = source.render_update();
+    source.feed("\u{301}".as_bytes());
+    assert_eq!(
+        source.render_update(),
+        "\x1b[1;1H\x1b[0mA\u{301}\x1b[0m\x1b[K\x1b[1;1H\x1b[?25h".as_bytes()
+    );
+}

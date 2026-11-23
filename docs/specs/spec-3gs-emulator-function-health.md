@@ -44,3 +44,16 @@ Owner rules (memories d295229d, 828f8118, fb283e4c, df233241): goal is a CodeSce
 ## 4. Flagged for the owner (not fixed here)
 
 Dead or defensive code found while reviewing, left alone: the `push_param` bound check; `mouse_mode_number(Off)` (both callers guard against Off; it exists for the exhaustive match); `raw_cursor.line.0.max(0)` (the cursor line is never negative); the fallback to `(0,0)` in `current_cursor` is reachable when scrolled and stays. The file-level Low Cohesion of `src/emulator.rs` (screen model, query replies, snapshot serializer and render updates in one 842-line module). Splitting it moves the one module AGENTS.md names as the only alacritty user; the Semgrep rules would need to follow. Proposal after this spec when the remaining shape is known. The consultant review may add more.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (strongest slot, review m_8682); developer antigravity-cli Gemini 4 Hydrogen (Medium); tester omp default slot (deepseek-v4.1-flash). BLOCKED/amend cycles: 0. cs `src/emulator.rs` 6.48 to 8.81, only the file-level Low Cohesion left; tests 1435 to 1440.
+
+| Found at | By | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | five findings (raw-cell test must run before `term.damage()`, private const tables, `intersects` for the multi-bit underline set, literal-byte contract) | applied before locking |
+| Tester pass | tester | survivor: `count == 0` return removed (would emit `ESC[m`) | architect added `style_back_to_default_emits_only_the_reset_and_a_background_space_is_kept`; mutant killed |
+| Tester pass | tester | survivor: `has_default_colors` `&&` turned `||` (a background-coloured space was treated as blank and dropped) | same test (space with background 1); mutant killed |
+| Tester pass | tester | survivor: cell-equality term of the raw-cell-unchanged test dropped (a combining mark on the cell under a stationary cursor was silently lost); the architect's first probe (`ESC[1X`) could not kill it | tester found the exact input by differential probe; architect added `combining_mark_on_the_cell_under_a_stationary_cursor_is_rendered` with the literal bytes; mutant killed |
+
+Equivalent or unreachable, no killers: skipped-cell term in `last_visible_col` (the emit loop re-skips), raw-cursor equality term, the `None` branch of the preceding-cells match, the `cursor_changed` clause of `has_pending_update`, `bound.line < rows` (no input path), the `< 16` colour guard (no feed path creates Named 16..255). The dead always-true condition in `render_update` was removed by this spec.
