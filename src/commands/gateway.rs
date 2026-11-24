@@ -1,6 +1,5 @@
 //! Gateway run, up, status, stop, and token commands.
 
-use super::home::migrate_old_state;
 use crate::discord::DiscordConfig;
 use crate::relay::{Io as RelayIo, PairIo};
 use crate::relay_files;
@@ -11,9 +10,8 @@ use std::path::{Path, PathBuf};
 
 const MAX_GATEWAY_TOKEN_BYTES: usize = 64 * 1024;
 
-pub(super) async fn run_gateway_token(home: &Path, explicit_home: bool) -> anyhow::Result<()> {
+pub(super) async fn run_gateway_token(home: &Path) -> anyhow::Result<()> {
     let layout = crate::layout::Layout::new(home.to_owned());
-    migrate_old_state(explicit_home, &layout).await?;
     layout.ensure()?;
     let token = tokio::task::spawn_blocking(read_gateway_token).await??;
     let home = home.to_owned();
@@ -67,10 +65,7 @@ pub(super) async fn run_gateway_up(
     home: PathBuf,
     pair: bool,
     foreground: bool,
-    explicit_home: bool,
 ) -> anyhow::Result<()> {
-    let layout = crate::layout::Layout::new(home.clone());
-    migrate_old_state(explicit_home, &layout).await?;
     tokio::task::spawn_blocking(move || crate::gateway_launch::up(&home, pair, foreground))
         .await??;
     Ok(())

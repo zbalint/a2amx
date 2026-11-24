@@ -56,3 +56,19 @@ Cause of both BLOCKED cycles: section 2 gated "suite green" per step, but steps 
 ## 7. Amendment 3 (developer BLOCKED m_8993, verified by the architect)
 
 The step 0 allowlist forgot the two places the spec itself requires to name the old layout. The step 7 search may also report, and nothing else beyond the step 0 list: `tests/daemon_cli/state_layout.rs` (the literals `XDG_STATE_HOME`, `.local/state/a2amx` and `old layout` of the new test, section 3) and `docs/install.md` (the one `.migrating` sentence of step 5, currently `:45`). Any other new hit is still reported to the architect before the final checks. This is not a change of step order; Amendment 2 stands. With this amendment the step 7 search on the tree after step 6 returns exactly the step 0 allowlist plus those two files.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the `claude` harness (model not reported in its reports); developer on the `omp` harness (planning and working `openai-codex/gpt-5.6-luna`, advisor model not exposed); tester on the `omp` harness, `opencode-go/deepseek-v4.1-flash`. BLOCKED/amend cycles: 3 BLOCKED, 3 amendments (Amendments 1 to 3), all from the developer at implementation.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant | Nine findings on the first draft (message m_8793) | Spec text corrected before lock |
+| Implementation | Developer | Step 1 alone cannot compile: `src/commands/daemon.rs` imports and calls the symbols it deletes | Amendment 1 item 1: steps 1 to 3 one compile unit |
+| Implementation | Developer | Section 0's scope named no test file for the required new test | Amendment 1 item 2: new `tests/daemon_cli/state_layout.rs` and its `mod` line |
+| Implementation | Developer | The per-step "suite green" gate cannot hold: `tests/migrate_cli.rs` runs the removed behaviour until step 4 | Amendment 2: steps 1 to 4 one unit, suite gate after step 4; the architect checked that no test reads `docs/install.md` or `AGENTS.md` (causal review after the second cycle) |
+| Implementation | Developer | Step 7's "nothing outside the allowlist may remain" is impossible: the required test literals and the required `.migrating` note are hits | Amendment 3 adds both files to the allowed set |
+| Tester pass | Tester | The new test reads only the first stdout line, so the spec's exact stdout is not asserted | The architect added a read-to-EOF assertion in both cases of the test (test only, run five times) |
+| Architect review | Architect | The new test checks stderr with `contains` and `!contains` instead of equality, the exception section 3 allows when tracing makes exact stderr fragile | Recorded here as the deliberate exception; the tester's mutants A and B (old-layout warning, old-directory move) are both killed |
+
+Intended consequences, not problems: a v0.3 daemon still running from the old directory is no longer detected, and a home holding data in both locations starts instead of being refused (section 4). A pre-existing race, seen by the tester and not part of this change: SIGTERM right after the `listening on` line can leave the address file or WAL state varying between runs.

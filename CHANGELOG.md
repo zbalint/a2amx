@@ -13,6 +13,10 @@ All notable user-visible changes are listed here. The format follows
 
 - The activity notices no longer watch a session while it is starting: a Claude, Codex or OMP session that has not yet shown its ready screen is not observed, so starting a team no longer produces `idle (was working)` notices for peers that did no work. A `working_after` below ten seconds can still announce the screen drawn when the session becomes ready. Agy and generic sessions are unchanged. This is not a breaking change.
 
+### Removed
+
+- **Breaking:** the one-time move of the old state directory (`~/.local/state/a2amx`) into `~/.a2amx` is gone, together with the old-layout warning for an explicit home. Upgrade from a version before 0.4.0 through 0.4.0, or move the files by hand.
+
 ## [0.4.0] - 2026-11-22
 
 ### Changed

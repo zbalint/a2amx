@@ -1,6 +1,5 @@
 //! Daemon foreground, background, status, and stop commands.
 
-use super::home::{migrate_old_state, warn_explicit_old_layout};
 use crate::client::Client;
 use crate::daemon::{self, Daemon, DaemonConfig};
 use crate::terminal::confirm;
@@ -19,13 +18,7 @@ pub(super) async fn run_daemon(
     listen: Vec<std::net::SocketAddr>,
     host_name: Option<String>,
     owner_away_secs: Option<u64>,
-    explicit_home: bool,
 ) -> anyhow::Result<()> {
-    let migration_layout = crate::layout::Layout::new(home.clone());
-    migrate_old_state(explicit_home, &migration_layout).await?;
-    if explicit_home {
-        warn_explicit_old_layout(&home);
-    }
     let overrides = crate::config::Overrides {
         listen,
         host_name,
@@ -66,7 +59,6 @@ pub(super) async fn run_daemon_background(
     listen: Vec<std::net::SocketAddr>,
     host_name: Option<String>,
     owner_away_secs: Option<u64>,
-    explicit_home: bool,
 ) -> anyhow::Result<()> {
     if Client::connect(&home).await.is_ok() {
         let running = read_addrs(&home).await.unwrap_or_default();
@@ -74,11 +66,6 @@ pub(super) async fn run_daemon_background(
             "a2amx daemon is already running (listening on {})",
             running.lines().next().unwrap_or("unknown address")
         ));
-    }
-    let migration_layout = crate::layout::Layout::new(home.clone());
-    migrate_old_state(explicit_home, &migration_layout).await?;
-    if explicit_home {
-        warn_explicit_old_layout(&home);
     }
     let log_path = crate::layout::Layout::new(home.clone()).daemon_log();
     let (log, exe) = {

@@ -80,7 +80,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         }
         _ => {}
     }
-    let explicit_home = home_arg.is_some();
     let home = resolve_home(home_arg)?;
     let client_overrides = crate::config::ClientOverrides {
         prefix: cli.prefix,
@@ -98,10 +97,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
     };
     let result = match cli.command {
         Command::Gateway { action } => match action {
-            GatewayAction::Token => run_gateway_token(&home, explicit_home).await,
-            GatewayAction::Up { pair, foreground } => {
-                run_gateway_up(home, pair, foreground, explicit_home).await
-            }
+            GatewayAction::Token => run_gateway_token(&home).await,
+            GatewayAction::Up { pair, foreground } => run_gateway_up(home, pair, foreground).await,
             GatewayAction::Stop => return run_gateway_stop(&home).await,
             GatewayAction::Status => return run_gateway_status(&home).await,
             GatewayAction::Run { pair, pair_only } => run_gateway(home, pair, pair_only).await,
@@ -139,10 +136,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
                 owner_away_secs,
             } => {
                 if foreground {
-                    run_daemon(home, listen, host_name, owner_away_secs, explicit_home).await
+                    run_daemon(home, listen, host_name, owner_away_secs).await
                 } else {
-                    run_daemon_background(home, listen, host_name, owner_away_secs, explicit_home)
-                        .await
+                    run_daemon_background(home, listen, host_name, owner_away_secs).await
                 }
             }
             DaemonAction::Status => return run_daemon_status(home).await,

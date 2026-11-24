@@ -38,11 +38,12 @@ signatures and workflow identity. The build-from-source route above is unchanged
 
 ### Upgrading from the old state directory
 
-Stop the daemon and gateway before installing the new binary; the installer replaces the old
-binary. On the first start, A2AMX automatically moves the old state from
-`~/.local/state/a2amx` (or `$XDG_STATE_HOME/a2amx`) into `~/.a2amx`, converting the team and
-gateway settings as needed. It refuses to overwrite data already in either location. After the
-start succeeds, delete the old directory when the stderr hint says it is no longer used.
+From v0.4.1 on, a2amx no longer moves state from before v0.4.0. To upgrade from such a
+version, install v0.4.0 first; its first start moves the data into the new root, then install
+the new binary. You can also move the files by hand as described in the v0.4.0 changelog.
+
+If `state/.migrating` remains after a v0.4.0 move crashed, the new version does not finish the
+move. Install v0.4.0 again or finish the move by hand.
 
 a2amx and its daemon refuse to run as root or under `sudo`; install and run them as an ordinary
 user. There is no override, and containers must use a non-root user too.
