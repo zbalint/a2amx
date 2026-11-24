@@ -508,3 +508,184 @@ async fn reset_non_agy_with_spinner_above_composer_succeeds() {
     assert_eq!(reset_success_admin(dir.path(), &target).await, 1);
     daemon.shutdown().await.unwrap();
 }
+
+async fn spawn_screen_session(
+    admin: &mut Client,
+    name: &str,
+    harness: Harness,
+    below: &str,
+) -> String {
+    let rules = "─".repeat(40);
+    let command = format!(
+        "stty raw -echo; printf '\\033[2J\\033[?2004h\\033[2;1H{rules}\\033[3;1H> \\033[4;1H{rules}{below}\\033[3;3H\\033[?25h'; exec cat >/dev/null"
+    );
+    match admin
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), command],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some(name.into()),
+            harness,
+            deliver: None,
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected response: {response:?}"),
+    }
+}
+
+#[tokio::test]
+async fn agy_background_job_activity_is_waiting_after_quiet_and_working_on_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let rules = "─".repeat(40);
+    let job_below = format!("\\033[5;1H  ● [21:48:54] sleep 60 running\\033[6;1H{rules}");
+
+    let waiting_id = spawn_screen_session(&mut admin, "agy-job", Harness::Agy, &job_below).await;
+    let idle_id = spawn_screen_session(&mut admin, "agy-idle", Harness::Agy, "").await;
+    let generic_id =
+        spawn_screen_session(&mut admin, "generic-job", Harness::Generic, &job_below).await;
+    wait_claude_ready(dir.path(), &waiting_id).await;
+    wait_claude_ready(dir.path(), &idle_id).await;
+    wait_claude_ready(dir.path(), &generic_id).await;
+
+    tokio::time::sleep(Duration::from_millis(10_500)).await;
+    let working_id = spawn_screen_session(&mut admin, "agy-fresh", Harness::Agy, &job_below).await;
+    wait_claude_ready(dir.path(), &working_id).await;
+
+    let Response::Sessions { sessions } = admin.request(Request::List).await.unwrap() else {
+        panic!("expected sessions response");
+    };
+    let activity_of = |id: &str| {
+        sessions
+            .iter()
+            .find(|session| session.id == id)
+            .and_then(|session| session.activity)
+    };
+    assert_eq!(
+        activity_of(&waiting_id),
+        Some(a2amx::wire::Activity::Waiting)
+    );
+    assert_eq!(activity_of(&idle_id), Some(a2amx::wire::Activity::Idle));
+    assert_eq!(activity_of(&generic_id), Some(a2amx::wire::Activity::Idle));
+    assert_eq!(
+        activity_of(&working_id),
+        Some(a2amx::wire::Activity::Working)
+    );
+
+    daemon.shutdown().await.unwrap();
+}
+
+async fn spawn_activity_watcher(admin: &mut Client, watch: Vec<String>) -> String {
+    match admin
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "stty -echo; printf '\\033[?2004h'; exec cat".into(),
+            ],
+            cols: 80,
+            rows: 24,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch,
+            name: Some("w".into()),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Auto),
+            heartbeat: None,
+            activity: Some(a2amx::wire::ActivityWatch {
+                working_after: Some(1),
+                idle_after: Some(1),
+            }),
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::Created { session } => session,
+        response => panic!("unexpected watcher response: {response:?}"),
+    }
+}
+
+#[tokio::test]
+async fn agy_background_job_suppresses_idle_activity_notice_while_row_stays() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let rules = "─".repeat(40);
+    let job_below = format!("\\033[5;1H  ● [21:48:54] sleep 60 running\\033[6;1H{rules}");
+
+    let watcher = spawn_activity_watcher(&mut admin, vec!["p".into(), "q".into()]).await;
+    let _p = spawn_screen_session(&mut admin, "p", Harness::Agy, &job_below).await;
+    let q_command = format!(
+        "stty raw -echo; printf '\\033[2J\\033[?2004h\\033[2;1H{rules}\\033[3;1H> \\033[4;1H{rules}{job_below}\\033[3;3H\\033[?25h'; sleep 2; printf '\\033[2J\\033[?2004h\\033[2;1H{rules}\\033[3;1H> \\033[4;1H{rules}\\033[3;3H\\033[?25h'; exec cat >/dev/null"
+    );
+    let Response::Created { .. } = admin
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), q_command],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("q".into()),
+            harness: Harness::Agy,
+            deliver: None,
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected q created");
+    };
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+    let text = loop {
+        let Response::Screen { lines } = admin
+            .request(Request::Screen {
+                session: watcher.clone(),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("expected screen response");
+        };
+        let joined = lines.join("\n");
+        if joined.contains("- q: idle (was working") {
+            break joined;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for q: idle notice; screen:\n{joined}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    assert!(
+        !text.contains("- p: idle"),
+        "unexpected p: idle notice while job row present:\n{text}"
+    );
+    daemon.shutdown().await.unwrap();
+}

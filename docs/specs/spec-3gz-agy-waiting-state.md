@@ -64,8 +64,24 @@ Other harnesses (Claude Code, OMP, Codex) have the same pattern of background wo
 Cause: the tester pass (m_8918) and the tester's BLOCKED (m_8929) found that section 2 step 5 demanded a false sentence, and that three acceptance texts of section 3 could not be met as written. The architect verified each against the code and the developer's diff.
 
 1. Step 5 above: the clause "a waiting recipient receives no heartbeat" is deleted. It was false (`src/daemon/notices.rs:401` `watcher_may_receive` does not read the activity). The architect and the consultant (m_8838 finding 9) both wrote it; the developer's docs (`docs/architecture.md`) correctly omit it.
-2. Section 0 scope list gains `tests/table.rs` and `tests/explain.rs` (a `Waiting` fixture each, which pins `as_str` and the cause text) and, for tests, `tests/daemon_cli/` (the activity-notice test of the `session_working` term).
+2. Section 0 scope list gains `tests/table.rs` and `tests/explain.rs` (a `Waiting` fixture each, which pins `as_str` and the cause text) and, the activity-notice test of the `session_working` term lives in `tests/broker/agy.rs` (already in scope), not in `tests/daemon_cli/`.
 3. Section 3, matcher tests: `assert!` and `assert!(!..)` replace "exact `assert_eq!` on the bool" (clippy `bool_assert_comparison` rejects `assert_eq!(.., true)` and no suppression is allowed). Added cases: a non-digit in each of the columns 5, 6, 8, 9, 11 and 12; an empty command (`  ● [12:34:56] running`, the suffix starts at column 14: false) and a command of one space (`  ● [12:34:56]  running`, suffix at column 15: true).
 4. Section 3, daemon test: the `Working` case may use a fresh session printing the row, checked at once, instead of printing again on the quiet session; both test the same classifier branch. Added: a generic-harness session with the same screen reports `Idle`; a watcher test (`working_after` and `idle_after` one second) in which an agy peer with the job row gets no `idle` notice while a control peer that redraws without the row does.
 5. Section 3, status test: the `Waiting` case compares the full visible line exactly like the neighbouring cases.
 6. The picker mapping stays without a test: `picker_entries` is private and no public seam reaches it; recorded as unpinned, not as a gap to close in this spec.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (strongest slot); developer antigravity-cli Gemini 4 Hydrogen (Medium); tester omp default slot (deepseek-v4.1-flash). BLOCKED/amend cycles: 1 (Amendment 1). Verification at acceptance: cargo fmt --check, clippy -D warnings and the full suite (1464 passed, 0 failed, 3 ignored) run fresh by the architect and the tester; `cs check` warning counts of the five production files equal to HEAD. Architect mutants (all killed, files restored by checksum): `.any` to `.all` in the matcher, `is_ascii_digit` to `is_alphanumeric`, status colour 141 to 75.
+
+| Found at | By | Problem | Resolution |
+|---|---|---|---|
+| Draft review | consultant | ten findings (nine applied, finding 2 rejected with evidence: `list_agents` does carry the activity) | applied before locking; rejection settled |
+| Draft review | consultant and architect | both wrote that a waiting recipient receives no heartbeat; `watcher_may_receive` does not read the activity | found by the tester (m_8918); Amendment 1 deleted the clause |
+| Implementation | developer | the spec's `assert_eq!` on a bool is rejected by clippy `bool_assert_comparison`; the demanded "print again" Working case was replaced by a fresh session | spec defects; Amendment 1 changed both texts |
+| Tester pass | tester | 38 mutants, 26 killed, 2 equivalent, 10 survivors: digit columns 5, 6, 8, 9, 11, the suffix start bound, the harness guard, the cause text, the `session_working` term, `Activity::as_str` | developer follow-up 1 (m_8926): near misses, boundary rows, generic-harness case, table and explain fixtures, watcher test; the recheck killed all but the picker mapping |
+| Tester pass | tester | the picker mapping `Waiting` to `Working` has no public seam | recorded as unpinned in Amendment 1 section 6.6 |
+| Tester pass | tester | the first tester assignment's mutant run aborted before restore under `errexit` | restored by checksum; lesson stored |
+| Tester recheck | tester | BLOCKED m_8929: the locked step 5 demanded the false heartbeat clause the follow-up removed | Amendment 1 (0762def) |
+| Tester recheck | tester | `docs/architecture.md:551` still said working means only not-ready or changed within ten seconds | architect added the agy clause at acceptance |
+| Amendment 1 | tester | amendment named `tests/daemon_cli/` for the watcher test, which lives in `tests/broker/agy.rs` | architect corrected the text at acceptance |

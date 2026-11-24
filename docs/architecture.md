@@ -431,7 +431,7 @@ also draws the separator rule above it. Scroll mode draws its own row, and the s
 picker owns the screen while open.
 Team sessions also reserve the top row when the status line is visible and the terminal has at least five rows.
 At six rows or more they reserve a second row for a dim separator rule underneath. The first row uses the bar style
-to show ` team <name> │ ● member ...`; dots encode activity: idle green (256-color 78), working blue (75), starting yellow (221), resetting orange (209), held red (203), and exited grey (244). The attached member is bold, and a click or prefix
+to show ` team <name> │ ● member ...`; dots encode activity: idle green (256-color 78), working blue (75), waiting violet (141), starting yellow (221), resetting orange (209), held red (203), and exited grey (244). The attached member is bold, and a click or prefix
 `1`–`9`, `n`, or `p` switches members. A click on the team label opens the picker; exited members remain visible in
 grey but cannot be selected. Prefix `s` hides both top rows, the status line, and both separator rules.
 Newer clients treat omitted held and starting fields as false; older clients ignore these additive fields and keep the old member-dot rules.
@@ -533,11 +533,13 @@ machine; there is no central-versus-host split yet.
   together with a non-empty `watch` list. The daemon starts one one-second polling task
   for that session. Its single `last_change` clock is initialized at creation and
   refreshed by PTY output; activity is `busy` while held or resetting, `working` while
-  not ready or changed within ten seconds, and `idle` otherwise. The status dot additionally distinguishes
+  not ready or changed within ten seconds, `waiting` when ready and quiet for ten seconds
+  with a running agy background job, and `idle` otherwise. The status dot additionally distinguishes
   starting and held members without changing the list activity words. A digest is eligible only
   when the watcher is ready, unheld, not resetting, and unchanged for the configured interval.
   The task remembers when each watched peer was last seen non-idle, and skips the digest when
-  every live watched peer is idle with no pending or delivering messages. Missing or exited
+  every live watched peer is idle with no pending or delivering messages. A waiting peer counts as
+  busy for the heartbeat digest (`!= Idle`). Missing or exited
   peers do not make a watcher busy. The task inserts one message from the system sender
   (`a2amx-daemon@<host>`) through the ordinary queue and delivery gates, with at most
   one pending or delivering heartbeat; shutdown aborts heartbeat tasks before children.
@@ -546,7 +548,8 @@ machine; there is no central-versus-host split yet.
   same one-second activity calculation for every harness, with separate debounce
   thresholds and one open system message per watcher. The first settled peer state is
   silent; later sorted transition lines travel through the ordinary queue and gates.
-  Working ignores holds and resets and means not-ready or changed within ten seconds.
+  Working ignores holds and resets and means not-ready or changed within ten seconds, or, for agy,
+  a ready quiet screen that shows a running background job row (so no idle notice while the job runs).
   Team plans reject cycles among activity watches; hand-started mutual watches can loop.
 - **Session reset.** `a2amx reset <id|name>` resolves names before sending
   `Request::Reset`; the daemon types the configured sequence (or `/clear`) through
@@ -598,7 +601,7 @@ machine; there is no central-versus-host split yet.
 - **Human controls.** `a2amx list` gains NAME, optional TEAM, HARNESS, STATE, UPTIME, ACTIVITY, IN-STATE, PENDING,
   and HELD columns; `--details` appends CWD and COMMAND. UPTIME is the time since the session
   started, and IN-STATE is the age of its current activity; the daemon samples activity once per
-  second and shows `-` for exited sessions. The activity column reports `idle`, `working`, or `busy` for
+  second and shows `-` for exited sessions. The activity column reports `idle`, `working`, `waiting`, or `busy` for
   running sessions and `-` for exited sessions. The CLI resolves session names to ids before
   attach, kill, and messages; the daemon still receives ids only. HELD shows a real hold reason (or `-` when clear) and also displays a needs-input warning after ten seconds of a continuous signal: Codex `no_thread`/`waiting_on_approval` is `needs_input`, while Claude's same-row `Enter to confirm` plus `Esc to cancel` screen heuristic is `input?`. The warning is display-only, never sends input, and `input?` is hedged because those markers also occur in ordinary menus and search results; OMP and generic sessions have no needs-input signal. `a2amx messages [--session S]
   [--state ...]` lists messages; `a2amx cancel <id>` cancels a pending one; the

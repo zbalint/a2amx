@@ -433,6 +433,7 @@ pub struct ResetVerdict {
 pub enum Activity {
     Idle,
     Working,
+    Waiting,
     Busy,
 }
 
@@ -441,6 +442,7 @@ impl Activity {
         match self {
             Self::Idle => "idle",
             Self::Working => "working",
+            Self::Waiting => "waiting",
             Self::Busy => "busy",
         }
     }

@@ -55,7 +55,10 @@ from `~/.a2amx/bin/a2amx`; the launch fails with a clear error when that install
 `scripts/install.sh` first. Delivery is typed into the visible composer; the rules are in
 [Delivery](delivery.md#implemented-typed-delivery-agy). The quota column shows the five-hour and weekly percent
 left of the bucket group of the session's model. Stopping an `agy` session sends Ctrl-D twice. A role or the
-peer-authorization line is not delivered to `agy`: a2amx wires no system prompt for it.
+peer-authorization line is not delivered to `agy`: a2amx wires no system prompt for it. When an `agy` turn
+ends with a background job still running, `agy` draws one row per job below the composer's bottom rule
+(`  ● [HH:MM:SS] <command> running`); a2amx reads that row so the session reports `waiting` (instead of `idle`)
+and suppresses idle activity notices until the job finishes.
 
 Limits to know about `agy`:
 

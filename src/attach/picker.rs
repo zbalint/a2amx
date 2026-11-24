@@ -172,6 +172,8 @@ fn picker_entries(sessions: &[SessionSummary]) -> Vec<PickerEntry> {
             } else {
                 match session.activity {
                     Some(Activity::Working) => EntryState::Working,
+                    // shortcut: map Waiting to Working until 3gw is accepted and picker.rs gains a dedicated state.
+                    Some(Activity::Waiting) => EntryState::Working,
                     Some(Activity::Busy) => EntryState::Busy,
                     Some(Activity::Idle) => EntryState::Idle,
                     None => EntryState::Unknown,

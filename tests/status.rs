@@ -410,6 +410,18 @@ fn activity_dot_states_cover_starting_resetting_and_precedence() {
             .any(|window| window == b"\x1b[38;5;209m")
     );
     assert!(visible(&resetting).starts_with(" a │ ● resetting "));
+
+    info.activity = Some(Activity::Waiting);
+    let waiting = status::render("s1", Some(&info), 2, 40, 24);
+    assert!(
+        waiting
+            .windows(b"\x1b[38;5;141m".len())
+            .any(|window| window == b"\x1b[38;5;141m")
+    );
+    assert_eq!(
+        visible(&waiting),
+        format!(" a │ ● waiting {}", " ".repeat(24))
+    );
 }
 
 #[test]

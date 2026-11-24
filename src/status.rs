@@ -525,6 +525,7 @@ fn detail_prefix() -> [Span; 2] {
 enum DotState {
     Idle,
     Working,
+    Waiting,
     Starting,
     Resetting,
     Held,
@@ -542,6 +543,7 @@ fn dot_state(activity: Option<Activity>, held: bool, starting: bool, exited: boo
         match activity.unwrap_or(Activity::Idle) {
             Activity::Idle => DotState::Idle,
             Activity::Working => DotState::Working,
+            Activity::Waiting => DotState::Waiting,
             Activity::Busy => DotState::Resetting,
         }
     }
@@ -551,6 +553,7 @@ fn activity_word(state: DotState) -> &'static str {
     match state {
         DotState::Idle => "idle",
         DotState::Working => "working",
+        DotState::Waiting => "waiting",
         DotState::Starting => "starting",
         DotState::Resetting => "resetting",
         DotState::Held | DotState::Exited => "",
@@ -561,6 +564,7 @@ fn activity_color(state: DotState) -> &'static str {
     match state {
         DotState::Idle => "\x1b[38;5;78m",
         DotState::Working => "\x1b[38;5;75m",
+        DotState::Waiting => "\x1b[38;5;141m",
         DotState::Starting => "\x1b[38;5;221m",
         DotState::Resetting => "\x1b[38;5;209m",
         DotState::Held => "\x1b[38;5;203m",

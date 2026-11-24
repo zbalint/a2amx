@@ -5,6 +5,7 @@ fn summary_activity_serializes_literals_and_old_payloads_remain_unknown() {
     let activities = [
         (Activity::Idle, "idle"),
         (Activity::Working, "working"),
+        (Activity::Waiting, "waiting"),
         (Activity::Busy, "busy"),
     ];
     for (activity, expected) in activities {
@@ -19,7 +20,13 @@ fn summary_activity_serializes_literals_and_old_payloads_remain_unknown() {
         "attached": false, "harness": "generic",
     });
     for old in [session_json, agent_json] {
-        for activity in [None, Some("idle"), Some("working"), Some("busy")] {
+        for activity in [
+            None,
+            Some("idle"),
+            Some("working"),
+            Some("waiting"),
+            Some("busy"),
+        ] {
             let mut payload = old.clone();
             if let Some(activity) = activity {
                 payload["activity"] = activity.into();

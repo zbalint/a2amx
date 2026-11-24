@@ -443,3 +443,132 @@ fn agy_composer_idle_rejects_each_cursor_mismatch_and_non_blank_placeholder_tail
         );
     }
 }
+
+#[test]
+fn agy_background_job_running_matches_captured_rows() {
+    let rules = "─".repeat(120);
+    // 1. One job row below the composer plus closing rule row.
+    let one_job = agy_composer_with_rows(
+        8,
+        &[""],
+        2,
+        &[
+            (
+                11,
+                "  ● [21:48:54] sleep 60 && echo \"60s task done\" running",
+            ),
+            (12, &rules),
+        ],
+    );
+    assert!(harness::agy_background_job_running(&agy_screen_from(
+        &one_job
+    )));
+
+    // 2. Two job rows (newest on top).
+    let two_jobs = agy_composer_with_rows(
+        8,
+        &[""],
+        2,
+        &[
+            (
+                11,
+                "  ● [21:48:54] sleep 60 && echo \"60s task done\" running",
+            ),
+            (
+                12,
+                "  ● [21:48:47] sleep 30 && echo \"30s task done\" running",
+            ),
+            (13, &rules),
+        ],
+    );
+    assert!(harness::agy_background_job_running(&agy_screen_from(
+        &two_jobs
+    )));
+
+    // 3. Long-command row cut with `...` then ` running`.
+    let long_cmd = format!("  ● [21:52:40] {}... running", "a".repeat(94));
+    assert_eq!(long_cmd.chars().count(), 120);
+    let long_bytes = agy_composer_with_rows(8, &[""], 2, &[(11, &long_cmd), (12, &rules)]);
+    assert!(harness::agy_background_job_running(&agy_screen_from(
+        &long_bytes
+    )));
+
+    // 4. Command text contains ` running` and ends `...` then ` running`.
+    let inner_running = "  ● [21:52:40] echo \"still running\" && sleep 60... running";
+    let inner_bytes = agy_composer_with_rows(8, &[""], 2, &[(11, inner_running), (12, &rules)]);
+    assert!(harness::agy_background_job_running(&agy_screen_from(
+        &inner_bytes
+    )));
+
+    // 5. Row on the last screen row below the composer when there is no closing rule row.
+    let last_row = agy_composer_with_rows(8, &[""], 2, &[(11, "  ● [21:48:54] sleep 60 running")]);
+    assert!(harness::agy_background_job_running(&agy_screen_from_size(
+        &last_row, 12
+    )));
+
+    // 6. Boundary: suffix starts at col 15 (`  ● [12:34:56]  running`) matches (`start < 15` is false).
+    let one_space_cmd = agy_composer_with_rows(8, &[""], 2, &[(11, "  ● [12:34:56]  running")]);
+    assert!(harness::agy_background_job_running(&agy_screen_from(
+        &one_space_cmd
+    )));
+}
+
+#[test]
+fn agy_background_job_running_rejects_near_misses() {
+    let rules = "─".repeat(120);
+    // 1. No composer (cursor hidden).
+    let mut no_composer = agy_composer_bytes(8, &[""], 2, false);
+    no_composer.extend_from_slice("\x1b[12;1H  ● [21:48:54] sleep 60 running".as_bytes());
+    assert!(!harness::agy_background_job_running(&agy_screen_from(
+        &no_composer
+    )));
+
+    // 2. Row ABOVE the composer (transcript row) must not match.
+    let above_composer = agy_composer_with_rows(
+        8,
+        &[""],
+        2,
+        &[(7, "  ● [21:48:54] sleep 60 running"), (11, &rules)],
+    );
+    assert!(!harness::agy_background_job_running(&agy_screen_from(
+        &above_composer
+    )));
+
+    // 3. Near-misses on prefix columns, each timestamp digit (5, 6, 8, 9, 11, 12), and suffix.
+    let invalid_rows = [
+        "  ○ [21:48:54] sleep 60 running",
+        " ● [21:48:54] sleep 60 running",
+        "x ● [21:48:54] sleep 60 running",
+        "  ●[21:48:54] sleep 60 running",
+        "  ● 21:48:54] sleep 60 running",
+        "  ● [21:48:54 sleep 60 running",
+        "  ● [21:48] sleep 60 running",
+        "  ● [x1:48:54] sleep 60 running",
+        "  ● [2x:48:54] sleep 60 running",
+        "  ● [21:x8:54] sleep 60 running",
+        "  ● [21:4x:54] sleep 60 running",
+        "  ● [21:48:x4] sleep 60 running",
+        "  ● [21:48:5x] sleep 60 running",
+        "  ● [21-48:54] sleep 60 running",
+        "  ● [21:48-54] sleep 60 running",
+        "  ● [21:48:54]sleep 60 running",
+        "  ● [12:34:56] running",
+        "  ● [21:48:54] sleep 60 done",
+        "  ● [21:48:54] sleep 60 exit",
+        "  ● [21:48:54] sleep 60 xrunning",
+        &rules,
+    ];
+    for row in invalid_rows {
+        let bytes = agy_composer_with_rows(8, &[""], 2, &[(11, row)]);
+        assert!(
+            !harness::agy_background_job_running(&agy_screen_from(&bytes)),
+            "row {row:?} should not match"
+        );
+    }
+
+    // 4. Composer with nothing below.
+    let nothing_below = agy_composer_bytes(8, &[""], 2, true);
+    assert!(!harness::agy_background_job_running(&agy_screen_from(
+        &nothing_below
+    )));
+}

@@ -317,6 +317,14 @@ pub(super) fn session_quota(
         (None, false) => None,
     }
 }
+fn background_job_waiting(session: &Arc<Session>) -> bool {
+    if session.harness() != Harness::Agy {
+        return false;
+    }
+    let state = session.lock();
+    harness::agy_background_job_running(&state.emulator.screen())
+}
+
 pub(super) fn session_working(session: &Arc<Session>) -> Option<bool> {
     if session.exit_code().is_some() {
         return None;
@@ -326,7 +334,11 @@ pub(super) fn session_working(session: &Arc<Session>) -> Option<bool> {
         let state = session.lock();
         (session.observe_ready(&state), state.last_change)
     };
-    Some(!ready || now.saturating_duration_since(last_change) < ACTIVITY_QUIET)
+    Some(
+        !ready
+            || now.saturating_duration_since(last_change) < ACTIVITY_QUIET
+            || background_job_waiting(session),
+    )
 }
 
 fn session_activity_cause(session: &Arc<Session>) -> Option<(Activity, String)> {
@@ -351,6 +363,8 @@ fn session_activity_cause(session: &Arc<Session>) -> Option<(Activity, String)> 
                 Activity::Working,
                 format!("screen changed {}s ago", unchanged.as_secs()),
             ))
+        } else if background_job_waiting(session) {
+            Some((Activity::Waiting, "background job running".to_owned()))
         } else {
             Some((
                 Activity::Idle,

@@ -307,6 +307,57 @@ pub fn agy_turn_in_flight(screen: &Screen) -> bool {
         )
 }
 
+fn agy_job_row_prefix(screen: &Screen, row: u16) -> bool {
+    let fixed = [
+        (0, ' '),
+        (1, ' '),
+        (2, '●'),
+        (3, ' '),
+        (4, '['),
+        (7, ':'),
+        (10, ':'),
+        (13, ']'),
+        (14, ' '),
+    ];
+    let digits = [5, 6, 8, 9, 11, 12];
+    fixed
+        .into_iter()
+        .all(|(col, expected)| cell_char(screen, row, col) == Some(expected))
+        && digits
+            .into_iter()
+            .all(|col| cell_char(screen, row, col).is_some_and(|ch| ch.is_ascii_digit()))
+}
+
+fn agy_job_row_suffix(screen: &Screen, row: u16) -> bool {
+    const SUFFIX: [char; 8] = [' ', 'r', 'u', 'n', 'n', 'i', 'n', 'g'];
+    let mut end = screen.size.cols;
+    while end > 15 && cell_char(screen, row, end - 1) == Some(' ') {
+        end -= 1;
+    }
+    let Some(start) = end.checked_sub(SUFFIX.len() as u16) else {
+        return false;
+    };
+    if start < 15 {
+        return false;
+    }
+    SUFFIX
+        .iter()
+        .enumerate()
+        .all(|(offset, &expected)| cell_char(screen, row, start + offset as u16) == Some(expected))
+}
+
+// shortcut: narrow and scrolled screens are not measured; a miss reads as `idle`
+// (today's behavior), a false positive reads as `waiting` and never causes input;
+// the trigger to revisit is a capture where ` running` is cut off or the row wraps.
+/// Returns whether an Agy screen shows at least one running background job row below the composer.
+pub fn agy_background_job_running(screen: &Screen) -> bool {
+    let Some((_, bottom)) = agy_composer(screen) else {
+        return false;
+    };
+    ((bottom + 1)..screen.size.rows)
+        .any(|row| agy_job_row_prefix(screen, row) && agy_job_row_suffix(screen, row))
+}
+
 fn claude_prompt_at_row(screen: &Screen, row: u16) -> bool {
     // Claude Code 2.1.286 draws the glyph followed by U+00A0; older builds used a plain space.
     cell_char(screen, row, 0) == Some('❯')

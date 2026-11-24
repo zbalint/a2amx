@@ -635,3 +635,55 @@ async fn claude_native_explain_keeps_nonempty_composer_held() {
     assert!(!info.reset.allowed);
     daemon.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn agy_background_job_explain_reports_waiting_and_cause() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let rules = "─".repeat(40);
+    let command = format!(
+        "stty raw -echo; printf '\\033[2J\\033[?2004h\\033[2;1H{rules}\\033[3;1H> \\033[4;1H{rules}\\033[5;1H  ● [21:48:54] sleep 60 running\\033[6;1H{rules}\\033[3;3H\\033[?25h'; exec cat >/dev/null"
+    );
+    let Response::Created { session } = admin
+        .request(Request::NewSession {
+            argv: vec!["sh".into(), "-c".into(), command],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("agy-wait".into()),
+            harness: Harness::Agy,
+            deliver: None,
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected created response");
+    };
+    wait_claude_explain_ready(dir.path(), &session).await;
+    tokio::time::sleep(Duration::from_millis(10_500)).await;
+
+    let Response::Explain { info } = admin.request(Request::Explain { session }).await.unwrap()
+    else {
+        panic!("expected explain response");
+    };
+    assert_eq!(info.activity, Some(a2amx::wire::Activity::Waiting));
+    assert_eq!(
+        info.activity_cause.as_deref(),
+        Some("background job running")
+    );
+    let rendered = a2amx::table::format_explain(&info);
+    assert!(
+        rendered.contains("activity: waiting (background job running)\n"),
+        "rendered explain:\n{rendered}"
+    );
+    daemon.shutdown().await.unwrap();
+}

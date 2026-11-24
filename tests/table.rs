@@ -165,6 +165,16 @@ fn session_table_details_add_cwd_and_command_columns() {
         format_session_table(&[without_cwd], true),
         "ID  NAME  HARNESS  CONFINE  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE   CWD  COMMAND\ns1  a     claude   off      running  -       -         -         no        0        -     -      80x24  -    cat -n\n"
     );
+
+    let mut waiting = base_session("s2", Some("b"));
+    waiting.harness = Harness::Agy;
+    waiting.activity = Some(Activity::Waiting);
+    waiting.uptime_secs = Some(25);
+    waiting.activity_secs = Some(12);
+    assert_eq!(
+        format_session_table(&[waiting], false),
+        "ID  NAME  HARNESS  CONFINE  STATE    UPTIME  ACTIVITY  IN-STATE  ATTACHED  PENDING  HELD  QUOTA  SIZE\ns2  b     agy      off      running  25s     waiting   12s       no        0        -     -      80x24\n"
+    );
 }
 
 #[test]
@@ -394,6 +404,37 @@ fn explain_ready_states() {
             "s1 (agent-plan@host-a): generic, running\n",
             "activity: working (output)\n",
             "ready: no\n",
+            "needs input: no\n",
+            "hold: none\n",
+            "queued: 0\n",
+            "reset: gate open\n",
+        )
+    );
+
+    let waiting = ExplainInfo {
+        id: "s2".to_owned(),
+        address: "agy-dev@host-a".to_owned(),
+        harness: Harness::Agy,
+        exit_code: None,
+        ready: Some(true),
+        starting: false,
+        activity: Some(Activity::Waiting),
+        activity_cause: Some("background job running".to_owned()),
+        needs_input: None,
+        hold: None,
+        pending: 0,
+        reset: ResetVerdict {
+            allowed: true,
+            code: None,
+            reason: None,
+        },
+    };
+    assert_eq!(
+        format_explain(&waiting),
+        concat!(
+            "s2 (agy-dev@host-a): agy, running\n",
+            "activity: waiting (background job running)\n",
+            "ready: yes\n",
             "needs input: no\n",
             "hold: none\n",
             "queued: 0\n",
