@@ -35,35 +35,53 @@ impl PickerParser {
             self.pending.clear();
             return vec![PickerAction::Cancel];
         }
-        let mut actions = Vec::new();
-        for byte in bytes {
-            if self.pending.len() == 1 {
-                if *byte == b'[' || *byte == b'O' {
-                    self.pending.push(*byte);
-                    continue;
-                }
-                self.pending.clear();
-            }
-            if self.pending.is_empty() {
-                if let Some(action) = plain_key(*byte, self.filter_mode) {
-                    actions.push(action);
-                    continue;
-                }
-                if *byte == 0x1b {
-                    self.pending.push(*byte);
-                    continue;
-                }
-            } else {
-                self.pending.push(*byte);
-            }
-            if let Some(action) = escape_action(&self.pending) {
-                self.pending.clear();
-                actions.push(action);
-            } else if self.pending.len() > 3 || self.pending.first() != Some(&0x1b) {
-                self.pending.clear();
-            }
+        bytes
+            .iter()
+            .filter_map(|&byte| self.feed_byte(byte))
+            .collect()
+    }
+
+    // Consumes the byte when it extends a lone ESC; any other byte abandons the ESC and is then
+    // handled as a plain key.
+    fn extend_introducer(&mut self, byte: u8) -> bool {
+        if self.pending.len() != 1 {
+            return false;
         }
-        actions
+        if byte == b'[' || byte == b'O' {
+            self.pending.push(byte);
+            return true;
+        }
+        self.pending.clear();
+        false
+    }
+
+    fn feed_byte(&mut self, byte: u8) -> Option<PickerAction> {
+        if self.extend_introducer(byte) {
+            return None;
+        }
+        if self.pending.is_empty() {
+            if let Some(action) = plain_key(byte, self.filter_mode) {
+                return Some(action);
+            }
+            if byte == 0x1b {
+                self.pending.push(byte);
+                return None;
+            }
+        } else {
+            self.pending.push(byte);
+        }
+        self.finish_sequence()
+    }
+
+    fn finish_sequence(&mut self) -> Option<PickerAction> {
+        if let Some(action) = escape_action(&self.pending) {
+            self.pending.clear();
+            return Some(action);
+        }
+        if self.pending.len() > 3 || self.pending.first() != Some(&0x1b) {
+            self.pending.clear();
+        }
+        None
     }
 }
 
@@ -202,6 +220,12 @@ struct Section {
     entries: Vec<PickerEntry>,
 }
 
+struct SelectionMemo {
+    selection: Option<Selection>,
+    index: Option<usize>,
+    team: Option<Option<String>>,
+}
+
 pub struct PickerView {
     entries: Vec<PickerEntry>,
     current: String,
@@ -232,11 +256,7 @@ impl PickerView {
     }
 
     pub fn replace(&mut self, entries: Vec<PickerEntry>) {
-        let old_selection = self.selection.clone();
-        let old_index = self.selected_line();
-        let old_team = old_selection
-            .as_ref()
-            .and_then(|selection| self.selection_team(selection));
+        let memo = self.remember_selection();
         let old_folds = self.folds.clone();
 
         self.entries = entries;
@@ -248,7 +268,7 @@ impl PickerView {
         }
 
         if self.query.is_empty() {
-            self.reconcile_empty(old_selection, old_index, old_team);
+            self.reconcile_empty(memo);
         } else {
             self.reconcile_filter();
         }
@@ -278,20 +298,10 @@ impl PickerView {
             }
             let expanded =
                 !self.query.is_empty() || self.folds.get(&section.key).copied().unwrap_or(true);
-            let summary = if expanded {
-                String::new()
-            } else {
-                Self::summary(&shown)
-            };
+            let collapsed = (!expanded).then(|| Self::summary(&shown));
             lines.push(Line::Header {
                 key: section.key.clone(),
-                text: Self::header_text(
-                    &section.key,
-                    section.private,
-                    shown.len(),
-                    expanded,
-                    &summary,
-                ),
+                text: Self::header_text(&section, shown.len(), collapsed.as_deref()),
             });
             if expanded {
                 lines.extend(shown.into_iter().map(|entry| Line::Session {
@@ -333,12 +343,7 @@ impl PickerView {
             PickerAction::Move(_)
             | PickerAction::Page(_)
             | PickerAction::Home
-            | PickerAction::End => {
-                let lines = self.lines();
-                let selected = self.selected_line()?;
-                let target = target(selected, action, height, lines.len());
-                self.selection = lines.get(target).map(Self::selection_for_line);
-            }
+            | PickerAction::End => self.move_selection(action, height),
             PickerAction::Toggle | PickerAction::Fold | PickerAction::Unfold => {
                 self.apply_fold(action);
             }
@@ -346,53 +351,77 @@ impl PickerView {
                 self.filter_mode = true;
                 self.query.clear();
             }
-            PickerAction::Char(byte) => {
-                if self.filter_mode {
-                    self.query.push(char::from(byte));
-                    self.reconcile_filter();
-                }
-            }
-            PickerAction::Backspace => {
-                if self.filter_mode && !self.query.is_empty() {
-                    let old_selection = self.selection.clone();
-                    let old_index = self.selected_line();
-                    let old_team = old_selection
-                        .as_ref()
-                        .and_then(|selection| self.selection_team(selection));
-                    self.query.pop();
-                    if self.query.is_empty() {
-                        self.reconcile_empty(old_selection, old_index, old_team);
-                    } else {
-                        self.reconcile_filter();
-                    }
-                }
-            }
-            PickerAction::Select => {
-                let line = self.selected_line()?;
-                match self.lines().get(line) {
-                    Some(Line::Session { id }) => return Some(Outcome::Attach(id.clone())),
-                    Some(Line::Header { .. }) if self.query.is_empty() => {
-                        self.apply_fold(PickerAction::Toggle);
-                    }
-                    _ => {}
-                }
-            }
-            PickerAction::Cancel => {
-                if self.filter_mode {
-                    let old_selection = self.selection.clone();
-                    let old_index = self.selected_line();
-                    let old_team = old_selection
-                        .as_ref()
-                        .and_then(|selection| self.selection_team(selection));
-                    self.query.clear();
-                    self.filter_mode = false;
-                    self.reconcile_empty(old_selection, old_index, old_team);
-                } else {
-                    return Some(Outcome::Cancel);
-                }
-            }
+            PickerAction::Char(byte) => self.type_char(byte),
+            PickerAction::Backspace => self.erase_char(),
+            PickerAction::Select => return self.select_current(),
+            PickerAction::Cancel => return self.cancel_or_leave_filter(),
         }
         None
+    }
+
+    fn move_selection(&mut self, action: PickerAction, height: usize) {
+        let lines = self.lines();
+        let Some(selected) = self.selected_line() else {
+            return;
+        };
+        let next = target(selected, action, height, lines.len());
+        self.selection = lines.get(next).map(Self::selection_for_line);
+    }
+
+    fn type_char(&mut self, byte: u8) {
+        if self.filter_mode {
+            self.query.push(char::from(byte));
+            self.reconcile_filter();
+        }
+    }
+
+    fn erase_char(&mut self) {
+        if self.filter_mode && !self.query.is_empty() {
+            let memo = self.remember_selection();
+            self.query.pop();
+            if self.query.is_empty() {
+                self.reconcile_empty(memo);
+            } else {
+                self.reconcile_filter();
+            }
+        }
+    }
+
+    fn select_current(&mut self) -> Option<Outcome> {
+        let line = self.selected_line()?;
+        match self.lines().get(line) {
+            Some(Line::Session { id }) => return Some(Outcome::Attach(id.clone())),
+            Some(Line::Header { .. }) if self.query.is_empty() => {
+                self.apply_fold(PickerAction::Toggle);
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn cancel_or_leave_filter(&mut self) -> Option<Outcome> {
+        if self.filter_mode {
+            let memo = self.remember_selection();
+            self.query.clear();
+            self.filter_mode = false;
+            self.reconcile_empty(memo);
+            None
+        } else {
+            Some(Outcome::Cancel)
+        }
+    }
+
+    fn remember_selection(&self) -> SelectionMemo {
+        let selection = self.selection.clone();
+        let index = self.selected_line();
+        let team = selection
+            .as_ref()
+            .and_then(|selected| self.selection_team(selected));
+        SelectionMemo {
+            selection,
+            index,
+            team,
+        }
     }
 
     fn sectioned(&self) -> bool {
@@ -495,20 +524,14 @@ impl PickerView {
         parts.join(", ")
     }
 
-    fn header_text(
-        key: &Option<String>,
-        private: bool,
-        count: usize,
-        expanded: bool,
-        summary: &str,
-    ) -> String {
-        let mut name = key.as_deref().unwrap_or("(no team)").to_owned();
-        if key.is_some() && private {
+    fn header_text(section: &Section, count: usize, collapsed: Option<&str>) -> String {
+        let mut name = section.key.as_deref().unwrap_or("(no team)").to_owned();
+        if section.key.is_some() && section.private {
             name.push_str(" (private)");
         }
-        let marker = if expanded { '-' } else { '+' };
+        let marker = if collapsed.is_some() { '+' } else { '-' };
         let mut text = format!("[{marker}] {name} ({count})");
-        if !expanded && !summary.is_empty() {
+        if let Some(summary) = collapsed.filter(|summary| !summary.is_empty()) {
             text.push_str(": ");
             text.push_str(summary);
         }
@@ -569,34 +592,66 @@ impl PickerView {
         self.selection = Self::first_session_or_line(&lines);
     }
 
-    fn reconcile_empty(
-        &mut self,
-        old_selection: Option<Selection>,
-        old_index: Option<usize>,
+    fn folded_header_for(
+        &self,
+        selection: &Selection,
         old_team: Option<Option<String>>,
-    ) {
+    ) -> Option<Selection> {
+        let Selection::Session(_) = selection else {
+            return None;
+        };
+        let team = old_team
+            .or_else(|| self.selection_team(selection))
+            .filter(|key| self.section_exists(key))?;
+        let folded = !self.folds.get(&team).copied().unwrap_or(true);
+        folded.then_some(Selection::Header(team))
+    }
+
+    fn reconcile_empty(&mut self, memo: SelectionMemo) {
         let lines = self.lines();
-        if let Some(selection) = old_selection.as_ref() {
+        if let Some(selection) = memo.selection.as_ref() {
             if self.contains_selection(&lines, selection) {
                 self.selection = Some(selection.clone());
                 return;
             }
-            if let Selection::Session(_) = selection {
-                let team = old_team
-                    .or_else(|| self.selection_team(selection))
-                    .filter(|key| self.section_exists(key));
-                if let Some(team) = team {
-                    let folded = !self.folds.get(&team).copied().unwrap_or(true);
-                    if folded {
-                        self.selection = Some(Selection::Header(team));
-                        return;
-                    }
-                }
+            if let Some(header) = self.folded_header_for(selection, memo.team) {
+                self.selection = Some(header);
+                return;
             }
         }
-        self.selection = Self::selection_at(&lines, old_index);
-        if self.selection.is_none() && old_selection.is_none() {
+        self.selection = Self::selection_at(&lines, memo.index);
+        if self.selection.is_none() && memo.selection.is_none() {
             self.selection = lines.first().map(Self::selection_for_line);
+        }
+    }
+
+    fn fold_header(&mut self, key: Option<String>, action: PickerAction) {
+        let expanded = self.folds.get(&key).copied().unwrap_or(true);
+        let next = match action {
+            PickerAction::Toggle => !expanded,
+            PickerAction::Fold => false,
+            PickerAction::Unfold => true,
+            _ => expanded,
+        };
+        if self.section_exists(&key) {
+            self.folds.insert(key, next);
+        }
+    }
+
+    fn fold_session_section(&mut self, id: &str) {
+        if let Some(key) = self
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.team.clone())
+        {
+            if self.sectioned() && self.section_exists(&Some(key.clone())) {
+                self.folds.insert(Some(key.clone()), false);
+                self.selection = Some(Selection::Header(Some(key)));
+            }
+        } else if self.sectioned() {
+            self.folds.insert(None, false);
+            self.selection = Some(Selection::Header(None));
         }
     }
 
@@ -605,33 +660,9 @@ impl PickerView {
             return;
         }
         match self.selection.clone() {
-            Some(Selection::Header(key)) => {
-                let expanded = self.folds.get(&key).copied().unwrap_or(true);
-                let next = match action {
-                    PickerAction::Toggle => !expanded,
-                    PickerAction::Fold => false,
-                    PickerAction::Unfold => true,
-                    _ => expanded,
-                };
-                if self.section_exists(&key) {
-                    self.folds.insert(key, next);
-                }
-            }
+            Some(Selection::Header(key)) => self.fold_header(key, action),
             Some(Selection::Session(id)) if action == PickerAction::Fold => {
-                if let Some(key) = self
-                    .entries
-                    .iter()
-                    .find(|entry| entry.id == id)
-                    .and_then(|entry| entry.team.clone())
-                {
-                    if self.sectioned() && self.section_exists(&Some(key.clone())) {
-                        self.folds.insert(Some(key.clone()), false);
-                        self.selection = Some(Selection::Header(Some(key)));
-                    }
-                } else if self.sectioned() {
-                    self.folds.insert(None, false);
-                    self.selection = Some(Selection::Header(None));
-                }
+                self.fold_session_section(&id);
             }
             _ => {}
         }

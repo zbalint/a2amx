@@ -61,3 +61,19 @@ The tester pass (54 mutants, scratch snapshot) found four reachable conditions w
 3. Section 3, mutation bullet: the killer demanded for "a memory built after the query change in `Backspace` or `Cancel`" is withdrawn. It is equivalent: when the query becomes empty a selected header always stays among the lines, so the old-index fallback is never reached. The Backspace `filter_mode` term (a non-empty query implies filter mode) and the `Select` header query guard (`apply_fold` returns first on a non-empty query) are equivalent too, as are the folded-header step's session-only guard and `section_exists` filter and the memo's `team` field (no reachable state, tester's argument, read by the architect). Section 2 step 3's text stays as written; the fields are still all read.
 4. Section 2 step 1: `feed` collects the actions with `filter_map` over `feed_byte` instead of an explicit loop; accepted, no behavior difference.
 5. Acceptance of the amendment: `cargo test --no-fail-fast`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` pass; `git status --short` lists only the two scope files; the architect re-runs the four surviving mutants (the Fold-only session guard, the no-selection early return, the Backspace empty-query guard, the ESC start guard) in a scratch snapshot and each must fail a named test.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the `claude` harness (model not reported in its reports); developer on the `agy` harness (planning, working and advisor: Gemini 4 Hydrogen, Medium); tester on the `omp` harness, `opencode-go/deepseek-v4.1-flash`. BLOCKED/amend cycles: 0 BLOCKED; one amendment (Amendment 1), after the tester pass.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant | Nine findings on the first draft (message m_8782) | Spec text corrected before lock |
+| Tester pass | Tester | Four reachable conditions without a test: the Fold-only guard on a session, the no-selection early return of `move_selection`, the empty-query guard of `Backspace`, the ESC start only when nothing is pending | Amendment 1 item 1; the developer added four tests; the architect re-ran the four mutants, each killed by its own test |
+| Tester pass | Tester | The killer the spec demanded for a memory built after the query change in `Backspace` or `Cancel` cannot exist (the old-index fallback is unreachable; a selected header stays among the lines) | Amendment 1 item 3 withdrew it |
+| Tester pass | Tester | The `reconcile_empty` case "removed session in a folded section" cannot be built through `replace` | Amendment 1 item 2: pinned through `Backspace` and `Cancel` |
+| Tester pass | Tester | Four more mutants (the `Backspace` filter-mode term, the `Select` header query guard, the folded-header session guard and section filter, the memory's team field) are equivalent, though the spec asked for killers | Amendment 1 item 3 lists them as equivalent |
+| Tester pass | Tester | The spec says `feed` keeps an explicit loop; the diff uses `filter_map` | Amendment 1 item 4, accepted |
+| Design read | Consultant | `extend_introducer` mutates and returns a bool and hides the clear of a lone ESC from `feed_byte`; helpers sit before their callers in two places; some new tests cover several guards | Comment added by the architect; the order and the test split left as they are (nits) |
+
+A flake outside this spec was seen once by the tester: `team::reset_and_validation::team_up_forwards_reset_configuration_and_consent` ("screen not ready"), 1 of 5 runs on the unmutated tree; not a problem of this change.
