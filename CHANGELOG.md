@@ -9,6 +9,10 @@ All notable user-visible changes are listed here. The format follows
 
 - **Breaking for mixed versions:** a new activity word, `waiting`, in `a2amx list`, `a2amx explain`, the `list_agents` tool, the attach status line (violet) and the activity notices. An agy session that ended its turn while a background job runs (a row `  ● [HH:MM:SS] <command> running` below its composer) is `waiting`, not `idle`, and sends no idle notice until the job ends. The client and the daemon must be upgraded together: an older client cannot read the new value on the wire. Other harnesses are unchanged.
 
+### Changed
+
+- The activity notices no longer watch a session while it is starting: a Claude, Codex or OMP session that has not yet shown its ready screen is not observed, so starting a team no longer produces `idle (was working)` notices for peers that did no work. A `working_after` below ten seconds can still announce the screen drawn when the session becomes ready. Agy and generic sessions are unchanged. This is not a breaking change.
+
 ## [0.4.0] - 2026-11-22
 
 ### Changed

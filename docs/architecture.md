@@ -545,10 +545,11 @@ machine; there is no central-versus-host split yet.
   one pending or delivering heartbeat; shutdown aborts heartbeat tasks before children.
 - **Activity notices.** A watcher may set `--activity-working-after` and/or
   `--activity-idle-after`, or the equivalent team `activity` table. The daemon uses the
-  same one-second activity calculation for every harness, with separate debounce
-  thresholds and one open system message per watcher. The first settled peer state is
-  silent; later sorted transition lines travel through the ordinary queue and gates.
-  Working ignores holds and resets and means not-ready or changed within ten seconds, or, for agy,
+  same one-second activity calculation for every harness, with separate debounce thresholds
+  and one open system message per watcher. The first settled peer state is silent; later
+  sorted transition lines travel through the ordinary queue and gates. A Claude, Codex, or
+  OMP session that has not yet shown its ready screen is not observed.
+  Working ignores holds and resets and means unready or changed within ten seconds, or, for agy,
   a ready quiet screen that shows a running background job row (so no idle notice while the job runs).
   Team plans reject cycles among activity watches; hand-started mutual watches can loop.
 - **Session reset.** `a2amx reset <id|name>` resolves names before sending

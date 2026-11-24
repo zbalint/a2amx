@@ -80,9 +80,11 @@ Without `--name`, `new` generates a name such as `soggy-walrus`, prints it on st
 
 `--activity-working-after` and `--activity-idle-after` enable daemon activity notices for
 the named `--watch` peers. Each value accepts `s`, `m`, or `h` from 1 second through
-24 hours; at least one direction and a non-empty watch list are required. Working means
-the peer is not ready or changed within ten seconds; idle notices therefore arrive at
-least ten seconds after the peer's last output. The first settled state is silent, and
+24 hours; at least one direction and a non-empty watch list are required. Working means screen
+output within ten seconds or an unready peer; idle notices therefore arrive at
+least ten seconds after the peer's last output. A Claude, Codex, or OMP peer before its first ready
+screen is not watched, so boot is neither a working nor idle notice. A threshold below ten seconds
+can still announce the screen drawn when the peer becomes ready. The first settled state is silent, and
 each direction is debounced independently. Prefer 30 seconds or more for `idle-after`.
 
 ## Confinement

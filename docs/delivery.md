@@ -357,8 +357,10 @@ settled state differs from the last announced or baseline state. The first settl
 is silent; a pending or delivering activity message suppresses another insert, but
 trackers continue observing every tick and acknowledge changes only after a successful
 insert. The ordinary delivery gates still decide when the watcher receives it, so the
-body is frozen at insertion. Working means not-ready or screen output within ten seconds;
-holds and resets do not change it. Exited peers are forgotten silently, and a restarted
+body is frozen at insertion. Working means screen output within ten seconds or an
+unready peer; a Claude, Codex, or OMP session before its first ready screen is not
+watched, so boot is neither a working nor idle notice. Holds and resets do not change
+it. Exited peers are forgotten silently, and a restarted
 session gets a new baseline. Team plans reject activity-watch cycles; hand-started mutual
 watches can loop and should be avoided.
 

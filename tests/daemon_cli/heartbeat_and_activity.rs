@@ -417,6 +417,119 @@ fn activity_notices_report_peer_transitions_once_in_order() {
 }
 
 #[test]
+fn starting_peers_send_no_activity_notice_until_they_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("state");
+    let _cleanup = Cleanup(&home);
+    assert!(run(&home, &["daemon", "start"]).status.success());
+    let watcher = run(
+        &home,
+        &[
+            "new",
+            "--detach",
+            "--name",
+            "w",
+            "--harness",
+            "generic",
+            "--deliver",
+            "auto",
+            "--watch",
+            "a",
+            "--watch",
+            "b",
+            "--activity-working-after",
+            "15s",
+            "--activity-idle-after",
+            "1s",
+            "--",
+            "sh",
+            "-c",
+            "stty -echo; printf '\\033[?2004h'; cat",
+        ],
+    );
+    assert!(watcher.status.success(), "stderr: {}", stderr(&watcher));
+
+    let script = dir.path().join("claude-fixture.py");
+    std::fs::write(
+        &script,
+        r#"import os, sys, time
+
+delay = int(sys.argv[1])
+active = sys.argv[2] == "active"
+time.sleep(delay)
+cols = os.get_terminal_size(0).columns
+sys.stdout.write(
+    "\x1b[?2004h\x1b[?25h\x1b[2J\x1b[1;1Hfixture-ready"
+    + "\x1b[3;1H" + "─" * cols
+    + "\x1b[5;1H" + "─" * cols
+    + "\x1b[4;1H❯\u00a0"
+)
+sys.stdout.flush()
+if active:
+    for _ in range(18):
+        time.sleep(1)
+        sys.stdout.write("\x1b7\x1b[1;20Hx\x1b8")
+        sys.stdout.flush()
+time.sleep(60)
+"#,
+    )
+    .unwrap();
+
+    for (name, delay, mode) in [("a", "10", "quiet"), ("b", "3", "active")] {
+        let args = vec![
+            "new".to_owned(),
+            "--detach".to_owned(),
+            "--name".to_owned(),
+            name.to_owned(),
+            "--harness".to_owned(),
+            "claude".to_owned(),
+            "--no-channel".to_owned(),
+            "--".to_owned(),
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "exec python3 -u \"$1\" \"$2\" \"$3\"".to_owned(),
+            "fixture".to_owned(),
+            script.to_str().unwrap().to_owned(),
+            delay.to_owned(),
+            mode.to_owned(),
+        ];
+        let peer = run_owned(&home, &args);
+        assert!(peer.status.success(), "{name}: stderr: {}", stderr(&peer));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let screen = loop {
+        let output = run(&home, &["screen", "w"]);
+        let text = stdout(&output);
+        let notices = text.split("peer activity:").skip(1);
+        if notices
+            .clone()
+            .any(|notice| notice.contains("- b: idle (was working"))
+            || Instant::now() >= deadline
+        {
+            break output;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(screen.status.success(), "stderr: {}", stderr(&screen));
+    let text = stdout(&screen);
+    assert!(text.contains("- b: idle (was working"), "{text}");
+    assert!(!text.contains("- a:"), "{text}");
+    assert!(!text.contains("- b: working (was idle"), "{text}");
+    let peer_screen = run(&home, &["screen", "a"]);
+    assert!(
+        peer_screen.status.success(),
+        "stderr: {}",
+        stderr(&peer_screen)
+    );
+    assert!(
+        stdout(&peer_screen).contains("fixture-ready"),
+        "{}",
+        stdout(&peer_screen)
+    );
+}
+
+#[test]
 fn held_activity_delivery_keeps_at_most_one_open_message() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("state");

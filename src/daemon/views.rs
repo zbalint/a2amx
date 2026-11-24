@@ -325,6 +325,7 @@ fn background_job_waiting(session: &Arc<Session>) -> bool {
     harness::agy_background_job_running(&state.emulator.screen())
 }
 
+/// A starting session has no activity verdict, so its watcher baseline waits for readiness.
 pub(super) fn session_working(session: &Arc<Session>) -> Option<bool> {
     if session.exit_code().is_some() {
         return None;
@@ -334,6 +335,11 @@ pub(super) fn session_working(session: &Arc<Session>) -> Option<bool> {
         let state = session.lock();
         (session.observe_ready(&state), state.last_change)
     };
+    if session.starting() {
+        // shortcut: a ready latch tick can announce with working_after below ten seconds;
+        // never-ready sessions stay starting and are never announced. Revisit on either report.
+        return None;
+    }
     Some(
         !ready
             || now.saturating_duration_since(last_change) < ACTIVITY_QUIET

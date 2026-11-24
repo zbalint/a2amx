@@ -83,3 +83,24 @@ Changes (the body above is edited in place; this lists them):
 4. Not changed (tester F6): `docs/teams.md:99-102` describes the notices without the exception; its claims stay true, so it stays out of scope.
 
 Gate re-run on the amendment: the old number is gone from every section (`rg -n "eleven|11 s|up to one" docs/specs/spec-3ha-starting-activity-notices.md` finds only this section, the section 6 history line and the measured figures in step 1); the 5 s margin and the fallback rule agree (15 s minus 10 s is 5 s; the rule asks for at least four).
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant on the `claude` harness (model not reported in its report); developer on the `omp` harness (planning, working and advisor models not stated in its report); tester on the `omp` harness, `opencode-go/deepseek-v4.1-flash`. BLOCKED/amend cycles: 0 BLOCKED; one amendment (Amendment 1), after the tester pass.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | Consultant | The test seam `messages` prints only the subject, so the notice text could not be read; the test would time out on old and new code | `screen w`, as the model test does |
+| Draft review | Consultant | Peer `b`'s bytes could move the cursor off the prompt row and make it never ready again | Bytes written away from the composer with the cursor restored |
+| Draft review | Consultant | Red margin on the old code under one second (6 s boot, tracker start jitter), a false green | `a` boots 10 s, watcher created first |
+| Draft review | Consultant | The fallback rule's numbers contradicted the stated ones | Numeric conditions stated |
+| Draft review | Consultant | The `Some(false)` mutant survived the planned test | `b` boots 3 s and the test asserts no `- b: working (was idle` |
+| Draft review | Consultant | Mutant (4) reason incomplete; doc grep conflicted with the new wording; fixture wiring (`--no-channel`, inline script, NBSP) unspecified | Spec text corrected before lock |
+| Draft review | Consultant and architect | The ceiling was stated as "eleven seconds or less" (a first wrong number from the architect, a second from the consultant) | Corrected after the tester pass, see below |
+| Implementation | Developer | Two fixture setup failures (terminal-size fd, argv indexing) before a valid old-code red | Fixed in the test; no production edit |
+| Tester pass | Tester | The ceiling is false: 8 s announces the boot draw, 9 to 11 s do not | Amendment 1: below ten seconds, in the comment, `docs/cli.md` and the spec |
+| Tester pass | Tester | No positive control that peer `a` drew; a dead `a` fixture passes on the old code | `screen a` contains `fixture-ready` |
+| Tester pass | Tester | Doc nits: `therefore` lost its referent, a needless re-wrap, a dangling clause, wording that implied Generic and Agy are unwatched at start | Fix request 1 |
+| Architect review | Architect | One changed line in `docs/delivery.md` was 116 columns wide | Re-wrapped by the architect |
+
+`docs/teams.md:99-102` describes the notices without the exception; the tester judged its claims still true, so it was left unchanged (not a problem found).
