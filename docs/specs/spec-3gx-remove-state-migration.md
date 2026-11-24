@@ -52,3 +52,7 @@ Cause of both BLOCKED cycles: section 2 gated "suite green" per step, but steps 
 1. Steps 1 to 4 are one unit, done in any order. Inside it run `cargo build` and `cargo clippy --all-targets -- -D warnings` as you like, but the suite gate (`cargo test --no-fail-fast`) is first required after step 4, once the three files are deleted, `pub mod migrate;` is gone and the new test of section 3 exists and passes. The new test is part of step 4.
 2. Steps 5 and 6 (docs, `AGENTS.md`) follow, then steps 7 and 8. The suite stays green through them.
 3. This replaces the gate wording of Amendment 1 item 1 and of section 2's heading; everything else stands. Because this is the second cycle, no third change of the step order is made: any further contradiction goes to the architect with the evidence before dependent work.
+
+## 7. Amendment 3 (developer BLOCKED m_8993, verified by the architect)
+
+The step 0 allowlist forgot the two places the spec itself requires to name the old layout. The step 7 search may also report, and nothing else beyond the step 0 list: `tests/daemon_cli/state_layout.rs` (the literals `XDG_STATE_HOME`, `.local/state/a2amx` and `old layout` of the new test, section 3) and `docs/install.md` (the one `.migrating` sentence of step 5, currently `:45`). Any other new hit is still reported to the architect before the final checks. This is not a change of step order; Amendment 2 stands. With this amendment the step 7 search on the tree after step 6 returns exactly the step 0 allowlist plus those two files.
