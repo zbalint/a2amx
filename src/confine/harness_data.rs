@@ -14,83 +14,122 @@ use super::{
     check_write_allowed, check_write_runtime_allowed, is_within, user_path,
 };
 
-pub(super) fn harness_data(harness: Harness, home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let mut dirs = Vec::new();
-    let mut files = Vec::new();
+#[derive(Default)]
+pub(super) struct HarnessData {
+    pub(super) dirs: Vec<PathBuf>,
+    pub(super) files: Vec<PathBuf>,
+}
+
+fn harness_dir(harness: Harness) -> Option<&'static str> {
     match harness {
-        Harness::Claude => {
-            let root = home.join(".claude");
-            for name in [
-                "projects",
-                "todos",
-                "shell-snapshots",
-                "session-env",
-                "sessions",
-                "statsig",
-                "file-history",
-                "paste-cache",
-                "debug",
-                "cache",
-                "telemetry",
-                "plans",
-                "backups",
-            ] {
-                dirs.push(root.join(name));
-            }
-            files.extend([
-                root.join("history.jsonl"),
-                root.join("stats-cache.json"),
-                root.join(".credentials.json"),
-                home.join(".claude.json"),
-            ]);
-        }
-        Harness::Omp => {
-            let root = home.join(".omp");
-            for name in [
-                "cache",
-                "logs",
-                "run",
-                "agent/sessions",
-                "agent/projects",
-                "agent/cache",
-                "agent/blobs",
-            ] {
-                dirs.push(root.join(name));
-            }
-            let parent = root.join("agent");
-            let mut databases = BTreeSet::new();
-            if let Ok(entries) = fs::read_dir(&parent) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path
-                        .file_name()
-                        .and_then(OsStr::to_str)
-                        .is_some_and(|name| name.ends_with(".db"))
-                    {
-                        databases.insert(path);
-                    }
-                }
-            }
-            for database in databases {
-                files.push(database.clone());
-                files.push(PathBuf::from(format!("{}-wal", database.display())));
-                files.push(PathBuf::from(format!("{}-shm", database.display())));
-            }
-            let stats = root.join("stats.db");
-            if stats.is_file() {
-                files.extend([
-                    stats.clone(),
-                    PathBuf::from(format!("{}-wal", stats.display())),
-                    PathBuf::from(format!("{}-shm", stats.display())),
-                ]);
-            }
-        }
-        Harness::Agy => {
-            dirs.push(home.join(".gemini/antigravity-cli"));
-        }
-        Harness::Generic | Harness::Codex => {}
+        Harness::Claude => Some(".claude"),
+        Harness::Omp => Some(".omp"),
+        Harness::Codex => Some(".codex"),
+        Harness::Agy => Some(".gemini"),
+        Harness::Generic => None,
     }
-    (dirs, files)
+}
+
+// Root of the harness data a plan opens and validates; Codex has a harness dir (session_harness_root) but no data, so None (removing that case would start refusing a symlinked ~/.codex).
+fn data_root(harness: Harness, home: &Path) -> Option<PathBuf> {
+    if harness == Harness::Codex {
+        return None;
+    }
+    harness_dir(harness).map(|dir| home.join(dir))
+}
+
+fn sqlite_files(database: &Path) -> [PathBuf; 3] {
+    [
+        database.to_path_buf(),
+        PathBuf::from(format!("{}-wal", database.display())),
+        PathBuf::from(format!("{}-shm", database.display())),
+    ]
+}
+
+fn is_database(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.ends_with(".db"))
+}
+
+fn claude_data(home: &Path, root: &Path) -> HarnessData {
+    let dirs = [
+        "projects",
+        "todos",
+        "shell-snapshots",
+        "session-env",
+        "sessions",
+        "statsig",
+        "file-history",
+        "paste-cache",
+        "debug",
+        "cache",
+        "telemetry",
+        "plans",
+        "backups",
+    ]
+    .into_iter()
+    .map(|name| root.join(name))
+    .collect();
+    let files = vec![
+        root.join("history.jsonl"),
+        root.join("stats-cache.json"),
+        root.join(".credentials.json"),
+        home.join(".claude.json"),
+    ];
+    HarnessData { dirs, files }
+}
+
+fn omp_data(root: &Path) -> HarnessData {
+    let dirs = [
+        "cache",
+        "logs",
+        "run",
+        "agent/sessions",
+        "agent/projects",
+        "agent/cache",
+        "agent/blobs",
+    ]
+    .into_iter()
+    .map(|name| root.join(name))
+    .collect();
+    let mut files = Vec::new();
+    let mut databases = BTreeSet::new();
+    if let Ok(entries) = fs::read_dir(root.join("agent")) {
+        for path in entries.flatten().map(|entry| entry.path()) {
+            if is_database(&path) {
+                databases.insert(path);
+            }
+        }
+    }
+    for database in databases {
+        files.extend(sqlite_files(&database));
+    }
+    let stats = root.join("stats.db");
+    if stats.is_file() {
+        files.extend(sqlite_files(&stats));
+    }
+    HarnessData { dirs, files }
+}
+
+fn agy_data(root: &Path) -> HarnessData {
+    HarnessData {
+        dirs: vec![root.join("antigravity-cli")],
+        files: Vec::new(),
+    }
+}
+
+pub(super) fn harness_data(harness: Harness, home: &Path) -> HarnessData {
+    let Some(root) = data_root(harness, home) else {
+        return HarnessData::default();
+    };
+    match harness {
+        Harness::Claude => claude_data(home, &root),
+        Harness::Omp => omp_data(&root),
+        Harness::Agy => agy_data(&root),
+        // No-data case; data_root already returned None for Generic and Codex.
+        Harness::Generic | Harness::Codex => HarnessData::default(),
+    }
 }
 
 pub(super) fn harness_overlay_parents(
@@ -197,153 +236,181 @@ pub(super) fn unsaved_harness_files(
     unsaved
 }
 
-fn validate_harness_data_paths(
-    harness: Harness,
-    home: &Path,
-    root: &Path,
-    runtime_dir: &Path,
-    data_dirs: &[PathBuf],
-    data_files: &[PathBuf],
-    explicit_writes: &BTreeSet<PathBuf>,
-) -> Result<()> {
-    let expected_sources = match harness {
-        Harness::Claude => vec![home.join(".claude")],
-        Harness::Omp => vec![home.join(".omp/agent"), home.join(".omp")],
-        Harness::Agy => vec![home.join(".gemini")],
-        Harness::Generic | Harness::Codex => Vec::new(),
-    };
-    let expected_roots = expected_sources
-        .iter()
-        .filter_map(|source| fs::canonicalize(source).ok().map(|root| (source, root)))
-        .collect::<Vec<_>>();
-    let home_file = home.join(".claude.json");
-    let outside_error = |path: &Path, target: &Path, root: &Path| -> anyhow::Error {
-        anyhow!(
-            "harness data path {} resolves to {}, outside {}; remove the link, keep the data inside {}, or open it with write = [\"{}\"] if that is intended",
-            path.display(),
-            target.display(),
-            root.display(),
-            root.display(),
-            target.display()
-        )
-    };
-    for path in expected_sources
-        .iter()
-        .cloned()
-        .chain(data_dirs.iter().cloned())
-        .chain(data_files.iter().cloned())
-    {
-        let Some(target) = canonical_if_exists(&path) else {
-            continue;
+struct DataRoots<'a> {
+    home: &'a Path,
+    home_file: Option<PathBuf>,
+    sources: Vec<PathBuf>,
+    roots: Vec<(PathBuf, PathBuf)>,
+}
+
+impl<'a> DataRoots<'a> {
+    fn new(harness: Harness, home: &'a Path) -> Self {
+        let sources = match data_root(harness, home) {
+            Some(root) if harness == Harness::Omp => vec![root.join("agent"), root],
+            Some(root) => vec![root],
+            None => Vec::new(),
         };
-        let explicit = explicit_writes.contains(&target);
-        if !explicit {
-            if harness == Harness::Claude && path == home_file {
-                let is_file = fs::metadata(&target).is_ok_and(|metadata| metadata.is_file());
-                if !is_file || target.parent() != Some(home) {
-                    return Err(outside_error(&path, &target, home));
-                }
-            } else {
-                let Some((_, root)) = expected_roots
-                    .iter()
-                    .find(|(source, _)| is_within(&path, source))
-                else {
-                    return Err(outside_error(&path, &target, home));
-                };
-                if !is_within(&target, root) {
-                    return Err(outside_error(&path, &target, root));
-                }
-            }
+        let roots = sources
+            .iter()
+            .filter_map(|source| {
+                fs::canonicalize(source)
+                    .ok()
+                    .map(|root| (source.clone(), root))
+            })
+            .collect();
+        let home_file = (harness == Harness::Claude).then(|| home.join(".claude.json"));
+        Self {
+            home,
+            home_file,
+            sources,
+            roots,
         }
-        check_write_allowed(&target, home, root, explicit)?;
-        check_write_runtime_allowed(&target, runtime_dir, explicit)?;
     }
+
+    fn check_inside(&self, path: &Path, target: &Path) -> Result<()> {
+        if self.home_file.as_deref() == Some(path) {
+            let is_file = fs::metadata(target).is_ok_and(|metadata| metadata.is_file());
+            if !is_file || target.parent() != Some(self.home) {
+                return Err(outside_error(path, target, self.home));
+            }
+            return Ok(());
+        }
+        let Some((_, root)) = self
+            .roots
+            .iter()
+            .find(|(source, _)| is_within(path, source))
+        else {
+            return Err(outside_error(path, target, self.home));
+        };
+        if !is_within(target, root) {
+            return Err(outside_error(path, target, root));
+        }
+        Ok(())
+    }
+}
+
+fn outside_error(path: &Path, target: &Path, root: &Path) -> anyhow::Error {
+    anyhow!(
+        "harness data path {} resolves to {}, outside {}; remove the link, keep the data inside {}, or open it with write = [\"{}\"] if that is intended",
+        path.display(),
+        target.display(),
+        root.display(),
+        root.display(),
+        target.display()
+    )
+}
+
+fn secure_data_dir(directory: &Path) -> Result<()> {
+    if directory.exists() {
+        if !directory.is_dir() {
+            bail!(
+                "harness data path is not a directory: {}",
+                directory.display()
+            );
+        }
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+        return Ok(());
+    }
+    fs::create_dir_all(directory)?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
+
 /// Create the existing-harness data directories that are writable by a plan.
 pub fn ensure_data_dirs(harness: Harness, home: &Path) -> Result<()> {
-    let root = match harness {
-        Harness::Claude => home.join(".claude"),
-        Harness::Omp => home.join(".omp"),
-        Harness::Agy => home.join(".gemini"),
-        Harness::Generic | Harness::Codex => return Ok(()),
+    let Some(root) = data_root(harness, home) else {
+        return Ok(());
     };
     if !root.is_dir() {
         return Ok(());
     }
-    let (dirs, _) = harness_data(harness, home);
-    for directory in dirs {
-        if directory.exists() {
-            if !directory.is_dir() {
-                bail!(
-                    "harness data path is not a directory: {}",
-                    directory.display()
-                );
-            }
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-        } else {
-            fs::create_dir_all(&directory)?;
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-        }
+    let data = harness_data(harness, home);
+    for directory in data.dirs {
+        secure_data_dir(&directory)?;
     }
     Ok(())
 }
+
+fn ensure_sidecars(database: &Path) -> Result<()> {
+    for sidecar in &sqlite_files(database)[1..] {
+        if !sidecar.exists() {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(sidecar)?;
+        }
+        fs::set_permissions(sidecar, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 /// Create only OMP's SQLite sidecars; never create a credential or database file.
 pub fn ensure_data_files(harness: Harness, home: &Path) -> Result<()> {
-    if harness != Harness::Omp || !home.join(".omp").is_dir() {
+    if harness != Harness::Omp {
         return Ok(());
     }
-    let (_, files) = harness_data(Harness::Omp, home);
-    let dbs = files
-        .into_iter()
-        .filter(|path| {
-            path.file_name()
-                .and_then(OsStr::to_str)
-                .is_some_and(|name| name.ends_with(".db"))
-        })
-        .collect::<Vec<_>>();
-    for db in dbs {
-        if !db.is_file() {
-            continue;
-        }
-        for suffix in ["-wal", "-shm"] {
-            let sidecar = PathBuf::from(format!("{}{}", db.display(), suffix));
-            if !sidecar.exists() {
-                OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .open(&sidecar)?;
-            }
-            fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o600))?;
+    let Some(root) = data_root(harness, home) else {
+        return Ok(());
+    };
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let data = harness_data(Harness::Omp, home);
+    for database in data.files.into_iter().filter(|path| is_database(path)) {
+        if database.is_file() {
+            ensure_sidecars(&database)?;
         }
     }
     Ok(())
 }
 
-fn add_harness_data_mounts(
-    harness: Harness,
-    home: &Path,
-    data_dirs: &[PathBuf],
-    data_files: &[PathBuf],
-    writable: &mut Vec<PathBuf>,
-    skipped: &mut Vec<PathBuf>,
-) -> Result<()> {
-    if harness == Harness::Generic || harness == Harness::Codex {
-        return Ok(());
-    }
-    let root = match harness {
-        Harness::Claude => home.join(".claude"),
-        Harness::Omp => home.join(".omp"),
-        Harness::Agy => home.join(".gemini"),
-        Harness::Generic | Harness::Codex => unreachable!(),
+fn sidecar_of_existing_database(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
     };
-    if !root.is_dir() {
-        return Ok(());
+    let Some(base) = name
+        .strip_suffix("-wal")
+        .or_else(|| name.strip_suffix("-shm"))
+    else {
+        return false;
+    };
+    path.with_file_name(base).is_file()
+}
+
+impl<'a> PlanBuilder<'a> {
+    pub(super) fn session_harness_root(&self) -> Option<PathBuf> {
+        harness_dir(self.harness).map(|dir| self.home.join(dir))
     }
-    for path in data_dirs {
+
+    fn validate_harness_data_paths(
+        &self,
+        data: &HarnessData,
+        explicit_writes: &BTreeSet<PathBuf>,
+    ) -> Result<()> {
+        let data_roots = DataRoots::new(self.harness, &self.home);
+        for path in data_roots
+            .sources
+            .iter()
+            .chain(&data.dirs)
+            .chain(&data.files)
+        {
+            let Some(target) = canonical_if_exists(path) else {
+                continue;
+            };
+            let explicit = explicit_writes.contains(&target);
+            if !explicit {
+                data_roots.check_inside(path, &target)?;
+            }
+            check_write_allowed(&target, &self.home, self.layout.root(), explicit)?;
+            check_write_runtime_allowed(&target, &self.runtime_dir, explicit)?;
+        }
+        Ok(())
+    }
+
+    fn mount_data_dir(&mut self, path: &Path) -> Result<()> {
         match fs::canonicalize(path) {
-            Ok(path) => add_unique(writable, path),
+            Ok(path) => add_unique(&mut self.writable, path),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if fs::symlink_metadata(path).is_ok() {
                     bail!(
@@ -351,68 +418,47 @@ fn add_harness_data_mounts(
                         path.display()
                     );
                 }
-                add_unique(writable, path.clone());
+                add_unique(&mut self.writable, path.to_path_buf());
             }
             Err(error) => return Err(error.into()),
         }
+        Ok(())
     }
-    for path in data_files {
-        if let Some(path) = add_canonical_existing(path, "harness data", skipped) {
-            add_unique(writable, path);
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(OsStr::to_str) else {
-            continue;
-        };
-        let Some(base) = name
-            .strip_suffix("-wal")
-            .or_else(|| name.strip_suffix("-shm"))
-        else {
-            continue;
-        };
-        let database = path.with_file_name(base);
-        if database.is_file() {
-            add_unique(writable, path.clone());
-        }
-    }
-    Ok(())
-}
 
-impl<'a> PlanBuilder<'a> {
-    pub(super) fn session_harness_root(&self) -> Option<PathBuf> {
-        match self.harness {
-            Harness::Claude => Some(self.home.join(".claude")),
-            Harness::Omp => Some(self.home.join(".omp")),
-            Harness::Codex => Some(self.home.join(".codex")),
-            Harness::Agy => Some(self.home.join(".gemini")),
-            Harness::Generic => None,
+    fn mount_data_file(&mut self, path: &Path) {
+        if let Some(resolved) = add_canonical_existing(path, "harness data", &mut self.skipped) {
+            add_unique(&mut self.writable, resolved);
+        } else if sidecar_of_existing_database(path) {
+            add_unique(&mut self.writable, path.to_path_buf());
         }
+    }
+
+    // Relies on validate_harness_data_paths having run first; the containment check lives only there.
+    fn mount_harness_data(&mut self, data: &HarnessData) -> Result<()> {
+        let Some(root) = data_root(self.harness, &self.home) else {
+            return Ok(());
+        };
+        if !root.is_dir() {
+            return Ok(());
+        }
+        for path in &data.dirs {
+            self.mount_data_dir(path)?;
+        }
+        for path in &data.files {
+            self.mount_data_file(path);
+        }
+        Ok(())
     }
 
     pub(super) fn bind_harness_data(&mut self, request: &ConfineRequest) -> Result<()> {
-        let (data_dirs, data_files) = harness_data(self.harness, &self.home);
+        let data = harness_data(self.harness, &self.home);
         let explicit_writes = request
             .write
             .iter()
             .filter_map(|entry| canonical_if_exists(&user_path(entry, &self.home)))
             .collect::<BTreeSet<_>>();
-        validate_harness_data_paths(
-            self.harness,
-            &self.home,
-            self.layout.root(),
-            &self.runtime_dir,
-            &data_dirs,
-            &data_files,
-            &explicit_writes,
-        )?;
-        add_harness_data_mounts(
-            self.harness,
-            &self.home,
-            &data_dirs,
-            &data_files,
-            &mut self.writable,
-            &mut self.skipped,
-        )
+        self.validate_harness_data_paths(&data, &explicit_writes)?;
+        self.mount_harness_data(&data)
     }
 
     pub(super) fn bind_harness_config(&mut self, grants: &[String]) -> Result<()> {
@@ -430,10 +476,11 @@ impl<'a> PlanBuilder<'a> {
         let Some(root) = add_canonical_existing(&root, "harness config", &mut self.skipped) else {
             return Ok(());
         };
-        let (data_dirs, data_files) = harness_data(self.harness, &self.home);
-        let data_paths = data_dirs
+        let data = harness_data(self.harness, &self.home);
+        let data_paths = data
+            .dirs
             .into_iter()
-            .chain(data_files)
+            .chain(data.files)
             .filter_map(|path| {
                 let path = canonical_if_exists(&path).unwrap_or(path);
                 is_within(&path, &root).then_some(path)

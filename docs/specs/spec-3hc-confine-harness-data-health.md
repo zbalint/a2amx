@@ -87,3 +87,21 @@ Trust boundary: the module plans what a confined session may write under the use
 | the symlink test asserts only `is_err()` | `tests/confine/harnesses.rs:497-526` | read (consultant) |
 | an `agent/foo.db` that is a directory is listed and mounted; `ensure_data_files` skips it | `harness_data.rs:65-70`, `:306` | read (consultant) |
 | `launch.rs:157` runs `ensure_data_dirs` before plan validation | `src/daemon/launch.rs:157-160` | read (consultant) |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer Antigravity CLI, Gemini 4 Hydrogen (Medium); tester OMP, planning and working opencode-go/deepseek-v4.1-flash (the automatic advisor slot is not exposed to the session).
+
+BLOCKED/amend cycles: 1 (amendment 1), plus amendment 2 for a false sentence.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | A missing `-wal` or `-shm` whose database exists is in both `plan.skipped` and `plan.writable`; a rg acceptance literal could not match; scope omitted `bind_harness_config`; the harness table and `DataRoots` needed redesign | Applied before the lock (the redesign was not sent for a second review) |
+| Implementation | developer (BLOCKED, verified by architect) | The overlay functions cannot be exercised through `confine::plan`: `effective_grants` always leaves the harness root writable, hidden or read-only, so overlay parents, protected entries and unsaved files are always empty; step 0 and the mutation list asked for tests that cannot be written | Amendment 1: overlay code, steps 4 to 6 and `MountSets` out of scope; removal of the dead machinery raised to the owner |
+| Tester pass | tester | `ensure_data_files` OMP-only guard and `is_database` filter unpinned (F1, F2); a vacuous assertion in the sidecar test (F11) | Fix round 1: tests added, vacuous assertion removed |
+| Tester pass | tester | Spec section 2 claimed a symlinked home refuses a valid `~/.claude.json` link; false, `PlanBuilder::new` canonicalizes the home | Amendment 2: sentence corrected |
+| Tester pass | tester | No durable test for a symlinked `~/.claude.json`, the explicit-write `check_write_allowed` half, or the Codex guard in `data_root` (F7, F8) | Fix round 1: tests added |
+| Consultant design read | consultant | Why-comments missing on `data_root` and the unreachable `Generic \| Codex` arm; the seven-line grant guard in `effective_grants`; an unreadable `ensure_data_files` guard; a missing blank line | Fix round 1, no behaviour change |
+| Tester pass | tester | 9 surviving mutants of 42; F3 (order contracts), F4 (non-UTF-8 `Display`), F5 (`check_write_allowed` before runtime), F6 (non-NotFound error), F9 (open mode masked by chmod) not observable through public seams | Accepted without change; named here so a later reader knows |
+
+Architect checks after the last fix: full suite 64 suites, 1471 passed, 0 failed, 3 ignored (baseline 1466); clippy and fmt clean; `cs` `harness_data.rs` 9.09 with four findings, all in the overlay functions this spec leaves alone, `builder.rs` 10.00; two architect mutants (Omp guard in `ensure_data_files`, Codex guard in `data_root`) killed by the new tests, file restored by checksum. Pre-existing issue found and not fixed: `src/daemon/launch.rs:157` runs `ensure_data_dirs` before plan validation, so a symlinked data directory has its target set to 0700 before the plan refuses it.

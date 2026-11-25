@@ -207,26 +207,30 @@ impl<'a> PlanBuilder<'a> {
     }
 
     fn effective_grants(&mut self, request: &ConfineRequest) -> Vec<String> {
-        let Some(dir) = (match self.harness {
-            Harness::Claude => Some(".claude"),
-            Harness::Omp => Some(".omp"),
-            Harness::Codex => Some(".codex"),
-            Harness::Generic | Harness::Agy => None,
-        }) else {
-            return request.grants.clone();
-        };
         let mut effective_grants = request.grants.clone();
-        if !request.grants.iter().any(|grant| grant == "harness-config") {
-            let root = canonical_if_exists(&self.home.join(dir));
-            if let Some(root) = root.filter(|root| self.operator_names_root(request, root)) {
-                self.unresolved.push(Unresolved {
-                    option: "harness-config",
-                    path: root,
-                    reason: "operator hide or unhide of the harness root".into(),
-                });
-            } else {
-                effective_grants.push("harness-config".into());
-            }
+        // Agy and Generic never get the automatic grant even though Agy has a root.
+        let auto_grant = matches!(
+            self.harness,
+            Harness::Claude | Harness::Omp | Harness::Codex
+        );
+        if !auto_grant
+            || effective_grants
+                .iter()
+                .any(|grant| grant == "harness-config")
+        {
+            return effective_grants;
+        }
+        let root = self
+            .session_harness_root()
+            .and_then(|path| canonical_if_exists(&path));
+        if let Some(root) = root.filter(|root| self.operator_names_root(request, root)) {
+            self.unresolved.push(Unresolved {
+                option: "harness-config",
+                path: root,
+                reason: "operator hide or unhide of the harness root".into(),
+            });
+        } else {
+            effective_grants.push("harness-config".into());
         }
         effective_grants
     }
@@ -438,10 +442,10 @@ impl<'a> PlanBuilder<'a> {
     }
 
     fn overlay_data(&self, protected: &[PathBuf]) -> OverlayData {
-        let (data_dirs, data_files) = harness_data(self.harness, &self.home);
+        let data = harness_data(self.harness, &self.home);
         let overlay_parents = harness_overlay_parents(
             &self.home,
-            &data_files,
+            &data.files,
             &self.writable,
             &self.hidden,
             &self.readonly,
@@ -449,14 +453,14 @@ impl<'a> PlanBuilder<'a> {
         );
         let overlay_protected = overlay_protected_entries(
             &overlay_parents,
-            &data_dirs,
-            &data_files,
+            &data.dirs,
+            &data.files,
             &self.writable,
             &self.readonly,
             protected,
             &self.hidden,
         );
-        let unsaved_files = unsaved_harness_files(&data_files, &overlay_parents);
+        let unsaved_files = unsaved_harness_files(&data.files, &overlay_parents);
         OverlayData {
             overlay_parents,
             overlay_protected,
