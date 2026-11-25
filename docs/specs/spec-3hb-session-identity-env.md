@@ -82,6 +82,21 @@ Neither is secret or derived from a token. Every harness gets them: Claude, OMP,
 2. DECIDED (2026-11-24): the Codex child's role is visible in its environment; spec 3h's acceptance 5 (`unset`) is reversed for roled sessions.
 3. Decided by the architect within spec authority; the owner was told and may veto: an unroled session gets `A2AMX_ROLE` set to the empty string rather than absent, so the daemon's own environment cannot show through (the hook contract already treats empty as null).
 
-## 8. Review record of the draft (the architect completes `## Review record` at acceptance)
+## Review record
 
-First consultant review: B1 the Codex app-server starts inside `prepare_codex`, so a late push misses it (applied: one push site before `prepare_confined_and_codex`); B2 the Codex tests carry the role only as the carrier (applied: role from the field, `Case::launch` sends it); B3 the child inherits the daemon's environment (applied: empty `A2AMX_ROLE` for an unroled session); line anchors, the agy install note, the unnamed-session id, the docs placement, the empty-role mutant. Second review: the `tests/common` helper for test 4 (applied), the `A2AMX_SESSION` Codex record (applied), two wording fixes, how to simulate a roled session.
+Models: architect Claude Sonnet 5.5; consultant on the `claude` harness (model not reported in its reports); developer on the `agy` harness (Antigravity CLI, Gemini 4 Hydrogen Medium as it reported; planning and advisor models not reported separately); tester on the `omp` harness (`opencode-go/deepseek-v4.1-flash` as it reported).
+
+BLOCKED/amend cycles: 0 after the lock. The spec was amended twice before the lock, from the two consultant reviews.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Before the draft | Owner | The first draft was written without loading the `architect` and `spec-writing` skills | Both loaded afterwards; the draft went through the gate and two reviews |
+| Draft review | Consultant | B1: the Codex app-server starts inside `prepare_codex`, so a push after `prepare_confined_and_codex` misses it | One push site before it; the carrier read moved to the new function |
+| Draft review | Consultant | B2: the Codex tests carry the role only as the carrier, so a field-based variable is never set in them | `A2AMX_ROLE` from the validated field; `Case::launch` sends it |
+| Draft review | Consultant | B3: the child inherits the daemon's own environment, so an unset role would show the role of the session the daemon started from | An unroled session gets an empty `A2AMX_ROLE` |
+| Draft review | Consultant | Line anchors off, the agy install note wrong, unnamed-session id not `s1`, docs placement, an empty-role mutant | Text corrected before lock |
+| Draft review | Architect | The first draft's gate had not read the Codex ordering or the tests pinning the role as `unset` | Found by the gate; spec rewritten |
+| Second draft review | Consultant | Test 4 cannot be written with `spawn_daemon_process` as it is; no test can kill a Codex-skip mutant of the address | `spawn_daemon_process_with_env` in scope; one `A2AMX_SESSION` record in the fake Codex |
+| Architect review | Architect | A shortcut comment in `prepare_codex` said the role field is display-only | Developer reworded it (fix request m_9159) |
+
+Tester pass (no behavior problem): 12 mutants, ten killed, two survivors both expected (a skip for OMP, Claude or agy only, which no repository test launches; the removal of the pre-removal, equivalent). Accepted gaps: no repository test for a Codex session with an empty role, for a raw client sending only the carrier or only the field, or for reading the variables inside a launched Claude, OMP or agy session. The tester noted the name `codex_role_reaches_only_the_operator_instructions` now overstates what it asserts.

@@ -25,6 +25,7 @@ case \"$1\" in app-server) role=server;; *) role=tui;; esac
 printf '%s\\n' \"$@\" > \"$ARGS_DIR/$role.args\"
 printf '%s\\n' \"${A2AMX_TOKEN:-unset}\" > \"$ARGS_DIR/$role.token\"
 printf '%s\\n' \"${A2AMX_ROLE:-unset}\" > \"$ARGS_DIR/$role.role\"
+printf '%s\\n' \"${A2AMX_SESSION:-unset}\" > \"$ARGS_DIR/$role.session\"
 printf '%s\\n' \"$(readlink /proc/self/ns/pid)\" > \"$ARGS_DIR/$role.pidns\"
 if [ \"$role\" = server ]; then
     if [ -n \"$FAKE_GUEST_MUTATION\" ]; then
@@ -137,6 +138,10 @@ impl Case {
             if deep {
                 env.push(("FAKE_SOCKET".into(), short.to_string_lossy().into_owned()));
             }
+            let role = extra
+                .iter()
+                .rev()
+                .find_map(|(k, v)| (*k == "A2AMX_ROLE").then(|| (*v).to_owned()));
             async move {
                 admin
                     .request(Request::NewSession {
@@ -154,7 +159,7 @@ impl Case {
                         heartbeat: None,
                         activity: None,
                         team: None,
-                        role: None,
+                        role,
                         remote: None,
                     })
                     .await

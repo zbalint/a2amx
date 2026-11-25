@@ -472,7 +472,11 @@ machine; there is no central-versus-host split yet.
   the current run (a random boot id stored on each row). Terminal messages are purged
   after 7 days, hourly and at startup; open messages are never purged.
 - **Identity from the token.** Each session gets a random 64-hex token at spawn, passed
-  as `A2AMX_TOKEN` with `A2AMX_ADDR` in the child's environment (never argv). A
+  as `A2AMX_TOKEN` with `A2AMX_ADDR` in the child's environment (never argv). The
+  child's environment also holds `A2AMX_SESSION` (the peer address, `<name>@<host>` or
+  `<id>@<host>` when unnamed) and `A2AMX_ROLE` (the validated role label, or the empty
+  string when unroled); both are labels, not credentials, and a session already running
+  keeps its old environment until restarted. A
   connection that presents a session token has only session powers (`list_agents`,
   `send_message`, `message_status` for its own messages, `reset_session` when the
   target grants `control_from`, `report_prompt`, `report_quota`, and `bridge_attach`);

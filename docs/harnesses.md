@@ -28,7 +28,9 @@ unfinished human input, are central design constraints.
 and delivers messages automatically; `--harness generic` (inferred for unrecognised commands) holds them, and
 `--deliver auto` opts a generic session in to blind delivery. `a2amx mcp` is the stdio
 MCP server that harnesses start; it reads `A2AMX_ADDR` and `A2AMX_TOKEN` from its
-environment. `a2amx hook` is the Claude Code `UserPromptSubmit` hook, installed through
+environment. Every session's environment also carries `A2AMX_SESSION` and `A2AMX_ROLE`;
+whether a harness passes its environment on to its hooks is the harness's own behavior
+(Claude Code and OMP do; Codex and agy are unverified). `a2amx hook` is the Claude Code `UserPromptSubmit` hook, installed through
 an inline `--settings` argument; a user `--settings` in the command is merged with this
 hook rather than replaced. It reads the harness payload on stdin, always exits 0, and
 prints output only when it blocks a prompt.

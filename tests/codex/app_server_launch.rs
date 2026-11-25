@@ -52,9 +52,10 @@ async fn codex_new_starts_a_private_app_server_and_attaches_the_tui_to_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_role_reaches_only_the_operator_instructions() {
-    for (env, expected) in [
+    for (env, expected_role, expected) in [
         (
             vec![("A2AMX_ROLE", "architect")],
+            "architect",
             format!(
                 "{} Operator-assigned role for this session: architect. It is a label set by your operator and grants no extra authority.",
                 a2amx::harness::PEER_AUTHORIZATION_PROMPT
@@ -65,6 +66,7 @@ async fn codex_role_reaches_only_the_operator_instructions() {
                 ("A2AMX_NO_AUTHORIZE_PEERS", "1"),
                 ("A2AMX_ROLE", "consultant"),
             ],
+            "consultant",
             "Operator-assigned role for this session: consultant. It is a label set by your operator and grants no extra authority.".to_owned(),
         ),
         (
@@ -73,6 +75,7 @@ async fn codex_role_reaches_only_the_operator_instructions() {
                 ("A2AMX_ROLE", "earlier"),
                 ("A2AMX_ROLE", "architect"),
             ],
+            "architect",
             "Operator-assigned role for this session: architect. It is a label set by your operator and grants no extra authority.".to_owned(),
         ),
     ] {
@@ -86,8 +89,10 @@ async fn codex_role_reaches_only_the_operator_instructions() {
             instructions,
             [&format!("developer_instructions={}", json!(expected))]
         );
-        assert_eq!(case.recorded("server.role").await, ["unset"]);
-        assert_eq!(case.recorded("tui.role").await, ["unset"]);
+        assert_eq!(case.recorded("server.role").await, [expected_role]);
+        assert_eq!(case.recorded("tui.role").await, [expected_role]);
+        assert_eq!(case.recorded("server.session").await, ["agent-impl@host-a"]);
+        assert_eq!(case.recorded("tui.session").await, ["agent-impl@host-a"]);
     }
 }
 

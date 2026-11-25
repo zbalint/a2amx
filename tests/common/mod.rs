@@ -280,6 +280,16 @@ impl Drop for DaemonProcess {
 
 /// Run the real daemon with only the environment needed by its child sessions.
 pub fn spawn_daemon_process(state: &Path, home: &Path, runtime: &Path) -> DaemonProcess {
+    spawn_daemon_process_with_env(state, home, runtime, &[])
+}
+
+/// Run the real daemon with a cleared environment plus `extra` variables.
+pub fn spawn_daemon_process_with_env(
+    state: &Path,
+    home: &Path,
+    runtime: &Path,
+    extra: &[(&str, &str)],
+) -> DaemonProcess {
     let path = std::env::var_os("PATH").expect("PATH");
     let child = keep_coverage_env(
         Command::new(env!("CARGO_BIN_EXE_a2amx"))
@@ -288,6 +298,7 @@ pub fn spawn_daemon_process(state: &Path, home: &Path, runtime: &Path) -> Daemon
             .args(["daemon", "start", "--foreground", "--listen", "127.0.0.1:0"])
             .env_clear(),
     )
+    .envs(extra.iter().copied())
     .env("PATH", path)
     .env("HOME", home)
     .env("XDG_RUNTIME_DIR", runtime)

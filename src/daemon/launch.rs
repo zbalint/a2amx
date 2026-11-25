@@ -40,12 +40,14 @@ struct LaunchPrep<'a> {
     confine_request: Option<confine::ConfineRequest>,
     argv: Vec<String>,
     env: &'a mut Vec<(String, String)>,
+    codex_role: Option<&'a str>,
 }
 
 struct CodexPrep<'a> {
     id: &'a SessionId,
     cwd: Option<&'a str>,
     plan: Option<&'a confine::Plan>,
+    codex_role: Option<&'a str>,
 }
 
 struct PreparedSession {
@@ -304,6 +306,26 @@ impl Runtime {
         Ok((number, id, token, channel))
     }
 
+    fn apply_session_identity_env(
+        &self,
+        id: &SessionId,
+        name: Option<&str>,
+        role: Option<&str>,
+        env: &mut Vec<(String, String)>,
+    ) -> Option<String> {
+        let codex_role = env
+            .iter()
+            .rev()
+            .find_map(|(key, value)| (key == codex::ROLE_ENV).then(|| value.clone()));
+        env.retain(|(key, _)| key != codex::ROLE_ENV && key != "A2AMX_SESSION");
+        env.push((
+            "A2AMX_SESSION".into(),
+            messaging::address(name, &id.0, &self.host_name),
+        ));
+        env.push((codex::ROLE_ENV.into(), role.unwrap_or("").to_owned()));
+        codex_role
+    }
+
     async fn prepare_confined_and_codex(
         &self,
         prep: LaunchPrep<'_>,
@@ -329,6 +351,7 @@ impl Runtime {
                         id: prep.id,
                         cwd: prep.cwd,
                         plan: confine_plan.as_ref(),
+                        codex_role: prep.codex_role,
                     },
                     argv,
                     prep.env,
@@ -377,6 +400,7 @@ impl Runtime {
             name,
             harness,
             team,
+            role,
             ..
         } = &mut request
         else {
@@ -390,6 +414,8 @@ impl Runtime {
         let argv = std::mem::take(argv);
         let harness = *harness;
         let (number, id, token, channel) = self.prepare_session_identity(harness, &mut env).await?;
+        let codex_role =
+            self.apply_session_identity_env(&id, name.as_deref(), role.as_deref(), &mut env);
         let (argv, confine, codex) = match self
             .prepare_confined_and_codex(LaunchPrep {
                 id: &id,
@@ -398,6 +424,7 @@ impl Runtime {
                 confine_request,
                 argv,
                 env: &mut env,
+                codex_role: codex_role.as_deref(),
             })
             .await?
         {
@@ -560,22 +587,19 @@ impl Runtime {
         mut argv: Vec<String>,
         env: &mut Vec<(String, String)>,
     ) -> anyhow::Result<Result<(Vec<String>, Arc<codex::Link>), String>> {
-        // shortcut: the client signals --no-authorize-peers and the role through
-        // the request environment; a wire field is deferred until a third
-        // value needs this or the env path causes trouble. A field now would
-        // force edits to the 29 Request::NewSession literals in tests plus
+        // shortcut: the client signals --no-authorize-peers through the
+        // request environment; a wire field is deferred until a third value
+        // needs this or the env path causes trouble. A field now would force
+        // edits to the 29 Request::NewSession literals in tests plus
         // src/main.rs, which have no Default.
-        // The role also travels in the additive wire field for display only.
+        // The Codex role instruction still comes from the A2AMX_ROLE carrier
+        // read in apply_session_identity_env (`prep.codex_role`), while
+        // A2AMX_ROLE in the child comes from the validated role field.
         let authorize = !env
             .iter()
             .any(|(key, value)| key == codex::NO_AUTHORIZE_ENV && value == "1");
         env.retain(|(key, _)| key != codex::NO_AUTHORIZE_ENV);
         let exe = self.exe.clone();
-        let codex_role = env
-            .iter()
-            .rev()
-            .find_map(|(key, value)| (key == codex::ROLE_ENV).then(|| value.clone()));
-        env.retain(|(key, _)| key != codex::ROLE_ENV);
         if let Some(message) =
             tokio::task::spawn_blocking(move || codex::executable_error(&exe)).await?
         {
@@ -588,12 +612,7 @@ impl Runtime {
             &prep.id.0,
             prep.cwd.map(Path::new),
             env,
-            codex::server_config(
-                &self.exe,
-                authorize,
-                codex_role.as_deref(),
-                notice.as_deref(),
-            ),
+            codex::server_config(&self.exe, authorize, prep.codex_role, notice.as_deref()),
             prep.plan,
         )
         .await;

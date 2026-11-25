@@ -7,6 +7,7 @@ All notable user-visible changes are listed here. The format follows
 
 ### Added
 
+- Every session's environment now carries `A2AMX_SESSION` (its address, `name@host` or `id@host`) and `A2AMX_ROLE` (its role label, empty when it has none), set by the daemon. A session that is already running keeps its old environment until restarted. A Codex session's role is now also visible in its environment; it was hidden before.
 - **Breaking for mixed versions:** a new activity word, `waiting`, in `a2amx list`, `a2amx explain`, the `list_agents` tool, the attach status line (violet) and the activity notices. An agy session that ended its turn while a background job runs (a row `  ● [HH:MM:SS] <command> running` below its composer) is `waiting`, not `idle`, and sends no idle notice until the job ends. The client and the daemon must be upgraded together: an older client cannot read the new value on the wire. Other harnesses are unchanged.
 
 ### Changed

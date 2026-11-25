@@ -474,3 +474,175 @@ async fn message_status_visibility_and_hold_reason() {
     ));
     daemon.shutdown().await.unwrap();
 }
+
+async fn spawn_env_probe(
+    client: &mut Client,
+    out_path: &Path,
+    name: Option<&str>,
+    role: Option<&str>,
+    extra_env: Vec<(String, String)>,
+) -> String {
+    let mut env = vec![("OUT".into(), out_path.to_string_lossy().into_owned())];
+    env.extend(extra_env);
+    let response = client
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf '%s\\n%s\\n' \"${A2AMX_SESSION-unset}\" \"${A2AMX_ROLE-unset}\" > \"$OUT\"; sleep 30".into(),
+            ],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env,
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: name.map(str::to_owned),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Hold),
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: role.map(str::to_owned),
+            remote: None,
+        })
+        .await
+        .unwrap();
+    match response {
+        Response::Created { session } => session,
+        other => panic!("unexpected response: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn session_identity_env_named_with_role() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let out = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+    spawn_env_probe(
+        &mut admin,
+        out.path(),
+        Some("agent-impl"),
+        Some("developer"),
+        vec![],
+    )
+    .await;
+    let text = common::eventually(|| async {
+        let content = std::fs::read_to_string(out.path()).ok()?;
+        (content.matches('\n').count() >= 2).then_some(content)
+    })
+    .await;
+    assert_eq!(text, "agent-impl@host-a\ndeveloper\n");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn session_identity_env_unnamed_without_role() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let out = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+    let id = spawn_env_probe(&mut admin, out.path(), None, None, vec![]).await;
+    let text = common::eventually(|| async {
+        let content = std::fs::read_to_string(out.path()).ok()?;
+        (content.matches('\n').count() >= 2).then_some(content)
+    })
+    .await;
+    assert_eq!(text, format!("{id}@host-a\n\n"));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn session_identity_env_overrides_request_env() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let out = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+    spawn_env_probe(
+        &mut admin,
+        out.path(),
+        Some("real-name"),
+        None,
+        vec![
+            ("A2AMX_SESSION".into(), "leak".into()),
+            ("A2AMX_ROLE".into(), "leak".into()),
+        ],
+    )
+    .await;
+    let text = common::eventually(|| async {
+        let content = std::fs::read_to_string(out.path()).ok()?;
+        (content.matches('\n').count() >= 2).then_some(content)
+    })
+    .await;
+    assert_eq!(text, "real-name@host-a\n\n");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn session_identity_env_ignores_daemon_ambient_role() {
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let runtime = tempfile::tempdir().unwrap();
+    let _daemon = common::spawn_daemon_process_with_env(
+        state.path(),
+        home.path(),
+        runtime.path(),
+        &[("A2AMX_ROLE", "ambient")],
+    );
+    let mut admin = Client::connect(state.path()).await.unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let out_file = out.path().join("probe.out");
+    spawn_env_probe(&mut admin, &out_file, Some("unroled"), None, vec![]).await;
+    let text = common::eventually(|| async {
+        let content = std::fs::read_to_string(&out_file).ok()?;
+        (content.matches('\n').count() >= 2).then_some(content)
+    })
+    .await;
+    let role_line = text.split('\n').nth(1).expect("role line");
+    assert_eq!(role_line, "");
+}
+
+#[tokio::test]
+async fn session_identity_env_confined_session() {
+    let Some((dir, daemon)) = common::start_confined_daemon().await else {
+        return;
+    };
+    let work = tempfile::tempdir().unwrap();
+    let out = work.path().join("probe.out");
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let response = admin
+        .request(Request::Confine {
+            confine: a2amx::wire::ConfineRequest::default(),
+            request: Box::new(Request::NewSession {
+                argv: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "printf '%s\\n%s\\n' \"${A2AMX_SESSION-unset}\" \"${A2AMX_ROLE-unset}\" > probe.out; sleep 30".into(),
+                ],
+                cols: 40,
+                rows: 10,
+                cwd: Some(work.path().to_string_lossy().into_owned()),
+                env: vec![],
+                reset: vec![],
+                control_from: vec![],
+                watch: vec![],
+                name: Some("confined-impl".into()),
+                harness: Harness::Generic,
+                deliver: Some(Deliver::Hold),
+                heartbeat: None,
+                activity: None,
+                team: None,
+                role: Some("tester".into()),
+                remote: None,
+            }),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(response, Response::Created { .. }));
+    let text = common::eventually(|| async {
+        let content = std::fs::read_to_string(&out).ok()?;
+        (content.matches('\n').count() >= 2).then_some(content)
+    })
+    .await;
+    assert_eq!(text, "confined-impl@host-a\ntester\n");
+    daemon.shutdown().await.unwrap();
+}
