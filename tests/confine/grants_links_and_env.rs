@@ -254,9 +254,11 @@ fn grant_alias_to_path_directory_is_rejected_as_a_symlink() {
             grants: vec!["gh".into()],
             ..ConfineRequest::default()
         },
-        Harness::Generic,
-        &fixture.cwd,
-        &fixture.host(),
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &fixture.host(),
+        },
         Some(path_var),
     ) {
         Ok(_) => panic!("grant alias into PATH must be rejected"),

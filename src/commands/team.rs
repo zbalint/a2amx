@@ -335,9 +335,11 @@ fn validate_team_session(
     let preflight = crate::confine::ensure_grant_dirs(&request, harness, &host, false);
     crate::confine::plan_with_preflight(
         &request,
-        harness,
-        &resolved_cwd,
-        &host,
+        crate::confine::PlanTarget {
+            harness,
+            cwd: &resolved_cwd,
+            host: &host,
+        },
         std::env::var_os("PATH"),
         preflight,
     )?;

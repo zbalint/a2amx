@@ -23,7 +23,7 @@ mod hides;
 mod launch;
 mod wrap;
 
-pub use builder::{plan, plan_with_path, plan_with_preflight};
+pub use builder::{PlanTarget, plan, plan_with_path, plan_with_preflight};
 pub use bwrap::{
     ensure_empty_file, find_executable, preflight, preflight_env, resolve_bwrap,
     supports_tmp_overlay,

@@ -119,9 +119,11 @@ async fn dry_run_start(
         Some(
             crate::confine::plan_with_preflight(
                 &request,
-                harness,
-                &resolved_cwd,
-                &host,
+                crate::confine::PlanTarget {
+                    harness,
+                    cwd: &resolved_cwd,
+                    host: &host,
+                },
                 std::env::var_os("PATH"),
                 preflight,
             )?

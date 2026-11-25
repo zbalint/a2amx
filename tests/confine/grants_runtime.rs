@@ -222,9 +222,11 @@ fn cargo_grant_keeps_credentials_hidden_and_path_bin_protected() {
             grants: vec!["cargo".into()],
             ..ConfineRequest::default()
         },
-        Harness::Generic,
-        &fixture.cwd,
-        &fixture.host(),
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &fixture.host(),
+        },
         Some(path_var),
     )
     .expect("cargo grant plan");
@@ -454,9 +456,11 @@ fn cache_grant_preflight_refuses_a_state_directory_under_it() {
     let preflight = confine::ensure_grant_dirs(&request, Harness::Generic, &host, true);
     let error = match confine::plan_with_preflight(
         &request,
-        Harness::Generic,
-        &fixture.cwd,
-        &host,
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &host,
+        },
         None,
         preflight,
     ) {
@@ -478,9 +482,11 @@ fn missing_node_grant_path_is_skipped_after_preflight_without_creation() {
     assert!(preflight.is_empty());
     let plan = confine::plan_with_preflight(
         &request,
-        Harness::Generic,
-        &fixture.cwd,
-        &fixture.host(),
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &fixture.host(),
+        },
         None,
         preflight,
     )

@@ -336,3 +336,100 @@ fn plan_finds_hooks_path_after_lines_without_equals() {
             .contains(&std::fs::canonicalize(husky).expect("husky canonical"))
     );
 }
+
+#[test]
+fn write_rules_work_through_symlinked_home_root_and_runtime_dir() {
+    let fixture = Fixture::new();
+    let real_home = fixture._root.path().join("real-home");
+    let real_state = fixture._root.path().join("real-state");
+    let real_runtime = fixture._root.path().join("real-runtime");
+    for d in [&real_home, &real_state, &real_runtime] {
+        std::fs::create_dir_all(d).expect("real dir");
+    }
+    a2amx::layout::Layout::new(real_state.clone())
+        .ensure()
+        .expect("layout");
+    std::fs::write(
+        a2amx::layout::Layout::new(real_state.clone()).confine_empty(),
+        [],
+    )
+    .expect("empty");
+    let home_link = fixture._root.path().join("home-link");
+    let state_link = fixture._root.path().join("state-link");
+    let runtime_link = fixture._root.path().join("runtime-link");
+    symlink(&real_home, &home_link).expect("home symlink");
+    symlink(&real_state, &state_link).expect("state symlink");
+    symlink(&real_runtime, &runtime_link).expect("runtime symlink");
+    let host = Host {
+        home: home_link,
+        layout: a2amx::layout::Layout::new(state_link),
+        runtime_dir: runtime_link,
+    };
+
+    let err_home = match confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &real_home,
+        &host,
+    ) {
+        Ok(_) => panic!("writing real_home through symlinked host.home must fail"),
+        Err(e) => e.to_string(),
+    };
+    assert_eq!(err_home, "writable path $HOME is not allowed");
+
+    let err_state = match confine::plan(
+        &ConfineRequest {
+            write: vec![real_state.to_string_lossy().into_owned()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+    ) {
+        Ok(_) => panic!("writing real_state through symlinked layout must fail"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err_state.contains("overlaps the a2amx directory"),
+        "{err_state}"
+    );
+
+    let err_runtime = match confine::plan(
+        &ConfineRequest {
+            write: vec![real_runtime.to_string_lossy().into_owned()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &host,
+    ) {
+        Ok(_) => panic!("writing real_runtime through symlinked runtime_dir must fail"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err_runtime.contains("overlaps the runtime directory"),
+        "{err_runtime}"
+    );
+}
+
+#[test]
+fn explicit_write_of_team_file_keeps_it_writable_and_not_readonly() {
+    let fixture = Fixture::new();
+    let team_file = fixture.cwd.join("team.toml");
+    std::fs::write(&team_file, "[[session]]\nname = \"w\"\n").expect("team file");
+    let plan = confine::plan(
+        &ConfineRequest {
+            write: vec![team_file.to_string_lossy().into_owned()],
+            team_file: Some(team_file.to_string_lossy().into_owned()),
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("plan");
+    let team_canon = std::fs::canonicalize(&team_file).expect("team canon");
+    assert!(plan.writable.contains(&team_canon));
+    assert!(!plan.readonly.contains(&team_canon));
+    assert!(!plan.protected.contains(&team_canon));
+}

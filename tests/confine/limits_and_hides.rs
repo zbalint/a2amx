@@ -588,3 +588,512 @@ fn total_argv_size_checks_sum_arguments_below_per_argument_cap() {
     let below_total_cap = vec!["x".repeat(120_000), "y".repeat(120_000)];
     assert!(plan().wrap(below_total_cap).is_ok());
 }
+
+#[test]
+fn limit_and_validation_precedence_is_exact() {
+    let fixture = Fixture::new();
+    let over: Vec<String> = (0..=confine::MAX_LIST_ENTRIES)
+        .map(|i| format!("/tmp/entry-{i}"))
+        .collect();
+    let err = |req: ConfineRequest, cwd: &Path, host: &Host| match confine::plan(
+        &req,
+        Harness::Generic,
+        cwd,
+        host,
+    ) {
+        Ok(_) => panic!("expected plan failure for {req:?}"),
+        Err(e) => e.to_string(),
+    };
+
+    assert_eq!(
+        err(
+            ConfineRequest {
+                write: over.clone(),
+                hide: over.clone(),
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "write has more than 64 entries"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                hide: over.clone(),
+                unhide: over.clone(),
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "hide has more than 64 entries"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                unhide: over.clone(),
+                grants: over.clone(),
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "unhide has more than 64 entries"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                grants: over.clone(),
+                keep_env: vec!["GITHUB_TOKEN".into(); 65],
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "grants has more than 64 entries"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                keep_env: {
+                    let mut list = vec!["NOT_A_CRED".into()];
+                    list.extend(std::iter::repeat_n("GITHUB_TOKEN".to_owned(), 64));
+                    list
+                },
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "keep_env has more than 64 entries"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                keep_env: vec!["NOT_A_CRED".into()],
+                write: vec!["relative".into()],
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "keep_env \"NOT_A_CRED\" is not unset by default, so there is nothing to keep"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                keep_env: vec![
+                    "GITHUB_TOKEN".into(),
+                    "GITHUB_TOKEN".into(),
+                    "NOT_A_CRED".into(),
+                ],
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "keep_env \"GITHUB_TOKEN\" is repeated"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                keep_env: vec![
+                    "NOT_A_CRED".into(),
+                    "GITHUB_TOKEN".into(),
+                    "GITHUB_TOKEN".into(),
+                ],
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "keep_env \"NOT_A_CRED\" is not unset by default, so there is nothing to keep"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                write: vec!["relative/first".into(), "$HOME/second".into()],
+                hide: vec!["relative/hide".into()],
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "write entry \"relative/first\" must be an absolute path or start with ~/"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                hide: vec!["$HOME/bad-hide".into()],
+                unhide: vec!["$HOME/bad-unhide".into()],
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "hide entry \"$HOME/bad-hide\": environment variables are not expanded; write the path out, or use ~/ for your home"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                unhide: vec!["$HOME/bad-unhide".into()],
+                team_file: Some("x".repeat(confine::MAX_PATH_BYTES + 1)),
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "unhide entry \"$HOME/bad-unhide\": environment variables are not expanded; write the path out, or use ~/ for your home"
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                team_file: Some(format!("rel/{}", "x".repeat(confine::MAX_PATH_BYTES))),
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        format!("team_file path exceeds {} bytes", confine::MAX_PATH_BYTES)
+    );
+    assert_eq!(
+        err(
+            ConfineRequest {
+                team_file: Some("relative/team.toml".into()),
+                grants: vec!["no-such-grant".into()],
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &fixture.host(),
+        ),
+        "team_file entry \"relative/team.toml\" must be an absolute path or start with ~/"
+    );
+
+    let mut bad_home_host = fixture.host();
+    bad_home_host.home = fixture._root.path().join("missing-home");
+    assert!(
+        err(
+            ConfineRequest {
+                grants: vec!["no-such-grant".into()],
+                ..ConfineRequest::default()
+            },
+            &fixture.cwd,
+            &bad_home_host,
+        )
+        .starts_with("unknown confinement grant \"no-such-grant\"; valid grants:"),
+        "grant::validate must run before builder errors"
+    );
+    assert!(
+        err(ConfineRequest::default(), &fixture.cwd, &bad_home_host).contains("home "),
+        "builder error must check home"
+    );
+
+    let mut bad_root_host = fixture.host();
+    bad_root_host.layout = a2amx::layout::Layout::new(fixture._root.path().join("missing-root"));
+    assert!(
+        err(ConfineRequest::default(), &fixture.cwd, &bad_root_host).contains("a2amx root "),
+        "builder error must check root"
+    );
+
+    let mut bad_runtime_host = fixture.host();
+    bad_runtime_host.runtime_dir = fixture._root.path().join("missing-runtime");
+    assert!(
+        err(ConfineRequest::default(), &fixture.cwd, &bad_runtime_host)
+            .contains("runtime directory "),
+        "builder error must check runtime directory"
+    );
+
+    std::fs::write(&fixture.empty, b"not-empty").expect("non-empty confine-empty");
+    assert_eq!(
+        err(ConfineRequest::default(), &fixture.cwd, &fixture.host()),
+        "confinement empty file must be an empty run file"
+    );
+    let missing_cwd = fixture._root.path().join("missing-cwd");
+    assert!(
+        err(ConfineRequest::default(), &missing_cwd, &fixture.host()).contains("cwd "),
+        "missing cwd must fail before empty file check"
+    );
+    let file_cwd = fixture._root.path().join("file-cwd");
+    std::fs::write(&file_cwd, "not a dir").expect("file cwd");
+    assert_eq!(
+        err(ConfineRequest::default(), &file_cwd, &fixture.host()),
+        format!(
+            "cwd is not a directory: {}",
+            std::fs::canonicalize(&file_cwd).expect("canon").display()
+        )
+    );
+}
+
+#[test]
+fn implicit_writes_hidden_finish_order_and_sorted_outputs() {
+    let fixture = Fixture::new();
+    let aws = std::fs::canonicalize(fixture.home.join(".aws")).expect("aws");
+    let sub_cwd = aws.join("repo");
+    std::fs::create_dir_all(&sub_cwd).expect("sub_cwd");
+    let hidden_git = fixture.home.join(".ssh/git-common");
+    std::fs::create_dir_all(hidden_git.join("objects")).expect("objects");
+    std::fs::write(hidden_git.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+    std::fs::write(
+        sub_cwd.join(".git"),
+        format!("gitdir: {}\n", hidden_git.display()),
+    )
+    .expect("gitfile");
+    let ssh = std::fs::canonicalize(fixture.home.join(".ssh")).expect("ssh");
+    let err = match confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &sub_cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("hidden cwd and git dir must fail"),
+        Err(e) => e.to_string(),
+    };
+    let sub_cwd_canon = std::fs::canonicalize(&sub_cwd).expect("sub_cwd canon");
+    let hidden_git_canon = std::fs::canonicalize(&hidden_git).expect("hidden_git canon");
+    assert_eq!(
+        err,
+        format!(
+            "working directory {0} resolves to the hidden path {1}; open it with write = [\"{0}\"] if that is intended; git directory {2} resolves to the hidden path {3}; open it with write = [\"{2}\"] if that is intended",
+            sub_cwd_canon.display(),
+            aws.display(),
+            hidden_git_canon.display(),
+            ssh.display()
+        )
+    );
+
+    let suppressed = confine::plan(
+        &ConfineRequest {
+            write: vec![
+                sub_cwd_canon.to_string_lossy().into_owned(),
+                hidden_git_canon.to_string_lossy().into_owned(),
+            ],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &sub_cwd,
+        &fixture.host(),
+    )
+    .expect("explicit writes suppress implicit-write-hidden error");
+    assert!(suppressed.writable.contains(&sub_cwd_canon));
+
+    // finish error order: harness-config hide vs unhide vs grant unhide vs implicit write
+    let claude_root = fixture.home.join(".claude");
+    std::fs::create_dir_all(&claude_root).expect("claude root");
+    let claude_canon = std::fs::canonicalize(&claude_root).expect("claude canon");
+    let err_hc_hide = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["harness-config".into(), "aws".into()],
+            hide: vec!["~/.claude".into(), "~/.aws".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &sub_cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("must fail"),
+        Err(e) => e.to_string(),
+    };
+    assert_eq!(
+        err_hc_hide,
+        format!(
+            "confinement grant \"harness-config\" conflicts with the hide of {}",
+            claude_canon.display()
+        )
+    );
+
+    let err_hc_unhide = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["harness-config".into(), "aws".into()],
+            hide: vec!["~/.aws".into()],
+            unhide: vec!["~/.claude".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &sub_cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("must fail"),
+        Err(e) => e.to_string(),
+    };
+    assert_eq!(
+        err_hc_unhide,
+        format!(
+            "confinement grant \"harness-config\" conflicts with the unhide of {}",
+            claude_canon.display()
+        )
+    );
+
+    let err_grant_unhide = match confine::plan(
+        &ConfineRequest {
+            grants: vec!["aws".into()],
+            hide: vec!["~/.aws".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &sub_cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("must fail"),
+        Err(e) => e.to_string(),
+    };
+    assert_eq!(
+        err_grant_unhide,
+        format!(
+            "confinement grant \"aws\" conflicts with the hide of {}",
+            aws.display()
+        )
+    );
+
+    // Sorted outputs + unresolved sort by (option, path) + effective_grants dedup
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["ssh".into(), "cache".into()],
+            write: vec![
+                fixture.cwd.join("z-missing").to_string_lossy().into_owned(),
+                fixture.cwd.join("a-missing").to_string_lossy().into_owned(),
+            ],
+            hide: vec![fixture.cwd.join("m-missing").to_string_lossy().into_owned()],
+            keep_env: vec!["NPM_TOKEN".into(), "GH_TOKEN".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("sorted plan");
+    assert_eq!(plan.grants, vec!["cache", "ssh"]);
+    assert_eq!(
+        plan.effective_grants,
+        vec!["cache", "harness-config", "ssh"]
+    );
+    assert_eq!(plan.keep_env, vec!["GH_TOKEN", "NPM_TOKEN"]);
+    let assert_sorted = |list: &[PathBuf], name: &str| {
+        let mut sorted = list.to_vec();
+        sorted.sort();
+        assert_eq!(list, sorted.as_slice(), "{name} not sorted");
+    };
+    assert_sorted(&plan.readonly, "readonly");
+    assert_sorted(&plan.writable, "writable");
+    assert_sorted(&plan.hidden, "hidden");
+    assert_sorted(&plan.mandatory_hidden, "mandatory_hidden");
+    assert_sorted(&plan.default_hidden, "default_hidden");
+    assert_sorted(&plan.container_hidden, "container_hidden");
+    assert_sorted(&plan.skipped, "skipped");
+    let unresolved_keys: Vec<_> = plan
+        .unresolved
+        .iter()
+        .map(|u| (u.option, u.path.clone()))
+        .collect();
+    let mut sorted_unresolved = unresolved_keys.clone();
+    sorted_unresolved.sort();
+    assert_eq!(unresolved_keys, sorted_unresolved);
+}
+
+#[test]
+fn readonly_retain_precedes_grant_conflict_check() {
+    let fixture = Fixture::new();
+    let claude_root = fixture.home.join(".claude");
+    std::fs::create_dir_all(&claude_root).expect("claude root");
+    let claude_canon = std::fs::canonicalize(&claude_root).expect("claude canon");
+    let plan = confine::plan(
+        &ConfineRequest {
+            grants: vec!["harness-config".into()],
+            write: vec!["~/.claude".into()],
+            unhide: vec!["~/.claude".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Claude,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("explicit write removes harness-config root from readonly before conflict check");
+    assert!(plan.writable.contains(&claude_canon));
+    assert!(!plan.readonly.contains(&claude_canon));
+    assert!(plan.unresolved.is_empty());
+}
+
+#[test]
+fn readonly_sort_orders_multiple_entries_and_absent_team_file_leaves_skipped_empty() {
+    let fixture = Fixture::new();
+    let plan = confine::plan(
+        &ConfineRequest {
+            unhide: vec!["~/.ssh/config".into(), "~/.aws".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("plan with multiple readonly entries");
+    assert!(
+        plan.readonly.len() >= 2,
+        "readonly must have at least two entries: {:?}",
+        plan.readonly
+    );
+    let mut sorted_readonly = plan.readonly.clone();
+    sorted_readonly.sort();
+    assert_eq!(plan.readonly, sorted_readonly, "readonly must be sorted");
+
+    let no_team_file = confine::plan(
+        &ConfineRequest {
+            no_default_hides: true,
+            ..ConfineRequest::default()
+        },
+        Harness::Generic,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("plan without team_file");
+    let mut expected_skipped: Vec<PathBuf> = [
+        "/run/buildkit/buildkitd.sock",
+        "/run/crio/crio.sock",
+        "/run/k3s/containerd/containerd.sock",
+        "/run/libvirt/libvirt-sock",
+        "/run/podman/podman.sock",
+        "/var/lib/incus/unix.socket",
+        "/var/lib/lxd/unix.socket",
+        "/var/snap/lxd/common/lxd/unix.socket",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .chain([
+        fixture.home.join(".docker/desktop/docker.sock"),
+        fixture.home.join(".docker/run/docker.sock"),
+    ])
+    .filter(|path| !path.exists())
+    .collect();
+    expected_skipped.sort();
+    assert_eq!(no_team_file.skipped, expected_skipped);
+}
+
+#[test]
+fn implicit_write_inside_container_socket_names_both_default_and_container_hide() {
+    let fixture = Fixture::new();
+    let docker_dir = fixture.home.join(".docker");
+    let socket_dir = docker_dir.join("run/docker.sock");
+    let sub_cwd = socket_dir.join("repo");
+    std::fs::create_dir_all(&sub_cwd).expect("sub_cwd inside docker socket dir");
+    let docker_canon = std::fs::canonicalize(&docker_dir).expect("docker canon");
+    let socket_canon = std::fs::canonicalize(&socket_dir).expect("socket canon");
+    let sub_cwd_canon = std::fs::canonicalize(&sub_cwd).expect("sub_cwd canon");
+
+    let err = match confine::plan(
+        &ConfineRequest::default(),
+        Harness::Generic,
+        &sub_cwd,
+        &fixture.host(),
+    ) {
+        Ok(_) => panic!("cwd inside docker socket dir must fail"),
+        Err(e) => e.to_string(),
+    };
+    assert_eq!(
+        err,
+        format!(
+            "working directory {0} resolves to the hidden path {1}; open it with write = [\"{0}\"] if that is intended; working directory {0} resolves to the hidden path {2}; open it with write = [\"{0}\"] if that is intended",
+            sub_cwd_canon.display(),
+            docker_canon.display(),
+            socket_canon.display(),
+        )
+    );
+}

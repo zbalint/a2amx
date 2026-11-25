@@ -159,9 +159,11 @@ impl Runtime {
             let preflight = confine::ensure_grant_dirs(&confine_request, harness, &host, true);
             let mut plan = confine::plan_with_preflight(
                 &confine_request,
-                harness,
-                &cwd,
-                &host,
+                confine::PlanTarget {
+                    harness,
+                    cwd: &cwd,
+                    host: &host,
+                },
                 std::env::var_os("PATH"),
                 preflight,
             )?;

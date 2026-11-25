@@ -59,3 +59,22 @@ Amendment 2 (architect, after the second tester pass; fix round 2 of 2: four tes
 ## 4. Flagged for the owner (not fixed here)
 
 `plan_with_path` and `plan_with_preflight` change from five and six positional parameters to a `PlanTarget` plus the path and preflight arguments (public items of the crate; 19 external calls, listed in the report). `plan_with_path` and `plan_with_preflight` differ only by the `preflight` argument; merging them is left to the owner. `protect_system_paths` runs twice (`bind_operator_writes` and `plan_with_preflight`); the first call looks redundant and is left alone. Re-measured after this spec: nothing is expected to remain except a proved false positive (amendment 1); the `cs check` of step 8 will say.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer Antigravity CLI, Gemini 4 Hydrogen (Medium); tester OMP, planning and working opencode-go/deepseek-v4.1-flash (the automatic advisor slot is not exposed to the session). BLOCKED/amend cycles: 0 BLOCKED, 2 amendments (both after tester passes; fix rounds 1 and 2).
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Tester pass 1 | tester | 7 surviving mutants: Codex arm, already-granted guard, `~/.a2amx` home term, `PATH` directory and inside-home terms, read-only retain before the conflict check, `plan_empty_file` before the cwd checks | Amendment 1, fix round 1: tests added |
+| Tester pass 1 | tester | The cwd characterization test did not pin the claimed order (it removed the empty-file candidate, so both orders gave the cwd error); a dead `plan.readonly.clear();` | Fix round 1: test fixed, line removed |
+| Tester pass 1 | tester | Spec claim false: the raw-against-canonical mutant of `add_validated_write` is equivalent, not killed by a symlinked home | Amendment 1: claim corrected |
+| Tester pass 1 | tester | Spec claim false: the external call count is 20, not 19 | Amendment 1 |
+| Implementation | developer, found by tester and architect | The report said no section 1 finding remained, but four of the eight (two Complex Conditional on let-chains, two Bumpy Road) stood under new function names; the developer proposed leaving the let-chains as idiomatic | Amendment 1, fix round 1: early returns and helper splits, `builder.rs` 7.36 to 10.00 with 0 findings |
+| Tester pass 1 | tester (own report) | Wrong header totals, "all section 1 findings gone", and 25 call-site occurrences miscounted; corrected in a follow-up message | Corrections m_9187 and m_9201 read before acceptance |
+| Tester pass 2 | tester | 4 gaps: the `readonly` sort asserted over an empty list, the absent-`team_file` early return, the order of the hide and unhide checks (first classified equivalent, reclassified by a probe), the container chain of the offender text | Amendment 2, fix round 2: four tests |
+| Tester pass 2 | tester | The developer credited the already-granted guard mutant to the retain test, but it dies on the `unresolved` assertion | Noted in amendment 2; the retain property is killed by its own mutant |
+| Architect review | architect | `push_hidden_offenders` took an out-parameter accumulator and existed only to clear a Bumpy Road finding | Amendment 2, fix round 2: `hidden_offences` iterator and one `flat_map` chain, 0 findings kept |
+| Consultant design read | consultant | `effective_grants` restates the harness-to-root table that `session_harness_root` owns (duplication carried over from the inline code); `check_grant_conflicts` is a thin wrapper; `effective_grants` and `hidden_offences` names | Accepted without change (loop guard, behaviour-equal); the duplication goes to the backlog |
+
+Architect checks after the last fix: full suite 64 suites, 1466 passed, 0 failed, 3 ignored; clippy and fmt clean; `cs` on the five source files (`builder.rs` 10.00, no new finding in the others); four architect mutants (`readonly` sort removed, container chain dropped, `protect_team_file` call removed, harness hide check replaced) each killed by a named test, checkout restored by checksum.

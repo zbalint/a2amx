@@ -137,9 +137,11 @@ fn write_home_keeps_the_launch_inputs_read_only() {
                 write,
                 ..ConfineRequest::default()
             },
-            Harness::Generic,
-            &fixture.cwd,
-            &fixture.host(),
+            confine::PlanTarget {
+                harness: Harness::Generic,
+                cwd: &fixture.cwd,
+                host: &fixture.host(),
+            },
             Some(path_var),
         )
         .expect("launch-input plan")
@@ -177,6 +179,50 @@ fn write_home_keeps_the_launch_inputs_read_only() {
     assert!(!relative_path.readonly.contains(&relative));
     assert!(!relative_path.protected.contains(&relative));
 }
+
+#[test]
+fn system_path_protection_skips_missing_path_dirs_and_outside_a2amx_symlink() {
+    let fixture = Fixture::new();
+    let outer = fixture._root.path().join("outer");
+    let outside_a2amx = outer.join("outside-a2amx");
+    let outside_bin = outer.join("outside-bin");
+    std::fs::create_dir_all(&outside_a2amx).expect("outside a2amx");
+    std::fs::create_dir_all(&outside_bin).expect("outside bin");
+    symlink(&outside_a2amx, fixture.home.join(".a2amx")).expect("a2amx symlink");
+
+    let missing_bin = fixture.home.join("missing-bin");
+    let non_dir_entry = fixture.home.join("not-a-dir");
+    std::fs::write(&non_dir_entry, "file").expect("non-dir file");
+    let path_var = OsString::from(format!(
+        "{}:{}:{}",
+        missing_bin.display(),
+        non_dir_entry.display(),
+        outside_bin.display()
+    ));
+    let plan = confine::plan_with_path(
+        &ConfineRequest {
+            write: vec!["~".into(), outer.to_string_lossy().into_owned()],
+            ..ConfineRequest::default()
+        },
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &fixture.host(),
+        },
+        Some(path_var),
+    )
+    .expect("plan");
+    let outside_a2amx_canon = std::fs::canonicalize(&outside_a2amx).expect("outside a2amx canon");
+    let outside_bin_canon = std::fs::canonicalize(&outside_bin).expect("outside bin canon");
+    let non_dir_canon = std::fs::canonicalize(&non_dir_entry).expect("non-dir canon");
+    assert!(!plan.readonly.contains(&outside_a2amx_canon));
+    assert!(!plan.protected.contains(&outside_a2amx_canon));
+    assert!(!plan.readonly.contains(&missing_bin));
+    assert!(!plan.readonly.contains(&non_dir_canon));
+    assert!(!plan.protected.contains(&non_dir_canon));
+    assert!(!plan.readonly.contains(&outside_bin_canon));
+    assert!(!plan.protected.contains(&outside_bin_canon));
+}
 #[test]
 fn grant_create_paths_are_preflighted_and_writable() {
     let fixture = Fixture::new();
@@ -189,9 +235,11 @@ fn grant_create_paths_are_preflighted_and_writable() {
     assert!(preflight.is_empty());
     let plan = confine::plan_with_preflight(
         &request,
-        Harness::Generic,
-        &fixture.cwd,
-        &host,
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &host,
+        },
         None,
         preflight,
     )
@@ -310,9 +358,11 @@ fn grant_create_ancestor_does_not_release_hidden_path() {
     assert!(preflight.is_empty());
     let plan = confine::plan_with_preflight(
         &request,
-        Harness::Generic,
-        &fixture.cwd,
-        &host,
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &host,
+        },
         None,
         preflight,
     )
@@ -336,9 +386,11 @@ fn grant_create_symlink_ancestor_is_not_created() {
     let preflight = confine::ensure_grant_dirs(&request, Harness::Generic, &host, true);
     let error = match confine::plan_with_preflight(
         &request,
-        Harness::Generic,
-        &fixture.cwd,
-        &host,
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &host,
+        },
         None,
         preflight,
     ) {

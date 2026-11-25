@@ -622,9 +622,11 @@ fn real_bubblewrap_cargo_grant_keeps_credentials_and_bin_protected() -> anyhow::
             grants: vec!["cargo".into()],
             ..ConfineRequest::default()
         },
-        Harness::Generic,
-        &fixture.cwd,
-        &fixture.host(),
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &fixture.host(),
+        },
         Some(path_var),
     )?
     .with_bwrap(bwrap);
@@ -669,9 +671,11 @@ fn real_bubblewrap_hides_nested_credentials_but_allows_cache_writes() -> anyhow:
             grants: vec!["cargo".into()],
             ..ConfineRequest::default()
         },
-        Harness::Generic,
-        &fixture.cwd,
-        &fixture.host(),
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &fixture.host(),
+        },
         None,
     )?
     .with_bwrap(bwrap);
@@ -713,9 +717,11 @@ fn real_bubblewrap_cache_grant_hides_the_token_and_writes_the_cache() -> anyhow:
             grants: vec!["cache".into()],
             ..ConfineRequest::default()
         },
-        Harness::Generic,
-        &fixture.cwd,
-        &fixture.host(),
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &fixture.cwd,
+            host: &fixture.host(),
+        },
         None,
     )?
     .with_bwrap(bwrap);

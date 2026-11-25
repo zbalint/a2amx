@@ -244,9 +244,11 @@ fn harness_config_grant_opens_the_own_directory() {
             unhide: vec!["~/.claude/settings.json".into()],
             ..ConfineRequest::default()
         },
-        Harness::Claude,
-        &claude.cwd,
-        &claude.host(),
+        confine::PlanTarget {
+            harness: Harness::Claude,
+            cwd: &claude.cwd,
+            host: &claude.host(),
+        },
         Some(path_var),
     )
     .expect("Claude harness-config plan");
@@ -372,9 +374,11 @@ fn harness_config_is_default_for_claude_and_omp() {
         &ConfineRequest {
             ..ConfineRequest::default()
         },
-        Harness::Claude,
-        &claude.cwd,
-        &claude.host(),
+        confine::PlanTarget {
+            harness: Harness::Claude,
+            cwd: &claude.cwd,
+            host: &claude.host(),
+        },
         None,
     )
     .expect("implicit Claude harness config");
@@ -390,9 +394,11 @@ fn harness_config_is_default_for_claude_and_omp() {
             no_default_hides: true,
             ..ConfineRequest::default()
         },
-        Harness::Claude,
-        &claude.cwd,
-        &claude.host(),
+        confine::PlanTarget {
+            harness: Harness::Claude,
+            cwd: &claude.cwd,
+            host: &claude.host(),
+        },
         None,
     )
     .expect("implicit Claude harness config without default hides");
@@ -415,9 +421,11 @@ fn harness_config_is_default_for_claude_and_omp() {
         &ConfineRequest {
             ..ConfineRequest::default()
         },
-        Harness::Omp,
-        &omp.cwd,
-        &omp.host(),
+        confine::PlanTarget {
+            harness: Harness::Omp,
+            cwd: &omp.cwd,
+            host: &omp.host(),
+        },
         None,
     )
     .expect("implicit OMP harness config");
@@ -433,9 +441,11 @@ fn harness_config_is_default_for_claude_and_omp() {
         &ConfineRequest {
             ..ConfineRequest::default()
         },
-        Harness::Generic,
-        &generic.cwd,
-        &generic.host(),
+        confine::PlanTarget {
+            harness: Harness::Generic,
+            cwd: &generic.cwd,
+            host: &generic.host(),
+        },
         None,
     )
     .expect("Generic confinement plan");
@@ -619,4 +629,104 @@ fn harness_config_grant_persists_regular_writes() -> anyhow::Result<()> {
     assert_eq!(status.code(), Some(1));
     assert_eq!(std::fs::read_to_string(&settings)?, "changed");
     Ok(())
+}
+
+#[test]
+fn harness_config_effective_grants_cover_all_harnesses_and_missing_root() {
+    for harness in [Harness::Claude, Harness::Omp, Harness::Codex] {
+        let fixture = Fixture::new();
+        let plan = confine::plan(
+            &ConfineRequest::default(),
+            harness,
+            &fixture.cwd,
+            &fixture.host(),
+        )
+        .expect("missing root still appends harness-config");
+        assert!(plan.grants.is_empty());
+        assert_eq!(plan.effective_grants, vec!["harness-config"]);
+    }
+    for harness in [Harness::Generic, Harness::Agy] {
+        let fixture = Fixture::new();
+        let plan = confine::plan(
+            &ConfineRequest::default(),
+            harness,
+            &fixture.cwd,
+            &fixture.host(),
+        )
+        .expect("non-default harness-config plan");
+        assert!(plan.effective_grants.is_empty());
+    }
+}
+
+#[test]
+fn codex_harness_config_checks_codex_root_not_claude() {
+    let fixture = Fixture::new();
+    let claude_root = fixture.home.join(".claude");
+    let codex_root = fixture.home.join(".codex");
+    std::fs::create_dir_all(&claude_root).expect("claude root");
+    std::fs::create_dir_all(&codex_root).expect("codex root");
+    let codex_canon = std::fs::canonicalize(&codex_root).expect("codex canon");
+
+    let claude_hidden = confine::plan(
+        &ConfineRequest {
+            hide: vec!["~/.claude".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Codex,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("codex ignores operator hide on .claude");
+    assert_eq!(claude_hidden.effective_grants, vec!["harness-config"]);
+    assert!(claude_hidden.unresolved.is_empty());
+
+    let codex_hidden = confine::plan(
+        &ConfineRequest {
+            hide: vec!["~/.codex".into()],
+            ..ConfineRequest::default()
+        },
+        Harness::Codex,
+        &fixture.cwd,
+        &fixture.host(),
+    )
+    .expect("codex skips implicit harness-config when .codex is hidden");
+    assert!(codex_hidden.effective_grants.is_empty());
+    assert_eq!(codex_hidden.unresolved.len(), 1);
+    assert_eq!(codex_hidden.unresolved[0].option, "harness-config");
+    assert_eq!(codex_hidden.unresolved[0].path, codex_canon);
+    assert_eq!(
+        codex_hidden.unresolved[0].reason,
+        "operator hide or unhide of the harness root"
+    );
+}
+
+#[test]
+fn harness_config_hide_conflict_precedes_unhide_conflict() {
+    let fixture = Fixture::new();
+    let claude_root = fixture.home.join(".claude");
+    std::fs::create_dir_all(&claude_root).expect("claude root");
+    let claude_canon = std::fs::canonicalize(&claude_root).expect("claude canon");
+    let err = match confine::plan_with_path(
+        &ConfineRequest {
+            grants: vec!["harness-config".into()],
+            hide: vec!["~/.claude".into()],
+            ..ConfineRequest::default()
+        },
+        confine::PlanTarget {
+            harness: Harness::Claude,
+            cwd: &fixture.cwd,
+            host: &fixture.host(),
+        },
+        Some(claude_canon.as_os_str().to_os_string()),
+    ) {
+        Ok(_) => panic!("harness-config hide + PATH unhide must fail"),
+        Err(e) => e.to_string(),
+    };
+    assert_eq!(
+        err,
+        format!(
+            "confinement grant \"harness-config\" conflicts with the hide of {}",
+            claude_canon.display()
+        )
+    );
 }
