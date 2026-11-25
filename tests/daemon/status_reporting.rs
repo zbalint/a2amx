@@ -356,7 +356,12 @@ async fn claude_needs_input_label_reaches_list_and_attach_status() {
         panic!("initial status frame");
     };
     assert_eq!(info.hold.as_deref(), Some("input?"));
-    let rendered = String::from_utf8(a2amx::status::render(&id, Some(&info), 2, 80, 24)).unwrap();
+    let rendered = String::from_utf8(a2amx::status::render(
+        &a2amx::status::StatusBar::new(&id, Some(&info), 2),
+        80,
+        24,
+    ))
+    .unwrap();
     assert!(rendered.contains("HELD input?"));
     assert!(!rendered.contains("^B r"));
 

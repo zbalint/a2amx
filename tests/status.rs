@@ -1,49 +1,13 @@
+#[path = "common/status_layout.rs"]
+mod status_layout_helpers;
 use a2amx::harness::Harness;
 use a2amx::status;
 use a2amx::wire::{Activity, QuotaInfo, RemoteLease, RemoteStatus, StatusInfo, TeamMember};
+use status_layout_helpers::{info, team_member, visible};
 
 const PRE: &str = "\x1b7\x1b[23;1H\x1b[0m\x1b[2K\x1b[38;5;240m";
 const BAR: &str = "\x1b[0m\x1b[24;1H\x1b[0m\x1b[38;5;252;48;5;236m";
 const POST: &str = "\x1b[0m\x1b8";
-
-fn info(address: &str) -> StatusInfo {
-    StatusInfo {
-        address: address.into(),
-        pending: 0,
-        hold: None,
-        harness: None,
-        activity: None,
-        confined: false,
-        confine_auto: false,
-        starting: false,
-        quota: None,
-        team: None,
-        role: None,
-        members: vec![],
-        remote: None,
-    }
-}
-fn visible(bytes: &[u8]) -> String {
-    let bar = b"\x1b[24;1H";
-    let Some(start) = bytes.windows(bar.len()).position(|window| window == bar) else {
-        panic!("bar must draw on row 24");
-    };
-    let bytes = &bytes[start..];
-    let mut bytes = bytes.iter().copied();
-    let mut text = Vec::new();
-    while let Some(byte) = bytes.next() {
-        if byte != 0x1b {
-            text.push(byte);
-        } else if bytes.next() == Some(b'[') {
-            for byte in bytes.by_ref() {
-                if (0x40..=0x7e).contains(&byte) {
-                    break;
-                }
-            }
-        }
-    }
-    String::from_utf8_lossy(&text).into_owned()
-}
 
 #[test]
 fn remote_status_renders_active_gateway_cell() {
@@ -53,8 +17,12 @@ fn remote_status_renders_active_gateway_cell() {
         "remote": {"lease": "active", "gateway": true}
     }))
     .expect("remote status payload");
-    let rendered = String::from_utf8(status::render("agent-plan", Some(&status), 2, 80, 24))
-        .expect("utf8 status");
+    let rendered = String::from_utf8(status::render(
+        &status::StatusBar::new("agent-plan", Some(&status), 2),
+        80,
+        24,
+    ))
+    .expect("utf8 status");
     assert!(rendered.contains("\x1b[38;5;78m●"));
     assert!(rendered.contains("remote on "));
 }
@@ -84,7 +52,11 @@ fn remote_status_cells_have_locked_text_colors_and_priority() {
     ] {
         let mut status = info("agent-plan@host-a");
         status.remote = Some(RemoteStatus { lease, gateway });
-        let rendered = status::render("agent-plan", Some(&status), 2, 80, 24);
+        let rendered = status::render(
+            &status::StatusBar::new("agent-plan", Some(&status), 2),
+            80,
+            24,
+        );
         let rendered = String::from_utf8(rendered).expect("utf8 status");
         assert!(rendered.contains(text), "{text}: {rendered:?}");
         assert!(rendered.contains(color), "{text}: {rendered:?}");
@@ -98,11 +70,19 @@ fn remote_status_cells_have_locked_text_colors_and_priority() {
     status.pending = 1;
     status.hold = Some("human_draft".into());
     status.confined = true;
-    let rendered = visible(&status::render("agent-plan", Some(&status), 2, 120, 24));
+    let rendered = visible(&status::render(
+        &status::StatusBar::new("agent-plan", Some(&status), 2),
+        120,
+        24,
+    ));
     assert!(rendered.find("remote on").unwrap() < rendered.find("1 pending").unwrap());
     assert!(rendered.find("1 pending").unwrap() < rendered.find("HELD").unwrap());
     for cols in 2..=120 {
-        let text = visible(&status::render("agent-plan", Some(&status), 2, cols, 24));
+        let text = visible(&status::render(
+            &status::StatusBar::new("agent-plan", Some(&status), 2),
+            cols,
+            24,
+        ));
         assert!(
             text.chars().count() <= usize::from(cols - 1),
             "status overflows at {cols}: {text:?}"
@@ -120,7 +100,11 @@ fn remote_status_shrinks_before_confined_after_hint_and_pending() {
     status.pending = 1;
     status.hold = Some("human_draft".into());
     status.confined = true;
-    let full = visible(&status::render("agent-plan", Some(&status), 2, 120, 24));
+    let full = visible(&status::render(
+        &status::StatusBar::new("agent-plan", Some(&status), 2),
+        120,
+        24,
+    ));
     assert!(full.contains("remote on"));
     assert!(full.contains("[confined]"));
 
@@ -128,7 +112,11 @@ fn remote_status_shrinks_before_confined_after_hint_and_pending() {
     let mut dropped_hint = None;
     let mut dropped_remote = None;
     for cols in (2..=120).rev() {
-        let text = visible(&status::render("agent-plan", Some(&status), 2, cols, 24));
+        let text = visible(&status::render(
+            &status::StatusBar::new("agent-plan", Some(&status), 2),
+            cols,
+            24,
+        ));
         if dropped_pending.is_none() && !text.contains("pending") {
             dropped_pending = Some(text.clone());
         }
@@ -154,7 +142,11 @@ fn remote_status_exact_fit_drops_pending_at_width_minus_one() {
     status.hold = Some("human_draft".into());
     status.confined = true;
 
-    let exact = visible(&status::render("a@h", Some(&status), 2, 65, 24));
+    let exact = visible(&status::render(
+        &status::StatusBar::new("a@h", Some(&status), 2),
+        65,
+        24,
+    ));
     assert!(exact.contains("a@h"));
     assert!(exact.contains("[confined]"));
     assert!(exact.contains("remote on"));
@@ -162,7 +154,11 @@ fn remote_status_exact_fit_drops_pending_at_width_minus_one() {
     assert!(exact.contains("HELD human_draft"));
     assert!(exact.contains("· ^B r"));
 
-    let minus_one = visible(&status::render("a@h", Some(&status), 2, 64, 24));
+    let minus_one = visible(&status::render(
+        &status::StatusBar::new("a@h", Some(&status), 2),
+        64,
+        24,
+    ));
     assert!(minus_one.contains("[confined]"));
     assert!(minus_one.contains("remote on"));
     assert!(minus_one.contains("HELD human_draft"));
@@ -181,7 +177,11 @@ fn remote_status_drops_pending_before_remote_cell() {
     status.hold = Some("human_draft".into());
     status.confined = true;
 
-    let rendered = visible(&status::render("a@h", Some(&status), 2, 64, 24));
+    let rendered = visible(&status::render(
+        &status::StatusBar::new("a@h", Some(&status), 2),
+        64,
+        24,
+    ));
     assert!(rendered.contains("remote on"));
     assert!(!rendered.contains("1 pending"));
 }
@@ -190,7 +190,11 @@ fn remote_status_drops_pending_before_remote_cell() {
 fn confined_status_shows_dim_confined_tag() {
     let mut status = info("agent-plan@host-a");
     status.confined = true;
-    let rendered = status::render("agent-plan", Some(&status), 2, 80, 24);
+    let rendered = status::render(
+        &status::StatusBar::new("agent-plan", Some(&status), 2),
+        80,
+        24,
+    );
     let text = String::from_utf8(rendered).expect("utf8 status");
     assert!(text.contains("\x1b[2m[confined]\x1b[22m"));
 }
@@ -199,7 +203,11 @@ fn auto_confined_status_shows_mode_tag() {
     let mut status = info("agent-plan@host-a");
     status.confined = true;
     status.confine_auto = true;
-    let rendered = status::render("agent-plan", Some(&status), 2, 80, 24);
+    let rendered = status::render(
+        &status::StatusBar::new("agent-plan", Some(&status), 2),
+        80,
+        24,
+    );
     let text = String::from_utf8(rendered).expect("utf8 status");
     assert!(text.contains("\x1b[2m[confined auto]\x1b[22m"));
 }
@@ -216,9 +224,7 @@ fn status_shows_sanitized_role_and_private_team_before_harness() {
     });
     status.harness = Some(Harness::Claude);
     let text = visible(&status::render(
-        "agent-plan@host-a",
-        Some(&status),
-        2,
+        &status::StatusBar::new("agent-plan@host-a", Some(&status), 2),
         160,
         24,
     ));
@@ -240,7 +246,11 @@ fn details_drop_in_priority_order_as_the_terminal_narrows() {
     });
     // E1: ordinary quota is hidden.
     assert_eq!(
-        visible(&status::render("s1", Some(&info), 2, 80, 24)),
+        visible(&status::render(
+            &status::StatusBar::new("s1", Some(&info), 2),
+            80,
+            24
+        )),
         format!(
             " agent-plan@host-a │ ● working │ claude {} 2 pending ",
             " ".repeat(28)
@@ -270,7 +280,11 @@ fn details_drop_in_priority_order_as_the_terminal_narrows() {
         (28, " agent-plan@host-a ", 8, ""),
     ] {
         assert_eq!(
-            visible(&status::render("s1", Some(&info), 2, cols, 24)),
+            visible(&status::render(
+                &status::StatusBar::new("s1", Some(&info), 2),
+                cols,
+                24
+            )),
             format!("{left}{}{right}", " ".repeat(padding)),
             "cols {cols}"
         );
@@ -301,7 +315,11 @@ fn held_alert_keeps_priority_and_only_hints_releasable_holds() {
         (40, " agent-plan@host-a ", 2, " HELD human_draft "),
     ] {
         assert_eq!(
-            visible(&status::render("s1", Some(&info), 2, cols, 24)),
+            visible(&status::render(
+                &status::StatusBar::new("s1", Some(&info), 2),
+                cols,
+                24
+            )),
             format!("{left}{}{right}", " ".repeat(padding))
         );
     }
@@ -311,11 +329,15 @@ fn held_alert_keeps_priority_and_only_hints_releasable_holds() {
     info.quota = None;
     // E10-E11 and B5: clipped name spans must not emit empty bold sequences.
     assert_eq!(
-        visible(&status::render("s1", Some(&info), 2, 20, 24)),
+        visible(&status::render(
+            &status::StatusBar::new("s1", Some(&info), 2),
+            20,
+            24
+        )),
         "  HELD human_draft "
     );
     assert_eq!(
-        status::render("s1", Some(&info), 2, 20, 24),
+        status::render(&status::StatusBar::new("s1", Some(&info), 2), 20, 24),
         format!(
             "{PRE}{}{BAR} \x1b[0m\x1b[1;37;41m HELD human_draft {POST}",
             "─".repeat(19)
@@ -323,11 +345,15 @@ fn held_alert_keeps_priority_and_only_hints_releasable_holds() {
         .as_bytes()
     );
     assert_eq!(
-        visible(&status::render("s1", Some(&info), 2, 8, 24)),
+        visible(&status::render(
+            &status::StatusBar::new("s1", Some(&info), 2),
+            8,
+            24
+        )),
         " HELD h"
     );
     assert_eq!(
-        status::render("s1", Some(&info), 2, 8, 24),
+        status::render(&status::StatusBar::new("s1", Some(&info), 2), 8, 24),
         format!(
             "{PRE}{}{BAR}\x1b[0m\x1b[1;37;41m HELD h{POST}",
             "─".repeat(7)
@@ -337,7 +363,11 @@ fn held_alert_keeps_priority_and_only_hints_releasable_holds() {
     // E12: a future hold not released by r gets no hint.
     info.hold = Some("channel_down".into());
     assert_eq!(
-        visible(&status::render("s1", Some(&info), 2, 60, 24)),
+        visible(&status::render(
+            &status::StatusBar::new("s1", Some(&info), 2),
+            60,
+            24
+        )),
         format!(" agent-plan@host-a {} HELD channel_down ", " ".repeat(21))
     );
 }
@@ -352,7 +382,11 @@ fn low_quota_boundary_resetting_and_held_activity_match_the_bar_contract() {
     });
     // E13.
     assert_eq!(
-        visible(&status::render("s1", Some(&info), 2, 40, 24)),
+        visible(&status::render(
+            &status::StatusBar::new("s1", Some(&info), 2),
+            40,
+            24
+        )),
         format!(" a │ ● idle │ limit {}", " ".repeat(19))
     );
     info.activity = None;
@@ -362,7 +396,11 @@ fn low_quota_boundary_resetting_and_held_activity_match_the_bar_contract() {
     });
     // E14-E15.
     assert_eq!(
-        visible(&status::render("s1", Some(&info), 2, 40, 24)),
+        visible(&status::render(
+            &status::StatusBar::new("s1", Some(&info), 2),
+            40,
+            24
+        )),
         format!(" a │ 5h 15% {}", " ".repeat(27))
     );
     info.quota = Some(QuotaInfo {
@@ -370,21 +408,33 @@ fn low_quota_boundary_resetting_and_held_activity_match_the_bar_contract() {
         ..Default::default()
     });
     assert_eq!(
-        visible(&status::render("s1", Some(&info), 2, 40, 24)),
+        visible(&status::render(
+            &status::StatusBar::new("s1", Some(&info), 2),
+            40,
+            24
+        )),
         format!(" a {}", " ".repeat(36))
     );
     info.quota = None;
     info.activity = Some(Activity::Busy);
     // E16.
     assert_eq!(
-        visible(&status::render("s1", Some(&info), 2, 40, 24)),
+        visible(&status::render(
+            &status::StatusBar::new("s1", Some(&info), 2),
+            40,
+            24
+        )),
         format!(" a │ ● resetting {}", " ".repeat(22))
     );
     info.activity = Some(Activity::Working);
     info.hold = Some("human_draft".into());
     // E17.
     assert_eq!(
-        visible(&status::render("s1", Some(&info), 2, 60, 24)),
+        visible(&status::render(
+            &status::StatusBar::new("s1", Some(&info), 2),
+            60,
+            24
+        )),
         format!(" a {} HELD human_draft · ^B r ", " ".repeat(31))
     );
 }
@@ -394,7 +444,7 @@ fn activity_dot_states_cover_starting_resetting_and_precedence() {
     let mut info = info("a");
     info.activity = Some(Activity::Busy);
     info.starting = true;
-    let starting = status::render("s1", Some(&info), 2, 40, 24);
+    let starting = status::render(&status::StatusBar::new("s1", Some(&info), 2), 40, 24);
     assert!(
         starting
             .windows(b"\x1b[38;5;221m".len())
@@ -403,7 +453,7 @@ fn activity_dot_states_cover_starting_resetting_and_precedence() {
     assert!(visible(&starting).starts_with(" a │ ● starting "));
 
     info.starting = false;
-    let resetting = status::render("s1", Some(&info), 2, 40, 24);
+    let resetting = status::render(&status::StatusBar::new("s1", Some(&info), 2), 40, 24);
     assert!(
         resetting
             .windows(b"\x1b[38;5;209m".len())
@@ -412,7 +462,7 @@ fn activity_dot_states_cover_starting_resetting_and_precedence() {
     assert!(visible(&resetting).starts_with(" a │ ● resetting "));
 
     info.activity = Some(Activity::Waiting);
-    let waiting = status::render("s1", Some(&info), 2, 40, 24);
+    let waiting = status::render(&status::StatusBar::new("s1", Some(&info), 2), 40, 24);
     assert!(
         waiting
             .windows(b"\x1b[38;5;141m".len())
@@ -471,7 +521,7 @@ fn team_line_dot_states_cover_held_starting_exited_and_unknown() {
 fn styled_bar_bytes_restore_cursor_and_foreground() {
     // B1-B3.
     assert_eq!(
-        status::render("s1", None, 2, 40, 24),
+        status::render(&status::StatusBar::new("s1", None, 2), 40, 24),
         format!(
             "{PRE}{}{BAR} \x1b[1ms1\x1b[22m {}{POST}",
             "─".repeat(39),
@@ -481,11 +531,11 @@ fn styled_bar_bytes_restore_cursor_and_foreground() {
     );
     let mut info = info("a");
     info.activity = Some(Activity::Working);
-    assert_eq!(status::render("s1", Some(&info), 2, 40, 24), format!("{PRE}{}{BAR} \x1b[1ma\x1b[22m \x1b[38;5;240m│\x1b[38;5;252m \x1b[38;5;75m●\x1b[38;5;252m working {}{POST}", "─".repeat(39), " ".repeat(24)).as_bytes());
+    assert_eq!(status::render(&status::StatusBar::new("s1", Some(&info), 2), 40, 24), format!("{PRE}{}{BAR} \x1b[1ma\x1b[22m \x1b[38;5;240m│\x1b[38;5;252m \x1b[38;5;75m●\x1b[38;5;252m working {}{POST}", "─".repeat(39), " ".repeat(24)).as_bytes());
     info.activity = None;
     info.hold = Some("channel_down".into());
     assert_eq!(
-        status::render("s1", Some(&info), 2, 40, 24),
+        status::render(&status::StatusBar::new("s1", Some(&info), 2), 40, 24),
         format!(
             "{PRE}{}{BAR} \x1b[1ma\x1b[22m {}\x1b[0m\x1b[1;37;41m HELD channel_down {POST}",
             "─".repeat(39),
@@ -497,7 +547,7 @@ fn styled_bar_bytes_restore_cursor_and_foreground() {
     info.hold = None;
     for (activity, color) in [(Activity::Idle, 78), (Activity::Busy, 209)] {
         info.activity = Some(activity);
-        let rendered = status::render("s1", Some(&info), 2, 40, 24);
+        let rendered = status::render(&status::StatusBar::new("s1", Some(&info), 2), 40, 24);
         let bytes = String::from_utf8_lossy(&rendered);
         assert!(bytes.contains(&format!("\x1b[38;5;{color}m●\x1b[38;5;252m")));
     }
@@ -519,7 +569,7 @@ fn styled_bar_bytes_restore_cursor_and_foreground() {
         ),
     ] {
         info.quota = Some(quota);
-        let rendered = status::render("s1", Some(&info), 2, 40, 24);
+        let rendered = status::render(&status::StatusBar::new("s1", Some(&info), 2), 40, 24);
         let bytes = String::from_utf8_lossy(&rendered);
         assert!(bytes.contains(span));
     }
@@ -535,11 +585,19 @@ fn release_hint_respects_prefix_range_and_each_releasable_reason() {
     ] {
         info.hold = Some(reason.into());
         for (prefix, letter) in [(1, 'A'), (26, 'Z')] {
-            let text = visible(&status::render("s1", Some(&info), prefix, 80, 24));
+            let text = visible(&status::render(
+                &status::StatusBar::new("s1", Some(&info), prefix),
+                80,
+                24,
+            ));
             assert!(text.ends_with(&format!(" HELD {reason} · ^{letter} r ")));
         }
         for prefix in [0, 27, 255] {
-            let text = visible(&status::render("s1", Some(&info), prefix, 80, 24));
+            let text = visible(&status::render(
+                &status::StatusBar::new("s1", Some(&info), prefix),
+                80,
+                24,
+            ));
             assert!(text.ends_with(&format!(" HELD {reason} ")));
             assert!(!text.contains('^'));
         }
@@ -549,7 +607,7 @@ fn release_hint_respects_prefix_range_and_each_releasable_reason() {
 #[test]
 fn partial_name_clipping_preserves_style_and_character_boundaries() {
     assert_eq!(
-        status::render("éabc", None, 2, 5, 24),
+        status::render(&status::StatusBar::new("éabc", None, 2), 5, 24),
         format!("{PRE}{}{BAR} \x1b[1méab\x1b[22m{POST}", "─".repeat(4)).as_bytes()
     );
 }
@@ -558,7 +616,7 @@ fn partial_name_clipping_preserves_style_and_character_boundaries() {
 fn daemon_text_controls_are_replaced_before_layout() {
     let mut info = info("a\x1bb");
     assert_eq!(
-        status::render("s1", Some(&info), 2, 40, 24),
+        status::render(&status::StatusBar::new("s1", Some(&info), 2), 40, 24),
         format!(
             "{PRE}{}{BAR} \x1b[1ma?b\x1b[22m {}{POST}",
             "─".repeat(39),
@@ -567,13 +625,13 @@ fn daemon_text_controls_are_replaced_before_layout() {
         .as_bytes()
     );
     assert_eq!(
-        status::render("a\nb", None, 2, 6, 24),
+        status::render(&status::StatusBar::new("a\nb", None, 2), 6, 24),
         format!("{PRE}{}{BAR} \x1b[1ma?b\x1b[22m {POST}", "─".repeat(5)).as_bytes()
     );
     info.address = "a".into();
     info.hold = Some("x\n".into());
     assert_eq!(
-        status::render("s1", Some(&info), 2, 10, 24),
+        status::render(&status::StatusBar::new("s1", Some(&info), 2), 10, 24),
         format!(
             "{PRE}{}{BAR}\x1b[0m\x1b[1;37;41m HELD x? {POST}",
             "─".repeat(9)
@@ -584,22 +642,34 @@ fn daemon_text_controls_are_replaced_before_layout() {
 
 #[test]
 fn tiny_terminals_do_not_draw_a_bar() {
-    assert_eq!(status::render("s1", None, 2, 40, 2), Vec::<u8>::new());
-    assert_eq!(status::render("s1", None, 2, 1, 24), Vec::<u8>::new());
-    assert_eq!(status::render("s1", None, 2, 0, 0), Vec::<u8>::new());
+    assert_eq!(
+        status::render(&status::StatusBar::new("s1", None, 2), 40, 2),
+        Vec::<u8>::new()
+    );
+    assert_eq!(
+        status::render(&status::StatusBar::new("s1", None, 2), 1, 24),
+        Vec::<u8>::new()
+    );
+    assert_eq!(
+        status::render(&status::StatusBar::new("s1", None, 2), 0, 0),
+        Vec::<u8>::new()
+    );
 }
 
 #[test]
 fn separator_reserves_a_row_only_above_three_rows() {
     assert_eq!(
-        status::render("s1", None, 2, 4, 4),
+        status::render(&status::StatusBar::new("s1", None, 2), 4, 4),
         "\x1b7\x1b[3;1H\x1b[0m\x1b[2K\x1b[38;5;240m───\x1b[0m\x1b[4;1H\x1b[0m\x1b[38;5;252;48;5;236m \x1b[1ms1\x1b[22m\x1b[0m\x1b8".as_bytes()
     );
     assert_eq!(
-        status::render("s1", None, 2, 4, 3),
+        status::render(&status::StatusBar::new("s1", None, 2), 4, 3),
         "\x1b7\x1b[3;1H\x1b[0m\x1b[38;5;252;48;5;236m \x1b[1ms1\x1b[22m\x1b[0m\x1b8".as_bytes()
     );
-    assert_eq!(status::render("s1", None, 2, 4, 2), Vec::<u8>::new());
+    assert_eq!(
+        status::render(&status::StatusBar::new("s1", None, 2), 4, 2),
+        Vec::<u8>::new()
+    );
 }
 
 #[test]
@@ -613,17 +683,6 @@ fn team_rule_draws_clears_and_skips_narrow_terminals() {
         b"\x1b7\x1b[2;1H\x1b[0m\x1b[2K\x1b8".to_vec()
     );
     assert!(status::render_team_rule(1, true).is_empty());
-}
-
-fn team_member(id: &str, name: &str, activity: Option<Activity>, exited: bool) -> TeamMember {
-    TeamMember {
-        id: id.into(),
-        name: name.into(),
-        activity,
-        exited,
-        held: false,
-        starting: false,
-    }
 }
 
 #[test]

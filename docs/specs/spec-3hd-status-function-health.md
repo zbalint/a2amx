@@ -96,3 +96,23 @@ Baseline at `f854606`: `cargo test --no-fail-fast` 64 suites, 1471 passed, 0 fai
 | `prefix_len` can exceed the width (up to 25 columns against a width under 26) so `width - prefix_len` can underflow | `src/status.rs:86-89,164` | read (consultant, architect); no existing test has a non-empty team line below width 29 |
 | the `Shown` table form keeps every function at cyclomatic complexity 1 | design | inference; the tester's `cs` run judges |
 | baseline counts and `cs` scores in section 4 | commands | run at `f854606` |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer OMP junior (model not stated in its report); tester OMP, opencode-go/deepseek-v4.1-flash.
+
+BLOCKED/amend cycles: 0; amendments 1 and 2 after review findings; two fix rounds.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | `room = width - prefix_len` underflows for a prefix up to 25 columns on a narrow bar (debug panic, release wrap); no test had a non-empty team line under width 29 | Applied before the lock: `saturating_sub` and a characterization test |
+| Draft review | consultant | The `left_spans` acceptance `rg` pattern could not match a multi-line signature (vacuous); the obvious `Shown::all` would be a nine-arm `match` (a new Complex Method); a test-score criterion nothing in scope could meet | Applied before the lock: single-line anchor dry-run, table form, criterion reworded |
+| Implementation | junior developer | Left file-level Low Cohesion on `status.rs` and called it a proved false positive | Not adopted: the file holds two screen elements; amendment 1 hands the split to spec 3he |
+| Implementation | architect (spec at fault) | Section 3 said the module owns one screen element: false (team line, rule and bar have separate callers); the spec forbade the split by a size guess | Amendment 1: sentence withdrawn |
+| Design read | consultant | `left_spans` helpers mixed "shown" with "format" and `text_spans` let a part tag and its field disagree; `blank_team_line` returned a partial line; `RegionBook` built by struct literal | Fix round 1: `Shown::pick`, value-only cell builders, complete blank line, `RegionBook::new`/`into_regions`. Finding 4 (`fit_members` by index) not adopted: it would protect only the first member of a duplicated id |
+| Tester pass | tester | 5 surviving mutants: `fit_members` drop direction and the `room` boundary, the suffix Picker region, `RegionBook::add` at `first == width`, `sanitize` of the team label and member names | Amendment 2, fix round 2: five exact tests, each killed the named mutant; the architect re-ran all five |
+| Tester pass | tester | The narrow-prefix test cannot tell dropped from kept members; dead lines in a test; `tests/status.rs` grew to 1068 lines (goal under 1,000) | Amendment 2: claim narrowed, lines removed, new tests moved to `tests/status_layout.rs` (807 and 437 lines) |
+| Implementation | junior developer | First full run failed unrelated bridge, daemon_cli and team tests while the machine was loaded; the first baseline was the inherited draft state | Not reproduced in two tester runs and the architect's run; baseline corrected by the junior (m_9265) |
+| Architect review | architect | Fix round 2 left three tests on one four-member fixture and repeated region literals: `tests/status_layout.rs` scores 9.01 with 4 Code Duplication findings and a Large Method (71 lines) | Accepted without another round (loop guard); recorded for the test-file plan |
+
+Architect checks after the last fix: full suite 65 suites, 1482 passed, 0 failed, 3 ignored (baseline 64 suites, 1471); clippy, fmt and build clean; `src/status.rs` checksum unchanged by the round; `cs`: `status.rs` 7.65 with 12 findings to 8.81 with only Low Cohesion (spec 3he), `attach/model.rs` 10.00, `tests/status.rs` 5.36 to 5.09 (16 findings), `tests/attach_model.rs` 3.93, `tests/daemon/status_reporting.rs` 6.04 to 6.03, `tests/status_layout.rs` 9.01 (5 findings); five architect mutants (`room + 1`, `.rev()` removed, suffix region removed, `first >= width`, `sanitize` removed from `clipped_name`) killed, file restored by checksum.

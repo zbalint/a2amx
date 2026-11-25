@@ -403,9 +403,7 @@ impl Model {
             self.team_regions.clear();
         }
         bytes.extend(status::render(
-            &self.session,
-            self.status.as_ref(),
-            self.prefix_byte,
+            &status::StatusBar::new(&self.session, self.status.as_ref(), self.prefix_byte),
             cols,
             rows,
         ));

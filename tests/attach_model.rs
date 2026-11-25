@@ -5,7 +5,8 @@ use a2amx::emulator::Scroll;
 use a2amx::harness::Harness;
 use a2amx::messaging::TeamScope;
 use a2amx::status::{
-    TeamTarget, clear_status, render as render_status, render_team_line, render_team_rule,
+    StatusBar, TeamTarget, clear_status, render as render_status, render_team_line,
+    render_team_rule,
 };
 use a2amx::viewer;
 use a2amx::wire::{SessionSummary, StatusInfo, TeamMember};
@@ -631,7 +632,7 @@ fn viewer_blocks_batches_and_ignores_focus_report_for_idle_clock() {
         idle_model.on_tick(t0 + Duration::from_secs(1)),
         vec![
             Intent::SetViewer { viewer: true },
-            Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+            Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
             Intent::Output(expected_marker),
         ]
     );
@@ -701,7 +702,7 @@ fn on_output_reemits_mouse_capture_only_after_disable() {
         enable,
         vec![
             Intent::Output(b"\x1b[?1000h".to_vec()),
-            Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+            Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
         ]
     );
 
@@ -711,7 +712,7 @@ fn on_output_reemits_mouse_capture_only_after_disable() {
         vec![
             Intent::Output(b"\x1b[?1000l".to_vec()),
             Intent::Output(b"\x1b[?1000h\x1b[?1006h".to_vec()),
-            Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+            Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
         ]
     );
 }
@@ -906,7 +907,7 @@ fn step_guards_pass_through_segmentation_and_mode_dispatch() {
         model.on_tick(t0 + Duration::from_secs(10)),
         vec![
             Intent::SetViewer { viewer: true },
-            Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+            Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
             Intent::Output(viewer::marker(80, 24)),
         ]
     );
@@ -931,7 +932,7 @@ fn step_guards_pass_through_segmentation_and_mode_dispatch() {
         model.on_tick(t0 + Duration::from_secs(10)),
         vec![
             Intent::SetViewer { viewer: true },
-            Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+            Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
             Intent::Output(viewer::marker(80, 24)),
         ]
     );
@@ -1210,7 +1211,7 @@ fn scan_session_mouse_modes_and_picker_update() {
             model.on_output(enable.to_vec(), t0),
             vec![
                 Intent::Output(enable.to_vec()),
-                Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+                Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
             ]
         );
     }
@@ -1220,7 +1221,7 @@ fn scan_session_mouse_modes_and_picker_update() {
         vec![
             Intent::Output(b"\x1b[?1002h\x1b[?1003l".to_vec()),
             Intent::Output(b"\x1b[?1000h\x1b[?1006h".to_vec()),
-            Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+            Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
         ]
     );
     // Near miss 1001, 1006, 25, and truncated ESC[?1000 do NOT emit MOUSE_CAPTURE.
@@ -1234,7 +1235,7 @@ fn scan_session_mouse_modes_and_picker_update() {
             model.on_output(ignored.to_vec(), t0),
             vec![
                 Intent::Output(ignored.to_vec()),
-                Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+                Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
             ]
         );
     }
@@ -1462,7 +1463,7 @@ fn tester_survivor_guards_and_mouse_edge_cases() {
         prefix_check.on_output(b"abc1000h".to_vec(), t0),
         vec![
             Intent::Output(b"abc1000h".to_vec()),
-            Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+            Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
         ]
     );
     assert_eq!(
@@ -1479,7 +1480,7 @@ fn tester_survivor_guards_and_mouse_edge_cases() {
         odd_offset.on_output(b"x\x1b[?1000h".to_vec(), t0),
         vec![
             Intent::Output(b"x\x1b[?1000h".to_vec()),
-            Intent::Output(render_status("s1", None, 0x02, 80, 24)),
+            Intent::Output(render_status(&StatusBar::new("s1", None, 0x02), 80, 24)),
         ]
     );
     assert_eq!(
