@@ -15,7 +15,9 @@ scratch="$(mktemp -d)"
 # merge below and clutter the tree. Remove them before the run and on every exit.
 clean_profraw() { rm -f -- ./*.profraw; }
 clean_profraw
-trap 'rm -rf "$scratch"; clean_profraw' EXIT
+trap 'rm -rf "$scratch"; clean_profraw; echo "gate total: ${SECONDS}s"' EXIT
+stage_start=$SECONDS
+stage_done() { echo "stage $1: $((SECONDS - stage_start))s"; stage_start=$SECONDS; }
 git clone -q . "$scratch"
 git -C "$scratch" update-ref refs/heads/develop "$base_sha"
 git -C "$scratch" checkout -q --detach "$head_sha"
@@ -28,15 +30,21 @@ fi
 # --no-fail-fast and a failing test run still produce a report, as in CI; the exit code is kept
 # and returned last so a red suite is never hidden behind a green gate.
 tests=0
+# Raw coverage files of earlier runs come from older binaries and are never wanted; they made each
+# run read tens of thousands of stale files. This keeps the instrumented build.
+cargo llvm-cov clean --locked --profraw-only
 # A missing Node must fail the push gate, not skip the OMP extension tests.
 A2AMX_REQUIRE_NODE=1 A2AMX_JS_LCOV=js.lcov cargo llvm-cov --locked --no-fail-fast --no-report || tests=$?
+stage_done build+tests
 
 # A test that kills a child mid-write leaves a truncated .profraw that crashes llvm-profdata.
 profdata="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"
 for f in target/llvm-cov-target/*.profraw; do
   "$profdata" merge -sparse "$f" -o /dev/null >/dev/null 2>&1 || { echo "dropping unreadable $f"; rm -f "$f"; }
 done
+stage_done merge
 cargo llvm-cov report --lcov --output-path lcov.info
+stage_done report
 
 # Reports hold absolute paths; point them at the clone.
 sed "s#$PWD/#$scratch/#" lcov.info > "$scratch/lcov.info"
