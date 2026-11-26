@@ -1046,6 +1046,8 @@ fn readonly_sort_orders_multiple_entries_and_absent_team_file_leaves_skipped_emp
     )
     .expect("plan without team_file");
     let mut expected_skipped: Vec<PathBuf> = [
+        "/mnt/wslg",
+        "/run/WSL",
         "/run/buildkit/buildkitd.sock",
         "/run/crio/crio.sock",
         "/run/k3s/containerd/containerd.sock",
