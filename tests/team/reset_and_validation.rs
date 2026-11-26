@@ -47,24 +47,58 @@ control_from = ["/architect"]
     assert!(team::parse(invalid_control, Path::new("/work/proj"), false).is_err());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn team_up_forwards_reset_configuration_and_consent() {
-    let (dir, _daemon) = common::start_daemon().await;
-    let controller_file = dir.path().join("controller.creds");
-    let other_file = dir.path().join("other.creds");
-    let composer = dir.path().join("team-composer.py");
-    std::fs::write(
-        &composer,
-        r#"import sys
+const COMPOSER: &str = r#"import sys
 sys.stdout.write("\x1b[?2004h")
 sys.stdout.flush()
 for raw in sys.stdin.buffer:
     line = raw.decode(errors="replace").replace("\x1b[200~", "").replace("\x1b[201~", "").rstrip("\r\n")
     if line == "/clear":
         print("marker:/clear", flush=True)
-"#,
-    )
-    .unwrap();
+"#;
+
+/// The token and address a session wrote to `path` from its own environment.
+async fn read_credentials(path: std::path::PathBuf) -> (String, std::net::SocketAddr) {
+    common::eventually(|| async {
+        let text = std::fs::read_to_string(&path).ok()?;
+        let mut lines = text.lines();
+        let token = lines.next()?.to_owned();
+        let address = lines.next()?.parse::<std::net::SocketAddr>().ok()?;
+        (token.len() == 64).then_some((token, address))
+    })
+    .await
+}
+
+/// Wait until the reset gate would pass for `name`. The composer enables bracketed paste once
+/// python has started, which can be after the credentials files exist; the admin connection is
+/// the one that can explain a session of a private team.
+async fn wait_until_reset_gate_passes(home: &Path, name: &str) {
+    common::eventually(|| async {
+        let mut admin = Client::connect(home).await.ok()?;
+        let Response::Sessions { sessions } = admin.request(Request::List).await.ok()? else {
+            return None;
+        };
+        let target = sessions
+            .into_iter()
+            .find(|session| session.name.as_deref() == Some(name))?;
+        let Response::Explain { info } = admin
+            .request(Request::Explain { session: target.id })
+            .await
+            .ok()?
+        else {
+            return None;
+        };
+        info.reset.allowed.then_some(())
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn team_up_forwards_reset_configuration_and_consent() {
+    let (dir, _daemon) = common::start_daemon().await;
+    let controller_file = dir.path().join("controller.creds");
+    let other_file = dir.path().join("other.creds");
+    let composer = dir.path().join("team-composer.py");
+    std::fs::write(&composer, COMPOSER).unwrap();
     let config = format!(
         r#"
 team = "team"
@@ -79,7 +113,7 @@ command = ["sh", "-c", "printf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > '
 [[session]]
 name = "target"
 command = ["python3", "-u", "{composer}"]
-reset = ["/clear"]
+reset = ["/clear", "/clear"]
 control_from = ["controller"]
 "#,
         controller = controller_file.display(),
@@ -94,28 +128,21 @@ control_from = ["controller"]
         String::from_utf8_lossy(&up.stderr)
     );
 
-    let read_credentials = |path: std::path::PathBuf| async move {
-        common::eventually(|| async {
-            let text = std::fs::read_to_string(&path).ok()?;
-            let mut lines = text.lines();
-            let token = lines.next()?.to_owned();
-            let address = lines.next()?.parse::<std::net::SocketAddr>().ok()?;
-            (token.len() == 64).then_some((token, address))
-        })
-        .await
-    };
     let (controller_token, controller_addr) = read_credentials(controller_file).await;
     let (other_token, other_addr) = read_credentials(other_file).await;
     let mut controller = Client::connect_addr(controller_addr, &controller_token)
         .await
         .unwrap();
+    // The composer enables bracketed paste once python has started, which can be after the
+    // controller wrote its credentials: wait until the reset gate would pass, then reset once.
+    wait_until_reset_gate_passes(dir.path(), "team-target").await;
     let reset = controller
         .request(Request::Reset {
             session: "team-target".into(),
         })
         .await
         .unwrap();
-    assert!(matches!(reset, Response::Reset { steps: 1 }), "{reset:?}");
+    assert!(matches!(reset, Response::Reset { steps: 2 }), "{reset:?}");
 
     let mut other = Client::connect_addr(other_addr, &other_token)
         .await
