@@ -502,7 +502,7 @@ async fn team_up_and_down_characterize_exact_conflict_abort_and_missing_outputs(
         }
         assert!(waited < 50);
         waited += 1;
-        std::thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let conflict = run_binary(dir.path(), &["team", "up", "--detach", "--file", file_arg]).unwrap();
     assert!(!conflict.status.success());
