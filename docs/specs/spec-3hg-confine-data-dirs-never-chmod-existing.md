@@ -109,7 +109,7 @@ After the REPORT the developer stays idle and starts nothing until the architect
 
 Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the agy harness (it reported "Antigravity (Gemini 4 Hydrogen (Medium))" and did not separate planning, working and advisor models); tester: the pass was not run (below).
 
-BLOCKED/amend cycles: 0 spec amendments. Three BLOCKED replies, none a contradiction in the spec: the junior developer's (m_9319, before any edit) and the tester's two (m_9357, m_9359), all citing the OMP runtime rule "NEVER run checks between edits".
+BLOCKED/amend cycles: one spec amendment (Amendment 1, after the push gate, not caused by a BLOCKED). Three BLOCKED replies, none a contradiction in the spec: the junior developer's (m_9319, before any edit) and the tester's two (m_9357, m_9359), all citing the OMP runtime rule "NEVER run checks between edits".
 
 | Found | By | Problem | Resolution |
 | --- | --- | --- | --- |
@@ -121,6 +121,7 @@ BLOCKED/amend cycles: 0 spec amendments. Three BLOCKED replies, none a contradic
 | Implementation | junior developer (omp) | Refused the assignment before any edit (m_9319); when the owner asked later it called the refusal a misreading | The owner released the architect to assign any peer; the spec went to the senior developer |
 | Tester pass | tester (omp) | Refused twice (m_9357, m_9359), quoting its runtime rule "Run nothing while edits are still coming ... NEVER run checks between edits"; no pass ran | Architect ran the mutants (below); owner told that omp agents cannot run a red phase or a mutation pass |
 | Architect review | architect | The first full suite had one failure, `daemon_lifecycle::failed_start_after_the_tokens_are_written_removes_every_state_file` ("another a2amx daemon is running"), a lock race under load in code this diff does not reach | Passes alone three times and with the whole `daemon` target (52 of 52); a second full run was green; recorded as an intermittent failure, not a diff problem |
+| Pre-push gate | architect (Sonnet 5.5) | The Sonar scan of `7d3771c` failed new-code coverage (64.0 against 80): the two error branches of `secure_data_dir` (a `create` error other than `AlreadyExists`, a `symlink_metadata` error other than `NotFound`) had no test; the spec's mutant list covered only the branches it had tests for | Amendment 1 (`fb27210`) adds two tests; both mutants killed by them; the race branch stays untested on purpose |
 
 No problem was found in the senior developer's diff itself.
 

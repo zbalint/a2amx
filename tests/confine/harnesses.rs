@@ -1358,3 +1358,35 @@ fn data_dir_symlink_loop_still_fails() {
 
     assert!(confine::ensure_data_dirs(Harness::Agy, &fixture.home).is_err());
 }
+
+#[test]
+fn unsearchable_parent_fails_the_launch_with_the_metadata_error() {
+    let fixture = Fixture::new();
+    let gemini = fixture.home.join(".gemini");
+    std::fs::create_dir_all(&gemini).expect("gemini");
+    std::fs::set_permissions(&gemini, std::fs::Permissions::from_mode(0o000))
+        .expect("chmod 0000 gemini");
+
+    let result = confine::ensure_data_dirs(Harness::Agy, &fixture.home);
+    std::fs::set_permissions(&gemini, std::fs::Permissions::from_mode(0o755))
+        .expect("restore 0755 gemini");
+
+    assert!(result.is_err());
+    assert!(!gemini.join("antigravity-cli").exists());
+}
+
+#[test]
+fn read_only_parent_fails_the_launch_with_the_create_error() {
+    let fixture = Fixture::new();
+    let gemini = fixture.home.join(".gemini");
+    std::fs::create_dir_all(&gemini).expect("gemini");
+    std::fs::set_permissions(&gemini, std::fs::Permissions::from_mode(0o500))
+        .expect("chmod 0500 gemini");
+
+    let result = confine::ensure_data_dirs(Harness::Agy, &fixture.home);
+    std::fs::set_permissions(&gemini, std::fs::Permissions::from_mode(0o755))
+        .expect("restore 0755 gemini");
+
+    assert!(result.is_err());
+    assert!(!gemini.join("antigravity-cli").exists());
+}
