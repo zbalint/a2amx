@@ -60,7 +60,7 @@ Trust boundary: none. A local script run by the owner's session; it takes no inp
 ## 5. Acceptance
 
 1. `bash -n scripts/prepush-sonar.sh` exits 0 and `shellcheck scripts/prepush-sonar.sh` has no new finding against the pre-change script (judge: the architect's run of both on the old and new file).
-2. `rg -n 'clean --profraw-only' scripts/prepush-sonar.sh` has one match, on a line before the line containing `cargo llvm-cov --locked --no-fail-fast --no-report` (judge: `rg -n` line numbers).
+2. `rg -n 'clean --locked --profraw-only' scripts/prepush-sonar.sh` has one match, on a line before the line containing `cargo llvm-cov --locked --no-fail-fast --no-report` (judge: `rg -n` line numbers).
 3. `git diff --name-only` lists `scripts/prepush-sonar.sh` and the spec only.
 4. One complete gate run by the architect (the session with the `sonar` grant; the developer roles have none) on the committed change: the log contains the lines `stage build+tests:`, `stage merge:`, `stage report:` and `gate total:`; `find target/llvm-cov-target -maxdepth 1 -name '*.profraw' | wc -l` after the run is below 5,000 (it was 51,515); the Sonar gate result is the scanner's (PASSED or the real findings). The review record states `gate total` and each stage time against the earlier 48 and about 50 minutes. The spec makes no promise about the new total (about 20 minutes is the inference in section 1); if it is still above 40 minutes the numbers decide the next spec. The scan's coverage may come out lower than in the two earlier runs: old `.profraw` files whose function hashes still matched the current binaries may have added counts from other runs (inference, not verified). A coverage condition that fails on this first run is read against that before it is read as a regression.
 5. No test is added or changed: the suite is not affected by this script. Contract: the full gate run in 4 is the only run.
@@ -68,3 +68,7 @@ Trust boundary: none. A local script run by the owner's session; it takes no inp
 ## 6. Review
 
 Consultant review of this draft before the lock; consultant review of the diff before the commit. Reviewer and implementer have different addresses.
+
+## Amendment 1
+
+The architect adopted the consultant's finding 5 (`--locked` on the clean command) after the review, so section 2 step 1 reads `cargo llvm-cov clean --locked --profraw-only`, but acceptance 2 still searched for the old text and could not match. Acceptance 2's pattern is now `clean --locked --profraw-only`. Nothing else changes. Found by the architect while implementing; checked with `rg -n 'profraw-only' docs/specs/spec-3hf-prepush-sonar-profraw.md` (every mention agrees).
