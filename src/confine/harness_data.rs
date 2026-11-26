@@ -133,13 +133,31 @@ pub(super) fn harness_data(harness: Harness, home: &Path) -> HarnessData {
     }
 }
 
+pub(super) struct PathSets<'a> {
+    pub(super) writable: &'a [PathBuf],
+    pub(super) hidden: &'a [PathBuf],
+    pub(super) readonly: &'a [PathBuf],
+    pub(super) protected: &'a [PathBuf],
+}
+
+impl PathSets<'_> {
+    fn entries(&self) -> impl Iterator<Item = &PathBuf> {
+        self.writable
+            .iter()
+            .chain(self.hidden)
+            .chain(self.readonly)
+            .chain(self.protected)
+    }
+
+    fn covers(&self, path: &Path) -> bool {
+        self.entries().any(|entry| is_within(path, entry))
+    }
+}
+
 pub(super) fn harness_overlay_parents(
     home: &Path,
     data_files: &[PathBuf],
-    writable: &[PathBuf],
-    hidden: &[PathBuf],
-    readonly: &[PathBuf],
-    protected: &[PathBuf],
+    sets: &PathSets,
 ) -> Vec<PathBuf> {
     let mut parents = Vec::new();
     for file in data_files {
@@ -149,10 +167,7 @@ pub(super) fn harness_overlay_parents(
         if parent == home || !parent.is_dir() {
             continue;
         }
-        if [writable, hidden, readonly, protected]
-            .into_iter()
-            .any(|paths| paths.iter().any(|path| is_within(&parent, path)))
-        {
+        if sets.covers(&parent) {
             continue;
         }
         add_unique(&mut parents, parent);
@@ -161,38 +176,39 @@ pub(super) fn harness_overlay_parents(
     parents
 }
 
+fn plain_entries(parent: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut plain = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let kind = metadata.file_type();
+        if !kind.is_file() && !kind.is_dir() {
+            continue;
+        }
+        plain.push(path);
+    }
+    plain
+}
+
 pub(super) fn overlay_protected_entries(
     parents: &[PathBuf],
-    data_dirs: &[PathBuf],
-    data_files: &[PathBuf],
-    writable: &[PathBuf],
-    readonly: &[PathBuf],
-    protected: &[PathBuf],
-    hidden: &[PathBuf],
+    data: &HarnessData,
+    sets: &PathSets,
 ) -> Vec<PathBuf> {
     let mut entries_protected = Vec::new();
     for parent in parents {
-        let Ok(entries) = fs::read_dir(parent) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(metadata) = fs::symlink_metadata(&path) else {
-                continue;
-            };
-            if metadata.file_type().is_symlink()
-                || (!metadata.file_type().is_file() && !metadata.file_type().is_dir())
-            {
-                continue;
-            }
-            let excluded = data_dirs
+        for path in plain_entries(parent) {
+            let excluded = data
+                .dirs
                 .iter()
-                .chain(data_files)
-                .chain(writable)
-                .chain(readonly)
-                .chain(protected)
+                .chain(&data.files)
+                .chain(sets.entries())
                 .chain(parents)
-                .chain(hidden)
                 .any(|other| {
                     other == &path
                         || canonical_if_exists(other).is_some_and(|canonical| canonical == path)

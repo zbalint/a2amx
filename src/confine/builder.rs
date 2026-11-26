@@ -10,7 +10,8 @@ use crate::harness::Harness;
 
 use super::git::{git_common_dir, parse_core_hooks_path};
 use super::harness_data::{
-    harness_data, harness_overlay_parents, overlay_protected_entries, unsaved_harness_files,
+    PathSets, harness_data, harness_overlay_parents, overlay_protected_entries,
+    unsaved_harness_files,
 };
 use super::{
     CREDENTIAL_ENV, ConfineRequest, Host, MAX_PATH_BYTES, Plan, PlanBuilder, Unresolved,
@@ -443,23 +444,14 @@ impl<'a> PlanBuilder<'a> {
 
     fn overlay_data(&self, protected: &[PathBuf]) -> OverlayData {
         let data = harness_data(self.harness, &self.home);
-        let overlay_parents = harness_overlay_parents(
-            &self.home,
-            &data.files,
-            &self.writable,
-            &self.hidden,
-            &self.readonly,
+        let sets = PathSets {
+            writable: &self.writable,
+            hidden: &self.hidden,
+            readonly: &self.readonly,
             protected,
-        );
-        let overlay_protected = overlay_protected_entries(
-            &overlay_parents,
-            &data.dirs,
-            &data.files,
-            &self.writable,
-            &self.readonly,
-            protected,
-            &self.hidden,
-        );
+        };
+        let overlay_parents = harness_overlay_parents(&self.home, &data.files, &sets);
+        let overlay_protected = overlay_protected_entries(&overlay_parents, &data, &sets);
         let unsaved_files = unsaved_harness_files(&data.files, &overlay_parents);
         OverlayData {
             overlay_parents,
