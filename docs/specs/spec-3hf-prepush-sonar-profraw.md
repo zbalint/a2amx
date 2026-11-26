@@ -72,3 +72,21 @@ Consultant review of this draft before the lock; consultant review of the diff b
 ## Amendment 1
 
 The architect adopted the consultant's finding 5 (`--locked` on the clean command) after the review, so section 2 step 1 reads `cargo llvm-cov clean --locked --profraw-only`, but acceptance 2 still searched for the old text and could not match. Acceptance 2's pattern is now `clean --locked --profraw-only`. Nothing else changes. Found by the architect while implementing; checked with `rg -n 'profraw-only' docs/specs/spec-3hf-prepush-sonar-profraw.md` (every mention agrees).
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect). No developer or tester pass: the architect implemented the ten-line script change under the tiny-change exception and the consultant reviewed the spec and the diff.
+
+BLOCKED/amend cycles: 0; one amendment (architect, found while implementing).
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The draft said the time split of the gate was unknown; file timestamps already showed merge and report took about 33 of 50 minutes (run 2: coverage files 01:19 to 01:32, `lcov.info` at 02:05:28, scan end 02:08) | Why section rewritten with the measurement and an expected total near 20 minutes |
+| Draft review | consultant | The by-day counts in the Why section summed to 28,551, not 51,515 (four days missing) | Full by-day list put in |
+| Draft review | consultant | The label `stage tests` also counted the clone, the clean and the instrumented build | Renamed `build+tests` and the reason stated |
+| Draft review | consultant | Stale test executables in `debug/deps` may slow the report stage; `--locked` missing on the clean command | Named as a suspect with a trigger in Out of scope; `--locked` adopted |
+| Draft review | consultant | The first Sonar scan after the clean may show lower coverage than before (stale counts from old runs) | One sentence added to acceptance 4 |
+| Implementation | architect | Acceptance 2 still searched for `clean --profraw-only` after `--locked` was adopted, so it could not match | Amendment 1 (bae5f35) |
+| After the push | architect | Memory 74ef6fa3 (2026-11-10) blamed the slow gate on stray profraw files in the repo root; they were in `target/llvm-cov-target` | Memory revised to its successor 1998ed81 |
+
+Result of the acceptance run (2026-11-26, commit b5fc8d9, load average 3 to 4 on 4 cores because a second team was working on the machine): `stage build+tests: 1107s`, `stage merge: 41s`, `stage report: 48s`, scan 1 minute 44 seconds, `gate total: 1303s` (about 22 minutes) against 48 and about 50 minutes on the two earlier runs; raw coverage files after the run 1,474 (before 51,515); one truncated file dropped by the merge loop; the Sonar gate passed (bugs 0, smells 0, vulnerabilities 0, duplication 0.0; no coverage condition shown because the four new commits hold no coverable lines). The two suspects in section 4 are not triggered: `stage merge` 41s is under 2 minutes and `stage report` 48s is under 5 minutes.
