@@ -115,3 +115,22 @@ git status --short
 | `command_with_timeout` has no direct test; the exit and stderr texts have none | `bwrap.rs:13-50` | grep over `tests/`: only `tests/privilege.rs` mentions the phrases (a different message, to be confirmed by the consultant) |
 | callers: `parse_core_hooks_path` `builder.rs`; `git_common_dir` `builder.rs`, `confine.rs`, `commands/grants.rs`; `ensure_grant_dirs` `confine.rs`, `commands/team.rs`, `commands/team/dry_run.rs`, `daemon/launch.rs`; `resolve_bwrap` `daemon/launch.rs`, `gateway_launch.rs` | grep over `src/` | grep |
 | tests reaching these: `tests/confine/{paths_and_git_config,git_dirs_and_roots,notices_and_preflight,grant_writes_and_create,grants_runtime,real_bwrap,harness_config,limits_and_hides}.rs`, `tests/auto_confine/{git_detection,git_config_limits}.rs`, `tests/daemon/confine.rs`, `tests/gateway_*.rs` | grep | grep; the exhaustive list is the consultant's check |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the agy harness, planning and working model Gemini 4 Hydrogen (Medium), no advisor (single-slot harness); tester `a2amx-tester` on the omp harness, planning and working model `opencode-go/deepseek-v4.1-flash` (advisor model not exposed).
+
+BLOCKED/amend cycles: none. Two fix rounds after the tester pass and the design read.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Step A pin 3 expected the wrong text: the overlay probe text keeps the exit code because it splits at the first `: ` | Pin corrected before locking |
+| Draft review | consultant | Three drafted shapes would still leave cs findings (cc, two-operator conditionals); `base.join(path)` replaces the `is_absolute` if; a `.git`-file failure must return `None`, never continue the walk | Shapes and rules rewritten before locking |
+| Draft review | consultant | Mutant list wrong (n, o unreachable, d equivalent, q not equivalent), `daemon_confine` test target does not exist, three grant-dir reasons unreachable | Corrected before locking |
+| Tester pass | tester | Mutants (j) non-file `commondir` over a shape-valid gitdir, (l) `overlaps_reserved` ignoring the runtime dir (reachable through the public `Host`), and own mutant `hooksPath` key case survived; (j) had been listed as an expected kill | Fix round 1: pins for (l) and the key case; (j) killed by strengthening the two existing commondir fixtures (see below) |
+| Tester pass | tester | New pin `preflight_error_carries_the_exit_status_and_stderr` flaked twice: spawn of a just-written script failed (ETXTBSY) while sibling tests forked | Bounded retry helper on "cannot run" in the test file, exact text still asserted |
+| Tester pass | tester | First report called (l) unreachable; corrected in a follow-up message | Retracted by the tester, (l) pinned |
+| Architect review | consultant | The fix round added a sibling test file outside section 0 that copied a helper and two near-duplicate tests | Fix round 2: file deleted, the two existing tests in `git_dirs_and_roots.rs` given shape-valid gitdirs in place (that file is outside section 0; `cs` for it 6 warnings to 4, still not clean, to be cleaned in the tests/confine batch) |
+| Design read | consultant | Nits only: grouped scenarios per test in `grant_dir_reasons.rs`; duplicate `symlink component` text in two functions (pre-existing); `search_path_value` name; `?`-on-Option comment | Not applied: grouping is in the locked pin table, the rest follow the locked shapes or are pre-existing |
+
+Tester mutants (scratch with its own `CARGO_TARGET_DIR`, deleted afterwards): 24 runs, 19 killed, survivors (j), (l), n4 (all fixed above), (k2) expected, n2 equivalent (success returns `Ok` either way). Architect spot-check (own scratch, deleted): (j) killed by both strengthened commondir tests, (l) killed by `grant_dir_runtime_dir_overlap_reason_is_pinned`. Fresh checks by the architect: `cargo test` 1512 passed after round 1 (1510 after round 2: two sibling-file tests removed), `clippy -D warnings` and `fmt --check` clean, `cs` 10.00 on the six touched files, whole-tree cs warnings 894 to 878.

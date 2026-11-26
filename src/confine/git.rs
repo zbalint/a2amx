@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use rustix::fs::OFlags;
 
-pub(super) fn parse_core_hooks_path(common: &Path, worktree: &Path) -> Result<Option<PathBuf>> {
+fn read_git_config(common: &Path) -> Result<Option<String>> {
     let config = common.join("config");
     let Ok(file) = OpenOptions::new()
         .read(true)
@@ -33,7 +33,10 @@ pub(super) fn parse_core_hooks_path(common: &Path, worktree: &Path) -> Result<Op
             GIT_CONFIG_PLAN_LIMIT
         );
     }
-    let text = String::from_utf8_lossy(&bytes);
+    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+fn hooks_path_in(text: &str, worktree: &Path) -> Option<PathBuf> {
     let mut in_core = false;
     for line in text.lines() {
         let line = line.trim();
@@ -49,15 +52,17 @@ pub(super) fn parse_core_hooks_path(common: &Path, worktree: &Path) -> Result<Op
         };
         if key.trim().eq_ignore_ascii_case("hooksPath") {
             let value = value.trim().trim_matches(['"', '\'']);
-            let path = PathBuf::from(value);
-            return Ok(Some(if path.is_absolute() {
-                path
-            } else {
-                worktree.join(path)
-            }));
+            return Some(worktree.join(value));
         }
     }
-    Ok(None)
+    None
+}
+
+pub(super) fn parse_core_hooks_path(common: &Path, worktree: &Path) -> Result<Option<PathBuf>> {
+    let Some(text) = read_git_config(common)? else {
+        return Ok(None);
+    };
+    Ok(hooks_path_in(&text, worktree))
 }
 
 const POINTER_LIMIT: usize = 4096;
@@ -85,6 +90,29 @@ fn is_git_dir_shape(common: &Path) -> bool {
         && fs::metadata(common.join("objects")).is_ok_and(|metadata| metadata.is_dir())
 }
 
+fn pointer_gitdir(marker: &Path, current: &Path) -> Option<PathBuf> {
+    let text = read_pointer_text(marker)?;
+    let target = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("gitdir:"))?
+        .trim();
+    fs::canonicalize(current.join(target)).ok()
+}
+
+fn common_dir_of(gitdir: PathBuf) -> Option<PathBuf> {
+    let commondir = gitdir.join("commondir");
+    let common = match fs::metadata(&commondir) {
+        Ok(metadata) if metadata.is_file() => {
+            let relative = read_pointer_text(&commondir)?;
+            gitdir.join(relative.trim())
+        }
+        Ok(_) => return None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => gitdir,
+        Err(_) => return None,
+    };
+    fs::canonicalize(common).ok()
+}
+
 /// Returns the canonical common git directory and worktree root, or `None` for no repository, a home-directory repository, or an unusable pointer; `cwd` must be canonical.
 pub fn git_common_dir(cwd: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
     let mut current = cwd.to_owned();
@@ -99,38 +127,9 @@ pub fn git_common_dir(cwd: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
                 .map(|common| (common, current));
         }
         if marker.is_file() {
-            let text = read_pointer_text(&marker)?;
-            let target = text
-                .lines()
-                .find_map(|line| line.trim().strip_prefix("gitdir:"))?
-                .trim();
-            let gitdir = PathBuf::from(target);
-            let gitdir = if gitdir.is_absolute() {
-                gitdir
-            } else {
-                current.join(gitdir)
-            };
-            let gitdir = fs::canonicalize(gitdir).ok()?;
-            let commondir = gitdir.join("commondir");
-            let common = match fs::metadata(&commondir) {
-                Ok(metadata) if metadata.is_file() => {
-                    let relative = read_pointer_text(&commondir)?;
-                    let path = PathBuf::from(relative.trim());
-                    if path.is_absolute() {
-                        path
-                    } else {
-                        gitdir.join(path)
-                    }
-                }
-                Ok(_) => return None,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => gitdir,
-                Err(_) => return None,
-            };
-            let common = fs::canonicalize(common).ok()?;
-            if common == home || !is_git_dir_shape(&common) {
-                return None;
-            }
-            return Some((common, current));
+            let gitdir = pointer_gitdir(&marker, &current)?;
+            let common = common_dir_of(gitdir)?;
+            return (common != home && is_git_dir_shape(&common)).then_some((common, current));
         }
         let parent = current.parent()?.to_owned();
         if parent == current {

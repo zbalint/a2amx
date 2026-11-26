@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -10,6 +10,31 @@ use anyhow::{Context, Result, anyhow, bail};
 use super::{canonical_existing, path_key};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn stderr_suffix(child: &mut Child) -> String {
+    let Some(mut stderr) = child.stderr.take() else {
+        return String::new();
+    };
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    stderr.read_to_end(&mut bytes).ok();
+    if bytes.is_empty() {
+        return String::new();
+    }
+    format!(": {}", String::from_utf8_lossy(&bytes))
+}
+
+fn exit_result(path: &Path, status: ExitStatus, child: &mut Child) -> Result<()> {
+    if status.success() {
+        return Ok(());
+    }
+    bail!(
+        "{} exited with {status}{}",
+        path.display(),
+        stderr_suffix(child)
+    );
+}
+
 fn command_with_timeout(path: &Path, args: &[String]) -> Result<()> {
     let mut child = Command::new(path)
         .args(args)
@@ -21,20 +46,7 @@ fn command_with_timeout(path: &Path, args: &[String]) -> Result<()> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
     loop {
         if let Some(status) = child.try_wait()? {
-            if status.success() {
-                return Ok(());
-            }
-            let mut message = format!("{} exited with {status}", path.display());
-            if let Some(mut stderr) = child.stderr.take() {
-                use std::io::Read;
-                let mut bytes = Vec::new();
-                stderr.read_to_end(&mut bytes).ok();
-                if !bytes.is_empty() {
-                    message.push_str(": ");
-                    message.push_str(&String::from_utf8_lossy(&bytes));
-                }
-            }
-            bail!("{message}");
+            return exit_result(path, status, &mut child);
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -69,8 +81,7 @@ pub fn find_executable(name: &str, path_var: &OsStr) -> Option<PathBuf> {
     None
 }
 
-/// Resolve a bwrap executable from a daemon-owned PATH-style value.
-pub fn resolve_bwrap(path_var: Option<&OsStr>) -> Result<PathBuf> {
+fn search_path_value(path_var: Option<&OsStr>) -> Result<PathBuf> {
     let path_var = path_var
         .map(OsStr::to_os_string)
         .or_else(|| std::env::var_os("PATH"))
@@ -79,7 +90,13 @@ pub fn resolve_bwrap(path_var: Option<&OsStr>) -> Result<PathBuf> {
     if path.as_os_str().is_empty() {
         bail!("PATH is empty; cannot find bubblewrap");
     }
-    if path.is_absolute() && path.components().count() > 1 && path.is_file() {
+    Ok(path)
+}
+
+/// Resolve a bwrap executable from a daemon-owned PATH-style value.
+pub fn resolve_bwrap(path_var: Option<&OsStr>) -> Result<PathBuf> {
+    let path = search_path_value(path_var)?;
+    if path.is_absolute() && path.is_file() {
         return fs::canonicalize(&path).context("canonicalizing bwrap path");
     }
     let candidate_name = if path.is_file() {

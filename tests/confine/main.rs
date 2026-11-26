@@ -212,7 +212,10 @@ fn populate_omp_overlay(fixture: &Fixture) {
     std::fs::write(root.join("config.yml"), "config").expect("OMP config");
 }
 
+mod bwrap_probe_messages;
+mod git_config_case;
 mod git_dirs_and_roots;
+mod grant_dir_reasons;
 mod grant_writes_and_create;
 mod grants_links_and_env;
 mod grants_runtime;

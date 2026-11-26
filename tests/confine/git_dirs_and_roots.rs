@@ -625,14 +625,21 @@ fn git_common_dir_with_timeout(cwd: PathBuf, home: PathBuf) -> Option<(PathBuf, 
         .expect("git common directory lookup timed out")
 }
 
-#[test]
-fn git_common_dir_rejects_fifo_commondir_without_hanging() {
-    let fixture = Fixture::new();
+fn setup_shape_valid_worktree(fixture: &Fixture) -> (PathBuf, PathBuf) {
     let worktree = fixture.cwd.join("worktree");
     let metadata = fixture.cwd.join("meta/worktree");
     std::fs::create_dir_all(&worktree).expect("worktree");
-    std::fs::create_dir_all(&metadata).expect("worktree metadata");
+    std::fs::create_dir_all(metadata.join("objects")).expect("gitdir objects");
+    std::fs::create_dir_all(metadata.join("refs")).expect("gitdir refs");
+    std::fs::write(metadata.join("HEAD"), "ref: refs/heads/main\n").expect("gitdir HEAD");
     std::fs::write(worktree.join(".git"), "gitdir: ../meta/worktree\n").expect("gitdir marker");
+    (worktree, metadata)
+}
+
+#[test]
+fn git_common_dir_rejects_fifo_commondir_without_hanging() {
+    let fixture = Fixture::new();
+    let (worktree, metadata) = setup_shape_valid_worktree(&fixture);
     let fifo = metadata.join("commondir");
     let status = Command::new("mkfifo").arg(&fifo).status().expect("mkfifo");
     assert!(status.success(), "mkfifo status: {status}");
@@ -665,11 +672,8 @@ fn git_common_dir_rejects_oversized_git_marker() {
 #[test]
 fn git_common_dir_rejects_directory_commondir() {
     let fixture = Fixture::new();
-    let worktree = fixture.cwd.join("worktree");
-    let metadata = fixture.cwd.join("meta/worktree");
-    std::fs::create_dir_all(&worktree).expect("worktree");
+    let (worktree, metadata) = setup_shape_valid_worktree(&fixture);
     std::fs::create_dir_all(metadata.join("commondir")).expect("commondir directory");
-    std::fs::write(worktree.join(".git"), "gitdir: ../meta/worktree\n").expect("gitdir marker");
     let result = git_common_dir_with_timeout(
         std::fs::canonicalize(&worktree).expect("canonical worktree"),
         std::fs::canonicalize(&fixture.home).expect("canonical home"),

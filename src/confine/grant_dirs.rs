@@ -17,6 +17,28 @@ struct GrantDirScope {
     hidden: Vec<PathBuf>,
 }
 
+impl GrantDirScope {
+    fn overlaps_reserved(&self, path: &Path) -> bool {
+        paths_overlap(path, &self.root) || paths_overlap(path, &self.runtime_dir)
+    }
+
+    fn hides(&self, path: &Path) -> bool {
+        self.hidden.iter().any(|hidden| is_within(path, hidden))
+    }
+
+    fn ancestor_unwritable(&self, ancestor: &Path) -> bool {
+        if !is_within(ancestor, &self.home) || self.overlaps_reserved(ancestor) {
+            return true;
+        }
+        if ancestor != self.home
+            && check_write_allowed(ancestor, &self.home, &self.root, false).is_err()
+        {
+            return true;
+        }
+        self.hides(ancestor)
+    }
+}
+
 fn grant_dir_scope(
     request: &ConfineRequest,
     harness: Harness,
@@ -52,23 +74,16 @@ fn grant_dir_scope(
     })
 }
 
-fn grant_dir_problem(source: &Path, scope: &GrantDirScope) -> Option<String> {
-    if source.exists() {
-        if let Ok(canonical) = fs::canonicalize(source)
-            && (paths_overlap(&canonical, &scope.root)
-                || paths_overlap(&canonical, &scope.runtime_dir)
-                || scope
-                    .hidden
-                    .iter()
-                    .any(|hidden| is_within(&canonical, hidden)))
-        {
-            return Some("path overlaps protected location".into());
-        }
-        if let Some(path) = symlink_component(source) {
-            return Some(format!("symlink component: {}", path.display()));
-        }
-        return None;
+fn existing_source_problem(source: &Path, scope: &GrantDirScope) -> Option<String> {
+    if fs::canonicalize(source)
+        .is_ok_and(|canonical| scope.overlaps_reserved(&canonical) || scope.hides(&canonical))
+    {
+        return Some("path overlaps protected location".into());
     }
+    symlink_component(source).map(|path| format!("symlink component: {}", path.display()))
+}
+
+fn missing_source_problem(source: &Path, scope: &GrantDirScope) -> Option<String> {
     if let Some(path) = symlink_component(source) {
         return Some(format!("symlink component: {}", path.display()));
     }
@@ -78,19 +93,30 @@ fn grant_dir_problem(source: &Path, scope: &GrantDirScope) -> Option<String> {
     let Ok(ancestor) = fs::canonicalize(ancestor) else {
         return Some("ancestor cannot be canonicalized".into());
     };
-    if !is_within(&ancestor, &scope.home)
-        || paths_overlap(&ancestor, &scope.root)
-        || paths_overlap(&ancestor, &scope.runtime_dir)
-        || (ancestor != scope.home
-            && check_write_allowed(&ancestor, &scope.home, &scope.root, false).is_err())
-        || scope
-            .hidden
-            .iter()
-            .any(|hidden| is_within(&ancestor, hidden))
-    {
-        return Some("ancestor is not writable".into());
+    scope
+        .ancestor_unwritable(&ancestor)
+        .then(|| "ancestor is not writable".into())
+}
+
+fn grant_dir_problem(source: &Path, scope: &GrantDirScope) -> Option<String> {
+    if source.exists() {
+        existing_source_problem(source, scope)
+    } else {
+        missing_source_problem(source, scope)
     }
-    None
+}
+
+fn ensure_grant_dir(source: PathBuf, scope: &GrantDirScope, create: bool) -> Option<Unresolved> {
+    let reason = match grant_dir_problem(&source, scope) {
+        Some(reason) => reason,
+        None if !create || source.exists() => return None,
+        None => fs::create_dir_all(&source).err()?.to_string(),
+    };
+    Some(Unresolved {
+        option: "grant",
+        path: source,
+        reason,
+    })
 }
 
 /// Best-effort creation for the tool directories requested by grants.
@@ -106,30 +132,11 @@ pub fn ensure_grant_dirs(
     let Some(scope) = grant_dir_scope(request, harness, host) else {
         return Vec::new();
     };
-    let mut unresolved = Vec::new();
-    for name in &request.grants {
-        let Ok(grant) = grant::lookup(name) else {
-            continue;
-        };
-        for relative in grant.create {
-            let source = user_path(relative, &scope.home);
-            if let Some(reason) = grant_dir_problem(&source, &scope) {
-                unresolved.push(Unresolved {
-                    option: "grant",
-                    path: source,
-                    reason,
-                });
-            } else if create
-                && !source.exists()
-                && let Err(error) = fs::create_dir_all(&source)
-            {
-                unresolved.push(Unresolved {
-                    option: "grant",
-                    path: source,
-                    reason: error.to_string(),
-                });
-            }
-        }
-    }
-    unresolved
+    request
+        .grants
+        .iter()
+        .filter_map(|name| grant::lookup(name).ok())
+        .flat_map(|grant| grant.create.iter())
+        .filter_map(|relative| ensure_grant_dir(user_path(relative, &scope.home), &scope, create))
+        .collect()
 }
