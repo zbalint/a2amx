@@ -136,3 +136,16 @@ None crossed: the module renders bytes from values the daemon already validated 
 7. Mutation pass: none, since no test and no behaviour changes; the tester's pass is the order check (3) and the full-suite run.
 
 After the REPORT the developer stays idle and starts nothing until the architect assigns again.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-junior-developer` on the omp harness (its report names no model). Tester pass: none (the spec asks for none; the order check was the architect's and the consultant's).
+
+BLOCKED/amend cycles: 0.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The acceptance diff must be `diff old new \| rg '^[<>]' \| LC_ALL=C sort` (a raw diff prints hunk headers and position-order lines); the uses check `rg -n 'status::' src tests` failed on `crate::status::` imports; "each shared item has two callers" was false for three items; the line counts left out `use` lines; `docs/backlog.md` F72 names `status.rs` | Spec corrected before the lock; the F72 line updated after the split |
+| Architect review | architect | The first full suite of this diff failed once in `team::reset_and_validation::team_up_forwards_reset_configuration_and_consent` ("screen not ready"), a known intermittent failure that passed three times alone and in the developer's own full run (1490 passed) | Recorded as intermittent, not a diff problem |
+
+No problem was found in the junior developer's diff: the sorted move check printed exactly the 41 lines of the spec, the order-preserving comparison against the architect's rebuild differed only in the `use` blocks, all comment lines are identical to the old file, `cs` scores 10.00 on the four modules (N/A on the 7-line root), and the consultant's design read had no findings.
