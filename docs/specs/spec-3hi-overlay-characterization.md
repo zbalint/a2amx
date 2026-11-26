@@ -66,3 +66,19 @@ git status --short
 | `Fixture` fields are reachable from a child module | `tests/confine/main.rs:24-31` | probe compiled |
 | no existing test covers a successful symlinked-agent plan | `tests/confine/harnesses.rs:530-547` and `:1051-1068`, refusals only | read; grep `overlay_parents` in `tests/` hits only emptiness asserts |
 | `dry_run_lines` signature `(plan, resolved_cwd, accepted: &BTreeSet<String>)` | `launch.rs:44` | read; no test calls it, so the developer passes `fixture.cwd` as the resolved cwd and an empty `BTreeSet<String>`, and BLOCKs if that does not print the `overlay:` line |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-junior-developer` on the omp harness, planning and working model `openai-codex/gpt-5.6-luna` (advisor model not exposed by the harness); tester `a2amx-tester` on the omp harness, planning and working model `opencode-go/deepseek-v4.1-flash` (advisor model not exposed).
+
+BLOCKED/amend cycles: one spec amendment (`bfc0dba`, the mutation form), no BLOCKED reply.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Before the draft | consultant (read-only) | Spec 3hc's claim that the three overlay lists are always empty through `confine::plan` is false for an OMP `~/.omp/agent` symlinked outside `~/.omp` | Architect probe confirmed it (`overlay_parents == [target]`); this spec pins it |
+| Draft review | consultant | The claims table cited one refusal test where two exist (`harnesses.rs:530-547` and `:1051-1068`); the spec did not forbid reusing `populate_omp_overlay`, which would break the mutant reasoning; the mutation form was ambiguous; the "harness root" wording described a check the code does not have | All four applied before locking (`3f9807b`) |
+| Tester pass | tester (omp) | The spec's in-checkout mutation form (taken from AGENTS.md) contradicts the tester skill's scratch-only rule; the tester declined to mutate the shared source and asked | Architect first told the tester to skip mutation (wrong: mutation is the tester's job); the owner corrected it; spec amended (`bfc0dba`) and the tester ran the pass in scratch |
+| Tester pass | tester (omp) | Its mutation scratch used the checkout's `CARGO_TARGET_DIR`, so its first reruns after the mutants may have run a mutant binary | Self-found; `cargo clean -p a2amx` and a full pristine rerun; the assignment had not required an isolated target dir |
+| Architect review | architect | none found in the diff: four tests match section 2, literal expected values, no suppressions, no deleted tests | n/a |
+
+Tester mutants: (a) empty return killed by tests 1 and 2; (b) dropped skip killed by tests 3 and 4; its own (c) `parent == home` guard survives the new file and is killed by five existing tests; its own (d) `!parent.is_dir()` is equivalent. Architect spot-check (scratch copy with its own target dir, deleted afterwards; `harness_data.rs` restored and `cmp`-identical after each): (a) killed by tests 1 and 2, (b) killed by tests 3 and 4, own mutant (e) dropping `writable` from the skip list killed by tests 3 and 4. Fresh checks by the architect: `cargo test` 1494 passed, 3 ignored, 0 failed (1490 baseline plus the four new tests); `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` clean.

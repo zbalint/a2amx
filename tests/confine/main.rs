@@ -220,6 +220,7 @@ mod harness_config;
 mod harnesses;
 mod limits_and_hides;
 mod notices_and_preflight;
+mod overlay_symlinked_agent;
 mod paths_and_git_config;
 mod plan_basics;
 mod real_bwrap;
