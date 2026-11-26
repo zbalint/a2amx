@@ -14,6 +14,8 @@ All notable user-visible changes are listed here. The format follows
 
 - The activity notices no longer watch a session while it is starting: a Claude, Codex or OMP session that has not yet shown its ready screen is not observed, so starting a team no longer produces `idle (was working)` notices for peers that did no work. A `working_after` below ten seconds can still announce the screen drawn when the session becomes ready. Agy and generic sessions are unchanged. This is not a breaking change.
 
+- Starting a confined session no longer changes the permissions of a harness data directory or an OMP SQLite sidecar file that already exists. It used to set them to 0700 and 0600, following symlinks, before the confinement checks ran. Missing directories and sidecars are still created private, a data directory that is a link keeps working as the confinement checks decide, and a dangling link at a data directory is now refused with the confinement message instead of a raw `File exists` error. A data directory that exists without the owner write bit is no longer repaired.
+
 ### Removed
 
 - **Breaking:** the one-time move of the old state directory (`~/.local/state/a2amx`) into `~/.a2amx` is gone, together with the old-layout warning for an explicit home. Upgrade from a version before 0.4.0 through 0.4.0, or move the files by hand.

@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::io;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
@@ -301,19 +302,28 @@ fn outside_error(path: &Path, target: &Path, root: &Path) -> anyhow::Error {
 }
 
 fn secure_data_dir(directory: &Path) -> Result<()> {
-    if directory.exists() {
-        if !directory.is_dir() {
-            bail!(
-                "harness data path is not a directory: {}",
-                directory.display()
-            );
+    match fs::symlink_metadata(directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            directory.parent().map(fs::create_dir_all).transpose()?;
+            let Err(create_err) = fs::DirBuilder::new().mode(0o700).create(directory) else {
+                return Ok(());
+            };
+            if create_err.kind() != io::ErrorKind::AlreadyExists {
+                return Err(create_err.into());
+            }
         }
-        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
-        return Ok(());
+        Err(error) => return Err(error.into()),
     }
-    fs::create_dir_all(directory)?;
-    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
-    Ok(())
+    match fs::metadata(directory) {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => bail!(
+            "harness data path is not a directory: {}",
+            directory.display()
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Create the existing-harness data directories that are writable by a plan.
@@ -332,15 +342,20 @@ pub fn ensure_data_dirs(harness: Harness, home: &Path) -> Result<()> {
 }
 
 fn ensure_sidecars(database: &Path) -> Result<()> {
+    // SQLite cannot create WAL/SHM sidecars inside a read-only directory on a cold start.
     for sidecar in &sqlite_files(database)[1..] {
-        if !sidecar.exists() {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(sidecar)?;
+        let Err(error) = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(sidecar)
+        else {
+            continue;
+        };
+        // Leave an existing sidecar or target untouched; fail on a dangling or looping link.
+        if error.kind() != io::ErrorKind::AlreadyExists || fs::metadata(sidecar).is_err() {
+            return Err(error.into());
         }
-        fs::set_permissions(sidecar, fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
 }

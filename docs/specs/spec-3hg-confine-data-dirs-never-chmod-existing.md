@@ -104,3 +104,24 @@ No public interface changes: no CLI flag, config or team-file key, wire message,
 | `cargo test --test confine` and `cargo test --test daemon` pass | architect |
 
 After the REPORT the developer stays idle and starts nothing until the architect assigns again.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the agy harness (it reported "Antigravity (Gemini 4 Hydrogen (Medium))" and did not separate planning, working and advisor models); tester: the pass was not run (below).
+
+BLOCKED/amend cycles: 0 spec amendments. Three BLOCKED replies, none a contradiction in the spec: the junior developer's (m_9319, before any edit) and the tester's two (m_9357, m_9359), all citing the OMP runtime rule "NEVER run checks between edits".
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Before the first draft | architect (Sonnet 5.5) | Told the owner that a data directory symlinked elsewhere "works today"; false: the plan already refuses an outside-root or dangling link (`tests/confine/harnesses.rs:497`, `:910`), and the defect was the call order (chmod at `launch.rs:157`, guards at `:160`) | Corrected to the owner; the spec was written on the real behaviour, with a claims table |
+| Draft review, first pass | consultant | The sidecar test row duplicated `:563`; the case with no test was a sidecar that is a link to a file (the old code chmods the target) | Row replaced by `sidecar_symlinked_to_a_file_keeps_that_files_mode`; the attack path named in section 5 |
+| Draft review, first pass | consultant | A dangling sidecar link would have started a launch that failed before | Rule changed so it still fails; contract test added |
+| Draft review, first pass | consultant | Rule 3 left errors other than `NotFound` undecided; section 6 listed one changed case and missed two; the race branch skipped rule 3; the `use` line and the umask were unstated | Rule 3 split into three outcomes, the race branch re-evaluates rules 2 and 3, section 6 and the umask paragraph rewritten |
+| Draft review, second pass | consultant | The loop-error branch of rule 3 had no test, so a mutant survived; section 6 said "two cases" and listed three; an "unreadable target" example was wrong (stat on a mode-000 directory succeeds); mutants were not mapped to tests | `data_dir_symlink_loop_still_fails` added, wording fixed, mutant-to-test list written into acceptance |
+| Implementation | junior developer (omp) | Refused the assignment before any edit (m_9319); when the owner asked later it called the refusal a misreading | The owner released the architect to assign any peer; the spec went to the senior developer |
+| Tester pass | tester (omp) | Refused twice (m_9357, m_9359), quoting its runtime rule "Run nothing while edits are still coming ... NEVER run checks between edits"; no pass ran | Architect ran the mutants (below); owner told that omp agents cannot run a red phase or a mutation pass |
+| Architect review | architect | The first full suite had one failure, `daemon_lifecycle::failed_start_after_the_tokens_are_written_removes_every_state_file` ("another a2amx daemon is running"), a lock race under load in code this diff does not reach | Passes alone three times and with the whole `daemon` target (52 of 52); a second full run was green; recorded as an intermittent failure, not a diff problem |
+
+No problem was found in the senior developer's diff itself.
+
+Architect checks (2026-11-26, tree `a119e8e` plus the diff, umask 0022): production file sha256 `b70fe46e…` unchanged by every run; 11 of 11 mutants killed (the eight of acceptance plus `0o770` leaf, a non-directory passing, `create_new(false)`), each by the named test; red phase on `git show HEAD:src/confine/harness_data.rs` fails exactly the four tests of section 3 (rows 1, 2, 4 and the changed assertions) and passes the other seventeen `harnesses::` tests; five reruns of `harnesses::` stable (21 passed); `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean; `cs check` 9.09 before and after with the same four warnings; full `cargo test --no-fail-fast` 65 suites, 1488 passed, 0 failed, 3 ignored (baseline 1482 plus six new tests).

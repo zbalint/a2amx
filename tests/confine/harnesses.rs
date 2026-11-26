@@ -1094,21 +1094,21 @@ fn harness_data_validation_checks_claude_home_file_and_check_order() {
 
 #[test]
 fn ensure_data_dirs_and_files_pin_errors_and_permissions() {
-    // ensure_data_dirs: existing dir with 0755 is chmodded to 0700; data path as file is refused with exact text.
+    // ensure_data_dirs: existing dir with 0755 keeps 0755; data path as file is refused with exact text.
     let fixture = Fixture::new();
     let gemini = fixture.home.join(".gemini");
     std::fs::create_dir_all(&gemini).expect("gemini");
     let agy_dir = gemini.join("antigravity-cli");
     std::fs::create_dir_all(&agy_dir).expect("agy dir");
     std::fs::set_permissions(&agy_dir, std::fs::Permissions::from_mode(0o755)).expect("chmod 0755");
-    confine::ensure_data_dirs(Harness::Agy, &fixture.home).expect("chmod existing dir");
+    confine::ensure_data_dirs(Harness::Agy, &fixture.home).expect("existing dir");
     assert_eq!(
         std::fs::metadata(&agy_dir)
             .expect("meta")
             .permissions()
             .mode()
             & 0o777,
-        0o700
+        0o755
     );
 
     let file_err = Fixture::new();
@@ -1126,7 +1126,7 @@ fn ensure_data_dirs_and_files_pin_errors_and_permissions() {
         )
     );
 
-    // ensure_data_files: resets existing sidecar mode 0644 -> 0600, and skips a .db directory.
+    // ensure_data_files: keeps existing sidecar mode 0644, and skips a .db directory.
     let omp = Fixture::new();
     let agent = omp.home.join(".omp/agent");
     std::fs::create_dir_all(&agent).expect("agent");
@@ -1143,7 +1143,7 @@ fn ensure_data_dirs_and_files_pin_errors_and_permissions() {
             .permissions()
             .mode()
             & 0o777,
-        0o600
+        0o644
     );
     assert!(!agent.join("dir.db-wal").exists());
     assert!(!agent.join("a.db-wal-wal").exists());
@@ -1225,4 +1225,136 @@ fn codex_ignores_symlinked_root_and_claude_allows_home_file_link_and_explicit_wr
             state_target_canon.display()
         )
     );
+}
+
+#[test]
+fn existing_data_dir_symlinked_elsewhere_keeps_its_target_mode() {
+    let fixture = Fixture::new();
+    let gemini = fixture.home.join(".gemini");
+    std::fs::create_dir_all(&gemini).expect("gemini");
+    let target = fixture.home.join("outside-agy");
+    std::fs::create_dir_all(&target).expect("outside target");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod 0755 target");
+    let agy_dir = gemini.join("antigravity-cli");
+    symlink(&target, &agy_dir).expect("agy symlink");
+
+    confine::ensure_data_dirs(Harness::Agy, &fixture.home).expect("ensure_data_dirs");
+    assert!(
+        std::fs::symlink_metadata(&agy_dir)
+            .expect("link metadata")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::metadata(&target)
+            .expect("target metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+}
+
+#[test]
+fn dangling_data_dir_symlink_is_left_for_the_plan() {
+    let fixture = Fixture::new();
+    let gemini = fixture.home.join(".gemini");
+    std::fs::create_dir_all(&gemini).expect("gemini");
+    let target = fixture.home.join("missing-agy-target");
+    let agy_dir = gemini.join("antigravity-cli");
+    symlink(&target, &agy_dir).expect("dangling agy symlink");
+
+    confine::ensure_data_dirs(Harness::Agy, &fixture.home).expect("ensure_data_dirs");
+    assert!(
+        std::fs::symlink_metadata(&agy_dir)
+            .expect("link metadata")
+            .file_type()
+            .is_symlink()
+    );
+    assert!(std::fs::symlink_metadata(&target).is_err());
+}
+
+#[test]
+fn missing_data_dir_is_created_private_with_default_parents() {
+    let fixture = Fixture::new();
+    let omp = fixture.home.join(".omp");
+    std::fs::create_dir_all(&omp).expect("omp");
+    let agent = omp.join("agent");
+    assert!(!agent.exists());
+
+    confine::ensure_data_dirs(Harness::Omp, &fixture.home).expect("ensure_data_dirs");
+    assert!(agent.is_dir());
+    let sessions = agent.join("sessions");
+    assert!(sessions.is_dir());
+    assert_eq!(
+        std::fs::metadata(&sessions)
+            .expect("sessions metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+}
+
+#[test]
+fn sidecar_symlinked_to_a_file_keeps_that_files_mode() {
+    let fixture = Fixture::new();
+    let agent = fixture.home.join(".omp/agent");
+    std::fs::create_dir_all(&agent).expect("agent");
+    std::fs::write(agent.join("a.db"), "db").expect("db");
+    let target = fixture.home.join("outside-wal");
+    std::fs::write(&target, "wal").expect("outside wal");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+        .expect("chmod 0644 target");
+    let wal = agent.join("a.db-wal");
+    symlink(&target, &wal).expect("wal symlink");
+
+    confine::ensure_data_files(Harness::Omp, &fixture.home).expect("ensure_data_files");
+    assert!(
+        std::fs::symlink_metadata(&wal)
+            .expect("link metadata")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::metadata(&target)
+            .expect("target metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o644
+    );
+}
+
+#[test]
+fn dangling_sidecar_symlink_still_fails_the_launch() {
+    let fixture = Fixture::new();
+    let agent = fixture.home.join(".omp/agent");
+    std::fs::create_dir_all(&agent).expect("agent");
+    std::fs::write(agent.join("a.db"), "db").expect("db");
+    let target = fixture.home.join("missing-wal-target");
+    let wal = agent.join("a.db-wal");
+    symlink(&target, &wal).expect("dangling wal symlink");
+
+    let error =
+        confine::ensure_data_files(Harness::Omp, &fixture.home).expect_err("dangling sidecar");
+    assert_eq!(
+        error
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::AlreadyExists)
+    );
+    assert!(std::fs::symlink_metadata(&target).is_err());
+}
+
+#[test]
+fn data_dir_symlink_loop_still_fails() {
+    let fixture = Fixture::new();
+    let gemini = fixture.home.join(".gemini");
+    std::fs::create_dir_all(&gemini).expect("gemini");
+    let agy_dir = gemini.join("antigravity-cli");
+    symlink(&agy_dir, &agy_dir).expect("self-looping symlink");
+
+    assert!(confine::ensure_data_dirs(Harness::Agy, &fixture.home).is_err());
 }
