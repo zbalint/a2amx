@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::grant;
 use crate::harness::Harness;
 
-use super::{CLOSING_NOTICE, CREDENTIAL_ENV, ENV_PATH, Plan, granted_env};
+use super::{CLOSING_NOTICE, ENV_PATH, Plan};
 
 const NOTICE_LIMIT: usize = 12 * 1024;
 fn capped_paths(paths: &[PathBuf]) -> String {
@@ -40,33 +40,28 @@ fn truncate_before_closing(mut text: String) -> String {
     text
 }
 
-/// Render the confinement lines in a team's dry-run report.
-pub fn dry_run_lines(plan: &Plan, resolved_cwd: &Path, accepted: &BTreeSet<String>) -> String {
-    let mode = if plan.auto { "auto" } else { "manual" };
-    let mut output = format!("  confinement: {mode}\n");
-    if plan.auto {
-        for reason in &plan.reasons {
-            output.push_str(&format!("  {}: {}\n", reason.grant, reason.reason));
-        }
-        let not_accepted = plan
-            .reasons
-            .iter()
-            .filter(|reason| !accepted.contains(&reason.grant))
-            .map(|reason| reason.grant.as_str())
-            .collect::<Vec<_>>();
-        if !not_accepted.is_empty() {
-            output.push_str(&format!(
-                "  not yet accepted: {}\n",
-                not_accepted.join(", ")
-            ));
-        }
+fn auto_reason_lines(plan: &Plan, accepted: &BTreeSet<String>) -> String {
+    let mut output = String::new();
+    for reason in &plan.reasons {
+        output.push_str(&format!("  {}: {}\n", reason.grant, reason.reason));
     }
-    if !plan.grants.is_empty() {
-        output.push_str(&format!("  grants: {}\n", plan.grants.join(", ")));
+    let not_accepted = plan
+        .reasons
+        .iter()
+        .filter(|reason| !accepted.contains(&reason.grant))
+        .map(|reason| reason.grant.as_str())
+        .collect::<Vec<_>>();
+    if !not_accepted.is_empty() {
+        output.push_str(&format!(
+            "  not yet accepted: {}\n",
+            not_accepted.join(", ")
+        ));
     }
-    if !plan.keep_env.is_empty() {
-        output.push_str(&format!("  keep_env: {}\n", plan.keep_env.join(", ")));
-    }
+    output
+}
+
+fn path_lines(plan: &Plan, resolved_cwd: &Path) -> String {
+    let mut output = String::new();
     for path in plan.writable.iter().filter(|path| **path != resolved_cwd) {
         output.push_str(&format!("  writable: {}\n", path.display()));
     }
@@ -82,6 +77,11 @@ pub fn dry_run_lines(plan: &Plan, resolved_cwd: &Path, accepted: &BTreeSet<Strin
     for path in plan.unsaved_files() {
         output.push_str(&format!("  unsaved: {}\n", path.display()));
     }
+    output
+}
+
+fn unresolved_lines(plan: &Plan) -> String {
+    let mut output = String::new();
     for unresolved in &plan.unresolved {
         output.push_str(&format!(
             "  unresolved: {} ({}: {})\n",
@@ -100,10 +100,26 @@ pub fn dry_run_lines(plan: &Plan, resolved_cwd: &Path, accepted: &BTreeSet<Strin
     output
 }
 
-/// Render the operator-facing notice from the exact mount plan.
-pub fn notice(plan: &Plan) -> String {
-    let writable: Cow<'_, [PathBuf]> = match plan.writable.iter().position(|path| path == &plan.cwd)
-    {
+/// Render the confinement lines in a team's dry-run report.
+pub fn dry_run_lines(plan: &Plan, resolved_cwd: &Path, accepted: &BTreeSet<String>) -> String {
+    let mode = if plan.auto { "auto" } else { "manual" };
+    let mut output = format!("  confinement: {mode}\n");
+    if plan.auto {
+        output.push_str(&auto_reason_lines(plan, accepted));
+    }
+    if !plan.grants.is_empty() {
+        output.push_str(&format!("  grants: {}\n", plan.grants.join(", ")));
+    }
+    if !plan.keep_env.is_empty() {
+        output.push_str(&format!("  keep_env: {}\n", plan.keep_env.join(", ")));
+    }
+    output.push_str(&path_lines(plan, resolved_cwd));
+    output.push_str(&unresolved_lines(plan));
+    output
+}
+
+fn writable_first(plan: &Plan) -> Cow<'_, [PathBuf]> {
+    match plan.writable.iter().position(|path| path == &plan.cwd) {
         Some(0) | None => Cow::Borrowed(&plan.writable),
         Some(index) => {
             let mut reordered = Vec::with_capacity(plan.writable.len());
@@ -117,7 +133,58 @@ pub fn notice(plan: &Plan) -> String {
             );
             Cow::Owned(reordered)
         }
+    }
+}
+
+fn harness_config_line(plan: &Plan) -> Option<String> {
+    let path = plan.harness_config.as_ref()?;
+    let source = if plan.grants.iter().any(|grant| grant == "harness-config") {
+        "grant harness-config"
+    } else {
+        "default for this harness"
     };
+    Some(format!(
+        "{}: harness config, writable and persistent ({}).\n",
+        path.display(),
+        source
+    ))
+}
+
+fn credential_line(plan: &Plan) -> String {
+    let unset_credentials = plan.unset_credentials().collect::<Vec<_>>();
+    let mut line = format!(
+        "Credential environment variables are unset: {}",
+        unset_credentials.join(", ")
+    );
+    if !plan.keep_env.is_empty() {
+        line.push_str("; kept: ");
+        line.push_str(&plan.keep_env.join(", "));
+    }
+    line.push_str(".\n");
+    line
+}
+
+fn container_engines_line(plan: &Plan) -> String {
+    let granted = plan
+        .grants
+        .iter()
+        .filter_map(|name| grant::all().iter().find(|grant| grant.name == name))
+        .filter(|grant| !grant.sockets.is_empty())
+        .map(|grant| grant.name)
+        .collect::<Vec<_>>();
+    if granted.is_empty() {
+        "Container engines are restricted.\n".to_owned()
+    } else {
+        format!(
+            "Container engines allowed: {}. Other container engines are restricted.\n",
+            granted.join(", ")
+        )
+    }
+}
+
+/// Render the operator-facing notice from the exact mount plan.
+pub fn notice(plan: &Plan) -> String {
+    let writable = writable_first(plan);
     let mut text = String::new();
     text.push_str("This session is confined.\n");
     text.push_str("Writable locations: ");
@@ -149,54 +216,19 @@ pub fn notice(plan: &Plan) -> String {
         text.push_str(reason);
         text.push('\n');
     }
-    if let Some(path) = &plan.harness_config {
-        let source = if plan.grants.iter().any(|grant| grant == "harness-config") {
-            "grant harness-config"
-        } else {
-            "default for this harness"
-        };
-        text.push_str(&format!(
-            "{}: harness config, writable and persistent ({}).\n",
-            path.display(),
-            source
-        ));
+    if let Some(line) = harness_config_line(plan) {
+        text.push_str(&line);
     }
     if !plan.grants.is_empty() {
         text.push_str("Granted: ");
         text.push_str(&plan.grants.join(", "));
         text.push_str(".\n");
     }
-    let released = granted_env(&plan.grants);
-    let unset_credentials = CREDENTIAL_ENV
-        .iter()
-        .copied()
-        .filter(|name| !released.contains(*name) && !plan.keep_env.iter().any(|kept| kept == *name))
-        .collect::<Vec<_>>();
-    text.push_str("Credential environment variables are unset: ");
-    text.push_str(&unset_credentials.join(", "));
-    if !plan.keep_env.is_empty() {
-        text.push_str("; kept: ");
-        text.push_str(&plan.keep_env.join(", "));
-    }
-    text.push_str(".\n");
+    text.push_str(&credential_line(plan));
     text.push_str(
         "Everything else is read-only. /tmp is private to this session and discarded when it ends; paths under a peer's /tmp cannot be read.\n",
     );
-    let granted = plan
-        .grants
-        .iter()
-        .filter_map(|name| grant::all().iter().find(|grant| grant.name == name))
-        .filter(|grant| !grant.sockets.is_empty())
-        .map(|grant| grant.name)
-        .collect::<Vec<_>>();
-    if granted.is_empty() {
-        text.push_str("Container engines are restricted.\n");
-    } else {
-        text.push_str(&format!(
-            "Container engines allowed: {}. Other container engines are restricted.\n",
-            granted.join(", ")
-        ));
-    }
+    text.push_str(&container_engines_line(plan));
     text.push_str(
         "A Read-only file system error is authoritative where this notice and the system disagree.",
     );

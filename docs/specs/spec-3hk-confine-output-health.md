@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-LOCKED after consultant review m_9530 (all findings applied: B1 behaviour check replaced by the Step A text pins, B2 three full-text tests added, single-use helpers dropped, shared `unset_credentials`, corrected callers and anchors, concrete mutants; no second review because the review-driven changes drop helpers and add pins and do not change a behaviour rule). Context `a2amx-3hk-confine-output-health`. Location: main checkout `/home/zbalint/workspace/a2amx`, branch `develop`, HEAD at drafting `ef78e96`. Behaviour-preserving refactor, test-first. Public seams: `Plan::wrap`, `Plan::wrap_app_server`, `confine::notice`, `confine::dry_run_lines`.
+LOCKED and accepted. Locked after consultant review m_9530 (all findings applied: B1 behaviour check replaced by the Step A text pins, B2 three full-text tests added, single-use helpers dropped, shared `unset_credentials`, corrected callers and anchors, concrete mutants; no second review because the review-driven changes drop helpers and add pins and do not change a behaviour rule). Context `a2amx-3hk-confine-output-health`. Location: main checkout `/home/zbalint/workspace/a2amx`, branch `develop`, HEAD at drafting `ef78e96`. Behaviour-preserving refactor, test-first. Public seams: `Plan::wrap`, `Plan::wrap_app_server`, `confine::notice`, `confine::dry_run_lines`.
 
 Scope (edit): `src/confine/wrap.rs`, `src/confine/launch.rs` (its production code only: the `#[cfg(test)]` unit tests in the file, from `:244` on, are not edited), and `tests/confine/overlay_symlinked_agent.rs` (three new tests, section 2; it already holds the symlinked-OMP fixture `symlinked_agent_fixture`). Does not touch: any other source or test file, `docs/` other than this spec, `CHANGELOG.md`.
 
@@ -88,3 +88,20 @@ git status --short
 | notice and dry-run text have no full-text pin | `notices_and_preflight.rs` (line-level only), `tests/team/dry_run.rs:114-135`, `launch.rs:244-356` unit tests | read (consultant); grep |
 | callers: `notice` at `src/session/spawn.rs:230`, `src/daemon/launch.rs:610`; `dry_run_lines` at `src/commands/team/dry_run.rs:156`, `tests/confine/overlay_symlinked_agent.rs:55`; `wrap` at `src/confine/builder.rs:530`; `wrap_app_server` at `src/codex.rs:565`; `launch_argv` calls neither text function | grep | grep (consultant) |
 | tests that also pin wrap, notice or dry-run: `tests/confine/{harness_config,limits_and_hides,grants_links_and_env,overlay_symlinked_agent,plan_basics,paths_and_git_config,grant_writes_and_create,real_bwrap}.rs`, `tests/auto_confine/{dry_run_reports,daemon_use}.rs`, the `launch.rs` unit tests | grep | grep (consultant) |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the agy harness, planning and working model Gemini 4 Hydrogen (Medium), no advisor (single-slot harness); tester `a2amx-tester` on the omp harness, planning and working model `opencode-go/deepseek-v4.1-flash` (advisor model not exposed).
+
+BLOCKED/amend cycles: none (the pre-lock review's findings were applied before locking, no second review).
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The behaviour check (capture output before and after) cannot run: fixtures use random temp paths and tests print nothing; nothing pins the notice and dry-run text byte for byte | Replaced by Step A, three full-text pin tests written first and green on the old code |
+| Draft review | consultant | Single-use helpers (`check_argument_sizes`, `codex_socket_bind`, `first_occurrences`, `mount_order`) only hid branches; the credential filter was duplicated in `wrap.rs` and `launch.rs` | Helpers dropped; one shared `Plan::unset_credentials` with two callers |
+| Draft review | consultant | Callers, anchors and the test inventory in the claims table were wrong or incomplete (`launch_argv` calls neither text function; the Tmpfs and Codex bind anchors drifted); mutant (h) was undefined | Corrected before locking; (h) and (h2) defined as concrete changes |
+| Draft | architect | `BWRAP_PREFIX` was drafted as 14 tokens; it is 15 | Counted and corrected in the draft |
+| Tester pass | tester | Spec 6 expected mutant (h) to survive; it is killed (an ungiven credential grant plus `keep_env` makes the order observable) | Recorded; no fix needed |
+| Design read | consultant | Nits only: `path_key(&self.path)` repeated per arm in `Mount::bwrap_args`; six near-identical `mounts.extend` calls; `env_unsets` collects only to keep its `impl Iterator` return; `unset_credentials` would sit better beside `granted_env` in `confine.rs`; the pins sit in the overlay test file | Not applied: the first three follow the locked spec's shape and a change would invalidate the tested snapshot; placement and test location go to the later `confine.rs` and test specs |
+
+Tester mutants (scratch with its own `CARGO_TARGET_DIR`, deleted afterwards): 20 runs, (a)-(o), (h2) and four added: 18 killed, (c) hidden-after-writable SURVIVED as expected (the builder keeps `hidden` and `writable` disjoint), (h2) dedupe removal EQUIVALENT (the three env sources are disjoint). Architect spot-check (own scratch copy and target dir, deleted; `wrap.rs` restored and `cmp`-identical): (g) `unset_credentials` ignoring `keep_env` killed by four tests (both new notice pins and two `wrap_and_sockets` tests); (p) Codex directory bind moved after the remounts killed by `harnesses::codex_plan_wraps_own_socket_dir_with_read_only_and_read_write_variants`. Fresh checks by the architect: `cargo test` 1500 passed, 0 failed (1497 baseline plus three pins); `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` clean; `cs check` 10.00 on `wrap.rs` (was 8.45), `launch.rs` (was 9.07) and the test file; whole-tree cs warnings 905 to 894.
