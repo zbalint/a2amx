@@ -475,6 +475,102 @@ async fn message_status_visibility_and_hold_reason() {
     daemon.shutdown().await.unwrap();
 }
 
+async fn ready_recipient(admin: &mut Client, dir: &Path) -> (String, String, SocketAddr) {
+    let out = tempfile::NamedTempFile::new_in(dir).unwrap();
+    let response = admin
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf '\\033[?2004h'; printf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > \"$OUT\"; sleep 30".into(),
+            ],
+            cols: 40,
+            rows: 10,
+            cwd: None,
+            env: vec![("OUT".into(), out.path().to_string_lossy().into_owned())],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("recipient".into()),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Auto),
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await
+        .unwrap();
+    let session = match response {
+        Response::Created { session } => session,
+        response => panic!("unexpected response: {response:?}"),
+    };
+    let (token, address) = common::eventually(|| async {
+        let contents = std::fs::read_to_string(out.path()).ok()?;
+        let mut lines = contents.lines();
+        let token = lines.next()?.to_owned();
+        (token.len() == 64).then_some(())?;
+        Some((token, lines.next()?.parse().ok()?))
+    })
+    .await;
+    (session, token, address)
+}
+
+#[tokio::test]
+async fn observed_evidence_is_submission_observed_for_a_generic_recipient_and_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_sender_id, _sender_token, mut sender) = session(
+        &mut admin,
+        dir.path(),
+        Some("sender"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let (_recipient, recipient_token, recipient_addr) =
+        ready_recipient(&mut admin, dir.path()).await;
+    let mut recipient_client = Client::connect_addr(recipient_addr, &recipient_token)
+        .await
+        .unwrap();
+    accepted(
+        send(&mut sender, "recipient@host-a", "subject", "body").await,
+        "m_1",
+        None,
+    );
+    wait_status(&mut sender, "m_1", |message| message.state == "submitted").await;
+    let prompt = a2amx::messaging::render_envelope(
+        "m_1",
+        "sender@host-a",
+        "subject",
+        "body",
+        a2amx::messaging::Origin::Agent,
+    );
+    let Response::PromptVerdict { verdict, reason } = recipient_client
+        .request(Request::ReportPrompt { prompt })
+        .await
+        .unwrap()
+    else {
+        panic!("prompt report failed");
+    };
+    assert_eq!(verdict, "allow");
+    assert_eq!(reason, None);
+    let Response::Status { message } = status(&mut sender, "m_1").await else {
+        panic!("message status unavailable after receipt");
+    };
+    assert_eq!(message.evidence.as_deref(), Some("submission_observed"));
+    daemon.shutdown().await.unwrap();
+    let restarted = common::start_daemon_in(dir.path(), Some("host-a"), Limits::default()).await;
+    let mut restarted_admin = Client::connect(dir.path()).await.unwrap();
+    let Response::Status { message } = status(&mut restarted_admin, "m_1").await else {
+        panic!("message status unavailable after restart");
+    };
+    assert_eq!(message.evidence.as_deref(), Some("submission_observed"));
+    restarted.shutdown().await.unwrap();
+}
+
 async fn spawn_env_probe(
     client: &mut Client,
     out_path: &Path,

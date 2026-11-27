@@ -392,14 +392,60 @@ impl Runtime {
         let Some(message) = self.store.get(seq).await? else {
             return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
         };
-        if let Role::Session(sender) = role
-            && (message.boot != self.boot || message.sender_session != *sender)
-        {
+        if !self.may_read(role, &message) {
             return Ok(failed(code::UNKNOWN_MESSAGE, "unknown message"));
         }
         Ok(Response::Status {
             message: self.message_info(message).await?,
         })
+    }
+
+    fn may_read(&self, role: &Role, message: &Message) -> bool {
+        match role {
+            Role::Session(sender) => message.boot == self.boot && message.sender_session == *sender,
+            Role::Admin | Role::Gateway => true,
+        }
+    }
+
+    async fn hold_reason(
+        &self,
+        session: &Arc<Session>,
+        message: &Message,
+    ) -> anyhow::Result<Option<&'static str>> {
+        let queued = self
+            .store
+            .has_earlier_open(&self.boot, &message.recipient_session, message.seq)
+            .await?;
+        let channel = AnyChannel::for_session(session.clone());
+        if session.exit_code().is_some() {
+            Ok(None)
+        } else if session.deliver() == Deliver::Hold {
+            Ok(Some("deliver_hold"))
+        } else if let Some(reason) = channel.hold_reason() {
+            Ok(Some(reason))
+        } else if queued {
+            Ok(Some("queued"))
+        } else {
+            Ok(channel.unready_reason())
+        }
+    }
+
+    fn submission_evidence(&self, message: &Message) -> Option<&'static str> {
+        if message.state != MessageState::Submitted {
+            return None;
+        }
+        if !message.observed {
+            return Some("write_complete");
+        }
+        // shortcut: a removed session reports submission_observed for a
+        // native receipt; persist the channel with the receipt if that matters.
+        if lookup(self, &message.recipient_session).is_some_and(|(_, session)| {
+            matches!(session.harness(), Harness::Omp | Harness::Codex) || session.channel()
+        }) {
+            Some("native_receipt")
+        } else {
+            Some("submission_observed")
+        }
     }
 
     async fn message_info(&self, message: Message) -> anyhow::Result<MessageInfo> {
@@ -408,26 +454,11 @@ impl Runtime {
         } else {
             None
         };
-        let hold_reason = if let Some(session) = recipient {
-            let queued = self
-                .store
-                .has_earlier_open(&self.boot, &message.recipient_session, message.seq)
-                .await?;
-            let channel = AnyChannel::for_session(session.clone());
-            if session.exit_code().is_some() {
-                None
-            } else if session.deliver() == Deliver::Hold {
-                Some("deliver_hold")
-            } else if let Some(reason) = channel.hold_reason() {
-                Some(reason)
-            } else if queued {
-                Some("queued")
-            } else {
-                channel.unready_reason()
-            }
-        } else {
-            None
+        let hold_reason = match recipient {
+            Some(session) => self.hold_reason(&session, &message).await?,
+            None => None,
         };
+        let evidence = self.submission_evidence(&message);
         Ok(MessageInfo {
             id: format!("m_{}", message.seq),
             from: message.sender_address,
@@ -441,27 +472,7 @@ impl Runtime {
                 .map(str::to_owned),
             accepted_at: Some(message.accepted_at),
             updated_at: Some(message.updated_at),
-            evidence: if message.state == MessageState::Submitted {
-                Some(
-                    if message.observed {
-                        // shortcut: a removed session reports submission_observed for a
-                        // native receipt; persist the channel with the receipt if that matters.
-                        if lookup(self, &message.recipient_session).is_some_and(|(_, session)| {
-                            matches!(session.harness(), Harness::Omp | Harness::Codex)
-                                || session.channel()
-                        }) {
-                            "native_receipt"
-                        } else {
-                            "submission_observed"
-                        }
-                    } else {
-                        "write_complete"
-                    }
-                    .into(),
-                )
-            } else {
-                None
-            },
+            evidence: evidence.map(str::to_owned),
         })
     }
 }

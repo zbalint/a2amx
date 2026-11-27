@@ -72,3 +72,22 @@ git status --short
 | the hold priority and evidence rule above are today's behaviour | `views.rs:405-467` | read |
 | PTY channel holds are `hold_name` strings (`human_draft`, `unsubmitted_envelope`, `corrupted_submissions`); `channel_down` is the native unready reason, not a hold; the native and Codex `hold_reason` return `None` | `delivery.rs:144,200,272,390-395`, `session/native.rs:136` | consultant read |
 | the gateway cannot send `MessageStatus` | `daemon/trust.rs:25` | consultant read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-junior-developer` on the omp harness (default developer session, no alternate model slot); tester `a2amx-tester` on the omp harness, `opencode-go/deepseek-v4.1-flash`.
+
+BLOCKED/amend cycles: none.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Step A and section 7 called `channel_down` a channel hold; it is a native unready reason (PTY holds are `human_draft`, `unsubmitted_envelope`, `corrupted_submissions`) | Sections 2 and 7 corrected |
+| Draft review | consultant | The named pins for item 1 were gateway-path "unknown message" tests, not `MessageStatus` pins; the real pins are in `tests/broker` | Existing pins listed by name and line |
+| Draft review | consultant | The gateway role cannot reach `MessageStatus` (`trust.rs:25`); `may_read` with a wildcard arm would weaken a trust check | Item 1 corrected; `may_read` has explicit `Role::Admin \| Role::Gateway` arms |
+| Draft review | consultant | The "closures free" cc rule did not reproduce cs's cc 12; mutants (d) and (e) had no deterministic killer; `cooldown` is untestable without timing; a wrong call-site anchor | Rule text and hand counts fixed; (d), (e) expected non-kills; no `cooldown` pin; anchors corrected |
+| Implementation | developer | One new pin (`observed_evidence_...`) for the removed-recipient `submission_observed` path | Kept; see below |
+| Tester pass | tester | (d), (e), (h) survive as expected; (e) is a real but accepted coverage gap: a `Deliver::Hold` session can carry a PTY hold through human input or a corrupted submission | Accepted, recorded; a later tests batch may pin it |
+| Tester pass | tester | The new pin kills only (l) and (m), which many existing tests kill too; it still covers the "recipient no longer in the registry" case | Kept as the one test of that case |
+| Design read | consultant | The pin's helper `ready_recipient` repeats `common::new_team_agent` and the inline bracketed-paste argv of `claude_channel.rs`, and dropped the 64-character token guard; the test name said "registry reset" for a daemon restart; the restarted daemon was never shut down; `recipient.as_ref()` was needless | Token guard restored, test renamed, shutdown added, `match recipient` (architect edits); a shared ready-session helper in `tests/common` is left for the tests batch (outside this spec's scope) |
+
+Tester mutants (13): (a) to (c), (f), (g), (i) to (m) killed; (d), (e), (h) expected non-kills. Fresh checks by the architect: `cs` `views.rs` only the out-of-scope `:68`, `:156`, `:275` and file-level findings left, no new warning on `sessions_and_naming.rs`, whole-tree cs warnings 851 to 848.
