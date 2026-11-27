@@ -399,3 +399,53 @@ async fn human_outbound_rechecks_sender_eligibility_before_gateway_fetch() {
     );
     daemon.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn outbound_respects_the_human_pending_queue_limit() {
+    let limits = Limits {
+        max_pending_per_recipient: 1,
+        ..Limits::default()
+    };
+    let Some((dir, daemon)) = start_confined_daemon_with_limits(limits).await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let (_, token) = create_confined_with_token(
+        &mut admin,
+        fixture.path(),
+        "outbound-cap-agent",
+        Some(RemoteMode::Send),
+        Some(team_scope("outbound-cap-team")),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "outbound-cap-team").await;
+    let mut sender = Client::connect_addr(daemon.addrs()[0], token.trim())
+        .await
+        .unwrap();
+    let first = Request::SendMessage {
+        to: HUMAN_SESSION.into(),
+        subject: "Request".into(),
+        message: "first".into(),
+    };
+    assert!(matches!(
+        sender.request(first).await.unwrap(),
+        Response::Accepted { .. }
+    ));
+    let over = Request::SendMessage {
+        to: HUMAN_SESSION.into(),
+        subject: "Request".into(),
+        message: "over cap".into(),
+    };
+    assert_eq!(
+        sender.request(over).await.unwrap(),
+        Response::Failed {
+            code: code::QUEUE_FULL.into(),
+            message: "message queue is full".into(),
+        }
+    );
+    daemon.shutdown().await.unwrap();
+}

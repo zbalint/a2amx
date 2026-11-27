@@ -77,3 +77,22 @@ git status --short
 | the texts "a session cannot message itself", "recipient has exited", "sender session is unavailable", "message storage failed" appear in no test | `tests/` | grep |
 | `send_message` has one caller, `serve.rs:149` | `daemon/serve.rs` | grep `.send_message(` in `src` |
 | `insert_message_rate_limited` has three callers (`send_message` twice, `human_inbound`) | `admission.rs` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the agy harness, planning and working model Gemini 4 Hydrogen (Medium), no advisor (single-slot harness); tester `a2amx-tester` on the omp harness, planning and working model `opencode-go/deepseek-v4.1-flash` (advisor model not exposed).
+
+BLOCKED/amend cycles: none. No developer fix round; the architect applied three changes after the REPORT.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The draft kept `send_message`'s five-argument signature, so the argument-count finding could not clear and the one caller (`serve.rs:149`) was out of scope | `Outgoing` struct and the `serve.rs` arm added to scope |
+| Draft review | consultant | Mutant (j) needed the `quota` target; (h) and (k) (`notify_one`) are unobservable (the delivery loop wakes every second); the owner-before-remote order was unpinned and needs `bwrap`; Overall Code Complexity was misdescribed | `quota` and `mcp` targets added, (h)/(k) expected non-kills, new pin named, existing pins listed by code, wording fixed |
+| Implementation | architect | The developer's human-send queue-full pin added a new Low Cohesion warning to `tests/human_inbound/rate_limits.rs` | Test removed there, then re-added in `tests/human_inbound/outbound.rs` after the tester found its absence a survivor (no new warning) |
+| Tester pass | tester | Mutant (m), `send_to_human` mapping `QueueFull` to `rate_limited` at its own site, survived: no test pinned the human-send queue-full reply | `outbound_respects_the_human_pending_queue_limit` in `outbound.rs` |
+| Pre-push | architect (`cs delta` in `prepush-fast`) | The new owner-presence pin pushed `tests/presence/owner_presence.rs` over the Low Cohesion threshold (8 functions) | Pin moved to `tests/presence/remote_status.rs` (4 functions, no new warning); outside the test files named in Scope, a placement deviation |
+| Tester pass | tester | Suggested asserting owner presence in the new presence pin | Not applicable: `list_agents` reports no owner for a remote-off sender (the assertion failed when tried); reverted |
+| Design read | consultant | `routable_recipient` returned a boxed `Response` and `insert_outcome` likewise, boxing only to satisfy `clippy::result_large_err`; the spec claimed `Result<i64, Response>` | Both now return a `(code, message)` tuple like `remote_ineligible`; no `Box` remains; the spec's claim is corrected here |
+| Design read | consultant | Nits left: `agent_accepted` could be named for its notify side effect; `owner_present_message` would sit better on `PresenceCause`; four copies of the address expression; the human queue-full test does not check stored count | Left: out of scope or cosmetic |
+
+Tester mutants (scratch with its own `CARGO_TARGET_DIR`, deleted afterwards): 16 runs; (a) to (g), (i), (j), (l), (n) killed; (h) and (k) expected non-kills; (o) unreachable through the protocol; (p) equivalent (an exited session cannot be the sender); (m) survived and is fixed above. Fresh checks by the architect: `cargo test` 1533 passed, 3 ignored, `clippy -D warnings` and `fmt --check` clean, `cs` 10.00 on `admission.rs`, no new warning on the touched test files, whole-tree cs warnings 858 to 853.

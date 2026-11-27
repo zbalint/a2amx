@@ -9,7 +9,7 @@ use crate::client::Framed;
 use crate::emulator::Size;
 use crate::wire::{Request, Response};
 
-use super::admission::cancel_message;
+use super::admission::{Outgoing, cancel_message};
 use super::attach::attach;
 use super::bridge::bridge_attach;
 use super::launch::kill_session;
@@ -146,7 +146,18 @@ async fn answer(runtime: &Arc<Runtime>, role: &Role, request: Request) -> anyhow
             to,
             subject,
             message,
-        } => runtime.send_message(role, to, subject, message).await,
+        } => {
+            runtime
+                .send_message(
+                    role,
+                    Outgoing {
+                        to,
+                        subject,
+                        body: message,
+                    },
+                )
+                .await
+        }
         Request::ReportPrompt { prompt } => runtime.report_prompt(role, prompt).await?,
         Request::ReportQuota { five_hour, weekly } => {
             runtime.report_quota(role, five_hour, weekly).await?

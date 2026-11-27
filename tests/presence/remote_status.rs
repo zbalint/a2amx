@@ -200,3 +200,47 @@ async fn attach_status_reports_expiry_and_nonmember_and_nonremote_states() {
     assert!(status_once(&mut local_attachment).await.remote.is_none());
     daemon.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn remote_ineligible_refusal_precedes_owner_presence() {
+    let Some((dir, daemon)) = start_confined_daemon().await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let (sender_id, token) = create_confined_with_token(
+        &mut admin,
+        fixture.path(),
+        "presence-remote-off",
+        None,
+        Some(team_scope("presence-remote-off")),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let mut sender = Client::connect_addr(daemon.addrs()[0], &token)
+        .await
+        .unwrap();
+    let attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&sender_id, false, 80, 24)
+        .await
+        .unwrap();
+    assert_eq!(
+        sender
+            .request(Request::SendMessage {
+                to: messaging::HUMAN_SESSION.into(),
+                subject: "remote off while present".into(),
+                message: "refused".into(),
+            })
+            .await
+            .unwrap(),
+        Response::Failed {
+            code: code::NOT_PERMITTED.into(),
+            message: "remote messages to this session are not enabled".into(),
+        }
+    );
+    drop(attachment);
+    daemon.shutdown().await.unwrap();
+}

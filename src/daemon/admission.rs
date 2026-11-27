@@ -10,6 +10,37 @@ use crate::session::Session;
 use crate::store::{CancelResult, InsertError, Message, NewMessage};
 use crate::wire::{HumanOutboundMessage, Response};
 
+pub(super) struct Outgoing {
+    pub(super) to: String,
+    pub(super) subject: String,
+    pub(super) body: String,
+}
+
+fn insert_outcome(
+    result: Result<Result<i64, &'static str>, InsertError>,
+) -> Result<i64, (&'static str, &'static str)> {
+    match result {
+        Ok(Ok(seq)) => Ok(seq),
+        Ok(Err(message)) => Err((code::RATE_LIMITED, message)),
+        Err(InsertError::QueueFull) => Err((code::QUEUE_FULL, "message queue is full")),
+        Err(InsertError::Internal(error)) => {
+            tracing::error!(%error, "message acceptance failed");
+            Err((code::INTERNAL, "message storage failed"))
+        }
+    }
+}
+
+fn owner_present_message(cause: messaging::PresenceCause, away_secs: u64) -> String {
+    match cause {
+        messaging::PresenceCause::Attached => {
+            "the owner is attached to this session in the terminal (viewer mode does not count); write to them there instead".to_owned()
+        }
+        messaging::PresenceCause::Grace => format!(
+            "the owner left this session less than {away_secs} seconds ago; try again later or write to them in the terminal"
+        ),
+    }
+}
+
 impl Runtime {
     fn recipient(&self, to: &str) -> Option<Arc<Session>> {
         let local = messaging::local_part(to, &self.host_name)?;
@@ -20,13 +51,89 @@ impl Runtime {
             .cloned()
     }
 
-    pub(super) async fn send_message(
+    async fn send_to_human(&self, sender: &Session, subject: String, body: String) -> Response {
+        if let Some((error_code, message)) =
+            self.remote_ineligible(sender, Instant::now(), messaging::Direction::ToHuman)
+        {
+            return failed(error_code, message);
+        }
+        let sender_id = &sender.id().0;
+        if let Some((cause, away_secs)) = self.owner_cause(sender_id, Instant::now()) {
+            return failed(
+                code::OWNER_PRESENT,
+                &owner_present_message(cause, away_secs),
+            );
+        }
+        let new = NewMessage {
+            boot: self.boot.clone(),
+            sender_session: sender_id.into(),
+            sender_address: messaging::address(sender.name(), sender_id, &self.host_name),
+            recipient_session: messaging::HUMAN_SESSION.into(),
+            recipient_address: messaging::HUMAN_SESSION.into(),
+            subject,
+            body,
+        };
+        let windows = [
+            (
+                sender_id.as_str(),
+                self.limits.rate_per_minute,
+                "sender rate limit reached",
+            ),
+            (
+                "human:out",
+                self.limits.human_outbound_per_minute,
+                "human outbound rate limit reached",
+            ),
+        ];
+        match insert_outcome(self.insert_message_rate_limited(&windows, new).await) {
+            Ok(seq) => Response::Accepted {
+                id: format!("m_{seq}"),
+                recipient_hold: None,
+                recipient_quota: None,
+            },
+            Err((error_code, message)) => failed(error_code, message),
+        }
+    }
+
+    fn routable_recipient(
         &self,
-        role: &Role,
-        to: String,
-        subject: String,
-        body: String,
-    ) -> Response {
+        sender: &Session,
+        to: &str,
+    ) -> Result<Arc<Session>, (&'static str, &'static str)> {
+        let Some(recipient) = self.recipient(to) else {
+            return Err((code::UNKNOWN_RECIPIENT, "unknown recipient"));
+        };
+        if !messaging::visible(sender.party(), recipient.party()) {
+            return Err((code::UNKNOWN_RECIPIENT, "unknown recipient"));
+        }
+        if recipient.id().0 == sender.id().0 {
+            return Err((code::UNKNOWN_RECIPIENT, "a session cannot message itself"));
+        }
+        if recipient.exit_code().is_some() {
+            return Err((code::RECIPIENT_EXITED, "recipient has exited"));
+        }
+        Ok(recipient)
+    }
+
+    fn agent_accepted(&self, recipient: &Arc<Session>, seq: i64) -> Response {
+        recipient.message_notify().notify_one();
+        Response::Accepted {
+            id: format!("m_{seq}"),
+            recipient_hold: if recipient.deliver() == Deliver::Hold {
+                Some("deliver_hold".into())
+            } else {
+                AnyChannel::for_session(recipient.clone())
+                    .hold_reason()
+                    .map(str::to_owned)
+            },
+            recipient_quota: session_quota(recipient, self.omp_usage.current().as_ref())
+                .and_then(|quota| quota.exhausted())
+                .map(|window| format!("{window} quota exhausted")),
+        }
+    }
+
+    pub(super) async fn send_message(&self, role: &Role, outgoing: Outgoing) -> Response {
+        let Outgoing { to, subject, body } = outgoing;
         let sender_id = match session_id(role, "send_message") {
             Ok(id) => id,
             Err(message) => return Response::Error { message },
@@ -38,69 +145,12 @@ impl Runtime {
             return failed(code::INTERNAL, "sender session is unavailable");
         };
         if to == messaging::HUMAN_SESSION {
-            if let Some((error_code, message)) =
-                self.remote_ineligible(&sender, Instant::now(), messaging::Direction::ToHuman)
-            {
-                return failed(error_code, message);
-            }
-            if let Some((cause, away_secs)) = self.owner_cause(sender_id, Instant::now()) {
-                let message = match cause {
-                    messaging::PresenceCause::Attached => {
-                        "the owner is attached to this session in the terminal (viewer mode does not count); write to them there instead".to_owned()
-                    }
-                    messaging::PresenceCause::Grace => format!(
-                        "the owner left this session less than {away_secs} seconds ago; try again later or write to them in the terminal"
-                    ),
-                };
-                return failed(code::OWNER_PRESENT, &message);
-            }
-            let new = NewMessage {
-                boot: self.boot.clone(),
-                sender_session: sender_id.into(),
-                sender_address: messaging::address(sender.name(), sender_id, &self.host_name),
-                recipient_session: messaging::HUMAN_SESSION.into(),
-                recipient_address: messaging::HUMAN_SESSION.into(),
-                subject,
-                body,
-            };
-            let windows = [
-                (
-                    sender_id,
-                    self.limits.rate_per_minute,
-                    "sender rate limit reached",
-                ),
-                (
-                    "human:out",
-                    self.limits.human_outbound_per_minute,
-                    "human outbound rate limit reached",
-                ),
-            ];
-            return match self.insert_message_rate_limited(&windows, new).await {
-                Ok(Ok(seq)) => Response::Accepted {
-                    id: format!("m_{seq}"),
-                    recipient_hold: None,
-                    recipient_quota: None,
-                },
-                Ok(Err(message)) => failed(code::RATE_LIMITED, message),
-                Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
-                Err(InsertError::Internal(error)) => {
-                    tracing::error!(%error, "message acceptance failed");
-                    failed(code::INTERNAL, "message storage failed")
-                }
-            };
+            return self.send_to_human(&sender, subject, body).await;
         }
-        let Some(recipient) = self.recipient(&to) else {
-            return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
+        let recipient = match self.routable_recipient(&sender, &to) {
+            Ok(recipient) => recipient,
+            Err((error_code, message)) => return failed(error_code, message),
         };
-        if !messaging::visible(sender.party(), recipient.party()) {
-            return failed(code::UNKNOWN_RECIPIENT, "unknown recipient");
-        }
-        if recipient.id().0 == sender_id {
-            return failed(code::UNKNOWN_RECIPIENT, "a session cannot message itself");
-        }
-        if recipient.exit_code().is_some() {
-            return failed(code::RECIPIENT_EXITED, "recipient has exited");
-        }
         let new = NewMessage {
             boot: self.boot.clone(),
             sender_session: sender_id.into(),
@@ -119,29 +169,9 @@ impl Runtime {
             self.limits.rate_per_minute,
             "sender rate limit reached",
         )];
-        match self.insert_message_rate_limited(&windows, new).await {
-            Ok(Ok(seq)) => {
-                recipient.message_notify().notify_one();
-                Response::Accepted {
-                    id: format!("m_{seq}"),
-                    recipient_hold: if recipient.deliver() == Deliver::Hold {
-                        Some("deliver_hold".into())
-                    } else {
-                        AnyChannel::for_session(recipient.clone())
-                            .hold_reason()
-                            .map(str::to_owned)
-                    },
-                    recipient_quota: session_quota(&recipient, self.omp_usage.current().as_ref())
-                        .and_then(|quota| quota.exhausted())
-                        .map(|window| format!("{window} quota exhausted")),
-                }
-            }
-            Ok(Err(message)) => failed(code::RATE_LIMITED, message),
-            Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
-            Err(InsertError::Internal(error)) => {
-                tracing::error!(%error, "message acceptance failed");
-                failed(code::INTERNAL, "message storage failed")
-            }
+        match insert_outcome(self.insert_message_rate_limited(&windows, new).await) {
+            Ok(seq) => self.agent_accepted(&recipient, seq),
+            Err((error_code, message)) => failed(error_code, message),
         }
     }
 
@@ -207,8 +237,8 @@ impl Runtime {
             self.limits.human_inbound_per_minute,
             "human inbound rate limit reached",
         )];
-        match self.insert_message_rate_limited(&windows, new).await {
-            Ok(Ok(seq)) => {
+        match insert_outcome(self.insert_message_rate_limited(&windows, new).await) {
+            Ok(seq) => {
                 recipient.message_notify().notify_one();
                 Response::Accepted {
                     id: format!("m_{seq}"),
@@ -216,12 +246,7 @@ impl Runtime {
                     recipient_quota: None,
                 }
             }
-            Ok(Err(message)) => failed(code::RATE_LIMITED, message),
-            Err(InsertError::QueueFull) => failed(code::QUEUE_FULL, "message queue is full"),
-            Err(InsertError::Internal(error)) => {
-                tracing::error!(%error, "human message acceptance failed");
-                failed(code::INTERNAL, "message storage failed")
-            }
+            Err((error_code, message)) => failed(error_code, message),
         }
     }
 
