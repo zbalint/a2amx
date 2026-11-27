@@ -118,9 +118,13 @@ impl Runtime {
         inner: &str,
     ) -> anyhow::Result<()> {
         let ids = messaging::envelope_ids(inner);
-        if let [seq] = ids.as_slice()
-            && let Some(message) = self.store.get(*seq).await?
-            && awaiting_receipt(&message, &self.boot, session_id)
+        let [seq] = ids.as_slice() else {
+            return Ok(());
+        };
+        let Some(message) = self.store.get(*seq).await? else {
+            return Ok(());
+        };
+        if awaiting_receipt(&message, &self.boot, session_id)
             && inner == messaging::channel_view(&message.envelope())
         {
             self.store.record_receipt(*seq).await?;
@@ -156,36 +160,11 @@ impl Runtime {
         text: String,
         known: Vec<(i64, String)>,
     ) -> anyhow::Result<Response> {
-        let mut remainder = text;
-        let mut complete = true;
-        for (_, envelope) in &known {
-            if let Some(start) = remainder.find(envelope) {
-                remainder.replace_range(start..start + envelope.len(), "");
-            } else {
-                complete = false;
-                break;
-            }
-        }
         // shortcut: interleaved envelopes cannot be separated safely; their
         // human text stays in the transcript until a harness can rewrite it.
-        // A leftover wrapper tag means unwrapping failed; pasting it back would put
-        // harness markup in the human's composer.
-        let draft = (complete
-            && !remainder.contains("<pasted_content")
-            && !remainder.contains("</pasted_content"))
-        .then(|| messaging::sanitize_draft(remainder.trim()));
+        let draft = strip_envelopes(text, &known).and_then(|rest| recoverable_draft(&rest));
         session.note_corrupted(draft);
-        let mut undeliverable = false;
-        for (seq, _) in known {
-            if self
-                .store
-                .reject_attempt(seq, messaging::MAX_MESSAGE_REJECTIONS)
-                .await?
-                == RejectOutcome::Undeliverable
-            {
-                undeliverable = true;
-            }
-        }
+        let undeliverable = self.reject_known(known).await?;
         session.message_notify().notify_one();
         Ok(Response::PromptVerdict {
             verdict: "block".into(),
@@ -199,4 +178,36 @@ impl Runtime {
             ),
         })
     }
+
+    async fn reject_known(&self, known: Vec<(i64, String)>) -> anyhow::Result<bool> {
+        let mut undeliverable = false;
+        for (seq, _) in known {
+            if self
+                .store
+                .reject_attempt(seq, messaging::MAX_MESSAGE_REJECTIONS)
+                .await?
+                == RejectOutcome::Undeliverable
+            {
+                undeliverable = true;
+            }
+        }
+        Ok(undeliverable)
+    }
+}
+
+fn strip_envelopes(mut text: String, known: &[(i64, String)]) -> Option<String> {
+    for (_, envelope) in known {
+        let start = text.find(envelope)?;
+        text.replace_range(start..start + envelope.len(), "");
+    }
+    Some(text)
+}
+
+fn recoverable_draft(remainder: &str) -> Option<String> {
+    // A leftover wrapper tag means unwrapping failed; pasting it back would put
+    // harness markup in the human's composer.
+    if remainder.contains("<pasted_content") || remainder.contains("</pasted_content") {
+        return None;
+    }
+    Some(messaging::sanitize_draft(remainder.trim()))
 }

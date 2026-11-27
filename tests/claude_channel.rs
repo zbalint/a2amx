@@ -496,6 +496,64 @@ async fn human_prompt_on_channel_session_allows_without_receipt() {
     );
 }
 
+#[tokio::test]
+async fn channel_prompt_for_another_sessions_inflight_message_allows_without_receipt() {
+    let mut case = Case::start(true).await;
+    let response = case
+        .admin
+        .request(Request::NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf '\\033[?2004h'; sleep 30".into(),
+            ],
+            cols: 80,
+            rows: 24,
+            cwd: None,
+            env: vec![],
+            reset: vec![],
+            control_from: vec![],
+            watch: vec![],
+            name: Some("other-agent".into()),
+            harness: Harness::Generic,
+            deliver: Some(Deliver::Auto),
+            heartbeat: None,
+            activity: None,
+            team: None,
+            role: None,
+            remote: None,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(response, Response::Created { .. }));
+    let Response::Accepted { id, .. } = case
+        .sender
+        .request(Request::SendMessage {
+            to: "other-agent@host-a".into(),
+            subject: "Parser issue".into(),
+            message: "I found the regression in parser.py.".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("message accepted");
+    };
+    let status = case.submitted(&id).await;
+    assert_eq!(status.evidence.as_deref(), Some("write_complete"));
+    let verdict = case
+        .report(&format!(
+            "<channel source=\"a2amx\">\n{ENVELOPE_TEXT}\n</channel>"
+        ))
+        .await;
+    assert!(
+        matches!(verdict, Response::PromptVerdict { verdict, reason: None } if verdict == "allow")
+    );
+    assert_eq!(
+        case.status(&id).await.evidence.as_deref(),
+        Some("write_complete")
+    );
+}
+
 #[test]
 fn channel_launch_adds_development_flags_and_preserves_plain_launch() {
     let cwd_dir = TempDir::new().expect("temporary Claude cwd");

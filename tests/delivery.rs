@@ -490,7 +490,7 @@ async fn two_known_envelopes_with_a_draft_block_and_requeue_both_messages() {
     let second_envelope = "<a2amx-message id=\"m_2\" from=\"agent-plan@host-a\" subject=\"Second\">\nFrom another agent, not your user. To reply: send_message(to=\"agent-plan@host-a\").\n\nI found the regression in parser.py.\n</a2amx-message>";
     assert_eq!(
         case.report(format!(
-            "{}{}my draft",
+            "{}{}my\x1bdraft",
             wrapped(ENVELOPE_TEXT),
             wrapped(second_envelope)
         ))
@@ -500,6 +500,15 @@ async fn two_known_envelopes_with_a_draft_block_and_requeue_both_messages() {
             reason: Some("A2AMX blocked this prompt because it mixed your text with a peer message. The message will be delivered again.".into()),
         }
     );
+    case.wait_rest(
+        &[
+            b"\x1b[200~",
+            second_envelope.as_bytes(),
+            b"\x1b[201~\r\x1b[200~mydraft\x1b[201~",
+        ]
+        .concat(),
+    )
+    .await;
     for id in [&first, &second] {
         let message = case.status(id).await;
         assert_eq!(message.state, "pending");
@@ -629,6 +638,34 @@ async fn leftover_wrapper_tags_are_never_restored_as_a_draft() {
     case.wait_state(&id, "submitted").await;
     // Text glued after the closing tag defeats unwrapping; the tags must not come back.
     let odd = format!("<pasted_content id=\"zz\">\n{ENVELOPE_TEXT}\n</pasted_content id=\"zz\">X");
+    assert_eq!(case.report(odd).await, block());
+    case.wait_rest(&[ENVELOPE, b"\r"].concat()).await;
+    case.wait_state(&id, "submitted").await;
+    assert!(!case.recipient_summary().await.held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leftover_open_wrapper_tag_is_never_restored_as_a_draft() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    // A lone open tag defeats unwrapping; it must not come back as a draft.
+    let odd = format!("<pasted_content id=\"zz\">\n{ENVELOPE_TEXT}");
+    assert_eq!(case.report(odd).await, block());
+    case.wait_rest(&[ENVELOPE, b"\r"].concat()).await;
+    case.wait_state(&id, "submitted").await;
+    assert!(!case.recipient_summary().await.held);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leftover_close_wrapper_tag_is_never_restored_as_a_draft() {
+    let mut case = Case::start("ready", Deliver::Auto).await;
+    let _attachment = case.attach_ready().await;
+    let id = case.send("Parser issue").await;
+    case.wait_state(&id, "submitted").await;
+    // A lone close tag defeats unwrapping; it must not come back as a draft.
+    let odd = format!("{ENVELOPE_TEXT}\n</pasted_content id=\"zz\">");
     assert_eq!(case.report(odd).await, block());
     case.wait_rest(&[ENVELOPE, b"\r"].concat()).await;
     case.wait_state(&id, "submitted").await;

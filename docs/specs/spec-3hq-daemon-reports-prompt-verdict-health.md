@@ -35,7 +35,7 @@ The design is the instruction; the `cs` result is the check.
 
 - `channel_prompt_verdict`: early returns instead of the four-condition chain: `let [seq] = ids.as_slice() else { return Ok(()) };`, `let Some(message) = self.store.get(*seq).await? else { return Ok(()) };`, then `if awaiting_receipt(..) && inner == messaging::channel_view(&message.envelope()) { record_receipt; native_received }`. Same checks, same order, same store calls (`get` only for the single-id case, before the comparison).
 - `fn strip_envelopes(text: String, known: &[(i64, String)]) -> Option<String>`: removes each known envelope from `text` in order; `None` as soon as one is missing (today's first loop and its `complete` flag, with the stop at the first missing envelope). No bool flag.
-- `fn recoverable_draft(remainder: &str) -> Option<String>`: `None` when a `<pasted_content` or `</pasted_content` fragment remains, else `Some(messaging::sanitize_draft(remainder.trim()))`; both `shortcut:` comments stay, one beside each of the operations they describe.
+- `fn recoverable_draft(remainder: &str) -> Option<String>`: `None` when a `<pasted_content` or `</pasted_content` fragment remains, else `Some(messaging::sanitize_draft(remainder.trim()))`; the leftover-tag why-comment moves in with it (the `shortcut:` comment stays in `block_corrupted_submission`).
 - `async fn reject_known(&self, known: Vec<(i64, String)>) -> anyhow::Result<bool>`: one `reject_attempt(seq, MAX_MESSAGE_REJECTIONS)` for every known message in order, never stopping early (no `any()` and no return on the first `Undeliverable`), `true` when any outcome was `Undeliverable`.
 - `block_corrupted_submission`: `strip_envelopes(text, &known).and_then(|rest| recoverable_draft(&rest))`, `note_corrupted`, `reject_known`, the notify, and the `PromptVerdict` with the reason choice, in that order.
 - `record_receipt`, `awaiting_receipt`, `report_prompt`, `report_quota`, `known_envelopes` unchanged.
@@ -78,3 +78,20 @@ git status --short
 | `cs review` puts the Complex Conditional on `channel_prompt_verdict`; `awaiting_receipt` and the `draft` expression are not flagged | `cs review src/daemon/reports.rs` | run, output read |
 | `delivery.rs` is 925 lines, `claude_channel.rs` already has a Low Cohesion warning, `delivery.rs` has none | `cs check` on both | run, output read |
 | the existing killers listed in section 2 exist and cover the mutants named | `delivery.rs:481,625,746,758`, `claude_channel.rs:466` | consultant read; developer reruns |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the agy harness, Gemini 4 Hydrogen (Medium); tester `a2amx-tester` on the omp harness, `opencode-go/deepseek-v4.1-flash`.
+
+BLOCKED/amend cycles: 1 (amendment 1).
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The spec claimed a third complex conditional that cs does not report; the `then(..)` form of the draft helper would keep two operators; the `complete` bool flag | Section 1 corrected from `cs review`; `strip_envelopes` returns `Option<String>`, `recoverable_draft` takes no flag |
+| Draft review | consultant | Mutants (a), (f), (g), (h), (i) had no killing test; (c) and (d) unobservable; the quota pin item pointed at the wrong files | Pins specified (channel test, in-place strengthening, two wrapper tests); (c), (d) expected non-kills; the quota item dropped |
+| Implementation | developer (BLOCKED) | Section 2.1 said `common::new_agent` makes a session that can reach `delivering`; it never enables bracketed paste, so a Generic session stays `pending` (`harness.rs:436-438`) | Amendment 1: the test starts the session itself with a bracketed-paste argv |
+| Design read | consultant | The spec said both comments are `shortcut:`; only one is | Wording corrected here; the other comment is a why-comment inside `recoverable_draft` |
+| Design read | consultant | The two wrapper tests lacked a why-comment | One-line comments added by the architect |
+| Housekeeping | architect | 26 GB of finished specs' scratch (`target/scratch/3hm`, `3ho`) left by earlier passes | Deleted |
+
+Tester mutants (12): (a), (b), (e) to (k) killed; (c), (d), (l) expected non-kills with reasons (the channel path does not wait on receipts; an envelope id in a body is needed; the delivery loop ticks every second). Old-source pins pass on the old code. Fresh checks by the architect: `cs` on `reports.rs` 9.38, Complex Conditional and Bumpy Road cleared, only the file-level finding left; whole-tree cs warnings 853 to 851.
