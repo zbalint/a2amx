@@ -104,6 +104,7 @@ async fn raw_response(stream: &mut TcpStream) -> Response {
 mod attach_streams;
 mod confine;
 mod daemon_lifecycle;
+mod serve_dispatch_pins;
 mod serve_protocol;
 mod session_creation;
 mod status_reporting;

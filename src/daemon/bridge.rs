@@ -34,15 +34,24 @@ pub(super) async fn bridge_attach(
         }))
     }
 }
-async fn bridge(
+
+fn hello_refusal(protocol: u32, missing: &[String]) -> Option<String> {
+    if protocol != BRIDGE_PROTOCOL {
+        Some("protocol_mismatch".to_owned())
+    } else if !missing.is_empty() {
+        Some(format!("missing_apis: {}", missing.join(", ")))
+    } else {
+        None
+    }
+}
+
+async fn bridge_handshake(
     connection: &mut Framed,
-    runtime: &Arc<Runtime>,
-    session: Arc<Session>,
-    mut guard: NativeGuard,
-) -> anyhow::Result<()> {
+    session: &Session,
+) -> anyhow::Result<Option<String>> {
     let first = tokio::time::timeout(Duration::from_secs(5), connection.recv()).await;
     let Ok(Ok(Some(bytes))) = first else {
-        return Ok(());
+        return Ok(None);
     };
     let Ok(BridgeUp::Hello {
         protocol,
@@ -50,26 +59,65 @@ async fn bridge(
         missing,
     }) = serde_json::from_slice(&bytes)
     else {
-        return Ok(());
+        return Ok(None);
     };
-    let refusal = if protocol != BRIDGE_PROTOCOL {
-        Some("protocol_mismatch".to_owned())
-    } else if !missing.is_empty() {
-        Some(format!("missing_apis: {}", missing.join(", ")))
-    } else {
-        None
-    };
-    if let Some(reason) = refusal {
+    if let Some(reason) = hello_refusal(protocol, &missing) {
         session.native_refuse();
         connection
             .send(&serde_json::to_vec(&BridgeDown::Refused { reason })?)
             .await?;
-        return Ok(());
+        return Ok(None);
     }
     session.native_accept();
     connection
         .send(&serde_json::to_vec(&BridgeDown::Ready)?)
         .await?;
+    Ok(Some(omp_version))
+}
+
+async fn bridge_frame(
+    runtime: &Arc<Runtime>,
+    session: &Session,
+    bytes: &[u8],
+) -> anyhow::Result<bool> {
+    let Ok(frame) = serde_json::from_slice::<BridgeUp>(bytes) else {
+        return Ok(false);
+    };
+    match frame {
+        BridgeUp::Hello { .. } => return Ok(false),
+        BridgeUp::State {
+            idle,
+            draft,
+            pending,
+            queue,
+            host_pending,
+            provider,
+        } => {
+            // OMP holds next-turn reminders while idle; an empty extension queue means a2amx has nothing in flight.
+            let waiting_for_turn = idle && queue == Some(0) && host_pending == Some(true);
+            session.native_state(idle, draft, pending && !waiting_for_turn, provider);
+            session.native_diagnostics(queue, host_pending);
+        }
+        BridgeUp::Ack { id } => session.native_ack(&id, Ok(())),
+        BridgeUp::Nack { id, reason } => session.native_ack(&id, Err(reason)),
+        BridgeUp::Receipt { id } => {
+            if record_receipt(&runtime.store, &runtime.boot, session, &id).await? {
+                session.native_received();
+            }
+        }
+    }
+    Ok(true)
+}
+
+async fn bridge(
+    connection: &mut Framed,
+    runtime: &Arc<Runtime>,
+    session: Arc<Session>,
+    mut guard: NativeGuard,
+) -> anyhow::Result<()> {
+    let Some(omp_version) = bridge_handshake(connection, &session).await? else {
+        return Ok(());
+    };
     tracing::info!(%omp_version, session = %session.id().0, "native bridge accepted");
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -78,37 +126,8 @@ async fn bridge(
                 let Some(bytes) = bytes? else {
                     return Ok(());
                 };
-                let Ok(frame) = serde_json::from_slice::<BridgeUp>(&bytes) else {
+                if !bridge_frame(runtime, &session, &bytes).await? {
                     return Ok(());
-                };
-                match frame {
-                    BridgeUp::Hello { .. } => return Ok(()),
-                    BridgeUp::State {
-                        idle,
-                        draft,
-                        pending,
-                        queue,
-                        host_pending,
-                        provider,
-                    } => {
-                        // OMP holds next-turn reminders while idle; an empty extension queue means a2amx has nothing in flight.
-                        let waiting_for_turn =
-                            idle && queue == Some(0) && host_pending == Some(true);
-                        session.native_state(
-                            idle,
-                            draft,
-                            pending && !waiting_for_turn,
-                            provider,
-                        );
-                        session.native_diagnostics(queue, host_pending);
-                    }
-                    BridgeUp::Ack { id } => session.native_ack(&id, Ok(())),
-                    BridgeUp::Nack { id, reason } => session.native_ack(&id, Err(reason)),
-                    BridgeUp::Receipt { id } => {
-                        if record_receipt(&runtime.store, &runtime.boot, &session, &id).await? {
-                            session.native_received();
-                        }
-                    }
                 }
             }
             frame = guard.down.recv() => {

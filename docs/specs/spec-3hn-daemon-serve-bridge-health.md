@@ -87,3 +87,19 @@ git status --short
 | the serve and bridge messages are pinned | `tests/daemon/serve_protocol.rs`, `tests/bridge.rs`, `tests/human_inbound/gateway_capability.rs` | grep of each message text |
 | `"bridge session disappeared"` is not named in any test | `bridge.rs:21` | grep `tests/` |
 | `gateway_connections` is read by `daemon/remote.rs:213` | `remote.rs` | grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the agy harness, planning and working model Gemini 4 Hydrogen (Medium), no advisor (single-slot harness); tester `a2amx-tester` on the omp harness, planning and working model `opencode-go/deepseek-v4.1-flash` (advisor model not exposed).
+
+BLOCKED/amend cycles: none. One fix round after the tester pass.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Guard signature lacked an explicit lifetime (E0106); the presence test target was missing; mutant (a) was unbuildable (permission needs the parsed request); line anchors had drifted | Spec amended before the lock: explicit `'a`, presence target and pin added, (a) dropped, anchors fixed, `bridge_frame` takes bytes |
+| Tester pass | tester | Mutant (o) (a bridge `Receipt` never calls `native_received`) survived: no test showed a receipt clearing the in-flight flag without a later `State` frame | Fix round: pin `bridge_receipt_clears_in_flight_without_state_frame`, shown red on the mutant; blank line added in `bridge.rs` |
+| Tester pass | tester | Mutant (e) (`Shutdown` replies twice) was killed by the shutdown pin, though section 6 listed it as an expected non-kill | Recorded here; the pin reads one byte after the single `Ok` and sees the extra frame |
+| Tester pass | tester | Survivors S2 (a successful attach returns `Continue`) and S3 (unconditional `native_received`) | Left: S2 is equivalent (the attach stream ended, so `recv` yields `None`); S3 matters only for a duplicate or unmatched receipt while a message is in flight |
+| Design read | consultant | The new test file is named after the refactor, not the behaviour; the shutdown pin could sit in `serve_protocol.rs`; the raw admin-hello block is a fourth copy | Left: the spec fixes the file name and scope, and `tests/bridge.rs` is at 926 lines; to be consolidated in the tests batch |
+
+Tester mutants (scratch with its own `CARGO_TARGET_DIR`, deleted afterwards): 19 runs, 15 killed, survivors (d) expected non-kill (the close races the reply), (o) fixed above, S2 and S3 left as above. Architect spot-check (own scratch, deleted): (h) the guard counts every role, killed by `remote_status::attach_status_reports_remote_lease_and_gateway_lifecycle`; (o) killed by the new receipt pin. Fresh checks by the architect: `cargo test` 1526 passed, 3 ignored, `clippy -D warnings` and `fmt --check` clean, `cs` 10.00 on `serve.rs`, `bridge.rs` and the new test file, whole-tree cs warnings 867 to 862.
