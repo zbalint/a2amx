@@ -31,6 +31,7 @@ mod reports;
 mod serve;
 mod trust;
 mod views;
+use lifecycle::Tasks;
 use omp_usage::OmpUsage;
 use registry::Sessions;
 use remote::Leases;
@@ -60,10 +61,7 @@ pub struct Daemon {
     addrs: Vec<SocketAddr>,
     runtime: Arc<Runtime>,
     shutdown: watch::Sender<bool>,
-    listeners: Vec<JoinHandle<()>>,
-    purge: Option<JoinHandle<()>>,
-    omp_usage_poller: Option<JoinHandle<()>>,
-    presence: Option<JoinHandle<()>>,
+    tasks: Option<Tasks>,
     layout: crate::layout::Layout,
     lock: Option<File>,
 }
@@ -189,7 +187,7 @@ impl Runtime {
             .cloned()
     }
 
-    fn reset_audit(&self, sender: &str, target: &str, outcome: &str, step: Option<(usize, usize)>) {
+    fn reset_audit(sender: &str, target: &str, outcome: &str, step: Option<(usize, usize)>) {
         tracing::info!(
             sender,
             target,
@@ -199,38 +197,27 @@ impl Runtime {
         );
     }
 
-    async fn reset_session(&self, role: &Role, reference: String) -> Response {
-        let sender = match role {
+    fn reset_sender_label(&self, role: &Role) -> String {
+        match role {
             Role::Admin => "admin".to_owned(),
             Role::Gateway => "gateway".to_owned(),
             Role::Session(id) => lookup(self, id).map_or_else(
                 || id.clone(),
                 |(_, session)| messaging::address(session.name(), id, &self.host_name),
             ),
-        };
-        let Some(target) = self.reset_target(&reference) else {
-            self.reset_audit(&sender, &reference, messaging::code::UNKNOWN_SESSION, None);
-            return failed(messaging::code::UNKNOWN_SESSION, "unknown session");
-        };
-        if let Role::Session(sender_id) = role {
-            let Some((_, sender_session)) = lookup(self, sender_id) else {
-                self.reset_audit(&sender, &reference, messaging::code::UNKNOWN_SESSION, None);
-                return failed(messaging::code::UNKNOWN_SESSION, "unknown session");
-            };
-            if !messaging::visible(sender_session.party(), target.party()) {
-                let target_address =
-                    messaging::address(target.name(), &target.id().0, &self.host_name);
-                self.reset_audit(
-                    &sender,
-                    &target_address,
-                    messaging::code::UNKNOWN_SESSION,
-                    None,
-                );
-                return failed(messaging::code::UNKNOWN_SESSION, "unknown session");
-            }
         }
-        let target_address = messaging::address(target.name(), &target.id().0, &self.host_name);
-        let permitted = match role {
+    }
+
+    fn reset_visible(&self, role: &Role, target: &Session) -> bool {
+        match role {
+            Role::Admin | Role::Gateway => true,
+            Role::Session(sender_id) => lookup(self, sender_id)
+                .is_some_and(|(_, sender)| messaging::visible(sender.party(), target.party())),
+        }
+    }
+
+    fn reset_permitted(&self, role: &Role, target: &Session) -> bool {
+        match role {
             Role::Admin => true,
             Role::Gateway => false,
             Role::Session(sender_id) => {
@@ -239,30 +226,43 @@ impl Runtime {
                         .and_then(|(_, session)| session.name().map(str::to_owned))
                         .is_some_and(|name| target.control_from().iter().any(|item| item == &name))
             }
-        };
-        if !permitted {
-            self.reset_audit(
-                &sender,
-                &target_address,
-                messaging::code::NOT_PERMITTED,
-                None,
-            );
-            return failed(
+        }
+    }
+
+    fn reset_refusal(&self, role: &Role, target: &Session) -> Option<(&'static str, &'static str)> {
+        if !self.reset_visible(role, target) {
+            return Some((messaging::code::UNKNOWN_SESSION, "unknown session"));
+        }
+        if !self.reset_permitted(role, target) {
+            return Some((
                 messaging::code::NOT_PERMITTED,
                 "sender is not permitted to reset this session",
-            );
+            ));
         }
         if target.exit_code().is_some() {
-            self.reset_audit(&sender, &target_address, messaging::code::EXITED, None);
-            return failed(messaging::code::EXITED, "session has exited");
+            return Some((messaging::code::EXITED, "session has exited"));
+        }
+        None
+    }
+
+    async fn reset_session(&self, role: &Role, reference: String) -> Response {
+        let sender = self.reset_sender_label(role);
+        let Some(target) = self.reset_target(&reference) else {
+            Self::reset_audit(&sender, &reference, messaging::code::UNKNOWN_SESSION, None);
+            return failed(messaging::code::UNKNOWN_SESSION, "unknown session");
+        };
+        let target_address = messaging::address(target.name(), &target.id().0, &self.host_name);
+        if let Some((code, message)) = self.reset_refusal(role, &target) {
+            Self::reset_audit(&sender, &target_address, code, None);
+            return failed(code, message);
         }
         match target.reset_sequence().await {
             Ok(steps) => {
-                self.reset_audit(&sender, &target_address, "ok", None);
+                Self::reset_audit(&sender, &target_address, "ok", None);
                 Response::Reset { steps }
             }
             Err(error) => {
-                self.reset_audit(&sender, &target_address, error.code, error.step);
+                Self::reset_audit(&sender, &target_address, error.code, error.step);
                 failed(error.code, &error.message)
             }
         }

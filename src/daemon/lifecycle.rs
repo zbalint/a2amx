@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::Context;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
@@ -23,6 +23,64 @@ use crate::layout::Layout;
 use crate::messaging;
 use crate::session::mark_inherited_fds_cloexec;
 use crate::store::{self, Store};
+
+pub(super) struct Tasks {
+    listeners: Vec<JoinHandle<()>>,
+    purge: JoinHandle<()>,
+    omp_usage_poller: JoinHandle<()>,
+    presence: JoinHandle<()>,
+}
+
+impl Tasks {
+    fn spawn(
+        runtime: &Arc<Runtime>,
+        shutdown: &watch::Sender<bool>,
+        bound: Vec<TcpListener>,
+    ) -> Self {
+        let purge = spawn_purge(runtime.store.clone(), shutdown.subscribe());
+        let omp_usage_poller = spawn_omp_usage(runtime.clone(), shutdown.subscribe());
+        let presence = {
+            let runtime = runtime.clone();
+            let stopping = shutdown.subscribe();
+            tokio::spawn(runtime.poll_presence(stopping))
+        };
+        let listeners = bound
+            .into_iter()
+            .map(|listener| spawn_listener(listener, runtime.clone(), shutdown.subscribe()))
+            .collect();
+        Self {
+            listeners,
+            purge,
+            omp_usage_poller,
+            presence,
+        }
+    }
+
+    async fn stop(self) -> anyhow::Result<()> {
+        for listener in self.listeners {
+            listener.await?;
+        }
+        self.purge.await?;
+        self.omp_usage_poller.await?;
+        self.presence.await?;
+        Ok(())
+    }
+}
+
+fn generate_identity(
+    host_name: Option<String>,
+) -> anyhow::Result<(String, String, String, String)> {
+    let token = random_hex::<32>()?;
+    let gateway_token = random_hex::<32>()?;
+    let host = match host_name {
+        Some(host) => {
+            messaging::validate_host(&host).context("invalid host name")?;
+            host
+        }
+        None => messaging::default_host_name(),
+    };
+    Ok((token, gateway_token, host, random_hex::<8>()?))
+}
 
 impl Daemon {
     /// Bind every listen address, write the chosen addresses to a file in the
@@ -44,19 +102,7 @@ impl Daemon {
         let lock = acquire_lock(&layout).await?;
         let host_name = config.host_name;
         let (token, gateway_token, host_name, boot) =
-            tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-                let token = random_hex::<32>()?;
-                let gateway_token = random_hex::<32>()?;
-                let host = match host_name {
-                    Some(host) => {
-                        messaging::validate_host(&host).context("invalid host name")?;
-                        host
-                    }
-                    None => messaging::default_host_name(),
-                };
-                Ok((token, gateway_token, host, random_hex::<8>()?))
-            })
-            .await??;
+            tokio::task::spawn_blocking(move || generate_identity(host_name)).await??;
         let store = Store::open(&layout, config.limits).await?;
         let (bound, addrs) = match publish(&layout, &token, &gateway_token, config.listen).await {
             Ok(published) => published,
@@ -90,25 +136,12 @@ impl Daemon {
             stop_requested: tokio::sync::Notify::new(),
             stop_now: AtomicBool::new(false),
         });
-        let purge = spawn_purge(runtime.store.clone(), shutdown.subscribe());
-        let omp_usage_poller = spawn_omp_usage(runtime.clone(), shutdown.subscribe());
-        let presence = {
-            let runtime = runtime.clone();
-            let stopping = shutdown.subscribe();
-            tokio::spawn(runtime.poll_presence(stopping))
-        };
-        let listeners = bound
-            .into_iter()
-            .map(|listener| spawn_listener(listener, runtime.clone(), shutdown.subscribe()))
-            .collect();
+        let tasks = Tasks::spawn(&runtime, &shutdown, bound);
         Ok(Self {
             addrs,
             runtime,
             shutdown,
-            listeners,
-            purge: Some(purge),
-            omp_usage_poller: Some(omp_usage_poller),
-            presence: Some(presence),
+            tasks: Some(tasks),
             layout,
             lock: Some(lock),
         })
@@ -130,7 +163,9 @@ impl Daemon {
 
     pub async fn shutdown(mut self) -> anyhow::Result<()> {
         let _ = self.shutdown.send(true);
-        self.stop_tasks().await?;
+        if let Some(tasks) = self.tasks.take() {
+            tasks.stop().await?;
+        }
         let mut failure = self.stop_deliveries().await;
         if let Some(error) = self.stop_sessions().await {
             failure.get_or_insert(error);
@@ -148,22 +183,6 @@ impl Daemon {
             Some(error) => Err(error),
             None => Ok(()),
         }
-    }
-
-    async fn stop_tasks(&mut self) -> anyhow::Result<()> {
-        for listener in self.listeners.drain(..) {
-            listener.await?;
-        }
-        if let Some(purge) = self.purge.take() {
-            purge.await?;
-        }
-        if let Some(omp_usage_poller) = self.omp_usage_poller.take() {
-            omp_usage_poller.await?;
-        }
-        if let Some(presence) = self.presence.take() {
-            presence.await?;
-        }
-        Ok(())
     }
 
     async fn stop_deliveries(&self) -> Option<anyhow::Error> {
@@ -360,6 +379,39 @@ fn spawn_omp_usage(runtime: Arc<Runtime>, mut stopping: watch::Receiver<bool>) -
     })
 }
 
+async fn serve_until_stopped(
+    socket: TcpStream,
+    runtime: Arc<Runtime>,
+    mut stopping: watch::Receiver<bool>,
+) {
+    tokio::select! {
+        _ = stopping.changed() => {}
+        result = serve(socket, runtime) => {
+            if let Err(error) = result {
+                tracing::debug!(%error, "client connection closed");
+            }
+        }
+    }
+}
+
+fn spawn_connection(
+    connections: &mut JoinSet<()>,
+    accepted: std::io::Result<(TcpStream, SocketAddr)>,
+    runtime: &Arc<Runtime>,
+    stopping: &watch::Receiver<bool>,
+) {
+    match accepted {
+        Ok((socket, _)) => {
+            connections.spawn(serve_until_stopped(
+                socket,
+                runtime.clone(),
+                stopping.clone(),
+            ));
+        }
+        Err(error) => tracing::warn!(%error, "accept failed"),
+    }
+}
+
 fn spawn_listener(
     listener: TcpListener,
     runtime: Arc<Runtime>,
@@ -371,23 +423,7 @@ fn spawn_listener(
             tokio::select! {
                 _ = stopping.changed() => break,
                 accepted = listener.accept() => {
-                    match accepted {
-                        Ok((socket, _)) => {
-                            let runtime = runtime.clone();
-                            let mut stopping = stopping.clone();
-                            connections.spawn(async move {
-                                tokio::select! {
-                                    _ = stopping.changed() => {},
-                                    result = serve(socket, runtime) => {
-                                        if let Err(error) = result {
-                                            tracing::debug!(%error, "client connection closed");
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        Err(error) => tracing::warn!(%error, "accept failed"),
-                    }
+                    spawn_connection(&mut connections, accepted, &runtime, &stopping);
                 }
                 Some(result) = connections.join_next(), if !connections.is_empty() => {
                     if let Err(error) = result {

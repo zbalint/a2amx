@@ -250,3 +250,117 @@ async fn reset_holds_message_delivery_until_sequence_finishes() {
     );
     daemon.shutdown().await.unwrap();
 }
+
+async fn exited_reset_target(admin: &mut Client, dir: &Path) -> String {
+    let Response::Created { session: target } = admin
+        .request(common::new_session_request(
+            Some("exited-target"),
+            &["sh", "-c", "exit 0"],
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected target response");
+    };
+    common::eventually(|| async {
+        let mut client = Client::connect(dir).await.unwrap();
+        let Response::Sessions { sessions } = client.request(Request::List).await.unwrap() else {
+            return None;
+        };
+        sessions
+            .into_iter()
+            .find(|session| session.id == target && session.exit_code == Some(0))
+    })
+    .await;
+    target
+}
+
+#[tokio::test]
+async fn reset_unknown_target_reports_literal_unknown_session_error() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let unknown = admin
+        .request(Request::Reset {
+            session: "missing-target".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        unknown,
+        Response::Failed {
+            code: "unknown_session".into(),
+            message: "unknown session".into(),
+        }
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+async fn assert_reset_not_permitted(client: &mut Client, target: String) {
+    let denied = client
+        .request(Request::Reset { session: target })
+        .await
+        .unwrap();
+    assert_eq!(
+        denied,
+        Response::Failed {
+            code: "not_permitted".into(),
+            message: "sender is not permitted to reset this session".into(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn reset_checks_permission_before_exited_for_unlisted_sender() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_other_id, _other_token, mut other) = session(
+        &mut admin,
+        dir.path(),
+        Some("other"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+    let target = exited_reset_target(&mut admin, dir.path()).await;
+    assert_reset_not_permitted(&mut other, target).await;
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_exited_target_by_admin_reports_literal_exited_error() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let target = exited_reset_target(&mut admin, dir.path()).await;
+    let exited = admin
+        .request(Request::Reset { session: target })
+        .await
+        .unwrap();
+    assert_eq!(
+        exited,
+        Response::Failed {
+            code: "exited".into(),
+            message: "session has exited".into(),
+        }
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_rejects_self_even_when_listed_in_control_from() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (self_id, self_token, self_addr) = common::new_team_agent(
+        &mut admin,
+        dir.path(),
+        Some("self-controller"),
+        Harness::Generic,
+        Deliver::Hold,
+        None,
+        &[],
+        &["self-controller"],
+    )
+    .await;
+    let mut self_client = Client::connect_addr(self_addr, &self_token).await.unwrap();
+    assert_reset_not_permitted(&mut self_client, self_id).await;
+    daemon.shutdown().await.unwrap();
+}

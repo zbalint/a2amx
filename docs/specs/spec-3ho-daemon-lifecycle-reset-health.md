@@ -83,3 +83,24 @@ git status --short
 | the audit line is untested | "session reset attempt" | grep of `src tests docs` |
 | `stop_tasks` has one caller (`shutdown`) | `lifecycle.rs:131-133` | read |
 | the `Daemon` fields `purge`, `omp_usage_poller`, `presence`, `listeners` are used only in `lifecycle.rs` | `daemon.rs` struct, `lifecycle.rs` | grep (developer to re-confirm before editing) |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the agy harness, planning and working model Gemini 4 Hydrogen (Medium), no advisor (single-slot harness); tester `a2amx-tester` on the omp harness, planning and working model `opencode-go/deepseek-v4.1-flash` (advisor model not exposed).
+
+BLOCKED/amend cycles: none. Three fix rounds after the implementation.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | Step A omitted the existing reset pins (`tests/broker/reset_basics.rs`) and two mutant targets (`team`, `daemon_cli`); section 0 contradicted Step A on test files | Spec amended before the lock |
+| Draft review | consultant | The gateway reset claim was false at this layer: `trust.rs` refuses a gateway token before `reset_session`, so mutant (b) was equivalent | (b) dropped, the `Gateway` arms stated as kept for exhaustiveness |
+| Draft review | consultant | Mutant (d) would survive without a pin for an exited target reset by a visible, unpermitted session; mutants (f) and (i) are equivalent through the public seams; the no-behaviour-change sentence conflicted with the audit-target change; the String Heavy mechanism was misstated | New pins named, (f)/(i) expected non-kills, the exception stated, the mechanism reworded |
+| Implementation | architect | `spawn_listener` kept its Bumpy Road (bumps = 2) after the specified shape, although the spec expected it to clear | Fix round 1: `spawn_connection` extracted; cs 10.00 on `lifecycle.rs` |
+| Implementation | architect | The new exited/unknown test was an 89-line Large Method, a new cs warning in `reset_basics.rs` | Fix round 2: split into three small tests with one helper |
+| Tester pass | tester | Mutant (c), `reset_permitted` without the self-reset exclusion, survived: the only self-reset test used an empty `control_from` | Fix round 3: `reset_rejects_self_even_when_listed_in_control_from`, red on the mutant |
+| Tester pass | tester | The spec called the existing `reset_authorizes_controller_and_rejects_unlisted_or_self` a code-and-text pin; it asserts the code only | The new tests pin code and text literally; the claim is corrected here |
+| Tester pass | tester | "Shutdown returned only after the task group finished" is unpinned (mutant l survives); also expected survivors (k) stop order, (m) accept-failure log, (n) identity swap | Left: the awaits are structural and the watch stop races any observer; diff-inspected |
+| Design read | consultant | Nits: `spawn_connection` is better named `handle_accept`; a four-field `Identity` struct would remove the same-type tuple swap risk | Left: the tuple is HEAD's shape and the spec names it |
+| Design read | consultant | The file-level "String Heavy Function Arguments" on `daemon.rs` has no file-local fix: the arguments are tokens, codes and session references; a `SessionId` newtype or typed error codes would cross `trust.rs`, `serve.rs` and `messaging` | Recorded as known and not fixed; a crate-wide typing spec would need its own justification |
+
+Tester mutants (scratch with its own `CARGO_TARGET_DIR`, deleted afterwards): (a), (d), (e), (g), (h) killed; (f), (i), (j) expected non-kills; (c) survived and is fixed above. Architect spot-check (own scratch, deleted): `reset_refusal` skipping the permission check, killed by three reset tests including the new self pin; `Tasks::spawn` without the presence poller, killed by three `away_notice` tests. Fresh checks by the architect: `cargo test` 1531 passed, 3 ignored, `clippy -D warnings` and `fmt --check` clean, `cs` 10.00 on `lifecycle.rs`, `daemon.rs` 9.68 (the one file-level finding above), `reset_basics.rs` and `daemon_lifecycle.rs` unchanged in findings (pre-existing, for the tests batch), whole-tree cs warnings 862 to 858.

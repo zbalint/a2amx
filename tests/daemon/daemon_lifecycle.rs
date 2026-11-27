@@ -370,3 +370,26 @@ fn newly_created_parents_are_private_even_with_a_restrictive_umask() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+#[tokio::test]
+async fn start_rejects_invalid_host_name_with_literal_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_owned();
+    let error = Daemon::start(DaemonConfig {
+        root: root.clone(),
+        listen: vec!["127.0.0.1:0".parse().unwrap()],
+        host_name: Some("bad host".into()),
+        limits: a2amx::messaging::Limits::default(),
+        bwrap_path: None,
+        env_path: None,
+    })
+    .await
+    .err()
+    .unwrap();
+    assert!(
+        error.to_string().starts_with("invalid host name"),
+        "unexpected error: {error}"
+    );
+    assert!(!root.join("run/admin.token").exists());
+    assert!(!root.join("run/addr").exists());
+}
