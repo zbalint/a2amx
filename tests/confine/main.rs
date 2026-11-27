@@ -221,6 +221,7 @@ mod grants_links_and_env;
 mod grants_runtime;
 mod harness_config;
 mod harnesses;
+mod hide_unhide_messages;
 mod limits_and_hides;
 mod notices_and_preflight;
 mod overlay_symlinked_agent;

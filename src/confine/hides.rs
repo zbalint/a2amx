@@ -49,12 +49,11 @@ struct SocketRow<'a> {
     sockets: &'a [&'a str],
 }
 
-fn container_socket_hides(
+fn granted_socket_targets(
     table: &[SocketRow<'_>],
-    given: &[String],
+    given: &BTreeSet<&str>,
     home: &Path,
-) -> (Vec<(PathBuf, &'static str)>, Vec<PathBuf>) {
-    let given = given.iter().map(String::as_str).collect::<BTreeSet<_>>();
+) -> BTreeSet<PathBuf> {
     let mut granted_targets = BTreeSet::new();
     for row in table.iter().filter(|row| given.contains(row.name)) {
         for socket in row.sockets {
@@ -64,6 +63,16 @@ fn container_socket_hides(
             }
         }
     }
+    granted_targets
+}
+
+fn container_socket_hides(
+    table: &[SocketRow<'_>],
+    given: &[String],
+    home: &Path,
+) -> (Vec<(PathBuf, &'static str)>, Vec<PathBuf>) {
+    let given = given.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let granted_targets = granted_socket_targets(table, &given, home);
 
     let mut hidden = Vec::new();
     let mut skipped = Vec::new();
@@ -154,6 +163,14 @@ impl<'a> PlanBuilder<'a> {
         }
     }
 
+    fn guarded_harness_root(&self) -> Option<PathBuf> {
+        if self.harness_config.is_some() {
+            return None;
+        }
+        self.session_harness_root()
+            .and_then(|root| canonical_if_exists(&root))
+    }
+
     fn check_grant_path_writable(&self, grant: &str, entry: &str, path: &Path) -> Result<PathBuf> {
         let path = check_write_allowed(path, &self.home, self.layout.root(), false)?;
         check_write_runtime_allowed(&path, &self.runtime_dir, false)?;
@@ -162,10 +179,7 @@ impl<'a> PlanBuilder<'a> {
         {
             bail!("confinement grant \"{grant}\" path {entry} is inside ~/.a2amx");
         }
-        if self.harness_config.is_none()
-            && let Some(root) = self
-                .session_harness_root()
-                .and_then(|root| canonical_if_exists(&root))
+        if let Some(root) = self.guarded_harness_root()
             && is_within(&path, &root)
         {
             bail!(
@@ -174,6 +188,45 @@ impl<'a> PlanBuilder<'a> {
             );
         }
         Ok(path)
+    }
+
+    fn resolve_grant_unhide(&mut self, grant_name: &str, name: &str) -> Result<Option<PathBuf>> {
+        let source = user_path(name, &self.home);
+        if let Some(path) = symlink_component(&source) {
+            bail!(
+                "confinement grant \"{}\" path {} passes through the symlink {}; name the real path with a write entry instead",
+                grant_name,
+                name,
+                path.display()
+            );
+        }
+        let Some(path) = canonical_if_exists(&source) else {
+            add_unique(&mut self.skipped, source);
+            return Ok(None);
+        };
+        Ok(Some(
+            self.check_grant_path_writable(grant_name, name, &path)?,
+        ))
+    }
+
+    fn unhide_conflict(
+        &self,
+        path: &Path,
+        default_hide_sources: &[PathBuf],
+        own_paths: &BTreeSet<PathBuf>,
+    ) -> Option<PathBuf> {
+        default_hide_sources
+            .iter()
+            .filter(|source| !own_paths.contains(*source))
+            .filter_map(|source| canonical_if_exists(source))
+            .find(|hidden| is_within(path, hidden))
+            .or_else(|| {
+                self.mandatory_hidden
+                    .iter()
+                    .chain(&self.container_hidden)
+                    .find(|hidden| paths_overlap(path, hidden))
+                    .cloned()
+            })
     }
 
     pub(super) fn apply_grant_unhides(
@@ -198,49 +251,17 @@ impl<'a> PlanBuilder<'a> {
             .filter(|grant| given.contains(grant.name))
         {
             for name in grant.unhides {
-                let source = user_path(name, &self.home);
-                if let Some(path) = symlink_component(&source) {
-                    bail!(
-                        "confinement grant \"{}\" path {} passes through the symlink {}; name the real path with a write entry instead",
-                        grant.name,
-                        name,
-                        path.display()
-                    );
-                }
-                let Some(path) = canonical_if_exists(&source) else {
-                    add_unique(&mut self.skipped, source);
+                let Some(path) = self.resolve_grant_unhide(grant.name, name)? else {
                     continue;
                 };
-                let path = self.check_grant_path_writable(grant.name, name, &path)?;
-                for hidden_source in &default_hide_sources {
-                    if own_paths.contains(hidden_source) {
-                        continue;
-                    }
-                    let Some(hidden) = canonical_if_exists(hidden_source) else {
-                        continue;
-                    };
-                    if is_within(&path, &hidden) {
-                        bail!(
-                            "confinement grant \"{}\" path {} resolves to the hidden path {}",
-                            grant.name,
-                            name,
-                            hidden.display()
-                        );
-                    }
-                }
-                for hidden in self
-                    .mandatory_hidden
-                    .iter()
-                    .chain(self.container_hidden.iter())
+                if let Some(hidden) = self.unhide_conflict(&path, &default_hide_sources, &own_paths)
                 {
-                    if paths_overlap(&path, hidden) {
-                        bail!(
-                            "confinement grant \"{}\" path {} resolves to the hidden path {}",
-                            grant.name,
-                            name,
-                            hidden.display()
-                        );
-                    }
+                    bail!(
+                        "confinement grant \"{}\" path {} resolves to the hidden path {}",
+                        grant.name,
+                        name,
+                        hidden.display()
+                    );
                 }
                 self.hidden.retain(|existing| existing != &path);
                 self.default_hidden.retain(|existing| existing != &path);

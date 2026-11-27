@@ -141,6 +141,10 @@ pub struct Unresolved {
     pub reason: String,
 }
 
+fn is_home_entry(entry: &str) -> bool {
+    entry == "~" || entry.starts_with("~/")
+}
+
 /// Reject a confinement entry that no later stage would understand.
 pub fn check_entry_syntax(option: &str, entry: &str) -> Result<()> {
     if entry.is_empty() {
@@ -151,7 +155,7 @@ pub fn check_entry_syntax(option: &str, entry: &str) -> Result<()> {
             "{option} entry {entry:?}: environment variables are not expanded; write the path out, or use ~/ for your home"
         );
     }
-    if entry.starts_with('~') && entry != "~" && !entry.starts_with("~/") {
+    if entry.starts_with('~') && !is_home_entry(entry) {
         bail!("{option} entry {entry:?}: only ~ and ~/... are understood, not another user's home");
     }
     Ok(())
@@ -235,8 +239,16 @@ fn check_entry_count(values: &[String], label: &str) -> Result<()> {
     }
     Ok(())
 }
+fn overlaps_for(explicit: bool, path: &Path, other: &Path) -> bool {
+    if explicit {
+        is_within(path, other)
+    } else {
+        paths_overlap(path, other)
+    }
+}
+
 fn check_absolute_entry(option: &str, entry: &str) -> Result<()> {
-    if entry != "~" && !entry.starts_with("~/") && !Path::new(entry).is_absolute() {
+    if !is_home_entry(entry) && !Path::new(entry).is_absolute() {
         bail!("{option} entry {entry:?} must be an absolute path or start with ~/");
     }
     Ok(())
@@ -255,28 +267,17 @@ pub fn check_write_allowed(
     if path == Path::new("/") {
         bail!("writable path / is not allowed");
     }
-    if !explicit && (path == home || is_within(&home, &path)) {
+    if !explicit && is_within(&home, &path) {
         bail!("writable path $HOME is not allowed");
     }
-    let state_overlap = if explicit {
-        is_within(&path, &root)
-    } else {
-        paths_overlap(&path, &root)
-    };
-    if state_overlap {
+    if overlaps_for(explicit, &path, &root) {
         bail!(
             "writable path {} overlaps the a2amx directory",
             path.display()
         );
     }
     for mandatory in MANDATORY_ROOTS {
-        let mandatory = Path::new(mandatory);
-        let overlap = if explicit {
-            is_within(&path, mandatory)
-        } else {
-            paths_overlap(&path, mandatory)
-        };
-        if overlap {
+        if overlaps_for(explicit, &path, Path::new(mandatory)) {
             bail!(
                 "writable path {} overlaps a mandatory hidden path",
                 path.display()
@@ -288,12 +289,7 @@ pub fn check_write_allowed(
 
 fn check_write_runtime_allowed(path: &Path, runtime_dir: &Path, explicit: bool) -> Result<()> {
     let runtime_dir = canonical_existing(runtime_dir, "runtime directory")?;
-    let overlap = if explicit {
-        is_within(path, &runtime_dir)
-    } else {
-        paths_overlap(path, &runtime_dir)
-    };
-    if overlap {
+    if overlaps_for(explicit, path, &runtime_dir) {
         bail!(
             "writable path {} overlaps the runtime directory",
             path.display()

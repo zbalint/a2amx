@@ -89,3 +89,20 @@ git status --short
 | the entry-syntax and absolute-entry messages are pinned | `plan_basics.rs:103,114,143,257-280`, `limits_and_hides.rs` | grep |
 | the two "resolves to the hidden path" texts in `apply_grant_unhides` are identical | `hides.rs:223-228`, `:237-242` | read |
 | `apply_grant_unhides` unchanged callers pass `no_default_hides` through the request | `builder.rs:94` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the agy harness, planning and working model Gemini 4 Hydrogen (Medium), no advisor (single-slot harness); tester `a2amx-tester` on the omp harness, planning and working model `opencode-go/deepseek-v4.1-flash` (advisor model not exposed).
+
+BLOCKED/amend cycles: none. One fix round after the tester pass.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The draft called the guard-root messages (`~/.a2amx`, harness root, default-hide, container) unreachable; they are reachable because the grant symlink bail checks only the grant's own path while the guard roots may be symlinks | Step A rewritten with symlink fixtures; all but the mandatory-run arm pinned |
+| Draft review | consultant | Mutant (e) was equivalent (`Path::starts_with` is true for equal paths); mutant (f) unobservable; `unhide_conflict` as two loops would keep a bump; `is_home_entry` would have had one caller | (e) redefined, (f) marked expected non-kill, iterator form specified, `is_home_entry` used by both rules |
+| Tester pass | tester | Mutants (l) harness-config guard, (n) `default_hidden.retain`, and own (p) runtime check ignoring `explicit` survived; the shipped harness-root pin used `Agy` without `harness-config`, not the fixture section 2 prescribes | Fix round: three pins (Codex with `harness-config`, ssh grant leaves `default_hidden`, cwd containing the runtime dir); each proven to kill in scratch |
+| Tester pass | tester | Reported a host dependence of the mandatory-root pin | Withdrawn by the tester after reading `check_write_allowed` (no existence check) |
+| Design read | consultant | `guarded_harness_root` used `is_none().then(..).flatten()`, which reads worse than an early return | Applied by the architect (same behaviour and laziness); full suite rerun |
+| Design read | consultant | Nits not applied: five test cases repeat the plan-error block (a `plan_error` helper would serve), `overlaps_for` sits apart from `is_within`/`paths_overlap` without a why-comment, the ssh pin partly overlaps an existing test | Left: siblings use the same inline pattern, spec scope bars editing the other test file |
+
+Tester mutants (scratch with its own `CARGO_TARGET_DIR`, deleted afterwards): 18 runs, 13 killed, survivors (l), (n), (p) fixed above, (f) expected non-kill, (q) equivalent (De Morgan of `!is_home_entry`). Architect spot-check (own scratch, deleted): (d) `overlaps_for` ignoring `explicit` and (n) together: five tests fail, including the new ssh and runtime-directory pins. Fresh checks by the architect: `cargo test` 1522 passed, `clippy -D warnings` and `fmt --check` clean, `cs` 10.00 on `hides.rs` and the new test file, `confine.rs` 9.84 (the out-of-scope unit-test finding `:424` remains, for the tests batch), whole-tree cs warnings 878 to 867.
