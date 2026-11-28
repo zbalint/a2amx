@@ -1,0 +1,65 @@
+# Spec 3hw: function-level code health of the lease code book in `src/daemon/remote.rs`
+
+## 0. Status
+
+LOCKED. Context `a2amx-3hw-daemon-remote-leases-health`. Location: main checkout `/home/zbalint/workspace/a2amx`, branch `develop`. Behaviour-preserving refactor, test-first where a behaviour is unpinned. Public seams: the control protocol over a real daemon (`Request::IssueLeaseCode`, `Request::RedeemLeaseCode` as the gateway, the remote status views).
+
+Scope (edit): `src/daemon/remote.rs` (`Leases::issue`, `Leases::redeem`, the new functions, and the one caller `Runtime::issue_lease_code` at `:171`), tests only for Step A gaps appended to existing files named there, never a new file. Does not touch: `Leases::start`, `Leases::state`, any other function, `src/messaging.rs`, `docs/` other than this spec, `CHANGELOG.md`.
+
+No behaviour change: same replies, same texts, same counts, the same lock scope (the book's mutex is a leaf and is held only inside `Leases` methods), and the same constant-time comparison over every pending code.
+
+## 1. Why
+
+`cs check` reports on `remote.rs`: `:35` `Leases::redeem` "Complex Method (cc = 11)", "Bumpy Road Ahead (bumps = 3)", "Complex Conditional" at `:42` (the `if let .. && now < expires && constant_time_eq(..)`), and `:25` `Leases::issue` "Excess Number of Function Arguments (Arguments = 5)". The redeem path is a trust boundary (a pairing code, a wrong-attempt lockout, constant-time comparison), so the split must keep its properties exactly.
+
+Rules that bind (earlier refactors): a helper that exists only to clear a finding is rejected; each new function names one domain job; no out-parameter accumulator; at most four parameters per new function counting `self`; split along contiguous runs; no suppression.
+
+## 2. Step A: pins (tests, green on the current code)
+
+The developer lists, per behaviour, the existing pin and runs it. Candidates (the consultant's pre-lock read replaces this list with the confirmed pins): `tests/human_inbound/inbound_admission.rs::lease_codes_expire_are_single_use_and_wrong_attempts_reset_on_issue` (expired code refused, single use), `::five_wrong_codes_drop_pending_codes_until_issue_resets_the_counter` (lockout at five, reset on issue), `::issue_lease_code_requires_a_running_remote_member_of_the_team`.
+
+1. A wrong, expired or used code replies `Error "invalid or expired code"`.
+2. A matching code consumes the pending entry and returns its team; the lease starts for that team only.
+3. Five wrong attempts lock redemption (a correct code is refused) and drop every pending code; a later `issue` resets the counter.
+4. The lockout also drops the pending codes of OTHER teams: a code issued for team A, five wrong attempts, then an `issue` for team B (which resets the counter), then redeeming A's code fails. Candidate gap: confirm by grep and add a pin if absent.
+5. With two teams holding different pending codes, redeeming team B's code starts B's lease and leaves A's code pending. Candidate gap.
+
+## 3. Step B: target shape
+
+### `src/daemon/remote.rs`
+
+- `Leases::issue(&self, team: String, code: String, expires: Instant)`: the caller computes `Instant::now() + ttl` (today `issue` adds `now + ttl` itself), four parameters; the counter reset and the replacement stay.
+- `impl PendingLeaseCode { fn accepts(&self, code: &str, now: Instant) -> bool }`: `now < self.expires && constant_time_eq(code, &self.code)`. One condition, one domain job: this entry is redeemable with this code.
+- `impl LeaseState { fn take_matching(&mut self, code: &str, now: Instant) -> Option<String> }`: iterate EVERY team (no early exit: the comparison time must not reveal which team or position matched), remember the first match, take its pending entry and return the team. Today's loop and `get_or_insert_with` stay as they are.
+- `impl LeaseState { fn record_wrong_code(&mut self, now: Instant) }`: drop expired pending entries, bump `wrong_codes` (saturating), and at `MAX_WRONG_CODES` drop every pending entry.
+- `Leases::redeem(&self, code: &str, now: Instant) -> Option<String>` keeps the lock, the early return at the lockout, `take_matching`, then `record_wrong_code` and `None`.
+
+If a finding remains, the developer quotes the cs text, reports per-function cc and stops. Hand counts: `accepts` 1, `take_matching` about 4, `record_wrong_code` about 5, `redeem` about 3.
+
+## 4. Out of scope
+
+`start`, `state`, the lease views (`:200` onward), the wire types, the gateway.
+
+## 5. Trust boundary
+
+Attack paths: (a) guessing a pairing code (constant-time comparison, five-attempt lockout, single use, expiry) and (b) timing of the match position. Disposition: constrained, unchanged. The refactor keeps `constant_time_eq` for every pending code on every redeem (no `find`, no early `break`), the lockout, the counter reset on issue and the drop of all pending codes at the lockout. Abuse-case pins: items 1, 3, 4 above (items 1 and 3 exist; item 4 added if absent). The timing property has no deterministic test: the architect and the consultant check by reading that `take_matching` has no early exit.
+
+## 6. Acceptance
+
+Baseline: whole-tree cs count 839 (after 3hv, cb40314).
+
+```sh
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+cs check src/daemon/remote.rs
+git status --short
+```
+
+- All pass; `cs check` lists no function finding on `remote.rs` (a file-level finding may remain); whole-tree count below the baseline; new tests add no cs warning.
+- `git status --short` lists only the files of section 0. No suppression.
+- Mutation check by the tester only (scratch `target/scratch/3hw/`, own `CARGO_TARGET_DIR`, deleted before its REPORT): (a) `accepts` ignores expiry; (b) `accepts` always true; (c) the matched entry is not taken (reusable code); (d) the lockout check at the top of `redeem` dropped; (e) the counter not incremented; (f) the lockout does not drop the pending codes; (g) the counter not reset by `issue`; (h) `issue` keeps an old pending entry; (i) `take_matching` returns the last match instead of the first (expected non-kill unless two teams share a code); (j) `take_matching` stops at the first match (a timing change; expected non-kill, reviewed by reading). The tester names the killing test per mutant.
+
+## 7. Claims
+
+To be filled before locking (`cs` anchors, callers, the existing pins, the candidate gaps).
