@@ -80,3 +80,22 @@ git status --short
 | `explain_of` has one caller (`serve.rs:143`); `session_quota` has four callers (`views.rs:30,127`, `attach.rs:105`, `admission.rs:129`), its signature stays | grep over `src/` | run, output read |
 | the hold chain and the quota rules above are today's behaviour | `views.rs:156-252,275-319` | read |
 | `Explain` is `Audience::AdminOnly` | `daemon/trust.rs:37-42` | read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-senior-developer` on the Antigravity CLI (Gemini 4 Hydrogen Medium, as it reported); tester `a2amx-tester` on the omp harness, `opencode-go/deepseek-v4.1-flash`.
+
+BLOCKED/amend cycles: none.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The PTY channel hold arm in `explain` is reachable only for Generic sessions, so Claude and OMP explain tests exercise the session-hold arm | The pin uses a Generic session with attached input `x` (recipe `tests/daemon/status_reporting.rs:542-567`) |
+| Draft review | consultant | The exited-session `explain` fields beyond the state line are invisible to the CLI; the Codex arm of `session_quota` has no daemon-level pin | A wire-level `Request::Explain` pin was added; the Codex arm is a recorded, accepted gap |
+| Draft review | consultant | A per-field `if` shape for `explain_of` keeps cc near 9 | Single-pass shape (exited-values literal plus one `if exit_code.is_none()`) in the target shape |
+| Tester pass | tester | Mutant (g) (exited `pending` from counts) survives: an exit fails open messages, so the count is already 0 | Expected non-kill, recorded; the other 13 mutants killed |
+| Design read | consultant | `pty_channel_hold_and_deliver_hold_priority_in_explain` killed the hold-swap mutant only through a fixed 50 ms sleep (the poll stops at `deliver_hold`, which the mutant also reports until the draft registers) | The developer replaced the sleep with a wait on an independent signal (`Request::List` `hold_reason == human_draft`) and one explain sample; mutant (b) re-checked killed |
+| Design read | consultant | `omp_provider_usage_ors_screen_limit_reached` copied the script and file lines of `bridged_fake_executable` | The helper takes a `BridgedScreen` argument; callers updated; the fixture origin of 97 and 5 commented |
+| Design read | consultant | The wire pin's name broke the `<x>_explain_reports_<y>` pattern and lacked a why-comment; `exited_claude_session_reports_no_quota` used the variable `s` and lacked a why-comment | Renamed `exited_generic_explain_reports_closed_wire_fields`; comments added; variable renamed (architect edits) |
+| Tester pass | tester | Its environment check printed the tester session token into tool output | Owner told to rotate the session; token never reached the repo or a commit |
+
+Tester mutants (14): 13 killed, (g) the expected non-kill. Fresh checks by the architect: `views.rs` only the out-of-scope `:68` and file-level findings left, whole-tree cs warnings 848 to 845.

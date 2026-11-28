@@ -25,10 +25,30 @@ fn fake_executable(dir: &Path, name: &str, usage_body: &str) -> PathBuf {
     path
 }
 
-fn bridged_fake_executable(dir: &Path, usage: &str) -> PathBuf {
+use BridgedScreen::{CodexLimitReached, Ready};
+
+#[derive(Clone, Copy)]
+enum BridgedScreen {
+    Ready,
+    CodexLimitReached,
+}
+
+impl BridgedScreen {
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::Ready => "",
+            Self::CodexLimitReached => {
+                "\\033[41;1H  Error: Codex error event: x (code=usage_limit_reached)"
+            }
+        }
+    }
+}
+
+fn bridged_fake_executable(dir: &Path, usage: &str, screen: BridgedScreen) -> PathBuf {
     let path = dir.join("omp");
+    let screen_suffix = screen.suffix();
     let script = format!(
-        "#!/bin/sh\nif [ \"$1\" = usage ]; then\nprintf '%s\\n' '{usage}'; exit 0\nelse\nprintf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > \"$OUT\"\nprintf '\\033[?2004h'\ncat\nfi\n"
+        "#!/bin/sh\nif [ \"$1\" = usage ]; then\nprintf '%s\\n' '{usage}'; exit 0\nelse\nprintf '%s\\n%s\\n' \"$A2AMX_TOKEN\" \"$A2AMX_ADDR\" > \"$OUT\"\nprintf '\\033[?2004h{screen_suffix}'\ncat\nfi\n"
     );
     fs::write(&path, script).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
@@ -145,7 +165,7 @@ async fn direct_omp_session(
 async fn list_and_list_agents_report_omp_usage_percentages() {
     let fake_dir = tempdir().unwrap();
     let output = fake_dir.path().join("bridge-state");
-    let executable = bridged_fake_executable(fake_dir.path(), OMP_USAGE_FIXTURE);
+    let executable = bridged_fake_executable(fake_dir.path(), OMP_USAGE_FIXTURE, Ready);
     let (dir, daemon) = common::start_daemon().await;
     let mut admin = Client::connect(dir.path()).await.unwrap();
     let (id, mut bridge) = bridged_omp_session(
@@ -211,7 +231,7 @@ async fn list_and_list_agents_report_omp_usage_percentages() {
 #[tokio::test]
 async fn send_message_uses_recipient_omp_provider_quota() {
     let fake_dir = tempdir().unwrap();
-    let executable = bridged_fake_executable(fake_dir.path(), OMP_USAGE_MULTI_FIXTURE);
+    let executable = bridged_fake_executable(fake_dir.path(), OMP_USAGE_MULTI_FIXTURE, Ready);
     let open_output = fake_dir.path().join("open-bridge-state");
     let glm_output = fake_dir.path().join("glm-bridge-state");
     let (dir, daemon) = common::start_daemon().await;
@@ -481,6 +501,49 @@ async fn omp_wrapper_named_bun_is_not_polled() {
     assert_eq!(
         fs::read_to_string(fake_dir.path().join("counter")).unwrap_or_default(),
         ""
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn omp_provider_usage_ors_screen_limit_reached() {
+    let fake_dir = tempdir().unwrap();
+    let output = fake_dir.path().join("bridge-state");
+    let executable = bridged_fake_executable(fake_dir.path(), OMP_USAGE_FIXTURE, CodexLimitReached);
+
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (id, _bridge) = bridged_omp_session(
+        &mut admin,
+        daemon.addrs()[0],
+        "agent-omp-usage-limit",
+        &executable,
+        fake_dir.path(),
+        &output,
+        "openai-codex",
+    )
+    .await;
+
+    let quota = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(quota) = summary(&mut admin, &id).await.quota
+                && quota.five_hour_left == Some(97)
+            {
+                return quota;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // 97 and 5 come from OMP_USAGE_FIXTURE.
+    assert_eq!(
+        quota,
+        QuotaInfo {
+            five_hour_left: Some(97),
+            weekly_left: Some(5),
+            limit_reached: true,
+        }
     );
     daemon.shutdown().await.unwrap();
 }

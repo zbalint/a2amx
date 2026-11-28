@@ -241,3 +241,57 @@ async fn bridge_receipt_clears_in_flight_without_state_frame() {
 
     daemon.shutdown().await.unwrap();
 }
+
+// The CLI prints only the exited state line, so the other closed fields of an
+// exited session's explain reply are pinned here at the wire level.
+#[tokio::test]
+async fn exited_generic_explain_reports_closed_wire_fields() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let Response::Created { session } = admin
+        .request(common::new_session_request(
+            Some("exited-wire"),
+            &["sh", "-c", "exit 0"],
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("expected created");
+    };
+
+    let info = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Response::Explain { info } = admin
+                .request(Request::Explain {
+                    session: session.clone(),
+                })
+                .await
+                .unwrap()
+                && info.exit_code.is_some()
+            {
+                return info;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(info.exit_code, Some(0));
+    assert_eq!(info.ready, None);
+    assert!(!info.starting);
+    assert_eq!(info.activity, None);
+    assert_eq!(info.activity_cause, None);
+    assert_eq!(info.needs_input, None);
+    assert_eq!(info.hold, None);
+    assert_eq!(info.pending, 0);
+    assert_eq!(
+        info.reset,
+        a2amx::wire::ResetVerdict {
+            allowed: false,
+            code: None,
+            reason: None,
+        }
+    );
+    daemon.shutdown().await.unwrap();
+}

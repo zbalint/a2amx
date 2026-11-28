@@ -153,6 +153,41 @@ pub(super) fn screen_of(runtime: &Runtime, id: &str) -> Response {
     }
 }
 
+fn explain_hold(session: &Arc<Session>) -> Option<HoldInfo> {
+    if session.deliver() == Deliver::Hold {
+        let reason = "deliver_hold";
+        return Some(HoldInfo {
+            explanation: messaging::hold_explanation(reason).map(str::to_owned),
+            reason: reason.to_owned(),
+        });
+    }
+    if let Some(reason) = AnyChannel::for_session(session.clone()).hold_reason() {
+        return Some(HoldInfo {
+            explanation: messaging::hold_explanation(reason).map(str::to_owned),
+            reason: reason.to_owned(),
+        });
+    }
+    session.lock().hold.map(|hold| HoldInfo {
+        reason: crate::delivery::hold_name(hold).to_owned(),
+        explanation: None,
+    })
+}
+
+fn reset_verdict(session: &Session) -> ResetVerdict {
+    session.reset_gate_preview().map_or_else(
+        || ResetVerdict {
+            allowed: true,
+            code: None,
+            reason: None,
+        },
+        |(code, reason)| ResetVerdict {
+            allowed: false,
+            code: Some(code.to_owned()),
+            reason: Some(reason),
+        },
+    )
+}
+
 pub(super) async fn explain_of(runtime: &Runtime, id: &str) -> Response {
     let counts = match runtime.store.open_counts(&runtime.boot).await {
         Ok(counts) => counts,
@@ -168,87 +203,43 @@ pub(super) async fn explain_of(runtime: &Runtime, id: &str) -> Response {
         };
     };
     let exit_code = session.exit_code();
-    let pending = if exit_code.is_some() {
-        0
-    } else {
-        counts.get(&session.id().0).copied().unwrap_or(0)
-    };
-    let (ready, starting, activity, activity_cause, needs_input, hold, reset) =
-        if exit_code.is_some() {
-            (
-                None,
-                false,
-                None,
-                None,
-                None,
-                None,
-                ResetVerdict {
-                    allowed: false,
-                    code: None,
-                    reason: None,
-                },
-            )
-        } else {
-            let activity_cause = session_activity_cause(&session);
-            let activity = activity_cause.as_ref().map(|(activity, _)| *activity);
-            let cause = activity_cause.map(|(_, cause)| cause);
-            let needs_input = session.needs_input().map(str::to_owned);
-            let hold = if session.deliver() == Deliver::Hold {
-                let reason = "deliver_hold";
-                Some(HoldInfo {
-                    explanation: messaging::hold_explanation(reason).map(str::to_owned),
-                    reason: reason.to_owned(),
-                })
-            } else if let Some(reason) = AnyChannel::for_session(session.clone()).hold_reason() {
-                Some(HoldInfo {
-                    explanation: messaging::hold_explanation(reason).map(str::to_owned),
-                    reason: reason.to_owned(),
-                })
-            } else {
-                session.lock().hold.map(|hold| HoldInfo {
-                    reason: crate::delivery::hold_name(hold).to_owned(),
-                    explanation: None,
-                })
-            };
-            let starting = session.starting();
-            let ready = {
-                let state = session.lock();
-                Some(harness::ready(
-                    session.harness(),
-                    &state.emulator.screen(),
-                    state.emulator.is_scrolled(),
-                ))
-            };
-            let reset = session.reset_gate_preview().map_or_else(
-                || ResetVerdict {
-                    allowed: true,
-                    code: None,
-                    reason: None,
-                },
-                |(code, reason)| ResetVerdict {
-                    allowed: false,
-                    code: Some(code.to_owned()),
-                    reason: Some(reason),
-                },
-            );
-            (ready, starting, activity, cause, needs_input, hold, reset)
-        };
-    Response::Explain {
-        info: ExplainInfo {
-            id: session.id().0.clone(),
-            address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
-            harness: session.harness(),
-            exit_code,
-            ready,
-            starting,
-            activity,
-            activity_cause,
-            needs_input,
-            hold,
-            pending,
-            reset,
+    let mut info = ExplainInfo {
+        id: session.id().0.clone(),
+        address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
+        harness: session.harness(),
+        exit_code,
+        ready: None,
+        starting: false,
+        activity: None,
+        activity_cause: None,
+        needs_input: None,
+        hold: None,
+        pending: 0,
+        reset: ResetVerdict {
+            allowed: false,
+            code: None,
+            reason: None,
         },
+    };
+    if exit_code.is_none() {
+        info.pending = counts.get(&session.id().0).copied().unwrap_or(0);
+        let activity_cause = session_activity_cause(&session);
+        info.activity = activity_cause.as_ref().map(|(activity, _)| *activity);
+        info.activity_cause = activity_cause.map(|(_, cause)| cause);
+        info.needs_input = session.needs_input().map(str::to_owned);
+        info.hold = explain_hold(&session);
+        info.starting = session.starting();
+        info.ready = {
+            let state = session.lock();
+            Some(harness::ready(
+                session.harness(),
+                &state.emulator.screen(),
+                state.emulator.is_scrolled(),
+            ))
+        };
+        info.reset = reset_verdict(&session);
     }
+    Response::Explain { info }
 }
 pub(super) async fn list_messages(
     runtime: &Runtime,
@@ -271,6 +262,41 @@ pub(super) async fn list_messages(
     }
     Ok(Response::Messages { messages })
 }
+fn reported_quota(session: &Session, screen: Option<QuotaInfo>) -> Option<QuotaInfo> {
+    let (five_hour, weekly) = session.quota_report(store::now());
+    let mut quota = screen.unwrap_or_default();
+    if let Some(window) = five_hour {
+        quota.five_hour_left = Some(window.left);
+    }
+    if let Some(window) = weekly {
+        quota.weekly_left = Some(window.left);
+    }
+    (quota.five_hour_left.is_some() || quota.weekly_left.is_some()).then_some(quota)
+}
+
+fn omp_quota(
+    session: &Session,
+    omp_usage: Option<&BTreeMap<String, QuotaInfo>>,
+    screen: Option<QuotaInfo>,
+) -> Option<QuotaInfo> {
+    let limit_reached = screen.is_some_and(|quota| quota.limit_reached);
+    let provider_quota = session
+        .native_provider()
+        .and_then(|provider| omp_usage.and_then(|usage| usage.get(&provider).cloned()));
+    match (provider_quota, limit_reached) {
+        (Some(quota), true) => Some(QuotaInfo {
+            limit_reached: true,
+            ..quota
+        }),
+        (Some(quota), false) => Some(quota),
+        (None, true) => Some(QuotaInfo {
+            limit_reached: true,
+            ..Default::default()
+        }),
+        (None, false) => None,
+    }
+}
+
 /// The quota a running Claude, Codex or OMP session reports.
 pub(super) fn session_quota(
     session: &Session,
@@ -286,35 +312,10 @@ pub(super) fn session_quota(
         return None;
     }
     let screen = quota::read(&session.lock().emulator.screen(), harness);
-    if matches!(harness, Harness::Claude | Harness::Agy) {
-        let (five_hour, weekly) = session.quota_report(store::now());
-        let mut quota = screen.unwrap_or_default();
-        if let Some(window) = five_hour {
-            quota.five_hour_left = Some(window.left);
-        }
-        if let Some(window) = weekly {
-            quota.weekly_left = Some(window.left);
-        }
-        return (quota.five_hour_left.is_some() || quota.weekly_left.is_some()).then_some(quota);
-    }
-    if harness != Harness::Omp {
-        return screen;
-    }
-    let limit_reached = screen.is_some_and(|quota| quota.limit_reached);
-    let omp_quota = session
-        .native_provider()
-        .and_then(|provider| omp_usage.and_then(|usage| usage.get(&provider).cloned()));
-    match (omp_quota, limit_reached) {
-        (Some(quota), true) => Some(QuotaInfo {
-            limit_reached: true,
-            ..quota
-        }),
-        (Some(quota), false) => Some(quota),
-        (None, true) => Some(QuotaInfo {
-            limit_reached: true,
-            ..Default::default()
-        }),
-        (None, false) => None,
+    match harness {
+        Harness::Claude | Harness::Agy => reported_quota(session, screen),
+        Harness::Omp => omp_quota(session, omp_usage, screen),
+        _ => screen,
     }
 }
 fn background_job_waiting(session: &Arc<Session>) -> bool {

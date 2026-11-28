@@ -687,3 +687,89 @@ async fn agy_background_job_explain_reports_waiting_and_cause() {
     );
     daemon.shutdown().await.unwrap();
 }
+
+async fn wait_pty_draft_registered(home: &Path, session_id: &str) {
+    // List reads the channel hold directly without deliver_hold, so waiting for
+    // human_draft here proves the PTY draft is registered before Explain is sampled.
+    let home = home.to_owned();
+    let session_id = session_id.to_owned();
+    common::eventually(|| {
+        let home = home.clone();
+        let session_id = session_id.clone();
+        async move {
+            let mut client = Client::connect(&home).await.ok()?;
+            let Response::Sessions { sessions } = client.request(Request::List).await.ok()? else {
+                return None;
+            };
+            sessions
+                .iter()
+                .any(|s| s.id == session_id && s.hold_reason.as_deref() == Some("human_draft"))
+                .then_some(())
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn pty_channel_hold_and_deliver_hold_priority_in_explain() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (auto_id, _, _) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("auto-pty"),
+        Harness::Generic,
+        Deliver::Auto,
+    )
+    .await;
+    let (hold_id, _, _) = common::new_agent(
+        &mut admin,
+        dir.path(),
+        Some("hold-pty"),
+        Harness::Generic,
+        Deliver::Hold,
+    )
+    .await;
+
+    for (id, expected_reason, expected_explanation) in [
+        (
+            &auto_id,
+            "human_draft",
+            "A person typed in the recipient session. Delivery resumes when they submit or release it (prefix, then r).",
+        ),
+        (
+            &hold_id,
+            "deliver_hold",
+            "The recipient session only holds messages; a person must deliver by hand or restart it with automatic delivery.",
+        ),
+    ] {
+        let mut attach = Client::connect(dir.path())
+            .await
+            .unwrap()
+            .attach(id, false, 40, 10)
+            .await
+            .unwrap();
+        attach
+            .send(ClientFrame::Input(b"x".to_vec()))
+            .await
+            .unwrap();
+        wait_pty_draft_registered(dir.path(), id).await;
+        let Response::Explain { info } = admin
+            .request(Request::Explain {
+                session: id.clone(),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("expected explain response");
+        };
+        assert_eq!(
+            info.hold,
+            Some(a2amx::wire::HoldInfo {
+                reason: expected_reason.into(),
+                explanation: Some(expected_explanation.into()),
+            })
+        );
+    }
+    daemon.shutdown().await.unwrap();
+}

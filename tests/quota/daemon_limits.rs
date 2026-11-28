@@ -268,3 +268,33 @@ async fn send_message_reports_omp_limit_without_changing_delivery() {
     );
     daemon.shutdown().await.unwrap();
 }
+
+// The quota text stays on the screen after the exit, so only the exit guard in
+// `session_quota` keeps an exited session at no quota.
+#[tokio::test]
+async fn exited_claude_session_reports_no_quota() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let id = status_line_session(
+        &mut admin,
+        "agent-claude-exited",
+        Harness::Claude,
+        "printf '\\033[24;1H5h 0%% left 7d 80%% left'; exit 0",
+    )
+    .await;
+
+    let exited = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let latest = summary(&mut admin, &id).await;
+            if latest.exit_code.is_some() {
+                return latest;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(exited.exit_code, Some(0));
+    assert_eq!(exited.quota, None);
+    daemon.shutdown().await.unwrap();
+}
