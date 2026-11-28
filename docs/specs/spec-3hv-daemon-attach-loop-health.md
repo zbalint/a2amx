@@ -100,3 +100,24 @@ git status --short
 | the presence guard is a temporary of the `if let` scrutinee and gone before `session.lock()` | `attach.rs:347-357` | consultant read |
 | the existing pins of section 2 | tests | consultant read |
 | G1 and G2 are unpinned | grep over `tests/` | consultant grep |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (consultant session, model not exposed to the architect); developer Gemini 4 Hydrogen (Medium) on antigravity; tester opencode-go/deepseek-v4.1-flash on OMP (no separate planning or advisor model stated).
+
+BLOCKED/amend cycles: 0 BLOCKED; 1 amendment (Amendment 1, from the architect's own review of the developer's diff).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| draft review | consultant | `&mut self` handlers fail with E0502 while the select future borrows `self.session`; `run` as one function would be cc 9-10 | clone the `Arc<Session>` into a local; `serve_next` returns `done` |
+| draft review | consultant | "six frame kinds" is seven; "five" `close_with` sites is four; naming of `close_with_frame` | spec corrected |
+| draft review | consultant | confirmed pins were setup-path tests, not loop tests (`:285`, `detached_queries`) | re-anchored; pins G1 (exited while scrolled back) and G2 (unchanged Mode frame) added |
+| architect review | architect | `attach` still a Large Method (94 lines) after the loop split | Amendment 1: `refuse` and `attached_reply` helpers, committed 638a3e6 |
+| tester pass | tester (deepseek-v4.1-flash) | spec section 6 claims G1 kills mutant (n) (Exit not sent after redraw); it survives: the next loop iteration sends Exit through `send_pending_output`, with a possible Status frame first when status is enabled | accepted as an unpinned survivor; the status-enabled ordering stays unpinned |
+| tester pass | tester (deepseek-v4.1-flash) | mutant (o) (no Exit after output) hangs instead of failing, and presence tests wait on stream close without deadlines | recorded; a deadline on those waits is a later tests-batch item |
+| tester pass | tester (deepseek-v4.1-flash) | first row for (g) conflated it with (f) | corrected in the tester's addendum; kill stands |
+| tester pass | tester (deepseek-v4.1-flash) | pre-existing cold-start flake `client_file_prefix_reaches_attached_session` ("22 80" vs "24 80") on the first parallel run | not credited to a mutant; reruns pass |
+| architect review | consultant | `on_frame` catch-all `frame => redraw` turns a new `ClientFrame` variant into a runtime `unreachable!` | bound with `frame @ (Resize { .. } \| Scroll(_) \| Redraw)`; tester confirmed the tested behaviour is unchanged |
+| architect review | consultant | nit: `attached_reply` has one caller; `AttachLoop` holds duplicate Arcs; the "send screen, close if exited" tail exists three times | accepted; the shared tail is a candidate for a later spec |
+
+Mutation result: 18 killed; expected survivors (m), (q)/(v), (w) and `guard.counted` as in section 6; (n) survives as above.

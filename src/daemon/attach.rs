@@ -183,10 +183,197 @@ fn count_presence(runtime: &Runtime, session: &Session, viewer: bool) {
         .attach_started(Instant::now(), viewer);
 }
 
-async fn close_with_exit(connection: &mut Framed, code: i32) -> anyhow::Result<()> {
-    connection.send(&ServerFrame::Exit(code).encode()).await?;
+async fn close_with(connection: &mut Framed, frame: ServerFrame) -> anyhow::Result<()> {
+    connection.send(&frame.encode()).await?;
     connection.stream.shutdown().await?;
     Ok(())
+}
+
+struct AttachLoop {
+    session: Arc<Session>,
+    runtime: Arc<Runtime>,
+    guard: AttachmentGuard,
+    taken_over: watch::Receiver<bool>,
+    status: bool,
+    last: Option<StatusInfo>,
+}
+
+impl AttachLoop {
+    async fn run(&mut self, connection: &mut Framed) -> anyhow::Result<bool> {
+        self.report_status(connection).await?;
+        let period = Duration::from_secs(1);
+        let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            if self.serve_next(connection, &mut ticker).await? {
+                return Ok(true);
+            }
+        }
+    }
+
+    async fn serve_next(
+        &mut self,
+        connection: &mut Framed,
+        ticker: &mut tokio::time::Interval,
+    ) -> anyhow::Result<bool> {
+        if *self.taken_over.borrow() {
+            close_with(
+                connection,
+                ServerFrame::Detached("taken over by another attachment".into()),
+            )
+            .await?;
+            return Ok(true);
+        }
+        let session = Arc::clone(&self.session);
+        // Delivery shares this notifier and can consume its stored permit while
+        // a snapshot is being sent. Register before checking pending render state.
+        let output = session.notify().notified();
+        tokio::pin!(output);
+        output.as_mut().enable();
+        let pending = output_pending(&session);
+        let done = tokio::select! {
+            _ = self.taken_over.changed() => false,
+            // shortcut: one-second poll per attachment; push from the store's write path if latency
+            // or load matters.
+            _ = ticker.tick() => {
+                self.report_status(connection).await?;
+                false
+            }
+            _ = async { if !pending { output.await; } } => {
+                self.send_pending_output(connection).await?
+            }
+            payload = connection.recv() => match payload? {
+                Some(payload) => self.on_frame(connection, payload).await?,
+                None => true,
+            },
+        };
+        Ok(done)
+    }
+
+    async fn report_status(&mut self, connection: &mut Framed) -> anyhow::Result<()> {
+        if !self.status {
+            return Ok(());
+        }
+        let info = attachment_status(&self.session, &self.runtime).await?;
+        if self.last.as_ref() != Some(&info) {
+            connection
+                .send(&ServerFrame::Status(info.clone()).encode())
+                .await?;
+            self.last = Some(info);
+        }
+        Ok(())
+    }
+
+    async fn send_pending_output(&mut self, connection: &mut Framed) -> anyhow::Result<bool> {
+        let (bytes, exited) = {
+            let mut state = self.session.lock();
+            let bytes = state.emulator.render_update();
+            if !state.emulator.is_scrolled() {
+                state.dirty = false;
+            }
+            let exited = state.exit_code.filter(|_| !state.dirty);
+            (bytes, exited)
+        };
+        send_data(connection, &bytes).await?;
+        if let Some(code) = exited {
+            close_with(connection, ServerFrame::Exit(code)).await?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    async fn on_frame(
+        &mut self,
+        connection: &mut Framed,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<bool> {
+        match ClientFrame::decode(&payload)? {
+            ClientFrame::Detach => return Ok(true),
+            ClientFrame::Input(bytes) if !self.guard.viewer => {
+                self.session.note_human_input(&bytes);
+                if !self.session.enqueue(bytes).await? {
+                    self.session.notify().notify_one();
+                }
+            }
+            ClientFrame::Input(_) => {}
+            ClientFrame::Release if !self.guard.viewer => self.session.release(),
+            ClientFrame::Release => {}
+            ClientFrame::Mode { viewer } => self.change_mode(viewer),
+            frame @ (ClientFrame::Resize { .. } | ClientFrame::Scroll(_) | ClientFrame::Redraw) => {
+                return self.redraw(connection, frame).await;
+            }
+        }
+        Ok(false)
+    }
+
+    fn change_mode(&mut self, viewer: bool) {
+        if self.guard.counted && self.guard.viewer != viewer {
+            if let Some(presence) = self
+                .runtime
+                .presence
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get_mut(&self.session.id().0)
+            {
+                presence.mode_changed(Instant::now(), viewer);
+            }
+            self.guard.viewer = viewer;
+        }
+        let mut state = self.session.lock();
+        if let Some(slot) = state
+            .attachment
+            .as_mut()
+            .filter(|slot| slot.generation == self.guard.generation)
+        {
+            slot.viewer = viewer;
+        }
+    }
+
+    async fn redraw(
+        &mut self,
+        connection: &mut Framed,
+        frame: ClientFrame,
+    ) -> anyhow::Result<bool> {
+        let (bytes, exited) = {
+            let mut state = self.session.lock();
+            match frame {
+                ClientFrame::Resize { cols, rows } if state.exit_code.is_none() => {
+                    self.session
+                        .resize_locked(&mut state, Size { cols, rows })?;
+                }
+                ClientFrame::Resize { .. } => {}
+                ClientFrame::Scroll(scroll) => state.emulator.scroll(scroll),
+                ClientFrame::Redraw => {}
+                _ => unreachable!(),
+            }
+            state.dirty = false;
+            (state.emulator.render_full(), state.exit_code)
+        };
+        send_data(connection, &bytes).await?;
+        if let Some(code) = exited {
+            close_with(connection, ServerFrame::Exit(code)).await?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
+
+fn output_pending(session: &Session) -> bool {
+    let state = session.lock();
+    (state.dirty && !state.emulator.is_scrolled()) || (state.exit_code.is_some() && !state.dirty)
+}
+
+async fn refuse(connection: &mut Framed, message: String) -> anyhow::Result<bool> {
+    response(connection, Response::Error { message }).await?;
+    Ok(false)
+}
+
+fn attached_reply(top_rows: u16) -> Response {
+    if top_rows == 0 {
+        Response::Attached
+    } else {
+        Response::AttachedTop { top_rows }
+    }
 }
 
 pub(super) async fn attach(
@@ -196,33 +383,23 @@ pub(super) async fn attach(
     runtime: Arc<Runtime>,
 ) -> anyhow::Result<bool> {
     if options.top_rows > 8 {
-        response(
-            connection,
-            Response::Error {
-                message: "top rows exceed 8".into(),
-            },
-        )
-        .await?;
-        return Ok(false);
+        return refuse(connection, "top rows exceed 8".into()).await;
     }
-    let (takeover, mut taken_over) = watch::channel(false);
+    let (takeover, taken_over) = watch::channel(false);
     let (closed, completion) = watch::channel(false);
     let Some(Reservation {
         generation,
         previous,
     }) = reserve_attachment(&session, options.force)
     else {
-        response(
+        return refuse(
             connection,
-            Response::Error {
-                message: format!(
-                    "session {} is attached elsewhere (use --force to take over)",
-                    session.id().0
-                ),
-            },
+            format!(
+                "session {} is attached elsewhere (use --force to take over)",
+                session.id().0
+            ),
         )
-        .await?;
-        return Ok(false);
+        .await;
     };
     let mut guard = AttachmentGuard {
         session: session.clone(),
@@ -244,151 +421,28 @@ pub(super) async fn attach(
     };
     let (bytes, exited) = match install_attachment(&session, slot, &options) {
         Ok(snapshot) => snapshot,
-        Err(error) => {
-            response(
-                connection,
-                Response::Error {
-                    message: error.to_string(),
-                },
-            )
-            .await?;
-            return Ok(false);
-        }
+        Err(error) => return refuse(connection, error.to_string()).await,
     };
     if exited.is_none() {
         count_presence(&runtime, &session, options.viewer);
         guard.counted = true;
     }
-    let attached = if options.top_rows == 0 {
-        Response::Attached
-    } else {
-        Response::AttachedTop {
-            top_rows: options.top_rows,
-        }
-    };
-    response(connection, attached).await?;
+    response(connection, attached_reply(options.top_rows)).await?;
     send_data(connection, &bytes).await?;
     if let Some(code) = exited {
-        close_with_exit(connection, code).await?;
+        close_with(connection, ServerFrame::Exit(code)).await?;
         return Ok(true);
     }
-    let mut last = None;
-    if options.status {
-        let info = attachment_status(&session, &runtime).await?;
-        connection
-            .send(&ServerFrame::Status(info.clone()).encode())
-            .await?;
-        last = Some(info);
+    AttachLoop {
+        session,
+        runtime,
+        guard,
+        taken_over,
+        status: options.status,
+        last: None,
     }
-    let period = Duration::from_secs(1);
-    let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        if *taken_over.borrow() {
-            connection
-                .send(&ServerFrame::Detached("taken over by another attachment".into()).encode())
-                .await?;
-            connection.stream.shutdown().await?;
-            return Ok(true);
-        }
-        // Delivery shares this notifier and can consume its stored permit while
-        // a snapshot is being sent. Register before checking pending render state.
-        let output = session.notify().notified();
-        tokio::pin!(output);
-        output.as_mut().enable();
-        let output_pending = {
-            let state = session.lock();
-            (state.dirty && !state.emulator.is_scrolled())
-                || (state.exit_code.is_some() && !state.dirty)
-        };
-        tokio::select! {
-            _ = taken_over.changed() => {},
-            // shortcut: one-second poll per attachment; push from the store's write path if latency
-            // or load matters.
-            _ = ticker.tick() => {
-                if options.status {
-                    let info = attachment_status(&session, &runtime).await?;
-                    if last.as_ref() != Some(&info) {
-                        connection.send(&ServerFrame::Status(info.clone()).encode()).await?;
-                        last = Some(info);
-                    }
-                }
-            },
-            _ = async { if !output_pending { output.await; } } => {
-                let (bytes, exited) = {
-                    let mut state = session.lock();
-                    let bytes = state.emulator.render_update();
-                    if !state.emulator.is_scrolled() { state.dirty = false; }
-                    let exited = state.exit_code.filter(|_| !state.dirty);
-                    (bytes, exited)
-                };
-                send_data(connection, &bytes).await?;
-                if let Some(code) = exited {
-                    connection.send(&ServerFrame::Exit(code).encode()).await?;
-                    connection.stream.shutdown().await?;
-                    return Ok(true);
-                }
-            },
-            payload = connection.recv() => {
-                let Some(payload) = payload? else { return Ok(true); };
-                match ClientFrame::decode(&payload)? {
-                    ClientFrame::Detach => return Ok(true),
-                    ClientFrame::Input(bytes) if !guard.viewer => {
-                        session.note_human_input(&bytes);
-                        if !session.enqueue(bytes).await? {
-                            session.notify().notify_one();
-                        }
-                    },
-                    ClientFrame::Input(_) => {},
-                    ClientFrame::Release if !guard.viewer => session.release(),
-                    ClientFrame::Release => {},
-                    ClientFrame::Mode { viewer } => {
-                        if guard.counted && guard.viewer != viewer {
-                            if let Some(presence) = runtime
-                                .presence
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner)
-                                .get_mut(&session.id().0)
-                            {
-                                presence.mode_changed(Instant::now(), viewer);
-                            }
-                            guard.viewer = viewer;
-                        }
-                        let mut state = session.lock();
-                        if let Some(slot) = state
-                            .attachment
-                            .as_mut()
-                            .filter(|slot| slot.generation == guard.generation)
-                        {
-                            slot.viewer = viewer;
-                        }
-                    },
-                    frame => {
-                        let (bytes, exited) = {
-                            let mut state = session.lock();
-                            match frame {
-                                ClientFrame::Resize { cols, rows }
-                                    if state.exit_code.is_none() =>
-                                    session.resize_locked(&mut state, Size { cols, rows })?,
-                                ClientFrame::Resize { .. } => {},
-                                ClientFrame::Scroll(scroll) => state.emulator.scroll(scroll),
-                                ClientFrame::Redraw => {},
-                                _ => unreachable!(),
-                            }
-                            state.dirty = false;
-                            (state.emulator.render_full(), state.exit_code)
-                        };
-                        send_data(connection, &bytes).await?;
-                        if let Some(code) = exited {
-                            connection.send(&ServerFrame::Exit(code).encode()).await?;
-                            connection.stream.shutdown().await?;
-                            return Ok(true);
-                        }
-                    },
-                }
-            },
-        }
-    }
+    .run(connection)
+    .await
 }
 
 async fn send_data(connection: &mut Framed, bytes: &[u8]) -> anyhow::Result<()> {

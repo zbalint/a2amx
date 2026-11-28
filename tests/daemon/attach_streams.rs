@@ -598,3 +598,53 @@ async fn takeover_waits_for_received_input_to_enqueue_under_backpressure() {
     assert!(list(&mut control).await[0].attached);
     daemon.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn scrolled_exited_session_withholds_exit_until_client_frame_and_ignores_resize() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut client = Client::connect(dir.path()).await.unwrap();
+    let id = create(
+        &mut client,
+        &[
+            "sh",
+            "-c",
+            "i=1; while [ \"$i\" -le 30 ]; do printf '\\r\\nline%02d' \"$i\"; i=$((i + 1)); done; read l; printf bye; exit 5",
+        ],
+        vec![],
+    )
+    .await;
+    let mut attached = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&id, false, 40, 5)
+        .await
+        .unwrap();
+    let mut emu = Emulator::new(Size { cols: 40, rows: 5 });
+    wait_text(&mut attached, &mut emu, "line30").await;
+    attached
+        .send(ClientFrame::Scroll(Scroll::Top))
+        .await
+        .unwrap();
+    wait_text(&mut attached, &mut emu, "line01").await;
+    attached
+        .send(ClientFrame::Input(b"go\n".to_vec()))
+        .await
+        .unwrap();
+    eventually_sessions(&mut client, |sessions| sessions[0].exit_code == Some(5)).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+    while let Ok(frame) = tokio::time::timeout_at(deadline, attached.recv()).await {
+        match frame.unwrap() {
+            Some(ServerFrame::Data(_)) => {}
+            other => panic!("unexpected frame while scrolled back: {other:?}"),
+        }
+    }
+    attached
+        .send(ClientFrame::Resize { cols: 50, rows: 7 })
+        .await
+        .unwrap();
+    assert!(matches!(next(&mut attached).await, ServerFrame::Data(_)));
+    assert_eq!(next(&mut attached).await, ServerFrame::Exit(5));
+    let session = &list(&mut client).await[0];
+    assert_eq!((session.cols, session.rows), (40, 5));
+    daemon.shutdown().await.unwrap();
+}

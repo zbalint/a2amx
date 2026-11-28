@@ -273,3 +273,49 @@ async fn release_clears_interactive_hold_but_viewer_release_is_ignored() {
     drop(interactive);
     daemon.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn unchanged_mode_frame_does_not_double_count_presence() {
+    let limits = Limits {
+        away_secs: 0,
+        ..Limits::default()
+    };
+    let Some((dir, daemon)) = start_confined_daemon_with_limits(limits).await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let (session, token) = create_confined_with_token(
+        &mut admin,
+        fixture.path(),
+        "mode-unchanged",
+        Some(RemoteMode::Both),
+        Some(team_scope("mode-unchanged")),
+        Harness::Generic,
+        Some(Deliver::Hold),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    issue_and_redeem(&mut admin, &mut gateway, "mode-unchanged").await;
+    let mut sender = Client::connect_addr(daemon.addrs()[0], &token)
+        .await
+        .unwrap();
+    let mut attachment = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&session, false, 80, 24)
+        .await
+        .unwrap();
+    receive_data(&mut attachment).await;
+    assert_eq!(owner_state(&mut sender).await.as_deref(), Some("present"));
+    attachment
+        .send(ClientFrame::Mode { viewer: false })
+        .await
+        .unwrap();
+    attachment.send(ClientFrame::Redraw).await.unwrap();
+    receive_data(&mut attachment).await;
+    attachment.send(ClientFrame::Detach).await.unwrap();
+    assert_eq!(attachment.recv().await.unwrap(), None);
+    assert_eq!(owner_state(&mut sender).await.as_deref(), Some("away"));
+    daemon.shutdown().await.unwrap();
+}
