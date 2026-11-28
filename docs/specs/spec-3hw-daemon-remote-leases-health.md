@@ -4,19 +4,19 @@
 
 LOCKED. Context `a2amx-3hw-daemon-remote-leases-health`. Location: main checkout `/home/zbalint/workspace/a2amx`, branch `develop`. Behaviour-preserving refactor, test-first where a behaviour is unpinned. Public seams: the control protocol over a real daemon (`Request::IssueLeaseCode`, `Request::RedeemLeaseCode` as the gateway, the remote status views).
 
-Scope (edit): `src/daemon/remote.rs` (`Leases::issue`, `Leases::redeem`, the new functions, and the one caller `Runtime::issue_lease_code` at `:171`), tests only for Step A gaps appended to existing files named there, never a new file. Does not touch: `Leases::start`, `Leases::state`, any other function, `src/messaging.rs`, `docs/` other than this spec, `CHANGELOG.md`.
+Scope (edit): `src/daemon/remote.rs` (`Leases::issue`, `Leases::start`, `Leases::redeem`, the new functions, and their two callers `Runtime::issue_lease_code` at `:171` and `Runtime::redeem_lease_code` at `:184-203`), tests only for Step A gaps appended to existing files named there, never a new file. Does not touch: `Leases::state`, any other function, `src/messaging.rs`, `docs/` other than this spec, `CHANGELOG.md`.
 
 No behaviour change: same replies, same texts, same counts, the same lock scope (the book's mutex is a leaf and is held only inside `Leases` methods), and the same constant-time comparison over every pending code.
 
 ## 1. Why
 
-`cs check` reports on `remote.rs`: `:35` `Leases::redeem` "Complex Method (cc = 11)", "Bumpy Road Ahead (bumps = 3)", "Complex Conditional" at `:42` (the `if let .. && now < expires && constant_time_eq(..)`), and `:25` `Leases::issue` "Excess Number of Function Arguments (Arguments = 5)". The redeem path is a trust boundary (a pairing code, a wrong-attempt lockout, constant-time comparison), so the split must keep its properties exactly.
+`cs check` reports on `remote.rs`: `:35` `Leases::redeem` "Complex Method (cc = 11)", "Bumpy Road Ahead (bumps = 3)", "Complex Conditional" at `:42` (the `if let .. && now < expires && constant_time_eq(..)`), and `:25` `Leases::issue` and `:76` `Leases::start` "Excess Number of Function Arguments (Arguments = 5)" (Amendment 1 added `start`; the first draft overlooked it). The redeem path is a trust boundary (a pairing code, a wrong-attempt lockout, constant-time comparison), so the split must keep its properties exactly.
 
 Rules that bind (earlier refactors): a helper that exists only to clear a finding is rejected; each new function names one domain job; no out-parameter accumulator; at most four parameters per new function counting `self`; split along contiguous runs; no suppression.
 
 ## 2. Step A: pins (tests, green on the current code)
 
-The developer lists, per behaviour, the existing pin and runs it. Candidates (the consultant's pre-lock read replaces this list with the confirmed pins): `tests/human_inbound/inbound_admission.rs::lease_codes_expire_are_single_use_and_wrong_attempts_reset_on_issue` (expired code refused, single use), `::five_wrong_codes_drop_pending_codes_until_issue_resets_the_counter` (lockout at five, reset on issue), `::issue_lease_code_requires_a_running_remote_member_of_the_team`.
+The developer lists, per behaviour, the existing pin and runs it. Candidates (all three exist; verified by the consultant's pre-lock read): `tests/human_inbound/inbound_admission.rs::lease_codes_expire_are_single_use_and_wrong_attempts_reset_on_issue` (expired code refused, single use), `::five_wrong_codes_drop_pending_codes_until_issue_resets_the_counter` (lockout at five, reset on issue), `::issue_lease_code_requires_a_running_remote_member_of_the_team`.
 
 1. A wrong, expired or used code replies `Error "invalid or expired code"`.
 2. A matching code consumes the pending entry and returns its team; the lease starts for that team only.
@@ -28,6 +28,7 @@ The developer lists, per behaviour, the existing pin and runs it. Candidates (th
 
 ### `src/daemon/remote.rs`
 
+- `Leases::start(&self, team: &str, members: Vec<SessionId>, expires: Instant)` (Amendment 1): the caller computes `now + Duration::from_secs(self.limits.lease_secs)`; `start` stores `expires` as given. Four parameters counting `self`.
 - `Leases::issue(&self, team: String, code: String, expires: Instant)`: the caller computes `Instant::now() + ttl` (today `issue` adds `now + ttl` itself), four parameters; the counter reset and the replacement stay.
 - `impl PendingLeaseCode { fn accepts(&self, code: &str, now: Instant) -> bool }`: `now < self.expires && constant_time_eq(code, &self.code)`. One condition, one domain job: this entry is redeemable with this code.
 - `impl LeaseState { fn take_matching(&mut self, code: &str, now: Instant) -> Option<String> }`: iterate EVERY team (no early exit: the comparison time must not reveal which team or position matched), remember the first match, take its pending entry and return the team. Today's loop and `get_or_insert_with` stay as they are.
@@ -38,7 +39,7 @@ If a finding remains, the developer quotes the cs text, reports per-function cc 
 
 ## 4. Out of scope
 
-`start`, `state`, the lease views (`:200` onward), the wire types, the gateway.
+`state`, the lease views (`:200` onward), the wire types, the gateway.
 
 ## 5. Trust boundary
 
@@ -62,4 +63,15 @@ git status --short
 
 ## 7. Claims
 
-To be filled before locking (`cs` anchors, callers, the existing pins, the candidate gaps).
+| claim | file:line or test | verified how |
+| --- | --- | --- |
+| cs findings on remote.rs are `:25` (5 args), `:35` (cc 11, bumpy 3, complex conditional `:42`), `:76` (5 args) | `cs check src/daemon/remote.rs` | run by the developer on 453c0f4 (BLOCKED report) |
+| `issue` and `start` each have exactly one caller outside the file | `remote.rs:171`, `:196` | grep `leases\.(start|issue)` across src and tests: no other hit |
+| existing pins for expiry, single use, lockout and reset | `tests/human_inbound/inbound_admission.rs:230`, `:273` | read |
+| no test issues codes for two teams, so items 4 and 5 of section 2 are new pins | `tests/human_inbound/inbound_admission.rs` | read: every `issue_code` call uses one team per test |
+| codes are random 12 hex characters, so a last-match mutant is equivalent | `remote.rs` `random_hex::<6>` | read |
+| `take_matching` "first match" depends on HashMap iteration order (arbitrary) | `remote.rs` `LeaseState.teams` | read |
+
+## Amendment 1
+
+The developer's BLOCKED report (m_9867) found that section 1 omitted the `:76` `Leases::start` finding (5 arguments counting `self`) while sections 0 and 4 put `start` out of scope, so the section 6 acceptance could not pass. Resolution: `start` joins the scope and takes `expires: Instant` like `issue`; its caller `redeem_lease_code` computes `now + term`. No behaviour change: the stored expiry value is identical. Sections 0, 1, 3 and 4 above carry the amended text.
