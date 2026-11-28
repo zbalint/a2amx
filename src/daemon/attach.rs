@@ -110,18 +110,92 @@ async fn attachment_status(
     })
 }
 
-#[allow(clippy::too_many_arguments)] // Locked attach flow keeps status, viewer, and runtime handles explicit.
+pub(super) struct AttachOptions {
+    pub force: bool,
+    pub size: Size,
+    pub top_rows: u16,
+    pub viewer: bool,
+    pub status: bool,
+}
+
+struct PreviousAttachment {
+    takeover: watch::Sender<bool>,
+    closed: watch::Receiver<bool>,
+}
+
+struct Reservation {
+    generation: u64,
+    previous: Option<PreviousAttachment>,
+}
+
+fn reserve_attachment(session: &Session, force: bool) -> Option<Reservation> {
+    let mut state = session.lock();
+    let busy = state.attachment.is_some() || state.pending_attachment.is_some();
+    if busy && !force {
+        return None;
+    }
+    let previous = state.attachment.as_ref().map(|slot| PreviousAttachment {
+        takeover: slot.takeover.clone(),
+        closed: slot.closed.clone(),
+    });
+    state.generation += 1;
+    let generation = state.generation;
+    state.pending_attachment = Some(generation);
+    Some(Reservation {
+        generation,
+        previous,
+    })
+}
+
+async fn wait_closed(mut previous_closed: watch::Receiver<bool>) {
+    while !*previous_closed.borrow() {
+        if previous_closed.changed().await.is_err() {
+            break;
+        }
+    }
+}
+
+fn install_attachment(
+    session: &Arc<Session>,
+    slot: AttachmentSlot,
+    options: &AttachOptions,
+) -> anyhow::Result<(Vec<u8>, Option<i32>)> {
+    let mut state = session.lock();
+    if state.pending_attachment != Some(slot.generation) {
+        anyhow::bail!("attachment was taken over");
+    }
+    state.emulator.set_row_origin(options.top_rows);
+    session.resize_locked(&mut state, options.size)?;
+    let bytes = state.emulator.render_full();
+    state.dirty = false;
+    state.attachment = Some(slot);
+    state.pending_attachment = None;
+    Ok((bytes, state.exit_code))
+}
+
+fn count_presence(runtime: &Runtime, session: &Session, viewer: bool) {
+    runtime
+        .presence
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(session.id().0.clone())
+        .or_insert_with(|| messaging::Presence::new(runtime.limits.away_secs))
+        .attach_started(Instant::now(), viewer);
+}
+
+async fn close_with_exit(connection: &mut Framed, code: i32) -> anyhow::Result<()> {
+    connection.send(&ServerFrame::Exit(code).encode()).await?;
+    connection.stream.shutdown().await?;
+    Ok(())
+}
+
 pub(super) async fn attach(
     connection: &mut Framed,
     session: Arc<Session>,
-    force: bool,
-    size: Size,
-    top_rows: u16,
-    viewer: bool,
-    status: bool,
+    options: AttachOptions,
     runtime: Arc<Runtime>,
 ) -> anyhow::Result<bool> {
-    if top_rows > 8 {
+    if options.top_rows > 8 {
         response(
             connection,
             Response::Error {
@@ -133,22 +207,11 @@ pub(super) async fn attach(
     }
     let (takeover, mut taken_over) = watch::channel(false);
     let (closed, completion) = watch::channel(false);
-    let reservation = {
-        let mut state = session.lock();
-        if (state.attachment.is_some() || state.pending_attachment.is_some()) && !force {
-            None
-        } else {
-            let previous = state
-                .attachment
-                .as_ref()
-                .map(|slot| (slot.takeover.clone(), slot.closed.clone()));
-            state.generation += 1;
-            let generation = state.generation;
-            state.pending_attachment = Some(generation);
-            Some((generation, previous))
-        }
-    };
-    let Some((generation, previous)) = reservation else {
+    let Some(Reservation {
+        generation,
+        previous,
+    }) = reserve_attachment(&session, options.force)
+    else {
         response(
             connection,
             Response::Error {
@@ -166,39 +229,20 @@ pub(super) async fn attach(
         generation,
         closed,
         presence: runtime.presence.clone(),
-        viewer,
+        viewer: options.viewer,
         counted: false,
     };
-    if let Some((previous, mut previous_closed)) = previous {
-        let _ = previous.send(true);
-        while !*previous_closed.borrow() {
-            if previous_closed.changed().await.is_err() {
-                break;
-            }
-        }
+    if let Some(previous) = previous {
+        let _ = previous.takeover.send(true);
+        wait_closed(previous.closed).await;
     }
-    let snapshot = {
-        let mut state = session.lock();
-        if state.pending_attachment != Some(generation) {
-            Err(anyhow::anyhow!("attachment was taken over"))
-        } else {
-            state.emulator.set_row_origin(top_rows);
-            let resize = session.resize_locked(&mut state, size);
-            resize.map(|()| {
-                let bytes = state.emulator.render_full();
-                state.dirty = false;
-                state.attachment = Some(AttachmentSlot {
-                    generation,
-                    takeover,
-                    closed: completion,
-                    viewer,
-                });
-                state.pending_attachment = None;
-                (bytes, state.exit_code)
-            })
-        }
+    let slot = AttachmentSlot {
+        generation,
+        takeover,
+        closed: completion,
+        viewer: options.viewer,
     };
-    let (bytes, exited) = match snapshot {
+    let (bytes, exited) = match install_attachment(&session, slot, &options) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             response(
@@ -212,29 +256,24 @@ pub(super) async fn attach(
         }
     };
     if exited.is_none() {
-        runtime
-            .presence
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(session.id().0.clone())
-            .or_insert_with(|| messaging::Presence::new(runtime.limits.away_secs))
-            .attach_started(Instant::now(), viewer);
+        count_presence(&runtime, &session, options.viewer);
         guard.counted = true;
     }
-    let attached = if top_rows == 0 {
+    let attached = if options.top_rows == 0 {
         Response::Attached
     } else {
-        Response::AttachedTop { top_rows }
+        Response::AttachedTop {
+            top_rows: options.top_rows,
+        }
     };
     response(connection, attached).await?;
     send_data(connection, &bytes).await?;
     if let Some(code) = exited {
-        connection.send(&ServerFrame::Exit(code).encode()).await?;
-        connection.stream.shutdown().await?;
+        close_with_exit(connection, code).await?;
         return Ok(true);
     }
     let mut last = None;
-    if status {
+    if options.status {
         let info = attachment_status(&session, &runtime).await?;
         connection
             .send(&ServerFrame::Status(info.clone()).encode())
@@ -267,7 +306,7 @@ pub(super) async fn attach(
             // shortcut: one-second poll per attachment; push from the store's write path if latency
             // or load matters.
             _ = ticker.tick() => {
-                if status {
+                if options.status {
                     let info = attachment_status(&session, &runtime).await?;
                     if last.as_ref() != Some(&info) {
                         connection.send(&ServerFrame::Status(info.clone()).encode()).await?;

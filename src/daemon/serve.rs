@@ -96,11 +96,13 @@ async fn dispatch(
                 if attach(
                     connection,
                     session,
-                    force,
-                    Size { cols, rows },
-                    top_rows,
-                    viewer,
-                    status,
+                    super::attach::AttachOptions {
+                        force,
+                        size: Size { cols, rows },
+                        top_rows,
+                        viewer,
+                        status,
+                    },
                     runtime.clone(),
                 )
                 .await?

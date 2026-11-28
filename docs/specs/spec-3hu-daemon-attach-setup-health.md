@@ -20,7 +20,7 @@ Existing pins (consultant-confirmed; the developer reruns each and names it in t
 | --- | --- | --- |
 | 1. 9 top rows replies an `Error` | `tests/daemon/attach_streams.rs:4` (matches `Error{..}` only; optionally assert the text `top rows exceed 8` and that nothing attached) | (a), (b) |
 | 2. no-force attach refused (`:145`); forced takeover, the old holder gets `Detached` (`:164`, `:447`, `:465`); the new one waits for the old to close (`:551`, the backpressure gate: the forced attach must not complete within 200 ms while the holder's input is blocked); CLI texts `tests/attach_cli/attach_session.rs:506,514` | | (c), (d), (e) |
-| 3. `Attached` vs `AttachedTop`, reply then Data (`attach_streams.rs:39,41`), row origin (`:49-53`), late attach then `Exit` (`:285`); presence: an exited attach does not make the owner present (`tests/presence/owner_presence.rs:347`), a live attach counts (`owner_presence.rs:4`, `:99`) | | (h), (i), (j), (k) |
+| 3. `Attached` vs `AttachedTop`, reply then Data (`attach_streams.rs:39,41`), row origin (`:49-53`), late attach then `Exit` (`:285`); presence: a live attach counts (`owner_presence.rs:4`, `:99`) | | (h), (i), (j), (k) |
 | 4. first status frame | `tests/daemon/status_reporting.rs:169` | not (m), see below |
 
 `tests/attach_cli/*` (viewer.rs, status_and_team_line.rs) talk to a fake daemon and pin nothing in `daemon/attach.rs`: not candidates.
@@ -30,7 +30,7 @@ Unpinned, so the developer adds literal-expectation tests green on the unchanged
 - (A) "attachment was taken over" (mutant (f)): reuse the gate of `attach_streams.rs:551`: forced attach A, wait 200 ms (the pattern at `:578-584`), forced attach B, then release; A gets `Error "attachment was taken over"` and B gets Data. Under mutant (f) A also installs and replies `Attached`.
 - (B) an exited session's attach with status: `attach_status` yields Data then `Exit`, with no `Status` frame first (kills (l)).
 
-Expected survivors, reported with their reason (no timing pin): (g) `dirty` not cleared (the loop's first `render_update` then sends no bytes, nothing observable); (m) first status frame skipped (the 1 s ticker sends `Status` within `next()`'s 10 s deadline, so `status_reporting.rs:169` passes either way).
+Expected survivors, reported with their reason (no timing pin): (g) `dirty` not cleared (the loop's first `render_update` then sends no bytes, nothing observable); (i) presence counted for an exited attach (unobservable through any public seam: an exited session's token is refused before dispatch, `owner_state` reads only the caller's own entry and the heartbeat prunes exited ids). (m) is killed by `tests/presence/remote_status.rs:24` (a 1 s lease makes the first status frame the only `Active` one), not by `status_reporting.rs:169`.
 
 ## 3. Step B: target shape
 
@@ -77,3 +77,17 @@ rg -n "allow\(clippy::too_many_arguments" src/daemon/attach.rs
 | the existing pins named in section 2 exist and cover what is claimed | `tests/daemon/attach_streams.rs`, `tests/presence/owner_presence.rs`, `tests/daemon/status_reporting.rs` | consultant read |
 | no test asserts `attachment was taken over` | grep over `tests/` | consultant grep (pin (A) added) |
 | `serve.rs:96` is the only caller; `bridge_attach` (`:119`) is another function | `serve.rs` | consultant read |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (consultant session, model not exposed to the architect); developer Gemini 4 Hydrogen (Medium) on antigravity; tester opencode-go/deepseek-v4.1-flash on OMP (no separate planning model). BLOCKED/amend cycles: 0.
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| draft review | consultant | "attachment was taken over" had no pin anywhere; an exited attach with status had none either | pins (A) and (B) added to Step A before locking |
+| draft review | consultant | the tests/attach_cli files use a fake daemon and pin nothing in `daemon/attach.rs` | dropped from the pin table |
+| tester pass | tester (deepseek-v4.1-flash) | the spec claimed `owner_presence.rs:347` pins mutant (i); it queries the sender's owner state, so (i) survives | consultant showed (i) is unobservable through any public seam; spec row corrected, (i) listed as an expected survivor |
+| tester pass | tester (deepseek-v4.1-flash) | mutant (m) was listed as an expected survivor but `remote_status.rs:24` kills it | spec corrected |
+| tester pass | tester (deepseek-v4.1-flash) | the guard-built-after-wait mutant survives; the spec's "future is dropped" rationale is unreachable because the attach future is awaited inline and aborted only at shutdown | recorded as equivalent; the guard order stays as the spec states it |
+| tester pass | tester (deepseek-v4.1-flash) | first report named the wrong hanging tests under mutant (d) | corrected by the tester in a follow-up; kill outcome unchanged |
+| architect review | consultant | nits: `install_attachment` reads only `top_rows` and `size` of `AttachOptions`; `viewer` lives in three places | accepted as is; 3hv must read `guard.viewer`, not `options.viewer` |

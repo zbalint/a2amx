@@ -295,3 +295,97 @@ async fn exited_generic_explain_reports_closed_wire_fields() {
     );
     daemon.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn attach_taken_over_during_wait_returns_error_and_new_attach_receives_data() {
+    let (dir, daemon) = common::start_daemon().await;
+    let release = dir.path().join("release-takeover");
+    let mut control = Client::connect(dir.path()).await.unwrap();
+    let id = create(
+        &mut control,
+        &[
+            "sh",
+            "-c",
+            "stty raw -echo; printf ready; while [ ! -f \"$RELEASE\" ]; do :; done; cat >/dev/null",
+        ],
+        vec![("RELEASE".into(), release.to_str().unwrap().into())],
+    )
+    .await;
+    let mut first = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach(&id, false, 40, 5)
+        .await
+        .unwrap();
+    let mut screen = Emulator::new(Size { cols: 40, rows: 5 });
+    wait_text(&mut first, &mut screen, "ready").await;
+    let mut input = Box::pin(first.send(ClientFrame::Input(vec![b'x'; 20_000_000])));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), input.as_mut())
+            .await
+            .is_err()
+    );
+
+    let client_a = Client::connect(dir.path()).await.unwrap();
+    let mut attach_a = Box::pin(client_a.attach(&id, true, 60, 8));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), attach_a.as_mut())
+            .await
+            .is_err()
+    );
+
+    let client_b = Client::connect(dir.path()).await.unwrap();
+    let mut attach_b = Box::pin(client_b.attach(&id, true, 60, 8));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), attach_b.as_mut())
+            .await
+            .is_err()
+    );
+
+    tokio::task::spawn_blocking(move || std::fs::write(release, b"resume"))
+        .await
+        .unwrap()
+        .unwrap();
+    let Err(err) = tokio::time::timeout(Duration::from_secs(10), attach_a.as_mut())
+        .await
+        .expect("attach A finishes")
+    else {
+        panic!("expected attach A to fail");
+    };
+    assert!(
+        err.to_string().contains("attachment was taken over"),
+        "{err:#}"
+    );
+    let mut second = tokio::time::timeout(Duration::from_secs(10), attach_b.as_mut())
+        .await
+        .expect("attach B finishes")
+        .unwrap();
+    drop(input);
+    assert!(matches!(next(&mut second).await, ServerFrame::Data(_)));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn exited_session_attach_status_sends_data_then_exit_without_status() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut control = Client::connect(dir.path()).await.unwrap();
+    let id = create(&mut control, &["sh", "-c", "printf bye; exit 7"], vec![]).await;
+    eventually_sessions(&mut control, |sessions| sessions[0].exit_code == Some(7)).await;
+
+    let mut attached = Client::connect(dir.path())
+        .await
+        .unwrap()
+        .attach_status(&id, false, 40, 5, 0)
+        .await
+        .unwrap();
+    let mut emu = Emulator::new(Size { cols: 40, rows: 5 });
+    match next(&mut attached).await {
+        ServerFrame::Data(bytes) => {
+            emu.feed(&bytes);
+        }
+        frame => panic!("expected Data first, got {frame:?}"),
+    }
+    assert!(text(&emu).contains("bye"));
+    assert_eq!(next(&mut attached).await, ServerFrame::Exit(7));
+    daemon.shutdown().await.unwrap();
+}
