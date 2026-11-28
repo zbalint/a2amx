@@ -75,3 +75,23 @@ git status --short
 ## Amendment 1
 
 The developer's BLOCKED report (m_9867) found that section 1 omitted the `:76` `Leases::start` finding (5 arguments counting `self`) while sections 0 and 4 put `start` out of scope, so the section 6 acceptance could not pass. Resolution: `start` joins the scope and takes `expires: Instant` like `issue`; its caller `redeem_lease_code` computes `now + term`. No behaviour change: the stored expiry value is identical. Sections 0, 1, 3 and 4 above carry the amended text.
+
+## Review record
+
+Models: architect Claude Sonnet 5.5; consultant Claude (consultant session, model not exposed to the architect); developer Gemini 4 Hydrogen (Medium) on antigravity (no advisor); tester opencode-go/deepseek-v4.1-flash on OMP (advisor model not exposed).
+
+BLOCKED/amend cycles: 1 (BLOCKED on the missing `Leases::start` finding, resolved by Amendment 1, 4dffee1).
+
+| Found at | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| draft review | consultant | candidate pins 4 and 5 (other teams' codes at the lockout; a match takes only its own team) had no existing test; "first match" is HashMap iteration order | pins added in Step A; mutant table adjusted |
+| draft review | consultant | the last-match mutant is equivalent in practice (random 12-hex codes) | listed as an expected non-kill |
+| implementation | developer (BLOCKED m_9867) | section 1 omitted the `:76` `Leases::start` five-argument finding while sections 0 and 4 put `start` out of scope, so section 6 could not pass | Amendment 1: `start` joins the scope and takes `expires`, like `issue` |
+| implementation | developer | section 2 and section 7 still carried drafting placeholders after locking | claims table written and the placeholders removed in Amendment 1 |
+| architect review | consultant | the spec wording "every pending code" over-claims: HEAD and the diff compare every unexpired pending code | recorded here; later specs quote the actual predicate |
+| architect review | consultant | the developer merged the expiry cleanup and the lockout drop of `record_wrong_code` into one pass, unlike the three steps of section 3 | accepted: the end state is identical and the drop never reads the counter; later specs state end states, not step order |
+| tester pass | tester (deepseek-v4.1-flash) | mutants (d) and (n) are one deletion (the early lockout return in `redeem`); equivalent because the lockout also drops every pending code and `issue` resets the counter | confirmed equivalent, no pin |
+| tester pass | tester (deepseek-v4.1-flash) | mutant (m) (expired entries never dropped) is observationally equivalent | accepted; only retention differs |
+| tester pass | tester (deepseek-v4.1-flash) | mutants (i) first vs last match and (j) early exit survive, as expected | (i) equivalent in practice; (j) is a timing property checked by reading `take_matching` (no early exit), done by the architect and the consultant |
+
+Mutation result: 10 killed, 3 equivalent, 2 expected survivors.

@@ -555,3 +555,107 @@ async fn inbound_rejects_a_forged_envelope_body() {
     );
     daemon.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn five_wrong_codes_drop_other_teams_pending_codes() {
+    let Some((dir, daemon)) = start_confined_daemon().await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "alpha-agent",
+        Some(RemoteMode::Both),
+        Some(team_scope("team-a")),
+    )
+    .await;
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "beta-agent",
+        Some(RemoteMode::Both),
+        Some(team_scope("team-b")),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    let code_a = issue_code(&mut admin, "team-a").await;
+    for attempt in 0..5 {
+        let response = gateway
+            .request(Request::RedeemLeaseCode {
+                code: "000000000000".into(),
+            })
+            .await
+            .unwrap();
+        let Response::Error { message } = response else {
+            panic!("expected error on wrong attempt {attempt}, got {response:?}");
+        };
+        assert_eq!(message, "invalid or expired code");
+    }
+    let code_b = issue_code(&mut admin, "team-b").await;
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code: code_a })
+            .await
+            .unwrap(),
+        Response::Error { message } if message == "invalid or expired code"
+    ));
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code: code_b })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn redeeming_one_teams_code_starts_its_lease_and_leaves_other_team_pending() {
+    let Some((dir, daemon)) = start_confined_daemon().await else {
+        return;
+    };
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "alpha-agent",
+        Some(RemoteMode::Both),
+        Some(team_scope("team-a")),
+    )
+    .await;
+    create_confined_with_team(
+        &mut admin,
+        fixture.path(),
+        "beta-agent",
+        Some(RemoteMode::Both),
+        Some(team_scope("team-b")),
+    )
+    .await;
+    let mut gateway = gateway(dir.path(), daemon.addrs()[0]).await;
+    let code_a = issue_code(&mut admin, "team-a").await;
+    let code_b = issue_code(&mut admin, "team-b").await;
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code: code_b })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+    let Response::GatewayAgents { agents } = gateway.request(Request::GatewayAgents).await.unwrap()
+    else {
+        panic!("expected gateway agents");
+    };
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].team, "team-b");
+    assert!(matches!(
+        gateway
+            .request(Request::RedeemLeaseCode { code: code_a })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+    daemon.shutdown().await.unwrap();
+}

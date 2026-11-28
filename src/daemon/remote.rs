@@ -22,12 +22,9 @@ impl Leases {
     }
 
     /// Store a fresh pending code for `team`, replacing any earlier one, and reset the wrong-attempt count.
-    pub(super) fn issue(&self, team: String, code: String, now: Instant, ttl: Duration) {
+    pub(super) fn issue(&self, team: String, code: String, expires: Instant) {
         let mut leases = self.lock();
-        leases.teams.entry(team).or_default().pending = Some(PendingLeaseCode {
-            code,
-            expires: now + ttl,
-        });
+        leases.teams.entry(team).or_default().pending = Some(PendingLeaseCode { code, expires });
         leases.wrong_codes = 0;
     }
 
@@ -37,48 +34,18 @@ impl Leases {
         if leases.wrong_codes >= messaging::MAX_WRONG_CODES {
             return None;
         }
-        let mut matched_team = None;
-        for (team, state) in &leases.teams {
-            if let Some(pending) = state.pending.as_ref()
-                && now < pending.expires
-                && constant_time_eq(code, &pending.code)
-            {
-                matched_team.get_or_insert_with(|| team.clone());
-            }
-        }
-        let team = matched_team;
-        if let Some(team) = team {
-            leases
-                .teams
-                .get_mut(&team)
-                .and_then(|state| state.pending.take());
+        if let Some(team) = leases.take_matching(code, now) {
             return Some(team);
         }
-        for state in leases.teams.values_mut() {
-            if state
-                .pending
-                .as_ref()
-                .is_some_and(|pending| now >= pending.expires)
-            {
-                state.pending = None;
-            }
-        }
-        leases.wrong_codes = leases.wrong_codes.saturating_add(1);
-        if leases.wrong_codes >= messaging::MAX_WRONG_CODES {
-            for state in leases.teams.values_mut() {
-                state.pending = None;
-            }
-        }
+        leases.record_wrong_code(now);
         None
     }
 
     /// Begin the lease of `team` for `members` (replacing an earlier one).
-    pub(super) fn start(&self, team: &str, members: Vec<SessionId>, now: Instant, term: Duration) {
+    pub(super) fn start(&self, team: &str, members: Vec<SessionId>, expires: Instant) {
         let mut leases = self.lock();
-        leases.teams.entry(team.to_owned()).or_default().lease = Some(ActiveLease {
-            expires: now + term,
-            members,
-        });
+        leases.teams.entry(team.to_owned()).or_default().lease =
+            Some(ActiveLease { expires, members });
     }
 
     /// None when `id` is not a member of `team`'s lease, Active before expiry, Ended after.
@@ -112,6 +79,42 @@ struct LeaseState {
     wrong_codes: u32,
 }
 
+impl LeaseState {
+    /// Scan every team without early exit so comparison timing does not reveal match position.
+    fn take_matching(&mut self, code: &str, now: Instant) -> Option<String> {
+        let mut matched_team = None;
+        for (team, state) in &self.teams {
+            if state
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.accepts(code, now))
+            {
+                matched_team.get_or_insert_with(|| team.clone());
+            }
+        }
+        let team = matched_team?;
+        self.teams
+            .get_mut(&team)
+            .and_then(|state| state.pending.take());
+        Some(team)
+    }
+
+    fn record_wrong_code(&mut self, now: Instant) {
+        self.wrong_codes = self.wrong_codes.saturating_add(1);
+        let drop_all = self.wrong_codes >= messaging::MAX_WRONG_CODES;
+        for state in self.teams.values_mut() {
+            if drop_all
+                || state
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| now >= pending.expires)
+            {
+                state.pending = None;
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct TeamLease {
     lease: Option<ActiveLease>,
@@ -126,6 +129,12 @@ struct ActiveLease {
 struct PendingLeaseCode {
     code: String,
     expires: Instant,
+}
+
+impl PendingLeaseCode {
+    fn accepts(&self, code: &str, now: Instant) -> bool {
+        now < self.expires && constant_time_eq(code, &self.code)
+    }
 }
 
 impl Runtime {
@@ -171,8 +180,7 @@ impl Runtime {
         self.leases.issue(
             team,
             code.clone(),
-            Instant::now(),
-            Duration::from_secs(self.limits.code_secs),
+            Instant::now() + Duration::from_secs(self.limits.code_secs),
         );
         Ok(Response::LeaseCode {
             code,
@@ -196,8 +204,7 @@ impl Runtime {
         self.leases.start(
             &team,
             members,
-            now,
-            Duration::from_secs(self.limits.lease_secs),
+            now + Duration::from_secs(self.limits.lease_secs),
         );
         Response::Ok
     }
