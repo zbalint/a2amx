@@ -77,3 +77,21 @@ git status --short
 | gateway never reaches `list_agents` | trust.rs:24, tests/human_inbound/gateway_capability.rs:43 | consultant read |
 | the pins in section 2 | named there | consultant read; developer reruns |
 | no test asserts `team` or running `activity` via ListAgents | grep over tests/ | consultant grep (wire/messaging.rs is serde only; status_reporting.rs:107 uses `List`) |
+
+## Review record
+
+Models: architect Claude Sonnet 5.5 (Claude Code); consultant on the Claude Code harness (model not reported to the architect); developer `a2amx-junior-developer` on the omp harness, `openai-codex/gpt-5.6-luna`; tester `a2amx-tester` on the omp harness, `opencode-go/deepseek-v4.1-flash`.
+
+BLOCKED/amend cycles: none.
+
+| Found | By | Problem | Resolution |
+| --- | --- | --- | --- |
+| Draft review | consultant | The "sender session is unavailable" refusal (views.rs:82) cannot be reached through any seam (`session_has_exited` answers and closes first), so Step A item 1 and mutant (i) were unpinnable; the `Role::Gateway` arm is unreachable but must stay | Section 2 narrowed; (i) an expected survivor; the match stays exhaustive |
+| Draft review | consultant | The candidate pin list was unconfirmed; `AgentSummary.team` and a running session's `activity` had no pin over `ListAgents` | Confirmed pins listed by name; two new pins (team, activity) and mutants (k), (l) added |
+| Draft review | consultant | `agent_summary(runtime, viewer, ..)` made the summary depend on the viewer; the hand count of `list_agents` (6) was low (7-8); a Complex Method fallback was undecided | `agent_summary(host_name, session, you, omp_usage)`; count 7-8; the `Admin \| Gateway` merge allowed if Complex Method appears; scope names the two test files |
+| Implementation | developer | The first activity pin expected `Busy`; a fresh Generic session reports `Working` | Literal corrected; the pin passed on the old code first |
+| Implementation | developer | clippy `question_mark` on `owner_state` | `viewer.remote()?` early return |
+| Design read | consultant | `agent_summary` read `session_activity` last, the old code first; the `Working` assertion needed a why-comment (the helper's shell never enables bracketed paste, so activity is deterministic) | Activity read first again; why-comment added; blank lines restored (architect edits) |
+| Tester pass | tester | Mutant (i) survived as expected; 11 of 12 killed; new pin 10/10 on the new source, 3/3 on HEAD | Recorded |
+
+Tester mutants (12 plus (b) in two variants): all killed except (i). Fresh checks by the architect: `views.rs` 10.00 with no finding, whole-tree cs warnings 845 to 844, cargo test 1542 pass.

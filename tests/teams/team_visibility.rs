@@ -90,6 +90,42 @@ async fn private_team_visibility_hides_other_private_teams_but_not_ungrouped() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_agents_reports_team_and_running_activity() {
+    let (dir, daemon) = common::start_daemon().await;
+    let mut admin = Client::connect(dir.path()).await.unwrap();
+    let (_team_id, _team) = session(
+        &mut admin,
+        dir.path(),
+        "team-member",
+        Some(scope("alpha", false, &[])),
+        &[],
+        &[],
+    )
+    .await;
+    let (_plain_id, _plain) = session(&mut admin, dir.path(), "plain", None, &[], &[]).await;
+
+    // The helper's shell never enables bracketed paste, so a running Generic
+    // session reports Working (screen not ready), not a quiet-window timing result.
+    let Response::Agents { agents, .. } = admin.request(Request::ListAgents).await.unwrap() else {
+        panic!("expected agent list");
+    };
+    let team_agent = agents
+        .iter()
+        .find(|agent| agent.address.starts_with("team-member@"))
+        .expect("team member listed");
+    assert_eq!(team_agent.team.as_deref(), Some("alpha"));
+    assert_eq!(team_agent.activity, Some(a2amx::wire::Activity::Working));
+
+    let plain_agent = agents
+        .iter()
+        .find(|agent| agent.address.starts_with("plain@"))
+        .expect("plain agent listed");
+    assert_eq!(plain_agent.team, None);
+    assert_eq!(plain_agent.activity, Some(a2amx::wire::Activity::Working));
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mutual_allow_is_required_for_private_team_message_visibility() {
     let (dir, _daemon) = common::start_daemon().await;
     let mut admin = Client::connect(dir.path()).await.unwrap();

@@ -85,18 +85,8 @@ pub(super) fn list_agents(runtime: &Runtime, role: &Role) -> Response {
         };
     }
     let owner = viewer
-        .as_ref()
-        .filter(|viewer| viewer.remote().is_some())
-        .map(|viewer| {
-            if runtime
-                .owner_cause(&viewer.id().0, Instant::now())
-                .is_some()
-            {
-                "present".to_owned()
-            } else {
-                "away".to_owned()
-            }
-        });
+        .as_deref()
+        .and_then(|viewer| owner_state(runtime, viewer));
     let omp_usage = runtime.omp_usage.current();
     let agents = sessions
         .iter()
@@ -108,34 +98,60 @@ pub(super) fn list_agents(runtime: &Runtime, role: &Role) -> Response {
                 })
         })
         .map(|session| {
-            let activity = session_activity(session);
-            let slot = session.attachment_viewer();
-            AgentSummary {
-                address: messaging::address(session.name(), &session.id().0, &runtime.host_name),
-                state: if session.exit_code().is_some() {
-                    "exited"
-                } else {
-                    "running"
-                }
-                .into(),
-                attached: slot.is_some(),
-                viewer: slot == Some(true),
-                team: session.team().map(|scope| scope.name.clone()),
-                you: viewer
-                    .as_ref()
-                    .is_some_and(|viewer| session.id() == viewer.id()),
-                quota: session_quota(session, omp_usage.as_ref()),
-                harness: session.harness(),
-                confine: session.confine_info(),
-                cwd: session
-                    .cwd()
-                    .map(|path| path.to_string_lossy().into_owned()),
-                activity,
-            }
+            let you = viewer
+                .as_ref()
+                .is_some_and(|viewer| session.id() == viewer.id());
+            agent_summary(&runtime.host_name, session, you, omp_usage.as_ref())
         })
         .collect();
     Response::Agents { agents, owner }
 }
+
+fn owner_state(runtime: &Runtime, viewer: &Session) -> Option<String> {
+    viewer.remote()?;
+    Some(
+        if runtime
+            .owner_cause(&viewer.id().0, Instant::now())
+            .is_some()
+        {
+            "present"
+        } else {
+            "away"
+        }
+        .to_owned(),
+    )
+}
+
+fn agent_summary(
+    host_name: &str,
+    session: &Arc<Session>,
+    you: bool,
+    omp_usage: Option<&BTreeMap<String, QuotaInfo>>,
+) -> AgentSummary {
+    let activity = session_activity(session);
+    let slot = session.attachment_viewer();
+    AgentSummary {
+        address: messaging::address(session.name(), &session.id().0, host_name),
+        state: if session.exit_code().is_some() {
+            "exited"
+        } else {
+            "running"
+        }
+        .into(),
+        attached: slot.is_some(),
+        viewer: slot == Some(true),
+        team: session.team().map(|scope| scope.name.clone()),
+        you,
+        quota: session_quota(session, omp_usage),
+        harness: session.harness(),
+        confine: session.confine_info(),
+        cwd: session
+            .cwd()
+            .map(|path| path.to_string_lossy().into_owned()),
+        activity,
+    }
+}
+
 pub(super) fn screen_of(runtime: &Runtime, id: &str) -> Response {
     match lookup(runtime, id) {
         Some((_, session)) => {
