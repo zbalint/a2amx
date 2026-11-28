@@ -55,6 +55,15 @@ Order and lifetime rules a split must keep: the taken-over check runs at the top
 
 If a finding remains, the developer quotes the cs text, reports per-function cc and stops. Hand counts (consultant, token model calibrated to today's 31): `run` 2, `serve_next` about 6 to 8 (the risk: if cs still reports Complex Method or Bumpy Road on it, the developer quotes the finding and stops), `on_frame` 5, `redraw` 4, `change_mode` 5, `send_pending_output` 3, `report_status` 3, `output_pending` 3.
 
+### Amendment 1 (after the developer's REPORT)
+
+After the loop moved into `AttachLoop`, `cs` still reports "Large Method (LoC = 94 lines)" on `attach`, the setup function of 3hu, which this spec's acceptance ("no function finding on `attach.rs`") covers. `attach` is therefore in scope for this one purpose. Its three refusal replies (`top rows exceed 8`, `session .. is attached elsewhere`, the install error) repeat the same four-line shape (send `Response::Error`, return `Ok(false)`), and the `Attached`/`AttachedTop` choice is a small decision of its own:
+
+- `async fn refuse(connection: &mut Framed, message: String) -> anyhow::Result<bool>`: sends `Response::Error { message }` and returns `Ok(false)` (the attach ended without attaching); used at the three sites (`return refuse(connection, ..).await`). The messages, their texts and their order stay as they are; the install error is `error.to_string()` as today.
+- `fn attached_reply(top_rows: u16) -> Response`: `Response::Attached` for 0, else `Response::AttachedTop { top_rows }`.
+
+Target: `attach` under 70 lines (hand estimate about 67) with no other change. If it stays at or above the threshold the developer quotes the cs text and stops.
+
 ## 4. Out of scope
 
 The setup phase, `attachment_status`, `AttachmentGuard`'s `Drop`, the client, the wire types, `serve.rs`.
